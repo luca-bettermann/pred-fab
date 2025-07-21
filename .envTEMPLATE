@@ -1,0 +1,6 @@
+LOCAL_FOLDER=<user value> # string pointing to local folder
+SERVER_FOLDER=<user value> # string pointing to server folder
+LOG_FOLDER=<user value> # string pointing to logs folder
+
+AIRTABLE_PERSONAL_ACCESS_TOKEN=<user value> # Personal access token for Airtable
+AIRTABLE_BASE_ID=<user value> # Base ID for Airtable
