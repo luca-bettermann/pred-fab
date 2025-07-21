@@ -1,0 +1,6 @@
+# Maps performance attribute codes to the import statement of the corresponding evaluation model classes
+
+# ADJUST THE EVALUATION MAPPINGS BELOW TO MATCH YOUR PROJECT STRUCTURE (performance code -> evaluation model class)
+evaluation:
+  performance_1: "python_file.class_1" 
+  performance_2: "python_file.class_2"
