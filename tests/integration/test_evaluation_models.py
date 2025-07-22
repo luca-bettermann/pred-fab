@@ -1,7 +1,7 @@
 import pytest
 import os
 import numpy as np
-from lbp_package.utils.folder_navigator import FolderNavigator
+from src.lbp_package.utils.folder_navigator import FolderNavigator
 from examples.example_evaluation_models import PathDeviationEvaluation, EnergyConsumption
 
 

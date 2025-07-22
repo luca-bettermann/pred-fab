@@ -1,7 +1,7 @@
 import pytest
 import os
 import yaml
-from lbp_package.orchestration import LBPManager
+from src.lbp_package.orchestration import LBPManager
 
 
 class TestLBPManager:

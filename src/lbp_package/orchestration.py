@@ -2,10 +2,10 @@ import yaml
 from importlib import import_module
 from typing import Any, Dict, List, Type, Tuple, Optional
 
-from .utils.folder_navigator import FolderNavigator
-from .utils.log_manager import LBPLogger
-from .evaluation import EvaluationModel, EvaluationSystem
-from .data_interface import DataInterface
+from src.lbp_package.utils.folder_navigator import FolderNavigator
+from src.lbp_package.utils.log_manager import LBPLogger
+from src.lbp_package.evaluation import EvaluationModel, EvaluationSystem
+from src.lbp_package.data_interface import DataInterface
 
 class LBPManager:
     """

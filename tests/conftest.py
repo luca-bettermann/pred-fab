@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 # Now import from lbp_package
-from lbp_package.utils.log_manager import LBPLogger
+from src.lbp_package.utils.log_manager import LBPLogger
 from examples.example_data_interface import ExampleDataInterface
 
 @pytest.fixture

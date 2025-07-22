@@ -1,8 +1,8 @@
 import pytest
 import os
 import yaml
-from lbp_package.orchestration import EvaluationSystem
-from lbp_package.utils.folder_navigator import FolderNavigator
+from src.lbp_package.orchestration import EvaluationSystem
+from src.lbp_package.utils.folder_navigator import FolderNavigator
 from examples.example_evaluation_models import PathDeviationEvaluation, EnergyConsumption
 
 

@@ -1,6 +1,6 @@
 import pytest
 from dataclasses import dataclass
-from lbp_package.utils.parameter_handler import (
+from src.lbp_package.utils.parameter_handler import (
     ParameterHandling, model_parameter, exp_parameter, runtime_parameter
 )
 

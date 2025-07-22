@@ -7,10 +7,10 @@ from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
-from lbp_package.utils.folder_navigator import FolderNavigator
-from lbp_package.utils.parameter_handler import ParameterHandling
-from lbp_package.utils.log_manager import LBPLogger
-from lbp_package.data_interface import DataInterface
+from src.lbp_package.utils.folder_navigator import FolderNavigator
+from src.lbp_package.utils.parameter_handler import ParameterHandling
+from src.lbp_package.utils.log_manager import LBPLogger
+from src.lbp_package.data_interface import DataInterface
 
 
 @dataclass

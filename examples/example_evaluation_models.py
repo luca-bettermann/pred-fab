@@ -4,8 +4,8 @@ import math
 import numpy as np
 from typing import Dict, Any
 from dataclasses import dataclass
-from lbp_package.evaluation import EvaluationModel, FeatureModel
-from lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
+from src.lbp_package.evaluation import EvaluationModel, FeatureModel
+from src.lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
 
 @dataclass
 class PathDeviationEvaluation(EvaluationModel):
@@ -69,6 +69,7 @@ class PathDeviationFeature(FeatureModel):
             performance_code: str, 
             folder_navigator, 
             logger, 
+            round_digits: int,
             **study_params
             ):
         
@@ -77,6 +78,7 @@ class PathDeviationFeature(FeatureModel):
             performance_code=performance_code,
             folder_navigator=folder_navigator,
             logger=logger,
+            round_digits=round_digits,
             **study_params
         )
         
@@ -181,6 +183,7 @@ class EnergyFeature(FeatureModel):
             performance_code: str, 
             folder_navigator, 
             logger, 
+            round_digits: int,
             **study_params
             ):
         
@@ -189,6 +192,7 @@ class EnergyFeature(FeatureModel):
             performance_code=performance_code,
             folder_navigator=folder_navigator,
             logger=logger,
+            round_digits=round_digits,
             **study_params
         )
         
