@@ -1,4 +1,4 @@
-from dataclasses import field, fields
+from dataclasses import dataclass, field, fields
 from abc import ABC, abstractmethod
 from typing import List
 
@@ -52,7 +52,7 @@ def runtime_parameter():
     """
     return field(default=None, metadata={'param_type': 'runtime'})
 
-
+@dataclass
 class ParameterHandling(ABC):
     """
     Elegant parameter handling system using dataclasses with three parameter types.

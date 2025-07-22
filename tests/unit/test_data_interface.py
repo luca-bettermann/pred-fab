@@ -1,5 +1,5 @@
 import pytest
-from lbp_package.lbp_package.data_interface import DataInterface
+from lbp_package.data_interface import DataInterface
 
 
 class ConcreteDataInterface(DataInterface):

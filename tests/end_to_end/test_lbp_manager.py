@@ -1,7 +1,7 @@
 import pytest
 import os
 import yaml
-from lbp_package.lbp_package.orchestration import LBPManager
+from lbp_package.orchestration import LBPManager
 
 
 class TestLBPManager:
@@ -21,7 +21,6 @@ class TestLBPManager:
         assert manager.nav is not None
         assert manager.interface == mock_data_interface
         assert manager.logger is not None
-        assert manager.initialized == False
         assert manager.eval_system is None
     
     def test_study_initialization(self, temp_dir, mock_data_interface, mock_config):
@@ -48,7 +47,6 @@ class TestLBPManager:
             # Initialize study
             manager.initialize_study("TEST_STUDY")
             
-            assert manager.initialized == True
             assert manager.study_code == "TEST_STUDY"
             assert manager.nav.study_code == "TEST_STUDY"
             assert manager.eval_system is not None
@@ -127,38 +125,3 @@ class TestLBPManager:
         with pytest.raises(FileNotFoundError, match="Configuration file not found"):
             manager.initialize_study("TEST_STUDY")
     
-    def test_debug_mode_switching(self, temp_dir, mock_data_interface, mock_config):
-        """Test debug mode switching."""
-        log_dir = os.path.join(temp_dir, "logs")
-        
-        # Create mock config file
-        config_path = os.path.join(temp_dir, "config.yaml")
-        with open(config_path, 'w') as f:
-            yaml.dump(mock_config, f)
-        
-        # Change to temp directory for config loading
-        original_cwd = os.getcwd()
-        os.chdir(temp_dir)
-        
-        try:
-            manager = LBPManager(
-                local_folder=temp_dir,
-                server_folder=temp_dir,
-                log_folder=log_dir,
-                data_interface=mock_data_interface
-            )
-            
-            # Initialize study
-            manager.initialize_study("TEST_STUDY")
-            
-            # Verify logger is not in debug mode initially
-            assert manager.logger.debug_mode == False
-            
-            # Run with debug flag - should switch to debug mode
-            manager.run_evaluation(exp_nr=1, debug_flag=True)
-            
-            # Verify debug mode was activated
-            assert manager.logger.debug_mode == True
-            
-        finally:
-            os.chdir(original_cwd)

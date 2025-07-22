@@ -1,6 +1,6 @@
 # folder_navigator.py
 import os
-from typing import List
+from typing import List, Optional
 import shutil
 
 
@@ -12,7 +12,7 @@ class FolderNavigator:
     consistent naming conventions and error handling.
     """
 
-    def __init__(self, local_folder: str, server_folder: str, study_code: str = None) -> None:
+    def __init__(self, local_folder: str, server_folder: str, study_code: Optional[str] = None) -> None:
         """
         Initialize folder navigator with base paths.
 
@@ -23,8 +23,8 @@ class FolderNavigator:
         """
         self.local_folder: str = local_folder
         self.server_folder: str = server_folder
-        self.study_code: str = study_code
-        self.study_folder: str = None
+        self.study_code: Optional[str] = study_code
+        self.study_folder: Optional[str] = None
 
         if study_code is not None:
             self.set_study_code(study_code)
@@ -61,6 +61,8 @@ class FolderNavigator:
         Returns:
             Full path to experiment folder
         """
+        if self.study_folder is None:
+            raise ValueError("Study code must be set before getting experiment folder")
         exp_code = self.get_experiment_code(exp_nr)
         return os.path.join(self.study_folder, exp_code)
 
@@ -74,6 +76,8 @@ class FolderNavigator:
         Returns:
             Full path to server experiment folder
         """
+        if self.study_code is None:
+            raise ValueError("Study code must be set before getting experiment folder")
         exp_code = self.get_experiment_code(exp_nr)
         return os.path.join(self.server_folder, self.study_code, exp_code)
 
@@ -84,6 +88,9 @@ class FolderNavigator:
         Returns:
             List of experiment folder names
         """
+        if self.study_folder is None:
+            raise ValueError("Study code must be set before listing experiments")
+        
         return [
             d
             for d in os.listdir(self.study_folder)

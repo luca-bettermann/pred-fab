@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-from lbp_package.lbp_package.data_interface import DataInterface
+from lbp_package.data_interface import DataInterface
 
 class ExampleDataInterface(DataInterface):
     """Example data interface for demonstration and testing."""

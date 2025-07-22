@@ -2,15 +2,15 @@ import os
 import numpy as np
 import pandas as pd
 import itertools
-from typing import Any, Dict, List, Type, Tuple
+from typing import Any, Dict, List, Type, Tuple, Optional
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
-from .utils.folder_navigator import FolderNavigator
-from .utils.parameter_handler import ParameterHandling
-from .utils.log_manager import LBPLogger
-from .data_interface import DataInterface
+from lbp_package.utils.folder_navigator import FolderNavigator
+from lbp_package.utils.parameter_handler import ParameterHandling
+from lbp_package.utils.log_manager import LBPLogger
+from lbp_package.data_interface import DataInterface
 
 
 @dataclass
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
             performance_code: Code identifying the performance metric
         """
         self.performance_codes.append(performance_code)
-        self.features[performance_code] = None
+        self.features[performance_code] = np.empty(0)
 
     def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, **dims_dict) -> None:
         """
@@ -126,6 +126,9 @@ class FeatureModel(ParameterHandling, ABC):
             # Store results in feature arrays
             for perf_code, value in feature_dict.items():
                 indices = tuple(dims_dict.values())
+
+                assert perf_code in self.performance_codes, f"Performance code '{perf_code}' not initialized in feature model."
+                assert self.features[perf_code] is not None, f"Feature storage for '{perf_code}' is not initialized."
                 self.features[perf_code][indices] = value
                 self.logger.debug(f"Extracted feature '{perf_code}': {round(value, self.round_digits) if value is not None else value}")
 
@@ -225,12 +228,12 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Feature model configuration
         self.feature_model_type: Type[FeatureModel] = feature_model_type
-        self.feature_model = None
+        self.feature_model: Optional[FeatureModel] = None
 
         # Dimensional configuration
-        self.dim_names: List[str] = None
-        self.dim_iterator_names: List[str] = None
-        self.dim_param_names: List[str] = None
+        self.dim_names: List[str] = []
+        self.dim_iterator_names: List[str] = []
+        self.dim_param_names: List[str] = []
 
         # Initialize the dimensional layers, in the form of [('dim_name', 'dim_iterator_name', 'dim_parameter_name'), (...), ...]
         # Note that the names must represent the namig convention in the code
@@ -241,13 +244,8 @@ class EvaluationModel(ParameterHandling, ABC):
         # Performance storage and configuration
         self.round_digits: int = round_digits
         self.performance_code = performance_code
-        self.performance_array: NDArray[np.float64] = None
-        self.performance_metrics = dict(
-            Value=None,
-            Performance=None,
-            Robustness=None,
-            Resilience=None,
-        )
+        self.performance_array: NDArray[np.float64] = np.empty((0,))
+        self.performance_metrics: Dict[str, Optional[np.floating]] = {}
 
         # Apply dataclass-based parameter handling
         self.set_model_parameters(**study_params)
@@ -278,6 +276,7 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Configure models with experiment parameters
         self.set_experiment_parameters(**exp_params)
+        assert self.feature_model is not None, "Feature model must be initialized before running evaluation."
         self.feature_model.set_experiment_parameters(**exp_params)
 
         # Process all dimensional combinations
@@ -326,7 +325,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.performance_metrics[key] = None
             
     # === OPTIONAL METHODS ===
-    def _compute_scaling_factor(self) -> float:
+    def _compute_scaling_factor(self) -> Optional[float]:
         """
         Optionally compute scaling factor for performance normalization.
         
@@ -380,6 +379,7 @@ class EvaluationModel(ParameterHandling, ABC):
             dims: Tuple of current dimension indices
         """
         # Extract feature value
+        assert self.feature_model is not None, "Feature model must be initialized before computing performance."
         if not dims:
             feature_value = self.feature_model.features[self.performance_code].item()
         else:
@@ -443,6 +443,7 @@ class EvaluationModel(ParameterHandling, ABC):
             interval_dict.update(indices_dict)
 
             # Add evaluation results
+            assert self.feature_model is not None, "Feature model must be initialized before adding evaluation results."
             feature_value = self.feature_model.features[self.performance_code][indices]
             target_value = self.performance_array[indices][0]
             diff_value = self.performance_array[indices][1]

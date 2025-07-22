@@ -1,26 +1,29 @@
 import json
 import os
 import math
+import numpy as np
 from typing import Dict, Any
 from dataclasses import dataclass
-from lbp_package.lbp_package.evaluation import EvaluationModel, FeatureModel
+from lbp_package.evaluation import EvaluationModel, FeatureModel
 from lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
-from lbp_package.utils.folder_navigator import FolderNavigator
-from lbp_package.utils.log_manager import LBPLogger
-
 
 @dataclass
 class PathDeviationEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
     
     # Model parameters
-    target_deviation: float = model_parameter(0.0)
-    max_deviation: float = model_parameter(0.5)
-    n_layers: int = model_parameter(2)
-    n_segments: int = model_parameter(2)
-    
-    def __init__(self, performance_code: str, folder_navigator: FolderNavigator, 
-                 logger: LBPLogger, **study_params):
+    target_deviation: float = model_parameter(0.0) # type: ignore
+    max_deviation: float = model_parameter(0.5) # type: ignore
+    n_layers: int = model_parameter(2) # type: ignore
+    n_segments: int = model_parameter(2) # type: ignore
+
+    def __init__(
+            self, 
+            performance_code: str, 
+            folder_navigator, 
+            logger, 
+            **study_params
+            ):
         """Initialize path deviation evaluation."""
         dimension_names = [
             ('layers', 'layer_id', 'n_layers'),
@@ -50,15 +53,35 @@ class PathDeviationFeature(FeatureModel):
     """Example feature model for path deviation calculation."""
     
     # Model parameters
-    tolerance_xyz: float = model_parameter(0.1)
-    
-    # Experiment parameters  
-    n_layers: int = exp_parameter()
-    n_segments: int = exp_parameter()
-    
+    tolerance_xyz: float = model_parameter(0.1) # type: ignore
+
+    # Experiment parameters
+    n_layers: int = exp_parameter() # type: ignore
+    n_segments: int = exp_parameter() # type: ignore
+
     # Runtime parameters
-    layer_id: int = runtime_parameter()
-    segment_id: int = runtime_parameter()
+    layer_id: int = runtime_parameter() # type: ignore
+    segment_id: int = runtime_parameter() # type: ignore
+
+
+    def __init__(
+            self, 
+            performance_code: str, 
+            folder_navigator, 
+            logger, 
+            **study_params
+            ):
+        
+        """Initialize path deviation feature model."""
+        super().__init__(
+            performance_code=performance_code,
+            folder_navigator=folder_navigator,
+            logger=logger,
+            **study_params
+        )
+        
+        # Initialize feature storage for path deviation
+        self.features["path_deviation"] = np.empty([])
     
     def _load_data(self, exp_nr: int) -> Dict[str, Any]:
         """Load designed and measured path data."""
@@ -111,11 +134,17 @@ class EnergyConsumption(EvaluationModel):
     """Example energy consumption evaluation model."""
 
     # Model parameters
-    target_energy: float = model_parameter(100.0)
-    max_energy: float = model_parameter(1000.0)
+    target_energy: float = model_parameter(100.0) # type: ignore
+    max_energy: float = model_parameter(1000.0) # type: ignore
 
-    def __init__(self, performance_code: str, folder_navigator: FolderNavigator,
-                 logger: LBPLogger, **study_params):
+    def __init__(
+            self, 
+            performance_code: str, 
+            folder_navigator,
+            logger, 
+            **study_params
+            ):
+        
         """Initialize energy consumption evaluation model."""
         dimension_names = []  # No dimensions for energy consumption
 
@@ -142,10 +171,29 @@ class EnergyFeature(FeatureModel):
     """Example feature model for energy consumption extraction."""
 
     # Model parameters
-    power_rating: float = model_parameter(50.0)  # Watts
+    power_rating: float = model_parameter(50.0)  # type: ignore
 
     # Experiment parameters
-    layerTime: float = exp_parameter()
+    layerTime: float = exp_parameter() # type: ignore
+
+    def __init__(
+            self, 
+            performance_code: str, 
+            folder_navigator, 
+            logger, 
+            **study_params
+            ):
+        
+        """Initialize energy feature model."""
+        super().__init__(
+            performance_code=performance_code,
+            folder_navigator=folder_navigator,
+            logger=logger,
+            **study_params
+        )
+        
+        # Initialize feature storage for energy consumption
+        self.features["energy_consumption"] = np.empty([])
 
     def _load_data(self, exp_nr: int) -> Any:
         """No data loading required for energy calculation."""

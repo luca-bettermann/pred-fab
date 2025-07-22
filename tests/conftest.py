@@ -1,12 +1,13 @@
 import pytest
 import tempfile
 import os
+import sys
 import json
-import yaml
-import shutil
-from typing import Dict, Any
+from pathlib import Path
+
+# Now import from lbp_package
 from lbp_package.utils.log_manager import LBPLogger
-from lbp_package.examples.example_data_interface import ExampleDataInterface
+from examples.example_data_interface import ExampleDataInterface
 
 @pytest.fixture
 def temp_dir():
@@ -44,8 +45,8 @@ def mock_config():
     """Create mock configuration."""
     return {
         'evaluation': {
-            'path_deviation': 'tests.mocks.mock_evaluation_models.PathDeviationEvaluation',
-            'energy_consumption': 'tests.mocks.mock_evaluation_models.EnergyConsumption'
+            'path_deviation': 'examples.example_evaluation_models.PathDeviationEvaluation',
+            'energy_consumption': 'examples.example_evaluation_models.EnergyConsumption'
         }
     }
 

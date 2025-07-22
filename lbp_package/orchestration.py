@@ -1,6 +1,6 @@
 import yaml
 from importlib import import_module
-from typing import Any, Dict, List, Type, Tuple
+from typing import Any, Dict, List, Type, Tuple, Optional
 
 from .utils.folder_navigator import FolderNavigator
 from .utils.log_manager import LBPLogger
@@ -43,14 +43,12 @@ class LBPManager:
         self.study_code = None
         self.study_record = None
         self.exp_record = None
-        self.study_params: Dict = None
-        self.performance_mapping: Dict[str, Type[EvaluationModel]] = None
+        self.study_params: Dict = {}
+        self.performance_mapping: Dict[str, Type[EvaluationModel]] = {}
 
         # Subsystem components
         self.eval_system = None
         self.pred_system = None
-
-        self.initialized = False
 
     # === PUBLIC API METHODS (Called externally) ===
     def initialize_study(self, study_code: str, debug_flag: bool = False) -> None:
@@ -75,12 +73,12 @@ class LBPManager:
         # Validate study parameters
         self.study_params = self.interface.get_study_parameters(self.study_record)
         if not self.study_params or not isinstance(self.study_params, dict):
-            self.logger.log_and_raise(f"Study parameters for study code '{study_code}' empty or not a dict. Please check the database configuration.")
+            raise ValueError(f"Study parameters for study code '{study_code}' empty or not a dict. Please check the database configuration.")
         
         # Load performance configuration
         performance_records = self.interface.get_performance_records(self.study_record)
         if not performance_records or not isinstance(performance_records, list):
-            self.logger.log_and_raise(f"Performance records for study code '{study_code}' empty or not a list. Please check the database configuration.")
+            raise ValueError(f"Performance records for study code '{study_code}' empty or not a list. Please check the database configuration.")
 
         # Initialize evaluation system
         self.eval_system = EvaluationSystem(self.nav, self.interface, self.logger)
@@ -89,10 +87,18 @@ class LBPManager:
         self.performance_mapping = self._load_performance_mapping()
         for performance_record in performance_records:
             code = performance_record.get("Code")
-            if code:
-                self._performance_to_model(code)
+            assert code is not None, f"Performance record missing 'Code' field: {performance_record}"
+            assert code in self.performance_mapping, f"Performance code '{code}' not found in performance mapping."
+
+            evaluation_class = self.performance_mapping[code]
+            if evaluation_class is not None:
+                self.eval_system.add_evaluation_model(
+                        evaluation_class,
+                        code,
+                        self.study_params
+                    )
             else:
-                self.logger.warning(f"Performance record missing 'Code' field: {performance_record}")
+                self.logger.warning(f"Performance mapping '{code}' is None, skipping evaluation model creation.")
 
         # Initialize feature model instances
         self.eval_system.add_feature_model_instances(self.study_params)
@@ -101,8 +107,6 @@ class LBPManager:
         summary = self._initialization_step_summary()
         self.logger.console_summary(summary)
         self.logger.console_success(f"Successfully initialized evaluation system of study '{study_code}'.")
-        
-        self.initialized = True
 
     def run_evaluation(self, exp_nr: int, visualize_flag: bool = False, debug_flag: bool = True) -> None:
         """
@@ -113,8 +117,8 @@ class LBPManager:
             visualize_flag: Whether to show visualizations
             debug_flag: Whether to run in debug mode (no writing/saving)
         """
-        if not self.initialized:
-            self.logger.log_and_raise("LBPManager is not initialized. Please call initialize_study() first.", RuntimeError)
+        if not self.eval_system:
+            raise RuntimeError("Evaluation system is not initialized. Please call initialize_study() first.")
 
         # Configure debug mode if needed
         if debug_flag and not self.logger.debug_mode:
@@ -132,6 +136,7 @@ class LBPManager:
         exp_vars.update(self.study_params)
 
         # Execute evaluation pipeline
+
         self.eval_system.run(
             exp_nr=exp_nr, 
             exp_record=self.exp_record, 
@@ -146,21 +151,6 @@ class LBPManager:
         self.logger.console_success(f"Successfully evaluated the performance attributes of study '{self.study_code}'.")
 
     # === PRIVATE/INTERNAL METHODS (Internal use only) ===
-    def _performance_to_model(self, code: str) -> None:
-        """Add evaluation model for a performance code."""
-        if code in self.performance_mapping:
-            evaluation_class = self.performance_mapping[code]
-            if evaluation_class is not None:
-                self.eval_system.add_evaluation_model(
-                        evaluation_class,
-                        code,
-                        self.study_params
-                    )
-            else:
-                self.logger.warning(f"Performance mapping '{code}' is None, skipping evaluation model creation.")
-        else:
-            self.logger.log_and_raise(f"Performance attribute '{code}' not found in performance mapping.")
-
     def _load_performance_mapping(self) -> Dict[str, Type[EvaluationModel]]:
         """
         Load performance-to-evaluation-model mapping from configuration.
@@ -175,15 +165,15 @@ class LBPManager:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
         except FileNotFoundError:
-            self.logger.log_and_raise(f"Configuration file not found at {config_path}. Please ensure the file exists.", FileNotFoundError)
+            raise FileNotFoundError(f"Configuration file not found at {config_path}. Please ensure the file exists.")
         except yaml.YAMLError as e:
-            self.logger.log_and_raise(f"Error parsing YAML configuration: {e}", yaml.YAMLError)
+            raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
 
         mapping = {}
         performance_mapping = config.get('evaluation', {})
 
         if not performance_mapping:
-            self.logger.log_and_raise("No performance to class mappings found in the evaluation config.")
+            raise ValueError("No performance to class mappings found in the evaluation config.")
 
         # Dynamically import evaluation model classes
         for code, class_path in performance_mapping.items():
@@ -193,12 +183,14 @@ class LBPManager:
                 evaluation_class = getattr(module, class_name)
                 mapping[code] = evaluation_class
             except (ValueError, ImportError, AttributeError) as e:
-                self.logger.log_and_raise(f"Error loading class '{class_path}' for performance code '{code}': {e}")
+                raise ImportError(f"Error loading class '{class_path}' for performance code '{code}': {e}")
             
         return mapping
     
     def _initialization_step_summary(self) -> str:
         """Generate summary of initialization results."""
+        assert self.eval_system is not None
+        
         summary = f"Loaded {len(self.performance_mapping)} performance attributes, {len(self.eval_system.evaluation_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in self.eval_system.evaluation_models.values()]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Feature Model':<20}\033[0m"
         
@@ -208,14 +200,11 @@ class LBPManager:
 
     def _evaluation_step_summary(self) -> str:
         """Generate summary of evaluation results."""
+        assert self.eval_system is not None
+
         summary = f"Evaluated {len(self.performance_mapping)} performance attributes, using {len(self.eval_system.evaluation_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in self.eval_system.evaluation_models.values()]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Dimensions':<30} {'Performance Value':<20}\033[0m"
 
-        for code, eval_model in self.eval_system.evaluation_models.items():
-            dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
-            dimensions = "(" + dimensions + ")"
-            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {eval_model.performance_metrics.get('Value', 0):<20}"
-        return summary + "\n"
         for code, eval_model in self.eval_system.evaluation_models.items():
             dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
             dimensions = "(" + dimensions + ")"

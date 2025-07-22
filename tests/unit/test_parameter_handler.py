@@ -9,12 +9,12 @@ from lbp_package.utils.parameter_handler import (
 class TestParameterClass(ParameterHandling):
     """Test class for parameter handling."""
     
-    model_param1: float = model_parameter(1.0)
-    model_param2: str = model_parameter("default")
-    exp_param1: int = exp_parameter(10)
-    exp_param2: bool = exp_parameter(False)
-    runtime_param1: str = runtime_parameter()
-    runtime_param2: int = runtime_parameter()
+    model_param1: float = model_parameter(1.0) # type: ignore
+    model_param2: str = model_parameter("default") # type: ignore
+    exp_param1: int = exp_parameter(10) # type: ignore
+    exp_param2: bool = exp_parameter(False) # type: ignore
+    runtime_param1: str = runtime_parameter() # type: ignore
+    runtime_param2: int = runtime_parameter() # type: ignore
     
     def _validate_parameters(self):
         """Mock validation method."""
