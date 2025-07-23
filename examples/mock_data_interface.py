@@ -4,11 +4,11 @@ from src.lbp_package.data_interface import DataInterface
 class ExampleDataInterface(DataInterface):
     """Example data interface for demonstration and testing."""
     
-    def __init__(self, test_data_dir: str, study_params: Dict[str, Any], experiment_data: Dict[str, Any]):
+    def __init__(self, test_data_dir: str, study_params: Dict[str, Any], exp_params: Dict[str, Any]):
         super().__init__(None)
         self.test_data_dir = test_data_dir
         self.study_params = study_params
-        self.experiment_data = experiment_data
+        self.exp_params = exp_params
         self.study_record = None
         self.exp_record = None
         
@@ -47,7 +47,7 @@ class ExampleDataInterface(DataInterface):
     
     def get_exp_variables(self, exp_record: Dict[str, Any]) -> Dict[str, Any]:
         """Return mock experiment variables."""
-        return self.experiment_data.copy()
+        return self.exp_params.copy()
     
     def push_to_database(self, exp_record: Dict[str, Any], performance_code: str, value_dict: Dict[str, Any]) -> None:
         """Mock database push - just store for verification."""

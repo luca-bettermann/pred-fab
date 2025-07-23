@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
             performance_code: Code identifying the performance metric
         """
         self.performance_codes.append(performance_code)
-        self.features[performance_code] = np.empty(0)
+        self.features[performance_code] = np.empty([])
 
     def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, **dims_dict) -> None:
         """
@@ -409,6 +409,11 @@ class EvaluationModel(ParameterHandling, ABC):
             else:
                 performance_value = np.abs(diff)
                 self.logger.warning(f"Performance value has not been scaled.")
+
+        # Ensure performance value is within [0, 1] range
+        if performance_value and not 0 <= performance_value <= 1:
+            self.logger.warning(f"Performance value {performance_value} out of bounds [0, 1] for dims {dims}. Clamping to [0, 1].")
+            performance_value = np.clip(performance_value, 0, 1)
         
         # Store results in performance array
         self.performance_array[dims][0] = target_value

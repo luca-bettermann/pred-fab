@@ -1,8 +1,6 @@
-import pytest
-import os
-import numpy as np
 from src.lbp_package.utils.folder_navigator import FolderNavigator
-from examples.example_evaluation_models import PathDeviationFeature, EnergyFeature
+from examples.path_deviation import PathDeviationFeature
+from examples.energy_consumption import EnergyFeature
 
 
 class TestPathDeviationFeature:
@@ -16,12 +14,13 @@ class TestPathDeviationFeature:
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         
         assert feature_model.tolerance_xyz == 0.1
-        assert feature_model.n_layers == 2
-        assert feature_model.n_segments == 2
+        assert feature_model.layer_id == None
+        assert feature_model.segment_id == None
         assert "path_deviation" in feature_model.performance_codes
     
     def test_feature_computation(self, temp_dir, test_logger, mock_study_params, setup_test_data):
@@ -32,6 +31,7 @@ class TestPathDeviationFeature:
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         
@@ -57,6 +57,7 @@ class TestPathDeviationFeature:
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         
@@ -74,7 +75,7 @@ class TestPathDeviationFeature:
 class TestEnergyFeature:
     """Test energy feature model."""
     
-    def test_initialization(self, temp_dir, test_logger, mock_study_params):
+    def test_initialization(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
         """Test energy feature initialization."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
         
@@ -82,13 +83,18 @@ class TestEnergyFeature:
             performance_code="energy_consumption",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         
         assert feature_model.power_rating == 50.0
-        assert feature_model.layerTime == 30.0
+        assert feature_model.layerTime == None
         assert "energy_consumption" in feature_model.performance_codes
-    
+
+        feature_model.set_experiment_parameters(**mock_exp_params)
+        assert feature_model.layerTime == 30.0
+
+
     def test_feature_computation(self, temp_dir, test_logger, mock_study_params):
         """Test energy feature computation."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
@@ -97,6 +103,7 @@ class TestEnergyFeature:
             performance_code="energy_consumption",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         
@@ -122,6 +129,7 @@ class TestEnergyFeature:
             performance_code="energy_consumption",
             folder_navigator=nav,
             logger=test_logger,
+            round_digits=3,
             **mock_study_params
         )
         

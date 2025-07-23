@@ -136,7 +136,6 @@ class LBPManager:
         exp_vars.update(self.study_params)
 
         # Execute evaluation pipeline
-
         self.eval_system.run(
             exp_nr=exp_nr, 
             exp_record=self.exp_record, 

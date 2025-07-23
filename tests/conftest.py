@@ -1,13 +1,12 @@
 import pytest
 import tempfile
 import os
-import sys
 import json
 from pathlib import Path
 
 # Now import from lbp_package
 from src.lbp_package.utils.log_manager import LBPLogger
-from examples.example_data_interface import ExampleDataInterface
+from examples.mock_data_interface import ExampleDataInterface
 
 @pytest.fixture
 def temp_dir():
@@ -21,23 +20,18 @@ def mock_study_params():
     return {
         "target_deviation": 0.0,
         "max_deviation": 0.5,
-        "n_layers": 2,
-        "n_segments": 2,
-        "tolerance_xyz": 0.1,
-        "target_energy": 100.0,
+        "target_energy": 0.0,
         "max_energy": 1000.0,
         "power_rating": 50.0
     }
 
 @pytest.fixture
-def mock_experiment_data():
+def mock_exp_params():
     """Load mock experiment data."""
     return {
         "n_layers": 2,
         "n_segments": 2,
         "layerTime": 30.0,
-        "layer_id": 0,
-        "segment_id": 0
     }
 
 @pytest.fixture
@@ -45,15 +39,15 @@ def mock_config():
     """Create mock configuration."""
     return {
         'evaluation': {
-            'path_deviation': 'examples.example_evaluation_models.PathDeviationEvaluation',
-            'energy_consumption': 'examples.example_evaluation_models.EnergyConsumption'
+            'path_deviation': 'examples.path_deviation.PathDeviationEvaluation',
+            'energy_consumption': 'examples.energy_consumption.EnergyConsumption'
         }
     }
 
 @pytest.fixture
-def mock_data_interface(temp_dir, mock_study_params, mock_experiment_data):
+def mock_data_interface(temp_dir, mock_study_params, mock_exp_params):
     """Create mock data interface with test data."""
-    return ExampleDataInterface(temp_dir, mock_study_params, mock_experiment_data)
+    return ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
 
 @pytest.fixture
 def test_logger(temp_dir):

@@ -10,12 +10,12 @@ from src.lbp_package.utils.parameter_handler import runtime_parameter, model_par
 @dataclass
 class PathDeviationEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
-    
-    # Model parameters
-    target_deviation: float = model_parameter(0.0) # type: ignore
-    max_deviation: float = model_parameter(0.5) # type: ignore
-    n_layers: int = model_parameter(2) # type: ignore
-    n_segments: int = model_parameter(2) # type: ignore
+
+    # Experiment parameters
+    target_deviation: float = model_parameter() # type: ignore
+    max_deviation: float = model_parameter() # type: ignore
+    n_layers: int = exp_parameter() # type: ignore
+    n_segments: int = exp_parameter() # type: ignore
 
     def __init__(
             self, 
@@ -24,6 +24,7 @@ class PathDeviationEvaluation(EvaluationModel):
             logger, 
             **study_params
             ):
+        
         """Initialize path deviation evaluation."""
         dimension_names = [
             ('layers', 'layer_id', 'n_layers'),
@@ -54,10 +55,6 @@ class PathDeviationFeature(FeatureModel):
     
     # Model parameters
     tolerance_xyz: float = model_parameter(0.1) # type: ignore
-
-    # Experiment parameters
-    n_layers: int = exp_parameter() # type: ignore
-    n_segments: int = exp_parameter() # type: ignore
 
     # Runtime parameters
     layer_id: int = runtime_parameter() # type: ignore
@@ -130,80 +127,3 @@ class PathDeviationFeature(FeatureModel):
         avg_deviation = total_deviation / point_count
         return {"path_deviation": avg_deviation}
 
-
-@dataclass
-class EnergyConsumption(EvaluationModel):
-    """Example energy consumption evaluation model."""
-
-    # Model parameters
-    target_energy: float = model_parameter(100.0) # type: ignore
-    max_energy: float = model_parameter(1000.0) # type: ignore
-
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator,
-            logger, 
-            **study_params
-            ):
-        
-        """Initialize energy consumption evaluation model."""
-        dimension_names = []  # No dimensions for energy consumption
-
-        super().__init__(
-            performance_code=performance_code,
-            folder_navigator=folder_navigator,
-            dimension_names=dimension_names,
-            feature_model_type=EnergyFeature,
-            logger=logger,
-            **study_params
-        )
-    
-    def _compute_target_value(self) -> float:
-        """Return target energy value."""
-        return self.target_energy
-    
-    def _compute_scaling_factor(self) -> float:
-        """Return maximum energy for normalization."""
-        return self.max_energy
-
-
-@dataclass
-class EnergyFeature(FeatureModel):
-    """Example feature model for energy consumption extraction."""
-
-    # Model parameters
-    power_rating: float = model_parameter(50.0)  # type: ignore
-
-    # Experiment parameters
-    layerTime: float = exp_parameter() # type: ignore
-
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator, 
-            logger, 
-            round_digits: int,
-            **study_params
-            ):
-        
-        """Initialize energy feature model."""
-        super().__init__(
-            performance_code=performance_code,
-            folder_navigator=folder_navigator,
-            logger=logger,
-            round_digits=round_digits,
-            **study_params
-        )
-        
-        # Initialize feature storage for energy consumption
-        self.features["energy_consumption"] = np.empty([])
-
-    def _load_data(self, exp_nr: int) -> Any:
-        """No data loading required for energy calculation."""
-        return None
-
-    def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]:
-        """Compute energy feature from power rating and layer time."""
-        energy_consumption = self.power_rating * self.layerTime  # Watts * seconds
-        return {"energy_consumption": energy_consumption}

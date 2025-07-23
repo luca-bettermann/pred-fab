@@ -1,9 +1,7 @@
-import pytest
-import os
-import yaml
 from src.lbp_package.orchestration import EvaluationSystem
 from src.lbp_package.utils.folder_navigator import FolderNavigator
-from examples.example_evaluation_models import PathDeviationEvaluation, EnergyConsumption
+from examples.path_deviation import PathDeviationEvaluation
+from examples.energy_consumption import EnergyConsumption
 
 
 class TestEvaluationSystem:
@@ -92,7 +90,7 @@ class TestEvaluationSystem:
         assert "energy_consumption_1" in energy_eval_1.feature_model.performance_codes
         assert "energy_consumption_2" in energy_eval_2.feature_model.performance_codes
     
-    def test_evaluation_workflow(self, temp_dir, test_logger, mock_data_interface, mock_study_params, setup_test_data):
+    def test_evaluation_workflow(self, temp_dir, test_logger, mock_data_interface, mock_study_params, mock_exp_params, setup_test_data):
         """Test complete evaluation workflow."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
@@ -113,7 +111,7 @@ class TestEvaluationSystem:
             exp_record=exp_record,
             visualize_flag=False,
             debug_flag=True,
-            **mock_study_params
+            **mock_exp_params
         )
         
         # Verify evaluation completed

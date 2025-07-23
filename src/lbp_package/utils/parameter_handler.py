@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field, fields
 from abc import ABC, abstractmethod
-from typing import List
 
 def model_parameter(default=None, **kwargs):
     """

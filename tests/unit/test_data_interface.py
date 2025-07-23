@@ -1,78 +1,106 @@
 import pytest
-from src.lbp_package.data_interface import DataInterface
-
-
-class ConcreteDataInterface(DataInterface):
-    """Concrete implementation for testing."""
-    
-    def get_study_record(self, study_code: str):
-        return {"id": "test_study", "code": study_code}
-    
-    def get_exp_record(self, exp_code: str):
-        return {"id": "test_exp", "code": exp_code}
-    
-    def get_study_parameters(self, study_record):
-        return {"param1": "value1", "param2": "value2"}
-    
-    def get_performance_records(self, study_record):
-        return [{"Code": "test_performance"}]
-    
-    def get_exp_variables(self, exp_record):
-        return {"var1": "value1", "var2": "value2"}
+from examples.mock_data_interface import ExampleDataInterface
 
 
 class TestDataInterface:
-    """Test data interface functionality."""
+    """Test data interface functionality using ExampleDataInterface."""
     
-    def test_concrete_implementation(self):
-        """Test concrete data interface implementation."""
-        interface = ConcreteDataInterface()
+    def test_example_data_interface_initialization(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test ExampleDataInterface initialization."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
         
-        # Test study record
+        assert interface.test_data_dir == temp_dir
+        assert interface.study_params == mock_study_params
+        assert interface.exp_params == mock_exp_params
+        assert interface.client is None
+    
+    def test_study_record_retrieval(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test study record retrieval."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        
         study_record = interface.get_study_record("TEST_STUDY")
-        assert study_record["id"] == "test_study"
-        assert study_record["code"] == "TEST_STUDY"
         
-        # Test experiment record
-        exp_record = interface.get_exp_record("TEST_EXP")
-        assert exp_record["id"] == "test_exp"
-        assert exp_record["code"] == "TEST_EXP"
-        
-        # Test study parameters
-        study_params = interface.get_study_parameters(study_record)
-        assert study_params["param1"] == "value1"
-        assert study_params["param2"] == "value2"
-        
-        # Test performance records
-        perf_records = interface.get_performance_records(study_record)
-        assert len(perf_records) == 1
-        assert perf_records[0]["Code"] == "test_performance"
-        
-        # Test experiment variables
-        exp_vars = interface.get_exp_variables(exp_record)
-        assert exp_vars["var1"] == "value1"
-        assert exp_vars["var2"] == "value2"
+        assert study_record["id"] == "mock_study_001"
+        assert study_record["fields"]["Code"] == "TEST_STUDY"
+        assert study_record["fields"]["Name"] == "Test Study TEST_STUDY"
     
-    def test_client_check(self):
-        """Test client validation."""
-        interface = ConcreteDataInterface()
+    def test_experiment_record_retrieval(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test experiment record retrieval."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
         
-        # Should not raise error with None client (base implementation)
-        interface._client_check()
+        exp_record = interface.get_exp_record("TEST_STUDY_001")
         
-        # Test with client set
+        assert exp_record["id"] == "mock_exp_001"
+        assert exp_record["fields"]["Code"] == "TEST_STUDY_001"
+        assert exp_record["fields"]["Name"] == "Test Experiment TEST_STUDY_001"
+    
+    def test_study_parameters_retrieval(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test study parameters retrieval."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        study_record = interface.get_study_record("TEST_STUDY")
+        
+        study_params = interface.get_study_parameters(study_record)
+        
+        assert study_params == mock_study_params
+        assert study_params["target_deviation"] == 0.0
+        assert study_params["max_deviation"] == 0.5
+    
+    def test_performance_records_retrieval(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test performance records retrieval."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        study_record = interface.get_study_record("TEST_STUDY")
+        
+        perf_records = interface.get_performance_records(study_record)
+        
+        assert len(perf_records) == 2
+        assert perf_records[0]["Code"] == "path_deviation"
+        assert perf_records[1]["Code"] == "energy_consumption"
+        assert all(record["Active"] for record in perf_records)
+    
+    def test_experiment_variables_retrieval(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test experiment variables retrieval."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        exp_record = interface.get_exp_record("TEST_STUDY_001")
+        
+        exp_vars = interface.get_exp_variables(exp_record)
+        
+        assert exp_vars == mock_exp_params
+        assert exp_vars["layerTime"] == 30.0
+        assert exp_vars["n_layers"] == 2
+    
+    def test_database_push_mock(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test database push functionality (mock)."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        exp_record = interface.get_exp_record("TEST_STUDY_001")
+        
+        test_values = {"Value": 0.85, "Performance": 0.90}
+        interface.push_to_database(exp_record, "path_deviation", test_values)
+        
+        assert hasattr(interface, 'pushed_data')
+        assert "path_deviation" in interface.pushed_data
+        assert interface.pushed_data["path_deviation"] == test_values
+    
+    def test_system_performance_update_mock(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test system performance update functionality (mock)."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        study_record = interface.get_study_record("TEST_STUDY")
+        
+        interface.update_system_performance(study_record)
+        
+        assert hasattr(interface, 'system_performance_updated')
+        assert interface.system_performance_updated is True
+    
+    def test_client_check_with_none_client(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test client validation with None client."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        
+        # Should raise error with None client in base implementation
+        with pytest.raises(ValueError, match="Client not initialized"):
+            interface._client_check()        
+    
+    def test_client_check_with_valid_client(self, temp_dir, mock_study_params, mock_exp_params):
+        """Test client validation with valid client."""
+        interface = ExampleDataInterface(temp_dir, mock_study_params, mock_exp_params)
+        
         interface.client = "mock_client"
         interface._client_check()  # Should not raise error
-        
-        # Test with None client
-        interface.client = None
-        with pytest.raises(ValueError, match="Client not initialized"):
-            interface._client_check()
-    
-    def test_optional_methods(self):
-        """Test optional methods have default implementations."""
-        interface = ConcreteDataInterface()
-        
-        # These should not raise errors (default implementations)
-        interface.push_to_database({}, "test_code", {})
-        interface.update_system_performance({})

@@ -6,7 +6,7 @@ from src.lbp_package.utils.parameter_handler import (
 
 
 @dataclass
-class TestParameterClass(ParameterHandling):
+class MockParameterClass(ParameterHandling):
     """Test class for parameter handling."""
     
     model_param1: float = model_parameter(1.0) # type: ignore
@@ -26,7 +26,7 @@ class TestParameterHandler:
     
     def test_model_parameter_setting(self):
         """Test setting model parameters."""
-        test_obj = TestParameterClass()
+        test_obj = MockParameterClass()
         
         # Set model parameters
         test_obj.set_model_parameters(
@@ -46,7 +46,7 @@ class TestParameterHandler:
     
     def test_experiment_parameter_setting(self):
         """Test setting experiment parameters."""
-        test_obj = TestParameterClass()
+        test_obj = MockParameterClass()
         
         # Set experiment parameters
         test_obj.set_experiment_parameters(
@@ -66,7 +66,7 @@ class TestParameterHandler:
     
     def test_runtime_parameter_setting(self):
         """Test setting runtime parameters."""
-        test_obj = TestParameterClass()
+        test_obj = MockParameterClass()
         
         # Set runtime parameters
         test_obj.set_runtime_parameters(
@@ -86,7 +86,7 @@ class TestParameterHandler:
     
     def test_parameter_filtering(self):
         """Test that parameter filtering works correctly."""
-        test_obj = TestParameterClass()
+        test_obj = MockParameterClass()
         
         # Set mixed parameters
         all_params = {
