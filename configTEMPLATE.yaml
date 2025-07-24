@@ -1,6 +1,34 @@
-# Maps performance attribute codes to the import statement of the corresponding evaluation model classes
+# Configuration template for Learning by Printing (LbP) system
+# Copy this file to config.yaml and adjust the mappings for your project
 
-# ADJUST THE EVALUATION MAPPINGS BELOW TO MATCH YOUR PROJECT STRUCTURE (performance code -> evaluation model class)
+# Evaluation model mappings
+# Maps performance codes to fully qualified class paths
 evaluation:
-  performance_1: "python_file.class_1" 
-  performance_2: "python_file.class_2"
+  performance_1: "your_module.YourEvaluationClass1" 
+  performance_2: "your_module.YourEvaluationClass2"
+
+# Prediction model mappings (to be added)
+# prediction:
+#   model_1: "your_module.YourMLModel1"
+#   model_2: "your_module.YourMLModel2"
+
+# Calibration/Optimization mappings (to be added)  
+# calibration:
+#   optimizer_1: "your_module.YourOptimizer1"
+#   optimizer_2: "your_module.YourOptimizer2"
+
+# System settings
+system:
+  # Default execution modes
+  debug_mode: false
+  visualize_flag: false
+  
+  # Numerical precision
+  round_digits: 3
+  
+  # Logging
+  log_level: 'INFO'
+  
+  # Performance evaluation
+  performance_bounds_check: true
+  performance_warning_threshold: 0.1

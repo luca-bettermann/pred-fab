@@ -2,9 +2,9 @@ import pytest
 import tempfile
 import os
 import json
+import yaml
 from pathlib import Path
 
-# Now import from lbp_package
 from src.lbp_package.utils.log_manager import LBPLogger
 from examples.mock_data_interface import ExampleDataInterface
 
@@ -36,13 +36,11 @@ def mock_exp_params():
 
 @pytest.fixture
 def mock_config():
-    """Create mock configuration."""
-    return {
-        'evaluation': {
-            'path_deviation': 'examples.path_deviation.PathDeviationEvaluation',
-            'energy_consumption': 'examples.energy_consumption.EnergyConsumption'
-        }
-    }
+    """Load example configuration from examples/config.yaml."""
+    config_path = Path(__file__).parent.parent / "examples" / "config.yaml"
+    
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 @pytest.fixture
 def mock_data_interface(temp_dir, mock_study_params, mock_exp_params):

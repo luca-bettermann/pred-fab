@@ -1,0 +1,40 @@
+# Example configuration file for Learning by Printing (LbP) system
+# This file defines the mapping between performance codes and their corresponding evaluation model classes
+
+# Evaluation model mappings
+# Each performance code maps to a fully qualified class path
+evaluation:
+  # Path deviation performance metric
+  # Measures how much the actual printed path deviates from the designed path
+  path_deviation: 'examples.path_deviation.PathDeviationEvaluation'
+  
+  # Energy consumption performance metric  
+  # Calculates energy usage during the printing process
+  energy_consumption: 'examples.energy_consumption.EnergyConsumption'
+
+# Future sections for other system components
+# prediction:
+#   # Machine learning models for performance prediction
+#   # multilayer_perceptron: 'examples.ml_models.MultilayerPerceptron'
+#   # gaussian_process: 'examples.ml_models.GaussianProcess'
+
+# calibration:
+#   # Optimization algorithms for parameter calibration
+#   # evolutionary_algorithm: 'examples.optimizers.EvolutionaryAlgorithm'
+#   # gradient_descent: 'examples.optimizers.GradientDescent'
+
+# System settings
+system:
+  # Default execution mode settings
+  debug_mode: false
+  visualize_flag: false
+  
+  # Default rounding precision for numerical results
+  round_digits: 3
+
+  # Logging configuration
+  log_level: 'INFO'
+  
+  # Performance evaluation settings
+  performance_bounds_check: true
+  performance_warning_threshold: 0.1

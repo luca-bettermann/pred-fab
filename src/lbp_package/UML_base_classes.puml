@@ -8,7 +8,7 @@
 ABSTRACT_CLASS FeatureModel #90EE9055 {
     +__init__(exp_params)
     +load_data(exp_nr)
-    +run_feature_extraction(exp_nr, visualize_flag)
+    +compute_features(exp_nr, visualize_flag)
 }
 
 ABSTRACT_CLASS MLModel #FFFFE055 {
@@ -38,8 +38,9 @@ ABSTRACT_CLASS DataInterface #eeb6ff55 {
 
 class LBPManager {
     +__init__(study)
+    +evaluate(exp_nr)
+    +predict(exp_nr)
     +calibrate(exp_nr)
-    +push_to_server()
 }
 
 ' System Classes - Core Orchestration
@@ -54,7 +55,6 @@ class PredictionSystem {
     +__init__()
     +add_ml_model()
     +run_inference(exp_params, visualize_flag)
-    +benchmark_models()
 }
 
 ' System Classes - Core Orchestration
@@ -74,19 +74,14 @@ class Calibration {
 
 ' Relationships
 
-LBPManager *-- Calibration
 LBPManager *-- DataInterface
-
-' LBPManager *-- Adaptation
-' LBPManager *-- Augmentation
-Calibration *-- EvaluationSystem
-Calibration *-- PredictionSystem
+LBPManager *-- EvaluationSystem
+LBPManager *-- PredictionSystem
+LBPManager *-- Calibration
 
 EvaluationSystem o-- EvaluationModel
 EvaluationModel o-- FeatureModel
-
 PredictionSystem o-- MLModel
-
 Calibration o-- Optimizer
 
 @enduml
