@@ -3,37 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List
 from src.lbp_package.data_interface import DataInterface
-from tests.test_data import create_test_data_files
 
-
-"""
-Script to generate example data for the LBP package examples.
-Run this script to create the test data files in examples/local/
-"""
-
-def main():
-    """Generate example data files."""
-    # Get the examples directory
-    examples_dir = Path(__file__).parent
-    local_dir = examples_dir / "local"
-    
-    # Create the local directory if it doesn't exist
-    local_dir.mkdir(exist_ok=True)
-    
-    # Generate test data for the "test" study
-    study_code = "test"
-    exp_nr = 1
-    create_test_data_files(str(local_dir), study_code=study_code, exp_nr=exp_nr)
-    
-    print("✓ Example data generated successfully!")
-    print(f"  Study: {study_code}")
-    print(f"  Experiment: {study_code}_{exp_nr:03d}")
-    print(f"  Location: {local_dir}/{study_code}/")
-
-
-"""
-Class to read data from the created local JSON files.
-"""
 
 class FileDataInterface(DataInterface):
     """Example data interface that reads from local JSON files."""
@@ -138,6 +108,3 @@ class FileDataInterface(DataInterface):
         """Mock system performance update."""
         self.system_performance_updated = True
 
-
-if __name__ == "__main__":
-    main()

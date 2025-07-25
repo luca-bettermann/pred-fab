@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from src.lbp_package.orchestration import LBPManager
 from examples.file_data_interface import FileDataInterface
-from tests.test_data import create_test_data_files
+from tests.conftest import create_test_data_files
 
 def main():
     # Get paths relative to this file

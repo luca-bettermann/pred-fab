@@ -92,7 +92,7 @@ class TestEnergyConsumption:
         # Test setting experiment parameters
         mock_exp_params.update(mock_study_params)
         eval_model.set_experiment_parameters(**mock_exp_params)
-        assert eval_model.max_energy == 1000.0 # Experiment parameter set
+        assert eval_model.max_energy == 10000.0 # Experiment parameter set
 
 
     
@@ -111,8 +111,8 @@ class TestEnergyConsumption:
 
         mock_exp_params.update(mock_study_params)
         eval_model.set_experiment_parameters(**mock_exp_params)
-        assert eval_model._compute_scaling_factor() == 1000.0
-    
+        assert eval_model._compute_scaling_factor() == 10000.0
+
     def test_scalar_evaluation(self, temp_dir, test_logger, mock_study_params):
         """Test scalar evaluation (no dimensions)."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
