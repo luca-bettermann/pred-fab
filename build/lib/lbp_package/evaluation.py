@@ -2,15 +2,15 @@ import os
 import numpy as np
 import pandas as pd
 import itertools
-from typing import Any, Dict, List, Type, Tuple
+from typing import Any, Dict, List, Type, Tuple, Optional
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
-from .utils.folder_navigator import FolderNavigator
-from .utils.parameter_handler import ParameterHandling
-from .utils.log_manager import LBPLogger
-from .data_interface import DataInterface
+from src.lbp_package.utils.folder_navigator import FolderNavigator
+from src.lbp_package.utils.parameter_handler import ParameterHandling
+from src.lbp_package.utils.log_manager import LBPLogger
+from src.lbp_package.data_interface import DataInterface
 
 
 @dataclass
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
             performance_code: Code identifying the performance metric
         """
         self.performance_codes.append(performance_code)
-        self.features[performance_code] = None
+        self.features[performance_code] = np.empty([])
 
     def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, **dims_dict) -> None:
         """
@@ -126,6 +126,9 @@ class FeatureModel(ParameterHandling, ABC):
             # Store results in feature arrays
             for perf_code, value in feature_dict.items():
                 indices = tuple(dims_dict.values())
+
+                assert perf_code in self.performance_codes, f"Performance code '{perf_code}' not initialized in feature model."
+                assert self.features[perf_code] is not None, f"Feature storage for '{perf_code}' is not initialized."
                 self.features[perf_code][indices] = value
                 self.logger.debug(f"Extracted feature '{perf_code}': {round(value, self.round_digits) if value is not None else value}")
 
@@ -225,12 +228,12 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Feature model configuration
         self.feature_model_type: Type[FeatureModel] = feature_model_type
-        self.feature_model = None
+        self.feature_model: Optional[FeatureModel] = None
 
         # Dimensional configuration
-        self.dim_names: List[str] = None
-        self.dim_iterator_names: List[str] = None
-        self.dim_param_names: List[str] = None
+        self.dim_names: List[str] = []
+        self.dim_iterator_names: List[str] = []
+        self.dim_param_names: List[str] = []
 
         # Initialize the dimensional layers, in the form of [('dim_name', 'dim_iterator_name', 'dim_parameter_name'), (...), ...]
         # Note that the names must represent the namig convention in the code
@@ -241,13 +244,8 @@ class EvaluationModel(ParameterHandling, ABC):
         # Performance storage and configuration
         self.round_digits: int = round_digits
         self.performance_code = performance_code
-        self.performance_array: NDArray[np.float64] = None
-        self.performance_metrics = dict(
-            Value=None,
-            Performance=None,
-            Robustness=None,
-            Resilience=None,
-        )
+        self.performance_array: NDArray[np.float64] = np.empty((0,))
+        self.performance_metrics: Dict[str, Optional[np.floating]] = {}
 
         # Apply dataclass-based parameter handling
         self.set_model_parameters(**study_params)
@@ -278,6 +276,7 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Configure models with experiment parameters
         self.set_experiment_parameters(**exp_params)
+        assert self.feature_model is not None, "Feature model must be initialized before running evaluation."
         self.feature_model.set_experiment_parameters(**exp_params)
 
         # Process all dimensional combinations
@@ -326,7 +325,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.performance_metrics[key] = None
             
     # === OPTIONAL METHODS ===
-    def _compute_scaling_factor(self) -> float:
+    def _compute_scaling_factor(self) -> Optional[float]:
         """
         Optionally compute scaling factor for performance normalization.
         
@@ -380,6 +379,7 @@ class EvaluationModel(ParameterHandling, ABC):
             dims: Tuple of current dimension indices
         """
         # Extract feature value
+        assert self.feature_model is not None, "Feature model must be initialized before computing performance."
         if not dims:
             feature_value = self.feature_model.features[self.performance_code].item()
         else:
@@ -409,6 +409,11 @@ class EvaluationModel(ParameterHandling, ABC):
             else:
                 performance_value = np.abs(diff)
                 self.logger.warning(f"Performance value has not been scaled.")
+
+        # Ensure performance value is within [0, 1] range
+        if performance_value and not 0 <= performance_value <= 1:
+            self.logger.warning(f"Performance value {performance_value} out of bounds [0, 1] for dims {dims}. Clamping to [0, 1].")
+            performance_value = np.clip(performance_value, 0, 1)
         
         # Store results in performance array
         self.performance_array[dims][0] = target_value
@@ -443,6 +448,7 @@ class EvaluationModel(ParameterHandling, ABC):
             interval_dict.update(indices_dict)
 
             # Add evaluation results
+            assert self.feature_model is not None, "Feature model must be initialized before adding evaluation results."
             feature_value = self.feature_model.features[self.performance_code][indices]
             target_value = self.performance_array[indices][0]
             diff_value = self.performance_array[indices][1]
@@ -469,138 +475,3 @@ class EvaluationModel(ParameterHandling, ABC):
         dim_sizes = self._compute_dim_sizes()
         return [range(size) for size in dim_sizes]
 
-
-class EvaluationSystem:
-    """
-    Orchestrates multiple evaluation models for a complete performance assessment.
-    
-    Manages the execution of evaluation models, handles database interactions,
-    and coordinates the overall evaluation workflow.
-    """
-    
-    def __init__(
-        self,
-        folder_navigator: FolderNavigator,
-        data_interface: DataInterface,
-        logger: LBPLogger
-    ) -> None:
-        """
-        Initialize evaluation system.
-        
-        Args:
-            folder_navigator: File system navigation utility
-            data_interface: Database interface for data access
-            logger: Logger instance for debugging and monitoring
-        """
-        self.nav = folder_navigator
-        self.interface = data_interface
-        self.logger = logger
-        self.evaluation_models = {}
-
-    # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, evaluation_class: Type[EvaluationModel], performance_code: str, study_params: Dict[str, Any]) -> None:
-        """
-        Add an evaluation model to the system.
-        
-        Args:
-            evaluation_class: Class of evaluation model to instantiate
-            performance_code: Code identifying the performance metric
-            study_params: Study parameters for model configuration
-        """
-        self.logger.info(f"Adding '{evaluation_class.__name__}' model to evaluate performance '{performance_code}'")
-        eval_model = evaluation_class(
-            performance_code,
-            folder_navigator=self.nav,
-            logger=self.logger,
-            **study_params
-        )
-        self.evaluation_models[performance_code] = eval_model
-
-    def add_feature_model_instances(self, study_params: Dict[str, Any]) -> None:
-        """
-        Create feature model instances for evaluation models.
-        
-        Optimizes by sharing feature model instances where possible.
-        
-        Args:
-            study_params: Study parameters for feature model configuration
-        """
-        feature_model_dict = {}
-
-        for eval_model in self.evaluation_models.values():
-            feature_model_type = eval_model.feature_model_type
-            
-            # Share feature model instances of the same type
-            if feature_model_type not in feature_model_dict:
-                eval_model.feature_model = feature_model_type(
-                    performance_code=eval_model.performance_code, 
-                    folder_navigator=eval_model.nav, 
-                    logger=self.logger, 
-                    round_digits=eval_model.round_digits,
-                    **study_params
-                )
-                feature_model_dict[feature_model_type] = eval_model.feature_model
-                self.logger.info(f"Adding feature model instance '{type(eval_model.feature_model).__name__}' to evaluation model '{type(eval_model).__name__}'")
-            else:
-                # Reuse existing feature model instance
-                eval_model.feature_model = feature_model_dict[feature_model_type]
-                eval_model.feature_model.initialize_for_performance_code(eval_model.performance_code)
-                self.logger.info(f"Reusing existing feature model instance '{type(eval_model.feature_model).__name__}' for evaluation model '{type(eval_model).__name__}'")
-            
-    def run(self, exp_nr: int, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
-        """
-        Execute evaluation for all models.
-        
-        Args:
-            exp_nr: Experiment number
-            exp_record: Experiment record from database
-            visualize_flag: Whether to show visualizations
-            debug_flag: Whether to run in debug mode (no writing/saving)
-            **exp_params: Experiment parameters
-        """
-        self.logger.info(f"Running evaluation system for experiment {exp_nr}")
-        
-        # Initialize all models before execution
-        self._model_exp_initialization(**exp_params)
-
-        # Execute each evaluation model
-        for performance_code, eval_model in self.evaluation_models.items():
-            self.logger.console_info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}' evaluation model...")
-            eval_model.run(exp_nr, visualize_flag, debug_flag, **exp_params)
-            self.logger.info(f"Finished evaluation for '{performance_code}' with '{type(eval_model).__name__}' model.")
-
-            # Push results to database if not in debug mode
-            if not debug_flag:
-                self.logger.info(f"Pushing results to database for '{performance_code}'...")
-                self.interface.push_to_database(exp_record, performance_code, eval_model.performance_metrics)
-            else:
-                self.logger.info(f"Debug mode: Skipping database push for '{performance_code}'")
-
-        self.logger.console_info("All evaluations completed successfully.")
-
-        # Update system-wide performance metrics
-        if not debug_flag:
-            self.logger.info("Updating system performance...")
-            self.interface.update_system_performance(exp_record)
-        else:
-            self.logger.info("Debug mode: Skipping system performance update")
-
-    # === PRIVATE/INTERNAL METHODS (Internal use only) ===
-    def _model_exp_initialization(self, **exp_params) -> None:
-        """
-        Initialize all evaluation models for the current experiment.
-        
-        Args:
-            **exp_params: Experiment parameters
-        """
-        for eval_model in self.evaluation_models.values():
-            self.logger.info(f"Initializing arrays of evaluation model '{eval_model.performance_code}' and its feature model '{type(eval_model.feature_model).__name__}'")
-
-            # Configure models with experiment parameters
-            eval_model.set_experiment_parameters(**exp_params)
-            eval_model.feature_model.set_experiment_parameters(**exp_params)
-
-            # Initialize arrays with correct dimensions
-            dim_sizes = eval_model._compute_dim_sizes()
-            eval_model.reset_for_new_experiment(dim_sizes)
-            eval_model.feature_model.reset_for_new_experiment(eval_model.performance_code, dim_sizes)

@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Type
+
 
 class LBPLogger:
     """
@@ -98,21 +98,6 @@ class LBPLogger:
         clean_message = self._strip_ansi_codes(message)  
         self.logger.info(f"CONSOLE SUMMARY:\n\n{clean_message}")
 
-    def log_and_raise(self, message: str, exception_type: Type[Exception] = ValueError) -> None:
-        """
-        Log error message and raise exception.
-        
-        Args:
-            message: Error message to log and display
-            exception_type: Type of exception to raise
-            
-        Raises:
-            exception_type: The specified exception with the message
-        """
-        print(f"❌ {message}")
-        self.logger.error(message)
-        raise exception_type(message)
-        
     def switch_to_debug_mode(self) -> None:
         """Switch logger to debug mode by renaming current file."""
         if not self.debug_mode:

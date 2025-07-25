@@ -1,2 +1,3 @@
 .venv/
 .examples/logs/
+build/

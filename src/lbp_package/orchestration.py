@@ -86,7 +86,7 @@ class EvaluationSystem:
                 eval_model.feature_model.initialize_for_performance_code(eval_model.performance_code)
                 self.logger.info(f"Reusing existing feature model instance '{type(eval_model.feature_model).__name__}' for evaluation model '{type(eval_model).__name__}'")
             
-    def run(self, exp_nr: int, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
+    def run(self, study_record: Dict[str, Any], exp_nr: int, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
         """
         Execute evaluation for all models.
         
@@ -120,7 +120,7 @@ class EvaluationSystem:
         # Update system-wide performance metrics
         if not debug_flag:
             self.logger.info("Updating system performance...")
-            self.interface.update_system_performance(exp_record)
+            self.interface.update_system_performance(study_record)
         else:
             self.logger.info("Debug mode: Skipping system performance update")
 
