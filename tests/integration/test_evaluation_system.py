@@ -102,11 +102,13 @@ class TestEvaluationSystem:
         # Add feature model instances
         eval_system.add_feature_model_instances(mock_study_params)
         
-        # Create mock experiment record
+        # Create mock study and experiment record
+        study_record = {"id": "test_study", "fields": {"Code": "test_001"}}
         exp_record = {"id": "test_exp", "fields": {"Code": "test_001"}}
         
         # Run evaluation in debug mode (no database operations)
         eval_system.run(
+            study_record=study_record,
             exp_nr=1,
             exp_record=exp_record,
             visualize_flag=False,

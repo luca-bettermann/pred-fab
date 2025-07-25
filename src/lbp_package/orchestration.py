@@ -2,10 +2,10 @@ import yaml
 from importlib import import_module
 from typing import Any, Dict, List, Type, Tuple, Optional
 
-from src.lbp_package.utils.folder_navigator import FolderNavigator
-from src.lbp_package.utils.log_manager import LBPLogger
-from src.lbp_package.evaluation import EvaluationModel
-from src.lbp_package.data_interface import DataInterface
+from .utils.folder_navigator import FolderNavigator
+from .utils.log_manager import LBPLogger
+from .evaluation import EvaluationModel
+from .data_interface import DataInterface
 
 
 
@@ -274,7 +274,7 @@ class LBPManager:
             visualize_flag: Whether to show visualizations (uses system default if None)
             debug_flag: Whether to run in debug mode (uses system default if None)
         """
-        if not self.eval_system:
+        if not self.eval_system or not self.study_record:
             raise RuntimeError("Evaluation system is not initialized. Please call initialize_study() first.")
 
         # Use system defaults if not explicitly provided
@@ -300,6 +300,7 @@ class LBPManager:
 
         # Execute evaluation pipeline
         self.eval_system.run(
+            study_record=self.study_record,
             exp_nr=exp_nr, 
             exp_record=self.exp_record, 
             visualize_flag=actual_visualize_flag, 

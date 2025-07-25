@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from src.lbp_package.orchestration import LBPManager
+from lbp_package.orchestration import LBPManager
 from examples.file_data_interface import FileDataInterface
 from tests.conftest import create_test_data_files
 

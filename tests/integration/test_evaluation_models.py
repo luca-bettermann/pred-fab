@@ -1,4 +1,3 @@
-
 from src.lbp_package.utils.folder_navigator import FolderNavigator
 from examples.path_deviation import PathEvaluation
 from examples.energy_consumption import EnergyConsumption
@@ -9,7 +8,7 @@ class TestPathDeviationEvaluation:
     
     def test_initialization(self, temp_dir, test_logger, mock_study_params):
         """Test path deviation evaluation initialization."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         eval_model = PathEvaluation(
             performance_code="path_deviation",
@@ -74,7 +73,7 @@ class TestEnergyConsumption:
     
     def test_initialization(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
         """Test energy consumption evaluation initialization."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         eval_model = EnergyConsumption(
             performance_code="energy_consumption",
@@ -135,4 +134,5 @@ class TestEnergyConsumption:
         
         # Test dimension ranges for scalar
         dim_ranges = eval_model._compute_dim_ranges()
+        assert len(dim_ranges) == 0
         assert len(dim_ranges) == 0

@@ -14,7 +14,6 @@ class TestLBPManager:
         manager = LBPManager(
             root_folder=temp_dir,
             local_folder=temp_dir,
-            server_folder=temp_dir,
             log_folder=log_dir,
             data_interface=mock_data_interface
         )
@@ -127,5 +126,6 @@ class TestLBPManager:
         
         # Test initialization with missing config
         with pytest.raises(FileNotFoundError, match="Configuration file not found"):
+            manager.initialize_study("test")
             manager.initialize_study("test")
     
