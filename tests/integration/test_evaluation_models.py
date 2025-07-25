@@ -1,6 +1,6 @@
 
 from src.lbp_package.utils.folder_navigator import FolderNavigator
-from examples.path_deviation import PathDeviationEvaluation
+from examples.path_deviation import PathEvaluation
 from examples.energy_consumption import EnergyConsumption
 
 
@@ -11,7 +11,7 @@ class TestPathDeviationEvaluation:
         """Test path deviation evaluation initialization."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
         
-        eval_model = PathDeviationEvaluation(
+        eval_model = PathEvaluation(
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,
@@ -31,7 +31,7 @@ class TestPathDeviationEvaluation:
         """Test target value and scaling factor computation."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
         
-        eval_model = PathDeviationEvaluation(
+        eval_model = PathEvaluation(
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,
@@ -45,7 +45,7 @@ class TestPathDeviationEvaluation:
         """Test dimensional configuration."""
         nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
         
-        eval_model = PathDeviationEvaluation(
+        eval_model = PathEvaluation(
             performance_code="path_deviation",
             folder_navigator=nav,
             logger=test_logger,

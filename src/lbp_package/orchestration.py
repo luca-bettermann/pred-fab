@@ -156,10 +156,11 @@ class LBPManager:
     
     def __init__(
             self, 
+            root_folder: str,
             local_folder: str, 
-            server_folder: str, 
             log_folder: str, 
-            data_interface: DataInterface
+            data_interface: DataInterface,
+            server_folder: Optional[str] = None
             ):
         """
         Initialize LBP Manager.
@@ -176,7 +177,7 @@ class LBPManager:
         self.interface = data_interface
         
         # Initialize file system navigator
-        self.nav = FolderNavigator(local_folder, server_folder)
+        self.nav = FolderNavigator(root_folder, local_folder, server_folder)
         
         # Study and experiment state
         self.study_code = None
@@ -322,7 +323,7 @@ class LBPManager:
             ValueError: If config structure is invalid
         """
         self.logger.info("Loading configuration from config.yaml file")
-        config_path = "config.yaml"
+        config_path = self.nav.root_folder + "/config.yaml"
 
         try:
             with open(config_path, 'r') as f:

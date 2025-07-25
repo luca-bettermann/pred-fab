@@ -6,7 +6,7 @@
 evaluation:
   # Path deviation performance metric
   # Measures how much the actual printed path deviates from the designed path
-  path_deviation: 'examples.path_deviation.PathDeviationEvaluation'
+  path_deviation: 'examples.path_deviation.PathEvaluation'
   
   # Energy consumption performance metric  
   # Calculates energy usage during the printing process
@@ -31,9 +31,6 @@ system:
   
   # Default rounding precision for numerical results
   round_digits: 3
-
-  # Logging configuration
-  log_level: 'INFO'
   
   # Performance evaluation settings
   performance_bounds_check: true

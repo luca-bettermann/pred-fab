@@ -8,7 +8,7 @@ from src.lbp_package.evaluation import EvaluationModel, FeatureModel
 from src.lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
 
 @dataclass
-class PathDeviationEvaluation(EvaluationModel):
+class PathEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
 
     # Experiment parameters

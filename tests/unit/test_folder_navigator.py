@@ -8,10 +8,11 @@ class TestFolderNavigator:
     
     def test_initialization(self, temp_dir):
         """Test folder navigator initialization."""
+        root_folder = temp_dir
         local_folder = os.path.join(temp_dir, "local")
         server_folder = os.path.join(temp_dir, "server")
         
-        nav = FolderNavigator(local_folder, server_folder)
+        nav = FolderNavigator(root_folder, local_folder, server_folder)
         
         assert nav.local_folder == local_folder
         assert nav.server_folder == server_folder
@@ -20,7 +21,7 @@ class TestFolderNavigator:
     
     def test_set_study_code(self, temp_dir):
         """Test setting study code."""
-        nav = FolderNavigator(temp_dir, temp_dir)
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir)
         
         nav.set_study_code("TEST_STUDY")
         
@@ -29,7 +30,7 @@ class TestFolderNavigator:
     
     def test_get_experiment_code(self, temp_dir):
         """Test experiment code generation."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         exp_code = nav.get_experiment_code(1)
         assert exp_code == "TEST_STUDY_001"
@@ -39,7 +40,7 @@ class TestFolderNavigator:
     
     def test_get_experiment_folder(self, temp_dir):
         """Test experiment folder path generation."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         exp_folder = nav.get_experiment_folder(1)
         expected = os.path.join(temp_dir, "TEST_STUDY", "TEST_STUDY_001")
@@ -50,7 +51,7 @@ class TestFolderNavigator:
         local_folder = os.path.join(temp_dir, "local")
         server_folder = os.path.join(temp_dir, "server")
         
-        nav = FolderNavigator(local_folder, server_folder, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, local_folder, server_folder, "TEST_STUDY")
         
         server_exp_folder = nav.get_server_experiment_folder(1)
         expected = os.path.join(server_folder, "TEST_STUDY", "TEST_STUDY_001")
@@ -58,7 +59,7 @@ class TestFolderNavigator:
     
     def test_copy_to_folder(self, temp_dir):
         """Test file copying functionality."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         # Create source file
         src_file = os.path.join(temp_dir, "test_file.txt")
@@ -82,14 +83,14 @@ class TestFolderNavigator:
     
     def test_copy_nonexistent_file(self, temp_dir):
         """Test copying nonexistent file raises error."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         with pytest.raises(FileNotFoundError):
             nav.copy_to_folder("nonexistent.txt", temp_dir)
     
     def test_copy_to_nonexistent_directory(self, temp_dir):
         """Test copying to nonexistent directory raises error."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
         
         # Create source file
         src_file = os.path.join(temp_dir, "test_file.txt")
@@ -102,10 +103,10 @@ class TestFolderNavigator:
     def test_check_server_connection(self, temp_dir):
         """Test server connection checking."""
         # Test with existing server folder
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
-        assert nav.check_server_connection() == True
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "TEST_STUDY")
+        assert nav.check_folder_access(temp_dir) == True
         
         # Test with nonexistent server folder
-        nav_bad = FolderNavigator(temp_dir, "nonexistent_server", "TEST_STUDY")
+        non_existent_folder = os.path.join(temp_dir, "nonexistent")
         with pytest.raises(ConnectionError):
-            nav_bad.check_server_connection()
+            nav.check_folder_access(non_existent_folder)

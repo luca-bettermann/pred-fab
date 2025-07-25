@@ -8,7 +8,7 @@ class TestPathDeviationFeature:
     
     def test_initialization(self, temp_dir, test_logger, mock_study_params):
         """Test path deviation feature initialization."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = PathDeviationFeature(
             performance_code="path_deviation",
@@ -25,7 +25,7 @@ class TestPathDeviationFeature:
     
     def test_feature_computation(self, temp_dir, test_logger, mock_study_params, setup_test_data):
         """Test path deviation feature computation."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = PathDeviationFeature(
             performance_code="path_deviation",
@@ -51,7 +51,7 @@ class TestPathDeviationFeature:
     
     def test_data_loading(self, temp_dir, test_logger, mock_study_params, setup_test_data):
         """Test data loading functionality."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = PathDeviationFeature(
             performance_code="path_deviation",
@@ -77,7 +77,7 @@ class TestEnergyFeature:
     
     def test_initialization(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
         """Test energy feature initialization."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = EnergyFeature(
             performance_code="energy_consumption",
@@ -97,7 +97,7 @@ class TestEnergyFeature:
 
     def test_feature_computation(self, temp_dir, test_logger, mock_study_params):
         """Test energy feature computation."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = EnergyFeature(
             performance_code="energy_consumption",
@@ -123,7 +123,7 @@ class TestEnergyFeature:
     
     def test_parameter_updates(self, temp_dir, test_logger, mock_study_params):
         """Test parameter updates affect feature computation."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         feature_model = EnergyFeature(
             performance_code="energy_consumption",

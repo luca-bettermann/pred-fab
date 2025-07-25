@@ -1,0 +1,16 @@
+{
+  "records": [
+    {
+      "Code": "path_deviation",
+      "Name": "Path Deviation",
+      "Active": true,
+      "Unit": "mm"
+    },
+    {
+      "Code": "energy_consumption",
+      "Name": "Energy Consumption",
+      "Active": true,
+      "Unit": "Wh"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "exp_name": "Test Experiment test_001",
+  "description": "Generated test experiment",
+  "parameters": {
+    "n_layers": 2,
+    "n_segments": 2,
+    "layerTime": 30.0
+  },
+  "status": "completed"
+}

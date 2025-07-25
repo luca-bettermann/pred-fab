@@ -2,6 +2,32 @@
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 
+## Project Structure
+
+```
+lbp_package/
+├── src/lbp_package/           # Core framework code
+│   ├── evaluation.py          # Base classes for evaluation models
+│   ├── data_interface.py      # Data access interface
+│   ├── orchestration.py       # System orchestration
+│   └── utils/                 # Utility modules
+├── examples/                  # Self-contained working example
+│   ├── *.py                   # Implementation files
+│   ├── config.yaml           # Configuration
+│   ├── local/                # Auto-generated data files
+│   └── logs/                 # Auto-generated log files
+├── tests/                    # Comprehensive test suite
+│   ├── unit/                 # Unit tests
+│   ├── integration/          # Integration tests
+│   ├── end_to_end/          # End-to-end tests
+│   ├── test_data.py         # Shared test data utilities
+│   └── conftest.py          # Test fixtures and configuration
+├── README.md                # This file
+└── configTEMPLATE.yaml      # Template for the config file
+
+```
+
+
 ## 1. Introduction & Quick Start
 
 ### 1.1 Learning by Printing Overview
@@ -64,6 +90,23 @@ manager.initialize_study("MY_STUDY")
 manager.run_evaluation(exp_nr=1, debug_flag=True)
 ```
 
+### Running the Example
+
+The `examples/` folder contains a complete, self-sufficient demonstration:
+
+```bash
+# Navigate to examples and run the main script
+cd examples
+python run_example.py
+```
+
+This will automatically:
+- Generate example data files if they don't exist
+- Initialize a study called "test" with 2 performance metrics
+- Load experimental data from JSON files
+- Execute path deviation and energy consumption evaluations
+- Display results and performance summaries
+
 #### Project Structure
 ```
 lbp_package/
@@ -73,6 +116,32 @@ lbp_package/
 ├── config.yaml              # System configuration
 └── .env                     # Environment variables
 ```
+
+## Data Structure
+
+The framework expects data in a structured format. The examples folder demonstrates one possibility of this organization. The crucial part is that the DataInterface knows how to navigate the database structure or in the example case the file-based
+
+```
+examples/
+├── main.py                     # Main execution script
+├── file_data_interface.py      # File-based data interface implementation
+├── path_deviation.py           # Path deviation evaluation model
+├── energy_consumption.py       # Energy consumption evaluation model
+├── config.yaml                 # System configuration file
+├── setup_example_data.py       # Standalone data generation script
+├── local/                      # Data storage directory
+│   └── test/                   # Study folder (generated automatically)
+│       ├── study_params.json           # Study-level parameters
+│       ├── performance_records.json    # Performance metric definitions
+│       └── test_001/                   # Experiment folder
+│           ├── exp_params.json         # Experiment-specific parameters
+│           ├── test_001_designed_paths.json   # Designed path data
+│           └── test_001_measured_paths.json   # Measured path data
+└── logs/                       # Log files (created automatically)
+    └── LBPManager_session_*.log     # Execution logs
+```
+
+The data files are automatically generated when running `main.py`.
 
 ## 2. Architecture & Framework Design
 

@@ -1,0 +1,11 @@
+{
+  "study_name": "Test Study test",
+  "description": "Generated test study",
+  "parameters": {
+    "target_deviation": 0.0,
+    "max_deviation": 0.5,
+    "target_energy": 0.0,
+    "max_energy": 10000.0,
+    "power_rating": 50.0
+  }
+}

@@ -18,6 +18,7 @@ class DataInterface(ABC):
         """
         self.client = client
 
+    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
     def get_study_record(self, study_code: str) -> Dict[str, Any]:
         """
@@ -83,6 +84,7 @@ class DataInterface(ABC):
         """
         ...
 
+    # === OPTIONAL METHODS ===
     def push_to_database(self, exp_record: Dict[str, Any], performance_code: str, value_dict: Dict[str, Any]) -> None:
         """
         Push performance data to the database.

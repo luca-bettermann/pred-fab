@@ -1,0 +1,12 @@
+2025-07-25 11:25:39,448 - INFO - info:67 - Initializing LBP Manager
+2025-07-25 11:25:39,449 - INFO - console_info:80 - CONSOLE: 
+
+
+------- Study Initialization: 'test' -------
+
+2025-07-25 11:25:39,449 - INFO - info:67 - Folder navigator initialized for study 'test'
+2025-07-25 11:25:39,449 - INFO - info:67 - Loading configuration from config.yaml file
+2025-07-25 11:25:39,464 - INFO - info:67 - Loaded configuration with 2 evaluation models, 0 prediction models, 0 calibration models, and 5 system settings
+2025-07-25 11:25:39,464 - INFO - info:67 - System defaults: debug_mode=False, visualize_flag=False, round_digits=3
+2025-07-25 11:25:39,465 - INFO - info:67 - Study record retrieved from database
+2025-07-25 11:25:39,466 - INFO - info:67 - Loading performance mapping from stored configuration

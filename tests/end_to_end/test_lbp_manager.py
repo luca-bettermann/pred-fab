@@ -12,6 +12,7 @@ class TestLBPManager:
         log_dir = os.path.join(temp_dir, "logs")
         
         manager = LBPManager(
+            root_folder=temp_dir,
             local_folder=temp_dir,
             server_folder=temp_dir,
             log_folder=log_dir,
@@ -38,6 +39,7 @@ class TestLBPManager:
         
         try:
             manager = LBPManager(
+                root_folder=temp_dir,
                 local_folder=temp_dir,
                 server_folder=temp_dir,
                 log_folder=log_dir,
@@ -45,10 +47,10 @@ class TestLBPManager:
             )
             
             # Initialize study
-            manager.initialize_study("TEST_STUDY")
+            manager.initialize_study("test")
             
-            assert manager.study_code == "TEST_STUDY"
-            assert manager.nav.study_code == "TEST_STUDY"
+            assert manager.study_code == "test"
+            assert manager.nav.study_code == "test"
             assert manager.eval_system is not None
             assert len(manager.eval_system.evaluation_models) == 2
             assert "path_deviation" in manager.eval_system.evaluation_models
@@ -72,6 +74,7 @@ class TestLBPManager:
         
         try:
             manager = LBPManager(
+                root_folder=temp_dir,
                 local_folder=temp_dir,
                 server_folder=temp_dir,
                 log_folder=log_dir,
@@ -79,7 +82,7 @@ class TestLBPManager:
             )
             
             # Initialize study
-            manager.initialize_study("TEST_STUDY")
+            manager.initialize_study("test")
             
             # Run evaluation
             manager.run_evaluation(
@@ -111,6 +114,7 @@ class TestLBPManager:
         log_dir = os.path.join(temp_dir, "logs")
         
         manager = LBPManager(
+            root_folder=temp_dir,
             local_folder=temp_dir,
             server_folder=temp_dir,
             log_folder=log_dir,
@@ -123,5 +127,5 @@ class TestLBPManager:
         
         # Test initialization with missing config
         with pytest.raises(FileNotFoundError, match="Configuration file not found"):
-            manager.initialize_study("TEST_STUDY")
+            manager.initialize_study("test")
     

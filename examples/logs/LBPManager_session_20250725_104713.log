@@ -1,0 +1,8 @@
+2025-07-25 10:47:13,820 - INFO - info:67 - Initializing LBP Manager
+2025-07-25 10:47:14,802 - INFO - console_info:80 - CONSOLE: 
+
+
+------- Study Initialization: 'test' -------
+
+2025-07-25 10:47:14,802 - INFO - info:67 - Folder navigator initialized for study 'test'
+2025-07-25 10:47:14,803 - INFO - info:67 - Loading configuration from config.yaml file

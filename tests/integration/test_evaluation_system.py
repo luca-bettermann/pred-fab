@@ -1,6 +1,6 @@
 from src.lbp_package.orchestration import EvaluationSystem
 from src.lbp_package.utils.folder_navigator import FolderNavigator
-from examples.path_deviation import PathDeviationEvaluation
+from examples.path_deviation import PathEvaluation
 from examples.energy_consumption import EnergyConsumption
 
 
@@ -9,7 +9,7 @@ class TestEvaluationSystem:
     
     def test_initialization(self, temp_dir, test_logger, mock_data_interface):
         """Test evaluation system initialization."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
@@ -20,12 +20,12 @@ class TestEvaluationSystem:
     
     def test_add_evaluation_model(self, temp_dir, test_logger, mock_data_interface, mock_study_params):
         """Test adding evaluation models."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add path deviation model
         eval_system.add_evaluation_model(
-            PathDeviationEvaluation, 
+            PathEvaluation, 
             "path_deviation", 
             mock_study_params
         )
@@ -42,16 +42,16 @@ class TestEvaluationSystem:
         assert "energy_consumption" in eval_system.evaluation_models
         
         # Verify model types
-        assert isinstance(eval_system.evaluation_models["path_deviation"], PathDeviationEvaluation)
+        assert isinstance(eval_system.evaluation_models["path_deviation"], PathEvaluation)
         assert isinstance(eval_system.evaluation_models["energy_consumption"], EnergyConsumption)
     
     def test_add_feature_model_instances(self, temp_dir, test_logger, mock_data_interface, mock_study_params):
         """Test adding feature model instances."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add evaluation models
-        eval_system.add_evaluation_model(PathDeviationEvaluation, "path_deviation", mock_study_params)
+        eval_system.add_evaluation_model(PathEvaluation, "path_deviation", mock_study_params)
         eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption", mock_study_params)
         
         # Add feature model instances
@@ -70,7 +70,7 @@ class TestEvaluationSystem:
     
     def test_feature_model_sharing(self, temp_dir, test_logger, mock_data_interface, mock_study_params):
         """Test feature model sharing between evaluation models."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add two evaluation models with same feature model type
@@ -92,18 +92,18 @@ class TestEvaluationSystem:
     
     def test_evaluation_workflow(self, temp_dir, test_logger, mock_data_interface, mock_study_params, mock_exp_params, setup_test_data):
         """Test complete evaluation workflow."""
-        nav = FolderNavigator(temp_dir, temp_dir, "TEST_STUDY")
+        nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add evaluation models
-        eval_system.add_evaluation_model(PathDeviationEvaluation, "path_deviation", mock_study_params)
+        eval_system.add_evaluation_model(PathEvaluation, "path_deviation", mock_study_params)
         eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption", mock_study_params)
         
         # Add feature model instances
         eval_system.add_feature_model_instances(mock_study_params)
         
         # Create mock experiment record
-        exp_record = {"id": "test_exp", "fields": {"Code": "TEST_STUDY_001"}}
+        exp_record = {"id": "test_exp", "fields": {"Code": "test_001"}}
         
         # Run evaluation in debug mode (no database operations)
         eval_system.run(
