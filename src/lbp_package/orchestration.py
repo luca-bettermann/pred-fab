@@ -7,7 +7,9 @@ from .utils.log_manager import LBPLogger
 from .evaluation import EvaluationModel
 from .data_interface import DataInterface
 
-
+# TODO
+# Move all interfaces into interfaces.py file
+# Then we have a clean separation of orchestration and interfaces
 
 class EvaluationSystem:
     """

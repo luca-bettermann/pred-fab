@@ -10,8 +10,6 @@ from numpy.typing import NDArray
 from .utils.folder_navigator import FolderNavigator
 from .utils.parameter_handler import ParameterHandling
 from .utils.log_manager import LBPLogger
-from .data_interface import DataInterface
-
 
 @dataclass
 class FeatureModel(ParameterHandling, ABC):
@@ -96,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.performance_codes.append(performance_code)
         self.features[performance_code] = np.empty([])
 
-    def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, **dims_dict) -> None:
+    def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, debug_flag: bool, **dims_dict) -> None:
         """
         Execute the feature extraction pipeline.
 
@@ -110,17 +108,20 @@ class FeatureModel(ParameterHandling, ABC):
         self.set_runtime_parameters(**dims_dict)
 
         # Optional initialization step
-        self._initialization_step(performance_code)
+        self._initialization_step(performance_code, exp_nr, **dims_dict)
 
         # Check if dimensions already processed
         self._set_processed_state(**dims_dict)
 
         if not self.is_processed_state:
-            # Fetch and load data
-            self._fetch_data(exp_nr)
-            current_data = self._load_data(exp_nr)
+            if not debug_flag:
+                # Fetch and load data
+                self._fetch_data(exp_nr)
             
-            # Compute features
+            # Load data for feature extraction
+            current_data = self._load_data(exp_nr)
+
+                # Compute features
             feature_dict = self._compute_features(current_data, visualize_flag)
             
             # Store results in feature arrays
@@ -136,7 +137,7 @@ class FeatureModel(ParameterHandling, ABC):
             self.logger.info("Data already processed for these dimensions, skipping")
 
         # Optional cleanup step
-        self._cleanup_step(performance_code)
+        self._cleanup_step(performance_code, exp_nr, **dims_dict)
 
     def reset_for_new_experiment(self, performance_code: str, dim_sizes: List[int]) -> None:
         """
@@ -164,21 +165,25 @@ class FeatureModel(ParameterHandling, ABC):
         """Optional parameter validation logic to check values after initialization."""
         pass
 
-    def _initialization_step(self, performance_code: str) -> None:
+    def _initialization_step(self, performance_code: str, exp_nr: int, **dims_dict) -> None:
         """
         Optional initialization logic before feature extraction.
         
         Args:
             performance_code: Code identifying the performance metric
+            exp_nr: Experiment number
+            **dims_dict: Runtime parameters for dimensional indexing
         """
         pass
 
-    def _cleanup_step(self, performance_code: str) -> None:
+    def _cleanup_step(self, performance_code: str, exp_nr: int, **dims_dict) -> None:
         """
         Optional cleanup logic after feature extraction.
         
         Args:
             performance_code: Code identifying the performance metric
+            exp_nr: Experiment number
+            **dims_dict: Runtime parameters for dimensional indexing
         """
         pass
     
@@ -291,7 +296,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.set_runtime_parameters(**dims_dict)
 
             # Extract features
-            self.feature_model.run(self.performance_code, exp_nr, visualize_flag, **dims_dict)
+            self.feature_model.run(self.performance_code, exp_nr, visualize_flag, debug_flag, **dims_dict)
 
             # Compute performance for current dimensions
             self._initialization_step()

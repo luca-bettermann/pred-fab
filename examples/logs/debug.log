@@ -1,22 +1,22 @@
-2025-07-25 17:58:07,202 - INFO - info:67 - Initializing LBP Manager
-2025-07-25 17:58:07,203 - INFO - console_info:80 - CONSOLE: 
+2025-07-25 18:06:11,947 - INFO - info:67 - Initializing LBP Manager
+2025-07-25 18:06:11,948 - INFO - console_info:80 - CONSOLE: 
 
 
 ------- Study Initialization: 'test' -------
 
-2025-07-25 17:58:07,203 - INFO - info:67 - Folder navigator initialized for study 'test'
-2025-07-25 17:58:07,203 - INFO - info:67 - Loading configuration from config.yaml file
-2025-07-25 17:58:07,204 - INFO - info:67 - Loaded configuration with 2 evaluation models, 0 prediction models, 0 calibration models, and 5 system settings
-2025-07-25 17:58:07,204 - INFO - info:67 - System defaults: debug_mode=False, visualize_flag=False, round_digits=3
-2025-07-25 17:58:07,204 - INFO - info:67 - Study record retrieved from database
-2025-07-25 17:58:07,204 - INFO - info:67 - Loading performance mapping from stored configuration
-2025-07-25 17:58:07,205 - DEBUG - debug:63 - Loaded evaluation class 'PathEvaluation' for performance code 'path_deviation'
-2025-07-25 17:58:07,205 - DEBUG - debug:63 - Loaded evaluation class 'EnergyConsumption' for performance code 'energy_consumption'
-2025-07-25 17:58:07,205 - INFO - info:67 - Adding 'PathEvaluation' model to evaluate performance 'path_deviation'
-2025-07-25 17:58:07,205 - INFO - info:67 - Adding 'EnergyConsumption' model to evaluate performance 'energy_consumption'
-2025-07-25 17:58:07,206 - INFO - info:67 - Adding feature model instance 'PathDeviationFeature' to evaluation model 'PathEvaluation'
-2025-07-25 17:58:07,206 - INFO - info:67 - Adding feature model instance 'EnergyFeature' to evaluation model 'EnergyConsumption'
-2025-07-25 17:58:07,206 - INFO - console_summary:99 - CONSOLE SUMMARY:
+2025-07-25 18:06:11,948 - INFO - info:67 - Folder navigator initialized for study 'test'
+2025-07-25 18:06:11,948 - INFO - info:67 - Loading configuration from config.yaml file
+2025-07-25 18:06:11,949 - INFO - info:67 - Loaded configuration with 2 evaluation models, 0 prediction models, 0 calibration models, and 5 system settings
+2025-07-25 18:06:11,949 - INFO - info:67 - System defaults: debug_mode=False, visualize_flag=False, round_digits=3
+2025-07-25 18:06:11,949 - INFO - info:67 - Study record retrieved from database
+2025-07-25 18:06:11,950 - INFO - info:67 - Loading performance mapping from stored configuration
+2025-07-25 18:06:11,951 - DEBUG - debug:63 - Loaded evaluation class 'PathEvaluation' for performance code 'path_deviation'
+2025-07-25 18:06:11,951 - DEBUG - debug:63 - Loaded evaluation class 'EnergyConsumption' for performance code 'energy_consumption'
+2025-07-25 18:06:11,951 - INFO - info:67 - Adding 'PathEvaluation' model to evaluate performance 'path_deviation'
+2025-07-25 18:06:11,951 - INFO - info:67 - Adding 'EnergyConsumption' model to evaluate performance 'energy_consumption'
+2025-07-25 18:06:11,951 - INFO - info:67 - Adding feature model instance 'PathDeviationFeature' to evaluation model 'PathEvaluation'
+2025-07-25 18:06:11,951 - INFO - info:67 - Adding feature model instance 'EnergyFeature' to evaluation model 'EnergyConsumption'
+2025-07-25 18:06:11,951 - INFO - console_summary:99 - CONSOLE SUMMARY:
 
 Loaded 2 performance attributes, 2 evaluation models and 2 feature models.
 
@@ -24,65 +24,65 @@ Performance Code     Evaluation Model     Feature Model
 path_deviation       PathEvaluation       PathDeviationFeature
 energy_consumption   EnergyConsumption    EnergyFeature       
 
-2025-07-25 17:58:07,206 - INFO - console_success:85 - CONSOLE SUCCESS: 
+2025-07-25 18:06:11,951 - INFO - console_success:85 - CONSOLE SUCCESS: 
 
 Successfully initialized evaluation system of study 'test'.
 
-2025-07-25 17:58:07,206 - INFO - info:67 - Execution flags: debug_mode=True, visualize_flag=False
-2025-07-25 17:58:07,206 - INFO - console_info:80 - CONSOLE: 
+2025-07-25 18:06:11,951 - INFO - info:67 - Execution flags: debug_mode=True, visualize_flag=False
+2025-07-25 18:06:11,952 - INFO - console_info:80 - CONSOLE: 
 
 
 ------- Run Experiment: 'test_001' -------
 
-2025-07-25 17:58:07,206 - INFO - info:67 - Experiment record retrieved from database
-2025-07-25 17:58:07,206 - INFO - info:67 - Running evaluation system for experiment 1
-2025-07-25 17:58:07,206 - INFO - info:67 - Initializing arrays of evaluation model 'path_deviation' and its feature model 'PathDeviationFeature'
-2025-07-25 17:58:07,206 - INFO - info:67 - Resetting evaluation model 'PathEvaluation' for new experiment
-2025-07-25 17:58:07,206 - INFO - info:67 - Resetting 'PathDeviationFeature' feature model for new experiment
-2025-07-25 17:58:07,206 - INFO - info:67 - Initializing arrays of evaluation model 'energy_consumption' and its feature model 'EnergyFeature'
-2025-07-25 17:58:07,206 - INFO - info:67 - Resetting evaluation model 'EnergyConsumption' for new experiment
-2025-07-25 17:58:07,206 - INFO - info:67 - Resetting 'EnergyFeature' feature model for new experiment
-2025-07-25 17:58:07,206 - INFO - console_info:80 - CONSOLE: 
+2025-07-25 18:06:11,952 - INFO - info:67 - Experiment record retrieved from database
+2025-07-25 18:06:11,952 - INFO - info:67 - Running evaluation system for experiment 1
+2025-07-25 18:06:11,952 - INFO - info:67 - Initializing arrays of evaluation model 'path_deviation' and its feature model 'PathDeviationFeature'
+2025-07-25 18:06:11,952 - INFO - info:67 - Resetting evaluation model 'PathEvaluation' for new experiment
+2025-07-25 18:06:11,952 - INFO - info:67 - Resetting 'PathDeviationFeature' feature model for new experiment
+2025-07-25 18:06:11,952 - INFO - info:67 - Initializing arrays of evaluation model 'energy_consumption' and its feature model 'EnergyFeature'
+2025-07-25 18:06:11,952 - INFO - info:67 - Resetting evaluation model 'EnergyConsumption' for new experiment
+2025-07-25 18:06:11,952 - INFO - info:67 - Resetting 'EnergyFeature' feature model for new experiment
+2025-07-25 18:06:11,952 - INFO - console_info:80 - CONSOLE: 
 
 Running evaluation for 'path_deviation' performance with 'PathEvaluation' evaluation model...
 
-2025-07-25 17:58:07,206 - INFO - info:67 - Starting evaluation for experiment 1
-2025-07-25 17:58:07,206 - INFO - info:67 - Processing 4 dimensional combinations
-2025-07-25 17:58:07,206 - DEBUG - debug:63 - Processing dimension 1/4: {'layer_id': 0, 'segment_id': 0}...
-2025-07-25 17:58:07,206 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.041
-2025-07-25 17:58:07,206 - DEBUG - debug:63 - Performance computed for dims (0, 0): feature=0.041, target=0.0, performance=0.917
-2025-07-25 17:58:07,206 - DEBUG - debug:63 - Processing dimension 2/4: {'layer_id': 0, 'segment_id': 1}...
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.036
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Performance computed for dims (0, 1): feature=0.036, target=0.0, performance=0.928
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Processing dimension 3/4: {'layer_id': 1, 'segment_id': 0}...
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.021
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Performance computed for dims (1, 0): feature=0.021, target=0.0, performance=0.958
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Processing dimension 4/4: {'layer_id': 1, 'segment_id': 1}...
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.021
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Performance computed for dims (1, 1): feature=0.021, target=0.0, performance=0.958
-2025-07-25 17:58:07,207 - INFO - info:67 - Debug mode: Skipping result saving
-2025-07-25 17:58:07,207 - INFO - info:67 - Evaluation completed: {'Value': np.float64(0.94), 'Performance': None, 'Robustness': None, 'Resilience': None}
-2025-07-25 17:58:07,207 - INFO - info:67 - Finished evaluation for 'path_deviation' with 'PathEvaluation' model.
-2025-07-25 17:58:07,207 - INFO - info:67 - Debug mode: Skipping database push for 'path_deviation'
-2025-07-25 17:58:07,207 - INFO - console_info:80 - CONSOLE: 
+2025-07-25 18:06:11,952 - INFO - info:67 - Starting evaluation for experiment 1
+2025-07-25 18:06:11,952 - INFO - info:67 - Processing 4 dimensional combinations
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Processing dimension 1/4: {'layer_id': 0, 'segment_id': 0}...
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.041
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Performance computed for dims (0, 0): feature=0.041, target=0.0, performance=0.917
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Processing dimension 2/4: {'layer_id': 0, 'segment_id': 1}...
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.036
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Performance computed for dims (0, 1): feature=0.036, target=0.0, performance=0.928
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Processing dimension 3/4: {'layer_id': 1, 'segment_id': 0}...
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.021
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Performance computed for dims (1, 0): feature=0.021, target=0.0, performance=0.958
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Processing dimension 4/4: {'layer_id': 1, 'segment_id': 1}...
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Extracted feature 'path_deviation': 0.021
+2025-07-25 18:06:11,952 - DEBUG - debug:63 - Performance computed for dims (1, 1): feature=0.021, target=0.0, performance=0.958
+2025-07-25 18:06:11,952 - INFO - info:67 - Debug mode: Skipping result saving
+2025-07-25 18:06:11,953 - INFO - info:67 - Evaluation completed: {'Value': np.float64(0.94), 'Performance': None, 'Robustness': None, 'Resilience': None}
+2025-07-25 18:06:11,953 - INFO - info:67 - Finished evaluation for 'path_deviation' with 'PathEvaluation' model.
+2025-07-25 18:06:11,953 - INFO - info:67 - Debug mode: Skipping database push for 'path_deviation'
+2025-07-25 18:06:11,953 - INFO - console_info:80 - CONSOLE: 
 
 Running evaluation for 'energy_consumption' performance with 'EnergyConsumption' evaluation model...
 
-2025-07-25 17:58:07,207 - INFO - info:67 - Starting evaluation for experiment 1
-2025-07-25 17:58:07,207 - INFO - info:67 - Processing 1 dimensional combinations
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Processing dimension 1/1: {}...
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Extracted feature 'energy_consumption': 1500.0
-2025-07-25 17:58:07,207 - DEBUG - debug:63 - Performance computed for dims (): feature=1500.0, target=0.0, performance=0.85
-2025-07-25 17:58:07,207 - INFO - info:67 - Debug mode: Skipping result saving
-2025-07-25 17:58:07,207 - INFO - info:67 - Evaluation completed: {'Value': np.float64(0.85), 'Performance': None, 'Robustness': None, 'Resilience': None}
-2025-07-25 17:58:07,207 - INFO - info:67 - Finished evaluation for 'energy_consumption' with 'EnergyConsumption' model.
-2025-07-25 17:58:07,207 - INFO - info:67 - Debug mode: Skipping database push for 'energy_consumption'
-2025-07-25 17:58:07,207 - INFO - console_info:80 - CONSOLE: 
+2025-07-25 18:06:11,953 - INFO - info:67 - Starting evaluation for experiment 1
+2025-07-25 18:06:11,953 - INFO - info:67 - Processing 1 dimensional combinations
+2025-07-25 18:06:11,953 - DEBUG - debug:63 - Processing dimension 1/1: {}...
+2025-07-25 18:06:11,953 - DEBUG - debug:63 - Extracted feature 'energy_consumption': 1500.0
+2025-07-25 18:06:11,953 - DEBUG - debug:63 - Performance computed for dims (): feature=1500.0, target=0.0, performance=0.85
+2025-07-25 18:06:11,953 - INFO - info:67 - Debug mode: Skipping result saving
+2025-07-25 18:06:11,953 - INFO - info:67 - Evaluation completed: {'Value': np.float64(0.85), 'Performance': None, 'Robustness': None, 'Resilience': None}
+2025-07-25 18:06:11,953 - INFO - info:67 - Finished evaluation for 'energy_consumption' with 'EnergyConsumption' model.
+2025-07-25 18:06:11,953 - INFO - info:67 - Debug mode: Skipping database push for 'energy_consumption'
+2025-07-25 18:06:11,953 - INFO - console_info:80 - CONSOLE: 
 
 All evaluations completed successfully.
 
-2025-07-25 17:58:07,207 - INFO - info:67 - Debug mode: Skipping system performance update
-2025-07-25 17:58:07,207 - INFO - console_summary:99 - CONSOLE SUMMARY:
+2025-07-25 18:06:11,953 - INFO - info:67 - Debug mode: Skipping system performance update
+2025-07-25 18:06:11,953 - INFO - console_summary:99 - CONSOLE SUMMARY:
 
 Evaluated 2 performance attributes, using 2 evaluation models and 2 feature models.
 
@@ -90,7 +90,7 @@ Performance Code     Evaluation Model     Dimensions                     Perform
 path_deviation       PathEvaluation       (layers: 2, segments: 2)       0.94                
 energy_consumption   EnergyConsumption    ()                             0.85                
 
-2025-07-25 17:58:07,207 - INFO - console_success:85 - CONSOLE SUCCESS: 
+2025-07-25 18:06:11,953 - INFO - console_success:85 - CONSOLE SUCCESS: 
 
 Successfully evaluated the performance attributes of study 'test'.
 
