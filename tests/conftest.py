@@ -3,6 +3,8 @@ import tempfile
 import os
 import json
 import yaml
+from random import randint
+
 from pathlib import Path
 from typing import Dict, Any
 
@@ -77,7 +79,7 @@ def get_designed_paths() -> Dict[str, Any]:
         ]
     }
 
-def get_measured_paths() -> Dict[str, Any]:
+def get_measured_paths(noise: float = 0) -> Dict[str, Any]:
     """Return standard measured path data with small deviations."""
     return {
         "layers": [
@@ -87,17 +89,17 @@ def get_measured_paths() -> Dict[str, Any]:
                     {
                         "segment_id": 0,
                         "path_points": [
-                            {"x": 10.05, "y": 20.02, "z": 0.19},
-                            {"x": 15.03, "y": 25.01, "z": 0.21},
-                            {"x": 20.02, "y": 30.03, "z": 0.20}
+                            {"x": 10.05 + _add_noise(noise), "y": 20.02 + _add_noise(noise), "z": 0.19},
+                            {"x": 15.03 + _add_noise(noise), "y": 25.01 + _add_noise(noise), "z": 0.21},
+                            {"x": 20.02 + _add_noise(noise), "y": 30.03 + _add_noise(noise), "z": 0.20}
                         ]
                     },
                     {
                         "segment_id": 1,
                         "path_points": [
-                            {"x": 25.01, "y": 35.04, "z": 0.19},
-                            {"x": 30.02, "y": 40.01, "z": 0.22},
-                            {"x": 35.03, "y": 45.02, "z": 0.20}
+                            {"x": 25.01 + _add_noise(noise), "y": 35.04 + _add_noise(noise), "z": 0.19},
+                            {"x": 30.02 + _add_noise(noise), "y": 40.01 + _add_noise(noise), "z": 0.22},
+                            {"x": 35.03 + _add_noise(noise), "y": 45.02 + _add_noise(noise), "z": 0.20}
                         ]
                     }
                 ]
@@ -108,23 +110,27 @@ def get_measured_paths() -> Dict[str, Any]:
                     {
                         "segment_id": 0,
                         "path_points": [
-                            {"x": 10.02, "y": 20.01, "z": 0.41},
-                            {"x": 15.01, "y": 25.02, "z": 0.39},
-                            {"x": 20.01, "y": 30.01, "z": 0.40}
+                            {"x": 10.02 + _add_noise(noise), "y": 20.01 + _add_noise(noise), "z": 0.41},
+                            {"x": 15.01 + _add_noise(noise), "y": 25.02 + _add_noise(noise), "z": 0.39},
+                            {"x": 20.01 + _add_noise(noise), "y": 30.01 + _add_noise(noise), "z": 0.40}
                         ]
                     },
                     {
                         "segment_id": 1,
                         "path_points": [
-                            {"x": 25.02, "y": 35.01, "z": 0.41},
-                            {"x": 30.01, "y": 40.02, "z": 0.39},
-                            {"x": 35.01, "y": 45.01, "z": 0.40}
+                            {"x": 25.02 + _add_noise(noise), "y": 35.01 + _add_noise(noise), "z": 0.41},
+                            {"x": 30.01 + _add_noise(noise), "y": 40.02 + _add_noise(noise), "z": 0.39},
+                            {"x": 35.01 + _add_noise(noise), "y": 45.01 + _add_noise(noise), "z": 0.40}
                         ]
                     }
                 ]
             }
         ]
     }
+
+def _add_noise(scale: float) -> float:
+    """Add random noise to path points."""
+    return randint(-9, 9) * scale if scale != 0 else 0
 
 def create_test_data_files(base_folder: str, study_code: str = "test", exp_nr: int = 1):
     """Generate all test data files in the specified folder structure."""

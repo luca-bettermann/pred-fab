@@ -18,7 +18,7 @@ class PreprocessingState:
     the original performance scale [0, 1].
     """
     
-    # Global preprocessing state
+    # Global preprocessing state - stores normalization parameters
     global_X_mean: Optional[np.ndarray] = None
     global_X_std: Optional[np.ndarray] = None
     global_X_min: Optional[np.ndarray] = None
@@ -29,7 +29,7 @@ class PreprocessingState:
     global_y_min: Optional[Dict[str, float]] = None
     global_y_max: Optional[Dict[str, float]] = None
     
-    # Track which normalization methods were used
+    # Track which normalization methods were used for reversal
     X_normalization_method: str = "standardize"  # "standardize", "minmax", or "none"
     y_normalization_method: str = "none"  # Performance values [0,1] usually don't need normalization
 
@@ -40,13 +40,17 @@ class PredictionModel(ParameterHandling, ABC):
     Abstract interface for prediction models.
     
     Defines the structure for training and predicting performance metrics y
-    based on input parameters X. Prediction models receive performance_codes
-    from the system (analogous to evaluation models).
-    """
+    based on input parameters X. Uses the same parameter handling approach
+    as FeatureModel and EvaluationModel for consistency.
     
-    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    Data Responsibility Boundary:
+    - DataInterface: Handles structured study/experiment metadata and parameters
+    - PredictionModel: Loads domain-specific, unstructured data (geometry, sensors, etc.)
+    """
+
     def __init__(self,
                  performance_codes: List[str],
+                 folder_navigator: FolderNavigator,
                  logger: LBPLogger,
                  **model_params):
         """
@@ -54,47 +58,50 @@ class PredictionModel(ParameterHandling, ABC):
         
         Args:
             performance_codes: List of performance codes this model should predict
+            folder_navigator: File system navigation utility
             logger: Logger instance
             **model_params: Model-specific parameters
         """
+        self.nav = folder_navigator
         self.logger = logger
 
-        # List of input codes this model uses for prediction
-        self.X_codes = self._get_input_codes()
-        if not self.X_codes:
-            raise ValueError("Model must specify input codes (X) for prediction")
-        
         # List of performance codes this model predicts (passed by system)
         self.y_codes = performance_codes
         if not self.y_codes:
             raise ValueError("Model must specify performance codes (y) to predict")
         
-        # Store preprocessing state for denormalization
+        # Store preprocessing state for denormalization during prediction
         self.preprocessing_state: Optional[PreprocessingState] = None
         
-        # Apply parameter handling
+        # Apply parameter handling - consistent with FeatureModel/EvaluationModel
         self.set_model_parameters(**model_params)
         self._validate_parameters()
     
+    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def _get_input_codes(self) -> List[str]:
+    def declare_inputs(self) -> List[str]:
         """
-        Return which inputs (X) this model uses for prediction.
-
+        Declare all input keys this model requires for prediction.
+        
+        This defines the complete input interface X. Can include:
+        - Parameter names (from dataclass fields using parameter_handler)
+        - External data keys (loaded via _load_data method)
+        
         Returns:
-            List of inputs this model handles
-            e.g., [parameter_1, parameter_2, "temperature"]
+            List of input keys this model expects in X
+            e.g., ["n_layers", "temperature", "geometry_mesh", "sensor_data"]
         """
         ...
     
     @abstractmethod
-    def train(self, X: np.ndarray, y: np.ndarray) -> None:
+    def train(self, X: Dict[str, np.ndarray], y: np.ndarray) -> None:
         """
-        Train the prediction model on processed historical data.
+        Train the prediction model on processed data.
         
         Args:
-            X: Input features for training, shape (n_samples, n_features)
+            X: Dictionary of input features {key: values_array}
             y: Target variables for training, shape (n_samples, n_targets)
+               Order matches self.y_codes
             
         Note:
             Cross-validation and hyperparameter tuning should be
@@ -103,26 +110,48 @@ class PredictionModel(ParameterHandling, ABC):
         ...
     
     @abstractmethod
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: Dict[str, float]) -> np.ndarray:
         """
         Predict performance metrics for given input X.
         
         Args:
-            X: Input features for prediction, shape (n_samples, n_features)
-
+            X: Dictionary of input features {key: scalar_value}
+               Single experiment prediction
         Returns:
-            y: Predicted performance values, shape (n_samples, n_targets)
+            y: Predicted performance values, shape (n_targets,)
                Order matches self.y_codes
         """
         ...
 
-    # === OPTIONAL METHODS ===        
+    # === OPTIONAL METHODS ===
+    def _load_data(self, exp_nr: int) -> Dict[str, Any]:
+        """
+        Load domain-specific, unstructured data for this experiment.
+        
+        Data Responsibility: This method handles complex, domain-specific data
+        that the DataInterface doesn't manage (geometry files, sensor streams,
+        images, proprietary formats, etc.).
+        
+        Args:
+            exp_nr: Experiment number
+            
+        Returns:
+            Dictionary of loaded data {key: data}
+            Keys should match those declared in declare_inputs()
+        """
+        return {}  # Default: no external data loading
+        
     def preprocess(self, 
-                   global_preprocessed_X: np.ndarray, 
+                   global_preprocessed_X: Dict[str, Any], 
                    global_preprocessed_y: np.ndarray,
-                   preprocessing_state: PreprocessingState) -> Tuple[np.ndarray, np.ndarray]:
+                   preprocessing_state: PreprocessingState) -> Tuple[Dict[str, Any], np.ndarray]:
         """
         Model-specific preprocessing after global preprocessing.
+        
+        Override this method to:
+        - Denormalize specific features back to original scale
+        - Apply custom normalization (robust scaling, log transforms, etc.)
+        - Handle categorical encoding or feature engineering
         
         Args:
             global_preprocessed_X: Globally preprocessed input features
@@ -138,7 +167,7 @@ class PredictionModel(ParameterHandling, ABC):
         """
         self.preprocessing_state = preprocessing_state
         return global_preprocessed_X, global_preprocessed_y
-    
+
     def _validate_parameters(self) -> None:
         """Optional parameter validation - can be overridden by subclasses."""
         pass
@@ -146,10 +175,18 @@ class PredictionModel(ParameterHandling, ABC):
 
 class PredictionSystem:
     """
-    Lightweight orchestration for single or multi prediction model system.
+    Orchestrates prediction models with consistent data preprocessing.
     
-    Handles global data preprocessing to ensure consistency across models,
-    then delegates to individual models for training and prediction.
+    Handles the complete prediction workflow:
+    1. Data collection from structured (DataInterface) and unstructured (models) sources
+    2. Global preprocessing for consistency across models
+    3. Model-specific preprocessing and training
+    4. Prediction with denormalization
+    
+    Data Responsibility Boundary:
+    - DataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
+    - PredictionSystem: Coordinates parameter collection and delegates to models
+    - PredictionModel: Loads domain-specific unstructured data via _load_data()
     """
     
     def __init__(self, 
@@ -161,7 +198,7 @@ class PredictionSystem:
         
         Args:
             folder_navigator: File system navigation utility  
-            data_interface: Interface for accessing study configuration
+            data_interface: Interface for accessing structured study configuration
             logger: Logger instance
         """
         self.nav = folder_navigator
@@ -169,7 +206,7 @@ class PredictionSystem:
         self.logger = logger
         self.models: List[PredictionModel] = []
         
-        # Store global preprocessing state for denormalization
+        # Store global preprocessing state for consistent normalization/denormalization
         self.preprocessing_state = PreprocessingState()
         
         self.logger.info("Initialized PredictionSystem")
@@ -182,15 +219,13 @@ class PredictionSystem:
             model: Instance of PredictionModel or subclass
         """
         if not isinstance(model, PredictionModel):
-            raise TypeError("model must be an instance of PredictionModel or its subclass")
+            raise TypeError("Model must be an instance of PredictionModel or its subclass")
         
         self.models.append(model)
         self.logger.info(f"Added model: {type(model).__name__} for performance codes: {model.y_codes}")
     
     def get_required_performance_codes(self) -> List[str]:
-        """
-        Get all performance codes that need to be predicted.
-        """
+        """Get all unique performance codes that need to be predicted across all models."""
         all_codes = set()
         for model in self.models:
             all_codes.update(model.y_codes)
@@ -198,164 +233,208 @@ class PredictionSystem:
     
     def train(self, historical_evaluation_data: Dict[str, Any]) -> None:
         """
-        Train all models with global preprocessing consistency.
+        Train all models with consistent data collection and preprocessing.
+        
+        Data Flow:
+        1. Extract structured parameters from historical data (via DataInterface)
+        2. For each model: collect parameters + load domain-specific data via _load_data()
+        3. Apply global preprocessing for consistency across models
+        4. Train individual models with model-specific preprocessing via preprocess()
         
         Args:
             historical_evaluation_data: Complete evaluation history
                 Expected format: {
-                    "parameters": Dict[str, List],  # {param_code: [values]}
-                    "performances": Dict[str, List],  # {perf_code: [values]}
-                    "experiment_codes": List[str],  # Experiment identifiers
+                    "parameters": Dict[str, List],  # {param_code: [values]} - from DataInterface
+                    "performances": Dict[str, List],  # {perf_code: [values]} - from evaluation results
+                    "experiment_numbers": List[int],  # Experiment identifiers
                 }
         """
         self.logger.info("Training prediction models on historical data")
         
-        # Step 1: Global preprocessing for data consistency
-        global_X, global_y, X_codes, y_codes = self._global_preprocess(historical_evaluation_data)
-        self.logger.info(f"Global preprocessing completed: X{global_X.shape}, y{global_y.shape}")
+        # Step 1: Collect data from all models and apply global preprocessing
+        global_X, global_y, X_keys = self._global_preprocess_and_collect(historical_evaluation_data)
+        self.logger.info(f"Global preprocessing completed: X with {len(X_keys)} features, y{global_y.shape}")
         
         # Step 2: Train each model with model-specific preprocessing
         for i, model in enumerate(self.models):
             self.logger.info(f"Training model {i+1}/{len(self.models)}: {type(model).__name__}")
             
-            # Extract relevant features and targets for this model
-            model_X = self._extract_model_features(global_X, X_codes, model.X_codes)
-            model_y = self._extract_model_targets(global_y, y_codes, model.y_codes)
+            # Extract relevant features and targets for this specific model
+            model_X = self._extract_model_features(global_X, X_keys, model.declare_inputs())
+            model_y = self._extract_model_targets(global_y, model.y_codes, historical_evaluation_data["performances"])
             
-            # Model-specific preprocessing
+            # Allow model to customize preprocessing (denormalization, custom scaling, etc.)
             processed_X, processed_y = model.preprocess(model_X, model_y, self.preprocessing_state)
             
-            # Train the model
+            # Train the model with its processed data
             model.train(processed_X, processed_y)
             self.logger.info(f"Model {i+1} training completed")
 
-    def predict(self, X: np.ndarray, parameter_codes: List[str]) -> Dict[str, np.ndarray]:
+    def predict(self, X_parameters: Dict[str, Any], exp_nr: int) -> Dict[str, float]:
         """
-        Get joint predictions for all performance metrics.
+        Get predictions for all performance metrics for a single upcoming experiment.
+        
+        Data Flow:
+        1. Set parameters in models using parameter handling system
+        2. Load domain-specific data for the experiment via model._load_data()
+        3. Construct complete input dictionary per model requirements
+        4. Get predictions and denormalize to original [0,1] scale
         
         Args:
-            X: Array of shape (n_candidates, n_features)
+            X_parameters: Parameter values {param_name: value} - from DataInterface
+            exp_nr: Experiment number for loading domain-specific data
+            
+        Returns:
+            Dictionary {performance_code: predicted_value} for all performance codes
         """
-        self.logger.debug(f"Predicting performance for {X.shape[0]} parameter combinations")
+        self.logger.debug(f"Predicting performance for experiment {exp_nr}")
 
-        # Step 1: Apply global preprocessing to input parameters
-        normalized_X = self._normalize_prediction_inputs(X, parameter_codes)
-
-        # Step 2: Collect predictions from all models
+        # Collect predictions from all models
         all_predictions = {}
         
         for model in self.models:
-            # Extract relevant features for this model
-            model_X = self._extract_model_features(normalized_X, parameter_codes, model.X_codes)
+            # Set structured parameters in model using existing parameter handling
+            model.set_experiment_parameters(**X_parameters)
             
-            # Get model predictions (normalized)
-            model_predictions = model.predict(model_X)  # Shape: (n_candidates, n_targets)
+            # Load domain-specific data for this experiment
+            external_data = model._load_data(exp_nr)
             
-            # Denormalize predictions to original [0,1] scale
+            # Construct complete input dictionary from parameters + external data
+            input_dict = self._construct_input_dict(model, X_parameters, external_data)
+            
+            # Get model predictions (normalized scale)
+            model_predictions = model.predict(input_dict)  # Shape: (n_targets,)
+            
+            # Denormalize predictions back to original [0,1] performance scale
             denormalized_predictions = self._denormalize_predictions(model_predictions, model.y_codes)
             
             # Store predictions by performance code
             for i, perf_code in enumerate(model.y_codes):
-                if perf_code not in all_predictions:
-                    all_predictions[perf_code] = []
-                all_predictions[perf_code].append(denormalized_predictions[:, i])
+                all_predictions[perf_code] = float(denormalized_predictions[i])
+                
         return all_predictions
     
-    def _global_preprocess(self, historical_data: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+    def _global_preprocess_and_collect(self, historical_data: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], np.ndarray, List[str]]:
         """
-        Global preprocessing ensuring data consistency across all models.
+        Collect data from all models and apply global preprocessing for consistency.
         
-        Args:
-            historical_data: Raw historical evaluation data
-        
-        Returns:
-            Tuple of (preprocessed_X, preprocessed_y, X_codes, y_codes)
+        Data Collection Strategy:
+        1. Use parameter handling to set structured parameters (from DataInterface)
+        2. Call _load_data on each model to get domain-specific data
+        3. Combine into unified input representation with global normalization
         """
-        self.logger.info("Applying global preprocessing")
+        self.logger.info("Collecting data from all models and applying global preprocessing")
         
-        # Extract parameter data
-        parameters = historical_data["parameters"]  # Dict[str, List]
-        performances = historical_data["performances"]  # Dict[str, List]
+        # Extract structured data from DataInterface and evaluation results
+        parameters = historical_data["parameters"]  # From DataInterface
+        performances = historical_data["performances"]  # From evaluation results
+        exp_numbers = historical_data["experiment_numbers"]
         
-        # Convert to arrays
-        X_codes = list(parameters.keys())
+        # Collect all unique input keys required by all models
+        all_input_keys = set()
+        for model in self.models:
+            all_input_keys.update(model.declare_inputs())
+        all_input_keys = list(all_input_keys)
+        
+        # Collect data for all experiments across all models
+        collected_X = {key: [] for key in all_input_keys}
+        
+        for exp_nr in exp_numbers:
+            # Set structured parameters in all models for this experiment
+            exp_params = {key: values[exp_numbers.index(exp_nr)] for key, values in parameters.items()}
+            
+            for model in self.models:
+                # Set parameters using parameter handling system
+                model.set_experiment_parameters(**exp_params)
+                
+                # Load domain-specific data via model's _load_data method
+                external_data = model._load_data(exp_nr)
+                
+                # Construct complete input dictionary for this experiment
+                input_dict = self._construct_input_dict(model, exp_params, external_data)
+                
+                # Collect values for all keys required by this model
+                for key in model.declare_inputs():
+                    if key in input_dict:
+                        collected_X[key].append(input_dict[key])
+        
+        # Convert to arrays and apply global normalization (default: standardization)
+        X_arrays = {}
+        for key, values in collected_X.items():
+            if values:  # Only process non-empty lists
+                X_arrays[key] = np.array(values)
+                
+                # Apply normalization based on preprocessing state configuration
+                if self.preprocessing_state.X_normalization_method == "standardize":
+                    mean_val = np.mean(X_arrays[key])
+                    std_val = np.std(X_arrays[key])
+                    if std_val > 0:  # Avoid division by zero
+                        X_arrays[key] = (X_arrays[key] - mean_val) / std_val
+                        
+        # Convert performance data to array format
         y_codes = list(performances.keys())
-        
-        X = np.array([parameters[code] for code in X_codes]).T  # Shape: (n_samples, n_features)
         y = np.array([performances[code] for code in y_codes]).T  # Shape: (n_samples, n_targets)
         
-        # Global X normalization (parameters can have very different scales)
-        if self.preprocessing_state.X_normalization_method == "standardize":
-            self.preprocessing_state.global_X_mean = np.mean(X, axis=0)
-            self.preprocessing_state.global_X_std = np.std(X, axis=0)
-            # Avoid division by zero
-            self.preprocessing_state.global_X_std = np.where(
-                self.preprocessing_state.global_X_std == 0, 1.0, self.preprocessing_state.global_X_std
-            )
-            X_normalized = (X - self.preprocessing_state.global_X_mean) / self.preprocessing_state.global_X_std
-            
-        elif self.preprocessing_state.X_normalization_method == "minmax":
-            self.preprocessing_state.global_X_min = np.min(X, axis=0)
-            self.preprocessing_state.global_X_max = np.max(X, axis=0)
-            # Avoid division by zero
-            X_range = self.preprocessing_state.global_X_max - self.preprocessing_state.global_X_min
-            X_range = np.where(X_range == 0, 1.0, X_range)
-            X_normalized = (X - self.preprocessing_state.global_X_min) / X_range
-            
-        else:  # "none"
-            X_normalized = X
-        
-        # Global y preprocessing (performances are [0,1] but might benefit from normalization)
-        if self.preprocessing_state.y_normalization_method == "standardize":
-            self.preprocessing_state.global_y_mean = {code: np.mean(y[:, i]) for i, code in enumerate(y_codes)}
-            self.preprocessing_state.global_y_std = {code: np.std(y[:, i]) for i, code in enumerate(y_codes)}
-            
-            y_normalized = np.zeros_like(y)
-            for i, code in enumerate(y_codes):
-                std_val = self.preprocessing_state.global_y_std[code]
-                if std_val == 0:
-                    std_val = 1.0
-                y_normalized[:, i] = (y[:, i] - self.preprocessing_state.global_y_mean[code]) / std_val
-        else:  # "none" - usually for performance values [0,1]
-            y_normalized = y
-        
-        self.logger.debug(f"Global preprocessing: X {X.shape} -> {X_normalized.shape}, y {y.shape} -> {y_normalized.shape}")
-        return X_normalized, y_normalized, X_codes, y_codes
+        return X_arrays, y, all_input_keys
     
-    def _normalize_prediction_inputs(self, X: np.ndarray, parameter_codes: List[str]) -> np.ndarray:
-        """Apply the same normalization used during training to new inputs."""
-        if self.preprocessing_state.X_normalization_method == "standardize":
-            return (X - self.preprocessing_state.global_X_mean) / self.preprocessing_state.global_X_std
-        elif self.preprocessing_state.X_normalization_method == "minmax":
-            X_range = self.preprocessing_state.global_X_max - self.preprocessing_state.global_X_min
-            X_range = np.where(X_range == 0, 1.0, X_range)
-            return (X - self.preprocessing_state.global_X_min) / X_range
-        else:
-            return X
+    def _construct_input_dict(self, model: PredictionModel, parameters: Dict[str, Any], external_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Construct complete input dictionary for a model's requirements.
+        
+        Combines structured parameters (from DataInterface) with domain-specific
+        external data (from model._load_data()) according to what the model declared.
+        """
+        input_dict = {}
+        
+        # Add all inputs that the model declared it needs
+        for key in model.declare_inputs():
+            if key in parameters:
+                # Structured parameter from DataInterface
+                input_dict[key] = parameters[key]
+            elif key in external_data:
+                # Domain-specific data from model._load_data()
+                input_dict[key] = external_data[key]
+            else:
+                # Check if it's a model attribute (from parameter handling decorators)
+                if hasattr(model, key):
+                    input_dict[key] = getattr(model, key)
+                    
+        return input_dict
     
     def _denormalize_predictions(self, predictions: np.ndarray, y_codes: List[str]) -> np.ndarray:
-        """Denormalize predictions back to original [0,1] scale."""
+        """Denormalize predictions back to original [0,1] performance scale."""
         if self.preprocessing_state.y_normalization_method == "standardize":
+            # Reverse standardization if it was applied
             denormalized = np.zeros_like(predictions)
             for i, code in enumerate(y_codes):
-                denormalized[:, i] = (predictions[:, i] * self.preprocessing_state.global_y_std[code] + 
-                                    self.preprocessing_state.global_y_mean[code])
+                if (self.preprocessing_state.global_y_mean and 
+                    self.preprocessing_state.global_y_std and
+                    code in self.preprocessing_state.global_y_mean):
+                    denormalized[i] = (predictions[i] * self.preprocessing_state.global_y_std[code] + 
+                                     self.preprocessing_state.global_y_mean[code])
+                else:
+                    denormalized[i] = predictions[i]
             return denormalized
         else:
-            return predictions  # No normalization was applied
+            return predictions  # No normalization was applied, return as-is
     
-    def _extract_model_features(self, X: np.ndarray, all_codes: List[str], model_codes: List[str]) -> np.ndarray:
-        """Extract features relevant to a specific model."""
-        indices = [all_codes.index(code) for code in model_codes if code in all_codes]
-        if len(indices) != len(model_codes):
-            missing = set(model_codes) - set(all_codes)
-            raise ValueError(f"Model requires features not in data: {missing}")
-        return X[:, indices]
+    def _extract_model_features(self, X: Dict[str, np.ndarray], all_keys: List[str], model_keys: List[str]) -> Dict[str, np.ndarray]:
+        """Extract only the features relevant to a specific model from global dataset."""
+        model_X = {}
+        for key in model_keys:
+            if key in X:
+                model_X[key] = X[key]
+            else:
+                self.logger.warning(f"Model requires feature '{key}' not found in collected data")
+        return model_X
     
-    def _extract_model_targets(self, y: np.ndarray, all_codes: List[str], model_codes: List[str]) -> np.ndarray:
-        """Extract targets relevant to a specific model."""
-        indices = [all_codes.index(code) for code in model_codes if code in all_codes]
-        if len(indices) != len(model_codes):
-            missing = set(model_codes) - set(all_codes)
-            raise ValueError(f"Model requires targets not in data: {missing}")
+    def _extract_model_targets(self, y: np.ndarray, model_codes: List[str], all_performances: Dict[str, List]) -> np.ndarray:
+        """Extract only the target variables relevant to a specific model."""
+        all_codes = list(all_performances.keys())
+        indices = []
+        for code in model_codes:
+            if code in all_codes:
+                indices.append(all_codes.index(code))
+            else:
+                raise ValueError(f"Model requires target '{code}' not found in performance data")
         return y[:, indices]

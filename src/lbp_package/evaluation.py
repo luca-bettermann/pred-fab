@@ -59,13 +59,17 @@ class FeatureModel(ParameterHandling, ABC):
     @abstractmethod
     def _load_data(self, exp_nr: int) -> Any:
         """
-        Load data for feature extraction.
-        
+        Load domain-specific, unstructured data from local storage for feature extraction.
+
+        Data Responsibility Boundary: This method handles complex, domain-specific data
+        that the DataInterface doesn't manage (geometry files, sensor streams, images,
+        proprietary formats, etc.). The DataInterface handles structured metadata only.
+
         Args:
             exp_nr: Experiment number
             
         Returns:
-            Loaded data object
+            Loaded data object (format depends on domain requirements)
         """
         ...
 
@@ -154,8 +158,13 @@ class FeatureModel(ParameterHandling, ABC):
     # === OPTIONAL METHODS ===
     def _fetch_data(self, exp_nr: int) -> None:
         """
-        Fetch data from external sources if needed.
-        
+        Fetch raw data for feature extraction from external sources, if needed.
+        Store in local folder for loading by _load_data.
+
+        Data Responsibility Boundary: Handles retrieval of domain-specific, unstructured
+        data from external sources (servers, APIs, instruments). The DataInterface
+        manages structured study/experiment metadata, not raw experimental data.
+
         Args:
             exp_nr: Experiment number
         """

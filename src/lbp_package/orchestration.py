@@ -113,7 +113,7 @@ class EvaluationSystem:
             # Push results to database if not in debug mode
             if not debug_flag:
                 self.logger.info(f"Pushing results to database for '{performance_code}'...")
-                self.interface.push_to_database(exp_record, performance_code, eval_model.performance_metrics)
+                self.interface.push_to_database(exp_record, eval_model.performance_metrics)
             else:
                 self.logger.info(f"Debug mode: Skipping database push for '{performance_code}'")
 
