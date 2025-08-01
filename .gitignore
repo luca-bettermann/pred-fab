@@ -1,3 +1,7 @@
 .venv/
 .examples/logs/
 build
+
+# Ignore all experiment folders except test_001
+examples/local/test/test_*/
+!examples/local/test/test_001/

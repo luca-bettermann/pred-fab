@@ -1,10 +1,10 @@
 {
-  "exp_name": "Test Experiment test_001",
-  "description": "Generated test experiment",
-  "parameters": {
+  "Code": "test_001",
+  "System Performance": null,
+  "Parameters": {
     "n_layers": 2,
     "n_segments": 2,
     "layerTime": 30.0
   },
-  "status": "completed"
+  "Status": "Evaluation"
 }

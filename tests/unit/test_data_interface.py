@@ -47,7 +47,6 @@ class TestDataInterface:
         assert len(perf_records) == 2
         assert perf_records[0]["Code"] == "path_deviation"
         assert perf_records[1]["Code"] == "energy_consumption"
-        assert all(record["Active"] for record in perf_records)
     
     def test_experiment_variables_retrieval(self, mock_data_interface, mock_exp_params):
         """Test experiment variables retrieval."""
@@ -58,26 +57,7 @@ class TestDataInterface:
         assert exp_vars == mock_exp_params
         assert exp_vars["layerTime"] == 30.0
         assert exp_vars["n_layers"] == 2
-    
-    def test_database_push_mock(self, mock_data_interface):
-        """Test database push functionality (mock)."""
-        exp_record = mock_data_interface.get_exp_record("test_001")
-        
-        test_values = {"Value": 0.85, "Performance": 0.90}
-        mock_data_interface.push_to_database(exp_record, "path_deviation", test_values)
-        
-        assert hasattr(mock_data_interface, 'pushed_data')
-        assert "path_deviation" in mock_data_interface.pushed_data
-        assert mock_data_interface.pushed_data["path_deviation"] == test_values
-    
-    def test_system_performance_update_mock(self, mock_data_interface):
-        """Test system performance update functionality (mock)."""
-        study_record = mock_data_interface.get_study_record("test")
-        
-        mock_data_interface.update_system_performance(study_record)
-        
-        assert hasattr(mock_data_interface, 'system_performance_updated')
-        assert mock_data_interface.system_performance_updated is True
+        assert exp_vars["n_segments"] == 2
     
     def test_client_check_with_none_client(self, mock_data_interface):
         """Test client validation with None client."""

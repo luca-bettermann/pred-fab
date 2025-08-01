@@ -2,15 +2,15 @@
   "records": [
     {
       "Code": "path_deviation",
-      "Name": "Path Deviation",
-      "Active": true,
-      "Unit": "mm"
+      "Performance": "Path Deviation",
+      "Optimal Value": 0.0,
+      "Description": "Deviation from designed path"
     },
     {
       "Code": "energy_consumption",
-      "Name": "Energy Consumption",
-      "Active": true,
-      "Unit": "Wh"
+      "Performance": "Energy Consumption",
+      "Optimal Value": 0.0,
+      "Description": "Energy consumed during operation"
     }
   ]
 }

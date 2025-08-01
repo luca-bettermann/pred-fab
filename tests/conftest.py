@@ -30,156 +30,144 @@ def get_mock_exp_params() -> Dict[str, Any]:
         "layerTime": 30.0,
     }
 
-def get_designed_paths() -> Dict[str, Any]:
-    """Return standard designed path data."""
-    return {
-        "layers": [
-            {
-                "layer_id": 0,
-                "segments": [
-                    {
-                        "segment_id": 0,
-                        "path_points": [
-                            {"x": 10.0, "y": 20.0, "z": 0.2},
-                            {"x": 15.0, "y": 25.0, "z": 0.2},
-                            {"x": 20.0, "y": 30.0, "z": 0.2}
-                        ]
-                    },
-                    {
-                        "segment_id": 1,
-                        "path_points": [
-                            {"x": 25.0, "y": 35.0, "z": 0.2},
-                            {"x": 30.0, "y": 40.0, "z": 0.2},
-                            {"x": 35.0, "y": 45.0, "z": 0.2}
-                        ]
-                    }
-                ]
-            },
-            {
-                "layer_id": 1,
-                "segments": [
-                    {
-                        "segment_id": 0,
-                        "path_points": [
-                            {"x": 10.0, "y": 20.0, "z": 0.4},
-                            {"x": 15.0, "y": 25.0, "z": 0.4},
-                            {"x": 20.0, "y": 30.0, "z": 0.4}
-                        ]
-                    },
-                    {
-                        "segment_id": 1,
-                        "path_points": [
-                            {"x": 25.0, "y": 35.0, "z": 0.4},
-                            {"x": 30.0, "y": 40.0, "z": 0.4},
-                            {"x": 35.0, "y": 45.0, "z": 0.4}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
+def generate_path_data(n_layers: int = 2, n_segments: int = 2, noise: bool = False) -> Dict[str, Any]:
+    """Return designed path data, add random noise to mock a measured path.
+    
+    Args:
+        path_deviation: Amount of noise to add to coordinates
+        n_layers: Number of layers to generate
+        n_segments: Number of segments per layer
+    """
+    layers = []
+    xy_deviation = 0.5 if noise else 0.0
+    z_deviation = 0.02 if noise else 0.0
+    
+    for layer_id in range(n_layers):
+        segments = []
+        z_position = 0.2 * (layer_id + 1)
+        
+        for segment_id in range(n_segments):
+            # Generate path points for each segment
+            # Base coordinates shift by segment
+            x_offset = segment_id * 15
+            y_offset = segment_id * 15
+            
+            # Create 3 path points per segment
+            path_points = [
+                {"x": 10.0 + x_offset + _add_noise(xy_deviation), "y": 20.0 + y_offset + _add_noise(xy_deviation), "z": z_position + _add_noise(z_deviation)},
+                {"x": 15.0 + x_offset + _add_noise(xy_deviation), "y": 25.0 + y_offset + _add_noise(xy_deviation), "z": z_position + _add_noise(z_deviation)},
+                {"x": 20.0 + x_offset + _add_noise(xy_deviation), "y": 30.0 + y_offset + _add_noise(xy_deviation), "z": z_position + _add_noise(z_deviation)}
+            ]
+            
+            segments.append({
+                "segment_id": segment_id,
+                "path_points": path_points
+            })
+        
+        layers.append({
+            "layer_id": layer_id,
+            "segments": segments
+        })
+    
+    return {"layers": layers}
 
-def get_measured_paths(noise: float = 0) -> Dict[str, Any]:
-    """Return standard measured path data with small deviations."""
-    return {
-        "layers": [
-            {
-                "layer_id": 0,
-                "segments": [
-                    {
-                        "segment_id": 0,
-                        "path_points": [
-                            {"x": 10.05 + _add_noise(noise), "y": 20.02 + _add_noise(noise), "z": 0.19},
-                            {"x": 15.03 + _add_noise(noise), "y": 25.01 + _add_noise(noise), "z": 0.21},
-                            {"x": 20.02 + _add_noise(noise), "y": 30.03 + _add_noise(noise), "z": 0.20}
-                        ]
-                    },
-                    {
-                        "segment_id": 1,
-                        "path_points": [
-                            {"x": 25.01 + _add_noise(noise), "y": 35.04 + _add_noise(noise), "z": 0.19},
-                            {"x": 30.02 + _add_noise(noise), "y": 40.01 + _add_noise(noise), "z": 0.22},
-                            {"x": 35.03 + _add_noise(noise), "y": 45.02 + _add_noise(noise), "z": 0.20}
-                        ]
-                    }
-                ]
-            },
-            {
-                "layer_id": 1,
-                "segments": [
-                    {
-                        "segment_id": 0,
-                        "path_points": [
-                            {"x": 10.02 + _add_noise(noise), "y": 20.01 + _add_noise(noise), "z": 0.41},
-                            {"x": 15.01 + _add_noise(noise), "y": 25.02 + _add_noise(noise), "z": 0.39},
-                            {"x": 20.01 + _add_noise(noise), "y": 30.01 + _add_noise(noise), "z": 0.40}
-                        ]
-                    },
-                    {
-                        "segment_id": 1,
-                        "path_points": [
-                            {"x": 25.02 + _add_noise(noise), "y": 35.01 + _add_noise(noise), "z": 0.41},
-                            {"x": 30.01 + _add_noise(noise), "y": 40.02 + _add_noise(noise), "z": 0.39},
-                            {"x": 35.01 + _add_noise(noise), "y": 45.01 + _add_noise(noise), "z": 0.40}
-                        ]
-                    }
-                ]
-            }
-        ]
-    }
+def generate_energy_consumption_data(n_layers: int = 2, n_segments: int = 2, noise: bool = False) -> Dict[str, Any]:
+    """Return designed energy consumption data, add random noise to mock measured values.
 
-def _add_noise(scale: float) -> float:
+    Args:
+        n_layers: Number of layers to generate
+        n_segments: Number of segments per layer
+        noise: Amount of noise to add to coordinates
+    """
+    deviation = 1.0 if noise else 0.0
+    layers = []
+    for layer_id in range(n_layers):
+        layers.append({
+            "layer_id": layer_id,
+            "energy_consumption": 10.0 * n_segments + _add_noise(deviation)
+        })
+    return {"layers": layers}
+
+def _add_noise(magnitude: float) -> float:
     """Add random noise to path points."""
-    return randint(-9, 9) * scale if scale != 0 else 0
+    return randint(-10, 10) * 0.1 * magnitude if magnitude != 0 else 0
 
-def create_test_data_files(base_folder: str, study_code: str = "test", exp_nr: int = 1):
-    """Generate all test data files in the specified folder structure."""
+def create_study_json_files(base_folder: str, study_code: str = "test"):
+    """Generate the file structure for an experiment."""
     
     # Create directory structure
     study_dir = os.path.join(base_folder, study_code)
-    exp_code = f"{study_code}_{exp_nr:03d}"
-    exp_dir = os.path.join(study_dir, exp_code)
-    
     os.makedirs(study_dir, exist_ok=True)
-    os.makedirs(exp_dir, exist_ok=True)
     
-    # Create study_params.json
+    # Create study_params.json (overwrite if it exists)
     study_data = {
         "study_name": f"Test Study {study_code}",
         "description": "Generated test study",
-        "parameters": get_mock_study_params()
+        "Parameters": get_mock_study_params()
     }
     with open(os.path.join(study_dir, "study_params.json"), 'w') as f:
         json.dump(study_data, f, indent=2)
-    
-    # Create performance_records.json
+
+    # Create performance_records.json (overwrite if it exists)
     perf_data = {
         "records": [
-            {"Code": "path_deviation", "Name": "Path Deviation", "Active": True, "Unit": "mm"},
-            {"Code": "energy_consumption", "Name": "Energy Consumption", "Active": True, "Unit": "Wh"}
+            {"Code": "path_deviation", "Performance": "Path Deviation", "Optimal Value": 0.0, "Description": "Deviation from designed path"},
+            {"Code": "energy_consumption", "Performance": "Energy Consumption", "Optimal Value": 0.0, "Description": "Energy consumed during operation"}
         ]
     }
     with open(os.path.join(study_dir, "performance_records.json"), 'w') as f:
         json.dump(perf_data, f, indent=2)
-    
-    # Create exp_params.json
+
+def create_exp_json_files(
+        base_folder: str, 
+        study_code: str = "test", 
+        exp_nr: int = 1, 
+        n_layers: int = 2,
+        n_segments: int = 2
+        ):
+    """Generate all experimental data files in the specified folder structure. 
+    Use the input parameters to customize the data generation."""
+
+    # Create directory structure
+    study_dir = os.path.join(base_folder, study_code)
+    exp_code = f"{study_code}_{exp_nr:03d}"
+    exp_dir = os.path.join(study_dir, exp_code)
+
+    os.makedirs(exp_dir, exist_ok=True)
+
+    # Create exp_params.json (overwrite if it exists)
     exp_data = {
-        "exp_name": f"Test Experiment {exp_code}",
-        "description": "Generated test experiment",
-        "parameters": get_mock_exp_params(),
-        "status": "completed"
+        "Code": exp_code,
+        "System Performance": None,
+        "Parameters": get_mock_exp_params(),
+        "Status": "Evaluation"
     }
     with open(os.path.join(exp_dir, "exp_params.json"), 'w') as f:
         json.dump(exp_data, f, indent=2)
-    
-    # Create path data files
+
+    # Create designed path data files (overwrite if they exist)
     with open(os.path.join(exp_dir, f"{exp_code}_designed_paths.json"), 'w') as f:
-        json.dump(get_designed_paths(), f, indent=2)
-    
+        json.dump(generate_path_data(
+            n_layers=n_layers,
+            n_segments=n_segments,
+            noise=False
+        ), f, indent=2)
+
+    # Generate measured path data
     with open(os.path.join(exp_dir, f"{exp_code}_measured_paths.json"), 'w') as f:
-        json.dump(get_measured_paths(), f, indent=2)
+        json.dump(generate_path_data(
+            n_layers=n_layers,
+            n_segments=n_segments,
+            noise=True
+        ), f, indent=2)
 
-
+    # Generate energy consumption data
+    with open(os.path.join(exp_dir, f"{exp_code}_energy_consumption.json"), 'w') as f:
+        json.dump(generate_energy_consumption_data(
+            n_layers=n_layers,
+            n_segments=n_segments,
+            noise=True
+        ), f, indent=2)
 
 @pytest.fixture
 def temp_dir():
@@ -209,7 +197,8 @@ def mock_config():
 def mock_data_interface(temp_dir):
     """Create mock data interface with test data files."""
     # Generate test data files using the shared utility
-    create_test_data_files(temp_dir, study_code="test", exp_nr=1)
+    create_study_json_files(temp_dir, study_code="test")
+    create_exp_json_files(temp_dir, study_code="test", exp_nr=1)
     
     # Return interface pointing to temp directory with generated files
     return FileDataInterface(temp_dir)
@@ -225,11 +214,12 @@ def test_logger(temp_dir):
 def setup_test_data(temp_dir):
     """Setup test data files using the shared utility."""
     # Generate complete test data structure
-    create_test_data_files(temp_dir, study_code="test", exp_nr=1)
+    create_study_json_files(temp_dir, study_code="test")
+    create_exp_json_files(temp_dir, study_code="test", exp_nr=1)
     
     return {
         "study_dir": os.path.join(temp_dir, "test"),
         "exp_dir": os.path.join(temp_dir, "test", "test_001"),
-        "designed_paths": get_designed_paths(),
-        "measured_paths": get_measured_paths()
+        "designed_paths": generate_path_data(),
+        "measured_paths": generate_path_data(noise=0.1)
     }

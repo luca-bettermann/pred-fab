@@ -70,7 +70,7 @@ class FileDataInterface(DataInterface):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in study parameters file {study_params_path}: {e}")
         
-        parameters = study_data.get("parameters", {})
+        parameters = study_data.get("Parameters", {})
         if not isinstance(parameters, dict):
             raise ValueError(f"Study parameters must be a dictionary in {study_params_path}")
         
@@ -97,7 +97,7 @@ class FileDataInterface(DataInterface):
         with open(exp_params_path, 'r') as f:
             exp_data = json.load(f)
         
-        return exp_data.get("parameters", {})
+        return exp_data.get("Parameters", {})
     
     def get_study_dataset(self, study_record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """
@@ -131,7 +131,7 @@ class FileDataInterface(DataInterface):
                 exp_params_path = os.path.join(item_path, "exp_params.json")
                 if os.path.exists(exp_params_path):
                     with open(exp_params_path, 'r') as f:
-                        exp_params = json.load(f).get("parameters", {})
+                        exp_params = json.load(f).get("Parameters", {})
                         exp_data.update(exp_params)
                 
                 # Load performance results if they exist

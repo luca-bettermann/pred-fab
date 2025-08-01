@@ -1,0 +1,12 @@
+{
+  "layers": [
+    {
+      "layer_id": 0,
+      "energy_consumption": 20.1
+    },
+    {
+      "layer_id": 1,
+      "energy_consumption": 20.2
+    }
+  ]
+}

@@ -92,8 +92,6 @@ class TestEnergyConsumption:
         mock_exp_params.update(mock_study_params)
         eval_model.set_experiment_parameters(**mock_exp_params)
         assert eval_model.max_energy == 10000.0 # Experiment parameter set
-
-
     
     def test_target_and_scaling_computation(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
         """Test target value and scaling factor computation."""
