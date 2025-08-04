@@ -4,8 +4,9 @@ import math
 import numpy as np
 from typing import Dict, Any
 from dataclasses import dataclass
-from src.lbp_package.evaluation import EvaluationModel, FeatureModel
-from src.lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
+
+from lbp_package import EvaluationModel, FeatureModel
+from lbp_package.utils import runtime_parameter, model_parameter, exp_parameter
 
 @dataclass
 class PathEvaluation(EvaluationModel):
@@ -72,7 +73,7 @@ class PathDeviationFeature(FeatureModel):
         
         """Initialize path deviation feature model."""
         super().__init__(
-            performance_code=performance_code,
+            associated_code=performance_code,
             folder_navigator=folder_navigator,
             logger=logger,
             round_digits=round_digits,
@@ -81,8 +82,8 @@ class PathDeviationFeature(FeatureModel):
         
         # Initialize feature storage for path deviation
         self.features["path_deviation"] = np.empty([])
-    
-    def _load_data(self, exp_nr: int) -> Dict[str, Any]:
+
+    def _load_data(self, exp_nr: int, debug_flag: bool = False) -> Dict[str, Any]:
         """Load designed and measured path data."""
         exp_code = self.nav.get_experiment_code(exp_nr)
         

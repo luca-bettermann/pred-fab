@@ -1,7 +1,7 @@
-import os
 from pathlib import Path
-from lbp_package.orchestration import LBPManager
-from examples.file_data_interface import FileDataInterface
+
+from lbp_package import LBPManager
+from .file_data_interface import FileDataInterface
 from tests.conftest import create_study_json_files, create_exp_json_files
 
 def main():

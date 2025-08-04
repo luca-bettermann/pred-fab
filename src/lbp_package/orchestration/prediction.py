@@ -1,176 +1,8 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Optional, Type
 import numpy as np
 
-from .utils.parameter_handler import ParameterHandling
-from .utils.folder_navigator import FolderNavigator
-from .data_interface import DataInterface
-from .utils.log_manager import LBPLogger
-
-
-@dataclass
-class PreprocessingState:
-    """
-    Stores preprocessing transformation parameters for consistent denormalization.
-    
-    This ensures that predictions can be properly denormalized to match
-    the original performance scale [0, 1].
-    """
-    
-    # Global preprocessing state - stores normalization parameters
-    global_X_mean: Optional[np.ndarray] = None
-    global_X_std: Optional[np.ndarray] = None
-    global_X_min: Optional[np.ndarray] = None
-    global_X_max: Optional[np.ndarray] = None
-    
-    global_y_mean: Optional[Dict[str, float]] = None
-    global_y_std: Optional[Dict[str, float]] = None
-    global_y_min: Optional[Dict[str, float]] = None
-    global_y_max: Optional[Dict[str, float]] = None
-    
-    # Track which normalization methods were used for reversal
-    X_normalization_method: str = "standardize"  # "standardize", "minmax", or "none"
-    y_normalization_method: str = "none"  # Performance values [0,1] usually don't need normalization
-
-
-@dataclass 
-class PredictionModel(ParameterHandling, ABC):
-    """
-    Abstract interface for prediction models.
-    
-    Defines the structure for training and predicting performance metrics y
-    based on input parameters X. Uses the same parameter handling approach
-    as FeatureModel and EvaluationModel for consistency.
-    
-    Data Responsibility Boundary:
-    - DataInterface: Handles structured study/experiment metadata and parameters
-    - PredictionModel: Loads domain-specific, unstructured data (geometry, sensors, etc.)
-    """
-
-    def __init__(self,
-                 performance_codes: List[str],
-                 folder_navigator: FolderNavigator,
-                 logger: LBPLogger,
-                 **model_params):
-        """
-        Initialize prediction model.
-        
-        Args:
-            performance_codes: List of performance codes this model should predict
-            folder_navigator: File system navigation utility
-            logger: Logger instance
-            **model_params: Model-specific parameters
-        """
-        self.nav = folder_navigator
-        self.logger = logger
-
-        # List of performance codes this model predicts (passed by system)
-        self.y_codes = performance_codes
-        if not self.y_codes:
-            raise ValueError("Model must specify performance codes (y) to predict")
-        
-        # Store preprocessing state for denormalization during prediction
-        self.preprocessing_state: Optional[PreprocessingState] = None
-        
-        # Apply parameter handling - consistent with FeatureModel/EvaluationModel
-        self.set_model_parameters(**model_params)
-        self._validate_parameters()
-    
-    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
-    @abstractmethod
-    def declare_inputs(self) -> List[str]:
-        """
-        Declare all input keys this model requires for prediction.
-        
-        This defines the complete input interface X. Can include:
-        - Parameter names (from dataclass fields using parameter_handler)
-        - External data keys (loaded via _load_data method)
-        
-        Returns:
-            List of input keys this model expects in X
-            e.g., ["n_layers", "temperature", "geometry_mesh", "sensor_data"]
-        """
-        ...
-    
-    @abstractmethod
-    def train(self, X: Dict[str, np.ndarray], y: np.ndarray) -> None:
-        """
-        Train the prediction model on processed data.
-        
-        Args:
-            X: Dictionary of input features {key: values_array}
-            y: Target variables for training, shape (n_samples, n_targets)
-               Order matches self.y_codes
-            
-        Note:
-            Cross-validation and hyperparameter tuning should be
-            implemented within this method by the user, if needed.
-        """
-        ...
-    
-    @abstractmethod
-    def predict(self, X: Dict[str, float]) -> np.ndarray:
-        """
-        Predict performance metrics for given input X.
-        
-        Args:
-            X: Dictionary of input features {key: scalar_value}
-               Single experiment prediction
-        Returns:
-            y: Predicted performance values, shape (n_targets,)
-               Order matches self.y_codes
-        """
-        ...
-
-    # === OPTIONAL METHODS ===
-    def _load_data(self, exp_nr: int) -> Dict[str, Any]:
-        """
-        Load domain-specific, unstructured data for this experiment.
-        
-        Data Responsibility: This method handles complex, domain-specific data
-        that the DataInterface doesn't manage (geometry files, sensor streams,
-        images, proprietary formats, etc.).
-        
-        Args:
-            exp_nr: Experiment number
-            
-        Returns:
-            Dictionary of loaded data {key: data}
-            Keys should match those declared in declare_inputs()
-        """
-        return {}  # Default: no external data loading
-        
-    def preprocess(self, 
-                   global_preprocessed_X: Dict[str, Any], 
-                   global_preprocessed_y: np.ndarray,
-                   preprocessing_state: PreprocessingState) -> Tuple[Dict[str, Any], np.ndarray]:
-        """
-        Model-specific preprocessing after global preprocessing.
-        
-        Override this method to:
-        - Denormalize specific features back to original scale
-        - Apply custom normalization (robust scaling, log transforms, etc.)
-        - Handle categorical encoding or feature engineering
-        
-        Args:
-            global_preprocessed_X: Globally preprocessed input features
-            global_preprocessed_y: Globally preprocessed target variables
-            preprocessing_state: Global preprocessing transformation parameters
-        
-        Returns:
-            Tuple of (model_specific_X, model_specific_y)
-            
-        Note:
-            Default implementation does no additional preprocessing.
-            Override this method for model-specific transformations.
-        """
-        self.preprocessing_state = preprocessing_state
-        return global_preprocessed_X, global_preprocessed_y
-
-    def _validate_parameters(self) -> None:
-        """Optional parameter validation - can be overridden by subclasses."""
-        pass
+from ..interfaces import DataInterface, PreprocessingState, PredictionModel, FeatureModel
+from ..utils import FolderNavigator, LBPLogger
 
 
 class PredictionSystem:
@@ -192,7 +24,7 @@ class PredictionSystem:
     def __init__(self, 
                  folder_navigator: FolderNavigator,
                  data_interface: DataInterface,
-                 logger: LBPLogger):
+                 logger: LBPLogger) -> None:
         """
         Initialize prediction system.
         
@@ -204,7 +36,7 @@ class PredictionSystem:
         self.nav = folder_navigator
         self.interface = data_interface
         self.logger = logger
-        self.models: List[PredictionModel] = []
+        self.prediction_models: List[PredictionModel] = []
         
         # Store global preprocessing state for consistent normalization/denormalization
         self.preprocessing_state = PreprocessingState()
@@ -221,13 +53,13 @@ class PredictionSystem:
         if not isinstance(model, PredictionModel):
             raise TypeError("Model must be an instance of PredictionModel or its subclass")
         
-        self.models.append(model)
+        self.prediction_models.append(model)
         self.logger.info(f"Added model: {type(model).__name__} for performance codes: {model.y_codes}")
     
     def get_required_performance_codes(self) -> List[str]:
         """Get all unique performance codes that need to be predicted across all models."""
         all_codes = set()
-        for model in self.models:
+        for model in self.prediction_models:
             all_codes.update(model.y_codes)
         return list(all_codes)
     
@@ -256,8 +88,8 @@ class PredictionSystem:
         self.logger.info(f"Global preprocessing completed: X with {len(X_keys)} features, y{global_y.shape}")
         
         # Step 2: Train each model with model-specific preprocessing
-        for i, model in enumerate(self.models):
-            self.logger.info(f"Training model {i+1}/{len(self.models)}: {type(model).__name__}")
+        for i, model in enumerate(self.prediction_models):
+            self.logger.info(f"Training model {i+1}/{len(self.prediction_models)}: {type(model).__name__}")
             
             # Extract relevant features and targets for this specific model
             model_X = self._extract_model_features(global_X, X_keys, model.declare_inputs())
@@ -292,7 +124,7 @@ class PredictionSystem:
         # Collect predictions from all models
         all_predictions = {}
         
-        for model in self.models:
+        for model in self.prediction_models:
             # Set structured parameters in model using existing parameter handling
             model.set_experiment_parameters(**X_parameters)
             
@@ -332,7 +164,7 @@ class PredictionSystem:
         
         # Collect all unique input keys required by all models
         all_input_keys = set()
-        for model in self.models:
+        for model in self.prediction_models:
             all_input_keys.update(model.declare_inputs())
         all_input_keys = list(all_input_keys)
         
@@ -343,7 +175,7 @@ class PredictionSystem:
             # Set structured parameters in all models for this experiment
             exp_params = {key: values[exp_numbers.index(exp_nr)] for key, values in parameters.items()}
             
-            for model in self.models:
+            for model in self.prediction_models:
                 # Set parameters using parameter handling system
                 model.set_experiment_parameters(**exp_params)
                 

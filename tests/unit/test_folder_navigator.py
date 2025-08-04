@@ -1,6 +1,6 @@
 import pytest
 import os
-from src.lbp_package.utils.folder_navigator import FolderNavigator
+from lbp_package.utils import FolderNavigator
 
 
 class TestFolderNavigator:

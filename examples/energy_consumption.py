@@ -1,11 +1,9 @@
-import json
-import os
-import math
 import numpy as np
 from typing import Dict, Any
 from dataclasses import dataclass
-from src.lbp_package.evaluation import EvaluationModel, FeatureModel
-from src.lbp_package.utils.parameter_handler import runtime_parameter, model_parameter, exp_parameter
+
+from lbp_package import EvaluationModel, FeatureModel
+from lbp_package.utils import runtime_parameter, model_parameter, exp_parameter
 
 @dataclass
 class EnergyConsumption(EvaluationModel):
@@ -67,7 +65,7 @@ class EnergyFeature(FeatureModel):
         
         """Initialize energy feature model."""
         super().__init__(
-            performance_code=performance_code,
+            associated_code=performance_code,
             folder_navigator=folder_navigator,
             logger=logger,
             round_digits=round_digits,
@@ -77,7 +75,7 @@ class EnergyFeature(FeatureModel):
         # Initialize feature storage for energy consumption
         self.features["energy_consumption"] = np.empty([])
 
-    def _load_data(self, exp_nr: int) -> Any:
+    def _load_data(self, exp_nr: int, debug_flag: bool = False) -> Any:
         """No data loading required for energy calculation."""
         return None
 

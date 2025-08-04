@@ -221,5 +221,5 @@ def setup_test_data(temp_dir):
         "study_dir": os.path.join(temp_dir, "test"),
         "exp_dir": os.path.join(temp_dir, "test", "test_001"),
         "designed_paths": generate_path_data(),
-        "measured_paths": generate_path_data(noise=0.1)
+        "measured_paths": generate_path_data(noise=True),
     }

@@ -1,4 +1,4 @@
-from src.lbp_package.utils.folder_navigator import FolderNavigator
+from lbp_package.utils import FolderNavigator
 from examples.path_deviation import PathDeviationFeature
 from examples.energy_consumption import EnergyFeature
 
@@ -21,7 +21,7 @@ class TestPathDeviationFeature:
         assert feature_model.tolerance_xyz == 0.1
         assert feature_model.layer_id == None
         assert feature_model.segment_id == None
-        assert "path_deviation" in feature_model.performance_codes
+        assert "path_deviation" in feature_model.associated_codes
     
     def test_feature_computation(self, temp_dir, test_logger, mock_study_params, setup_test_data):
         """Test path deviation feature computation."""
@@ -89,7 +89,7 @@ class TestEnergyFeature:
         
         assert feature_model.power_rating == 50.0
         assert feature_model.layerTime == None
-        assert "energy_consumption" in feature_model.performance_codes
+        assert "energy_consumption" in feature_model.associated_codes
 
         feature_model.set_experiment_parameters(**mock_exp_params)
         assert feature_model.layerTime == 30.0

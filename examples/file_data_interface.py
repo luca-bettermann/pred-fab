@@ -1,9 +1,8 @@
 import json
 import os
 import datetime
-from pathlib import Path
 from typing import Dict, Any, List
-from src.lbp_package.data_interface import DataInterface
+from lbp_package import DataInterface
 
 
 class FileDataInterface(DataInterface):

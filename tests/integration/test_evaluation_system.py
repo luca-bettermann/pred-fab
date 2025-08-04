@@ -1,8 +1,6 @@
-from src.lbp_package.orchestration import EvaluationSystem
-from src.lbp_package.utils.folder_navigator import FolderNavigator
-from examples.path_deviation import PathEvaluation
-from examples.energy_consumption import EnergyConsumption
-
+from lbp_package.orchestration import EvaluationSystem
+from lbp_package.utils import FolderNavigator
+from examples import PathEvaluation, EnergyConsumption
 
 class TestEvaluationSystem:
     """Test evaluation system functionality."""
@@ -63,11 +61,10 @@ class TestEvaluationSystem:
         
         assert path_eval.feature_model is not None
         assert energy_eval.feature_model is not None
-        
-        # Verify feature models have correct performance codes
-        assert "path_deviation" in path_eval.feature_model.performance_codes
-        assert "energy_consumption" in energy_eval.feature_model.performance_codes
-    
+        # Verify feature models have correct associated codes
+        assert "path_deviation" in path_eval.feature_model.associated_codes
+        assert "energy_consumption" in energy_eval.feature_model.associated_codes
+
     def test_feature_model_sharing(self, temp_dir, test_logger, mock_data_interface, mock_study_params):
         """Test feature model sharing between evaluation models."""
         nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")
@@ -87,9 +84,9 @@ class TestEvaluationSystem:
         assert energy_eval_1.feature_model is energy_eval_2.feature_model
         
         # Verify both performance codes are registered
-        assert "energy_consumption_1" in energy_eval_1.feature_model.performance_codes
-        assert "energy_consumption_2" in energy_eval_2.feature_model.performance_codes
-    
+        assert "energy_consumption_1" in energy_eval_1.feature_model.associated_codes
+        assert "energy_consumption_2" in energy_eval_2.feature_model.associated_codes
+
     def test_evaluation_workflow(self, temp_dir, test_logger, mock_data_interface, mock_study_params, mock_exp_params, setup_test_data):
         """Test complete evaluation workflow."""
         nav = FolderNavigator(temp_dir, temp_dir, temp_dir, "test")

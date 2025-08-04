@@ -327,7 +327,7 @@ Runtime parameter field names must match iterator names (second element) from `d
 ```python
 dimension_names = [('layers', 'layer_id', 'n_layers')]
 #                             ^^^^^^^^
-#                             This name must be used in runtime_parameter()
+#                             This name should be set as runtime_parameter()
 
 @dataclass
 class MyFeatureModel(FeatureModel):
