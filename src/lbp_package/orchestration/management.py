@@ -9,6 +9,12 @@ from ..utils import FolderNavigator, LBPLogger
 
 # TODO:
 # - Figure out how to properly initialize PredictionSystem (currently in initialize_study)
+# -> idea: config file defines initialization of evaluationsystem and predictionsystem
+# -> by default, subsystems are toggled as disabled
+# -> evaluationmodels get activated by matching performance codes of study
+# -> predictionmodels get activated by outputs matching with performance codes
+# -> feature models are mapped directly in the evaluation and prediction model instances
+
 # - Add example prediction model, using feature models
 # - Continue with the prediction model and system implementation
 # - Adapt the testing now that we moved _add_feature_model_instances from evaluation to LBPmanager

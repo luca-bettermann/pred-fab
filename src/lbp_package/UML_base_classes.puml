@@ -1,6 +1,6 @@
 @startuml UML_base_classes
 ' run this to create a png file:
-' plantuml -tpng "UML_diagrams/UML_base_classes.puml"
+' plantuml -tpng "src/lbp_package/UML_base_classes.puml"
 
 !define ABSTRACT_CLASS abstract class
 
@@ -11,7 +11,7 @@ ABSTRACT_CLASS FeatureModel #90EE9055 {
     +compute_features(exp_nr, visualize_flag)
 }
 
-ABSTRACT_CLASS MLModel #FFFFE055 {
+ABSTRACT_CLASS PredictionModel #FFFFE055 {
     +__init__(params)
     +forward_pass(input)
     +train(dataset)
@@ -81,7 +81,7 @@ LBPManager *-- Calibration
 
 EvaluationSystem o-- EvaluationModel
 EvaluationModel o-- FeatureModel
-PredictionSystem o-- MLModel
+PredictionSystem o-- PredictionModel
 Calibration o-- Optimizer
 
 @enduml

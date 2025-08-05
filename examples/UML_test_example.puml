@@ -1,6 +1,6 @@
 @startuml UML_test_example
 ' run this to create a png file:
-' plantuml -tpng "UML_diagrams/UML_test_example.puml"
+' plantuml -tpng "examples/UML_test_example.puml"
 
 class LBPManager {
     +__init__(study)
