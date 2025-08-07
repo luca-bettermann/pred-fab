@@ -66,20 +66,47 @@ class LBPManager:
         self.calibration_config: Dict[str, str] = {}
         self.system_config: Dict[str, Any] = {}
         
-        # System defaults (loaded from config)
-        self.default_debug_mode: bool = False
-        self.default_visualize_flag: bool = False
-        self.default_round_digits: int = 3
+        # Initialize system defaults (loaded from config)
+        self.defaults = {}
+        # self.default_debug_mode: bool = False
+        # self.default_visualize_flag: bool = False
+        # self.default_round_digits: int = 3
         
         # Performance mapping
-        self.performance_mapping: Dict[str, Type[EvaluationModel]] = {}
+        self.performance_records: List[Dict[str, Any]] = []
 
-        # Subsystem components
-        self.eval_system = None
-        self.pred_system = None
+        # Initialize system components
+        self.eval_system = EvaluationSystem(self.nav, self.interface, self.logger)
+        self.pred_system = PredictionSystem(self.nav, self.interface, self.logger)
+
+        # Load configuration file
+        self._load_config()
 
     # === PUBLIC API METHODS (Called externally) ===
-    def initialize_study(self, study_code: str, debug_flag: bool = False) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: Optional[int] = None, **kwargs) -> None:
+        """
+        Add an evaluation model to the system.
+        Args:
+            performance_code: Code identifying the performance metric
+            evaluation_class: Class of evaluation model to instantiate
+            **kwargs: Additional parameters for model initialization
+        """
+        round_digits = self._get_default_attribute('round_digits', round_digits)
+        self.eval_system.add_evaluation_model(performance_code, evaluation_class, self.study_params, round_digits, **kwargs)
+
+    def add_prediction_model(self, prediction_class: Type[PredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
+        """
+        Add a prediction model to the system.
+        
+        Args:
+            performance_code: Code identifying the performance metric
+            prediction_class: Class of prediction model to instantiate
+            **kwargs: Additional parameters for model initialization
+        """
+        round_digits = self._get_default_attribute('round_digits', round_digits)
+        self.pred_system.add_prediction_model(prediction_class, self.study_params, round_digits, **kwargs)
+
+    def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, eval_flag: Optional[bool] = None, pred_flag: Optional[bool] = None) -> None:
         """
         Initialize the system for a specific study.
         
@@ -88,14 +115,16 @@ class LBPManager:
             debug_flag: Whether to run in debug mode
         """
         self.logger.console_info(f"\n------- Study Initialization: '{study_code}' -------")
-        
+
+        # Use system defaults if not explicitly provided
+        debug_flag = self._get_default_attribute('debug_flag', debug_flag)
+        eval_flag = self._get_default_attribute('eval_flag', eval_flag)
+        pred_flag = self._get_default_attribute('pred_flag', pred_flag)
+
         # Configure study context
         self.study_code = study_code
         self.nav.set_study_code(study_code)
         self.logger.info(f"Folder navigator initialized for study '{study_code}'")
-        
-        # Load configuration file
-        self._load_config()
         
         # Load study data from database
         self.study_record = self.interface.get_study_record(study_code)
@@ -108,37 +137,42 @@ class LBPManager:
         
         # Load performance configuration
         performance_records = self.interface.get_performance_records(self.study_record)
-        if not performance_records or not isinstance(performance_records, list):
-            raise ValueError(f"Performance records for study code '{study_code}' empty or not a list. Please check the database configuration.")
+        assert performance_records, f"Performance records for study code '{study_code}' empty. Please check the database configuration."
+        assert isinstance(performance_records, list), f"Performance records for study code '{study_code}' not a list. Please check the database configuration."
 
-        # Initialize evaluation system
-        self.eval_system = EvaluationSystem(self.nav, self.interface, self.logger)
-        
-        # Load and configure evaluation models
-        self.performance_mapping = self._load_performance_mapping()
+        # Prep prediction system output dict
+        pred_model_by_code = {}
+        for pred_model in self.pred_system.prediction_models:
+            for code in pred_model.output:
+                assert code not in pred_model_by_code, f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration."
+                pred_model_by_code[code] = pred_model
+
+        # Activate the evaluation and prediction models based on performance records
         for performance_record in performance_records:
+            # Validate whether the performance records are dicts and contain 'Code' key, then retrieve the code
+            assert isinstance(performance_record, dict), f"Performance record for study code '{study_code}' is not a dict: {performance_record}"
+            assert "Code" in performance_record, f"Performance record missing 'Code' field: {performance_record}"
             code = performance_record.get("Code")
-            assert code is not None, f"Performance record missing 'Code' field: {performance_record}"
-            assert code in self.performance_mapping, f"Performance code '{code}' not found in performance mapping."
 
-            evaluation_class = self.performance_mapping[code]
-            if evaluation_class is not None:
-                self.eval_system.add_evaluation_model(
-                        evaluation_class,
-                        code,
-                        self.study_params
-                    )
-            else:
-                self.logger.warning(f"Performance mapping '{code}' is None, skipping evaluation model creation.")
+            # Activate evaluation model
+            assert code not in self.eval_system.evaluation_models, f"No evaluation model for performance code '{code}' has been initialized."
+            self.eval_system.evaluation_models[code].active = True
+            self.logger.info(f"Activated evaluation model for performance code '{code}'")
 
-        # Initialize prediction system
-        self.pred_system = PredictionSystem(self.nav, self.interface, self.logger)
+            # Activate prediction model if it matches the output codes
+            assert code in pred_model_by_code, f"No prediction model for performance code '{code}' has been initialized."
+            prediction_model = pred_model_by_code[code]
+            prediction_model.active = True
+            self.logger.info(f"Activated prediction model for performance code '{code}'")
+
+            # Add performance record to the list
+            self.performance_records.append(performance_record)
 
         # Initialize feature model instances
         self._add_feature_model_instances()
 
         # Display initialization summary
-        summary = self._initialization_step_summary()
+        summary = self._initialization_step_summary(pred_model_by_code)
         self.logger.console_summary(summary)
         self.logger.console_success(f"Successfully initialized evaluation system of study '{study_code}'.")
 
@@ -155,13 +189,13 @@ class LBPManager:
             raise RuntimeError("Evaluation system is not initialized. Please call initialize_study() first.")
 
         # Use system defaults if not explicitly provided
-        actual_debug_flag = debug_flag if debug_flag is not None else self.default_debug_mode
-        actual_visualize_flag = visualize_flag if visualize_flag is not None else self.default_visualize_flag
-        
-        self.logger.info(f"Execution flags: debug_mode={actual_debug_flag}, visualize_flag={actual_visualize_flag}")
+        debug_flag = debug_flag if debug_flag is not None else self._get_default_attribute('debug_mode')
+        visualize_flag = visualize_flag if visualize_flag is not None else self._get_default_attribute('visualize_flag')
+
+        self.logger.info(f"Execution flags: debug_mode={debug_flag}, visualize_flag={visualize_flag}")
 
         # Configure debug mode if needed
-        if actual_debug_flag and not self.logger.debug_mode:
+        if debug_flag and not self.logger.debug_mode:
             self.logger.switch_to_debug_mode()
 
         exp_code = self.nav.get_experiment_code(exp_nr)
@@ -180,8 +214,8 @@ class LBPManager:
             study_record=self.study_record,
             exp_nr=exp_nr, 
             exp_record=self.exp_record, 
-            visualize_flag=actual_visualize_flag, 
-            debug_flag=actual_debug_flag,
+            visualize_flag=visualize_flag, 
+            debug_flag=debug_flag,
             **exp_vars
         )
 
@@ -215,50 +249,70 @@ class LBPManager:
             raise ValueError("Configuration file must contain a valid dictionary structure.")
 
         # Extract and store configuration sections
-        self.evaluation_config = self.config.get('evaluation', {})
-        self.prediction_config = self.config.get('prediction', {})
-        self.calibration_config = self.config.get('calibration', {})
+        # self.evaluation_config = self.config.get('evaluation', {})
+        # self.prediction_config = self.config.get('prediction', {})
+        # self.calibration_config = self.config.get('calibration', {})
         self.system_config = self.config.get('system', {})
         
-        # Load system defaults
-        self.default_debug_mode = self.system_config.get('debug_mode', False)
-        self.default_visualize_flag = self.system_config.get('visualize_flag', False)
-        self.default_round_digits = self.system_config.get('round_digits', 3)
-        
-        self.logger.info(f"Loaded configuration with {len(self.evaluation_config)} evaluation models, "
-                        f"{len(self.prediction_config)} prediction models, "
-                        f"{len(self.calibration_config)} calibration models, "
-                        f"and {len(self.system_config)} system settings")
-        self.logger.info(f"System defaults: debug_mode={self.default_debug_mode}, "
-                        f"visualize_flag={self.default_visualize_flag}, "
-                        f"round_digits={self.default_round_digits}")
+        # Set system defaults
+        for key, value in self.system_config.items():
+            self.defaults[key] = value
 
-    def _load_performance_mapping(self) -> Dict[str, Type[EvaluationModel]]:
+        self.logger.info(f"Loaded configuration with {len(self.system_config)} system settings")
+        defaults_str = ', '.join([f"{key}={value}" for key, value in self.defaults.items()])
+        self.logger.info(f"System defaults: {defaults_str}")
+
+        # self.logger.info(f"Loaded configuration with {len(self.evaluation_config)} evaluation models, "
+        #                 f"{len(self.prediction_config)} prediction models, "
+        #                 f"{len(self.calibration_config)} calibration models, "
+        #                 f"and {len(self.system_config)} system settings")
+
+
+    def _get_default_attribute(self, key: str, value: Any) -> Any:
         """
-        Load performance-to-evaluation-model mapping from stored configuration.
+        Retrieve a default attribute value from the system configuration.
+
+        Args:
+            key: The key of the default attribute to retrieve
         
         Returns:
-            Dictionary mapping performance codes to evaluation model classes
+            The value of the default attribute
         """
-        self.logger.info("Loading performance mapping from stored configuration")
+        if value is None:
+            assert key in self.defaults, f"Default attribute '{key}' not found in system configuration."
+            self.logger.debug(f"Retrieved default attribute '{key}': {self.defaults[key]}")
+            return self.defaults[key]
+        else:
+            self.logger.debug(f"Using provided value for '{key}': {value}")
+            return value
 
-        if not self.evaluation_config:
-            raise ValueError("No performance to class mappings found in the evaluation config.")
 
-        mapping = {}
+    # def _load_performance_mapping(self) -> Dict[str, Type[EvaluationModel]]:
+    #     """
+    #     Load performance-to-evaluation-model mapping from stored configuration.
+        
+    #     Returns:
+    #         Dictionary mapping performance codes to evaluation model classes
+    #     """
+    #     self.logger.info("Loading performance mapping from stored configuration")
 
-        # Dynamically import evaluation model classes
-        for code, class_path in self.evaluation_config.items():
-            try:
-                module_path, class_name = class_path.rsplit('.', 1)
-                module = import_module(module_path)
-                evaluation_class = getattr(module, class_name)
-                mapping[code] = evaluation_class
-                self.logger.debug(f"Loaded evaluation class '{class_name}' for performance code '{code}'")
-            except (ValueError, ImportError, AttributeError) as e:
-                raise ImportError(f"Error loading class '{class_path}' for performance code '{code}': {e}")
+    #     if not self.evaluation_config:
+    #         raise ValueError("No performance to class mappings found in the evaluation config.")
+
+    #     mapping = {}
+
+    #     # Dynamically import evaluation model classes
+    #     for code, class_path in self.evaluation_config.items():
+    #         try:
+    #             module_path, class_name = class_path.rsplit('.', 1)
+    #             module = import_module(module_path)
+    #             evaluation_class = getattr(module, class_name)
+    #             mapping[code] = evaluation_class
+    #             self.logger.debug(f"Loaded evaluation class '{class_name}' for performance code '{code}'")
+    #         except (ValueError, ImportError, AttributeError) as e:
+    #             raise ImportError(f"Error loading class '{class_path}' for performance code '{code}': {e}")
             
-        return mapping
+    #     return mapping
     
     def _add_feature_model_instances(self) -> None:
         """
@@ -317,15 +371,25 @@ class LBPManager:
             feature_model_dict[feature_model_type] = feature_model_instance
 
 
-    def _initialization_step_summary(self) -> str:
+    def _initialization_step_summary(self, pred_model_by_code) -> str:
         """Generate summary of initialization results."""
-        assert self.eval_system is not None
+        assert self.eval_system is not None and self.pred_system is not None
+        val_eval_models = [eval_model for eval_model in self.eval_system.evaluation_models.values() if eval_model.active]
+        val_prediction_models = [pred_model for pred_model in self.pred_system.prediction_models if pred_model.active]
         
-        summary = f"Loaded {len(self.performance_mapping)} performance attributes, {len(self.eval_system.evaluation_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in self.eval_system.evaluation_models.values()]))} feature models.\n\n"
-        summary += f"\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Feature Model':<20}\033[0m"
+        # Create mapping of performance codes to prediction models
+        # pred_model_by_code = {}
+        # for pred_model in val_prediction_models:
+        #     for code in pred_model.output:
+        #         pred_model_by_code[code] = pred_model
+        
+        summary = f"Loaded {len(self.performance_records)} performance attributes, {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models]))} feature models.\n\n"
+        summary += f"\033[1m{'Performance Code':<20} {'Feature Model':<20} {'Evaluation Model':<20} {'Prediction Model':<20}\033[0m"
         
         for code, eval_model in self.eval_system.evaluation_models.items():
-            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {type(eval_model.feature_model).__name__:<20}"
+            if eval_model.active:
+                pred_model_name = type(pred_model_by_code[code]).__name__ if code in pred_model_by_code else "None"
+                summary += f"\n{code:<20} {type(eval_model.feature_model).__name__:<20} {type(eval_model).__name__:<20} {pred_model_name:<20}"
         return summary + "\n"
 
     def _evaluation_step_summary(self) -> str:

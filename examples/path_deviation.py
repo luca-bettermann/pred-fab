@@ -2,7 +2,7 @@ import json
 import os
 import math
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional, Tuple, Type
 from dataclasses import dataclass
 
 from lbp_package import EvaluationModel, FeatureModel
@@ -13,39 +13,32 @@ class PathEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
 
     # Experiment parameters
-    target_deviation: float = model_parameter() # type: ignore
-    max_deviation: float = model_parameter() # type: ignore
-    n_layers: int = exp_parameter() # type: ignore
-    n_segments: int = exp_parameter() # type: ignore
+    target_deviation: Optional[float] = model_parameter()
+    max_deviation: Optional[float] = model_parameter()
+    n_layers: Optional[int] = exp_parameter()
+    n_segments: Optional[int] = exp_parameter()
 
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator, 
-            logger, 
-            **study_params
-            ):
-        
-        """Initialize path deviation evaluation."""
+    # Passing initialization parameters to the parent class
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
+        """Declare dimensions for path evaluation with the corresponding structure."""
         dimension_names = [
             ('layers', 'layer_id', 'n_layers'),
             ('segments', 'segment_id', 'n_segments')
         ]
-        
-        super().__init__(
-            performance_code=performance_code,
-            folder_navigator=folder_navigator,
-            dimension_names=dimension_names,
-            feature_model_type=PathDeviationFeature,
-            logger=logger,
-            **study_params
-        )
+        return dimension_names
     
-    def _compute_target_value(self) -> float:
+    def _declare_feature_model_type(self) -> Type[FeatureModel]:
+        """Declare the feature model type to use for feature extraction."""
+        return PathDeviationFeature
+
+    def _compute_target_value(self) -> Optional[float]:
         """Return target deviation (ideally 0)."""
         return self.target_deviation
-        
-    def _compute_scaling_factor(self) -> float:
+
+    def _compute_scaling_factor(self) -> Optional[float]:
         """Return maximum acceptable deviation."""
         return self.max_deviation
 
@@ -55,11 +48,11 @@ class PathDeviationFeature(FeatureModel):
     """Example feature model for path deviation calculation."""
     
     # Model parameters
-    tolerance_xyz: float = model_parameter(0.1) # type: ignore
+    tolerance_xyz: Optional[float] = model_parameter(0.1)
 
     # Runtime parameters
-    layer_id: int = runtime_parameter() # type: ignore
-    segment_id: int = runtime_parameter() # type: ignore
+    layer_id: Optional[int] = runtime_parameter()
+    segment_id: Optional[int] = runtime_parameter()
 
 
     def __init__(

@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple, Type, Optional
 from dataclasses import dataclass
 
 from lbp_package import EvaluationModel, FeatureModel
@@ -10,36 +10,28 @@ class EnergyConsumption(EvaluationModel):
     """Example energy consumption evaluation model."""
 
     # Model parameters
-    target_energy: float = model_parameter(0.0) # type: ignore
+    target_energy: Optional[float] = model_parameter(0.0)
 
     # Experiment parameters
-    max_energy: float = exp_parameter() # type: ignore
+    max_energy: Optional[float] = exp_parameter()
 
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator,
-            logger, 
-            **study_params
-            ):
-        
-        """Initialize energy consumption evaluation model."""
-        dimension_names = []  # No dimensions for energy consumption
+    # Passing initialization parameters to the parent class
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-        super().__init__(
-            performance_code=performance_code,
-            folder_navigator=folder_navigator,
-            dimension_names=dimension_names,
-            feature_model_type=EnergyFeature,
-            logger=logger,
-            **study_params
-        )
+    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
+        """Declare dimensions for energy evaluation (no dimensions)."""
+        return []  # No dimensions for energy consumption
     
-    def _compute_target_value(self) -> float:
+    def _declare_feature_model_type(self) -> Type[FeatureModel]:
+        """Declare the feature model type to use for feature extraction."""
+        return EnergyFeature
+    
+    def _compute_target_value(self) -> Optional[float]:
         """Return target energy value."""
         return self.target_energy
     
-    def _compute_scaling_factor(self) -> float:
+    def _compute_scaling_factor(self) -> Optional[float]:
         """Return maximum energy for normalization."""
         return self.max_energy
 
@@ -49,10 +41,10 @@ class EnergyFeature(FeatureModel):
     """Example feature model for energy consumption extraction."""
 
     # Model parameters
-    power_rating: float = model_parameter(50.0)  # type: ignore
+    power_rating: Optional[float] = model_parameter(50.0)
 
     # Experiment parameters
-    layerTime: float = exp_parameter() # type: ignore
+    layerTime: Optional[float] = exp_parameter()
 
     def __init__(
             self, 
@@ -81,5 +73,7 @@ class EnergyFeature(FeatureModel):
 
     def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]:
         """Compute energy feature from power rating and layer time."""
+        if self.power_rating is None or self.layerTime is None:
+            raise ValueError("Power rating and layer time must be set to compute energy consumption.")
         energy_consumption = self.power_rating * self.layerTime  # Watts * seconds
         return {"energy_consumption": energy_consumption}

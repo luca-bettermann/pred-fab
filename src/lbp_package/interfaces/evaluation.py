@@ -24,8 +24,6 @@ class EvaluationModel(ParameterHandling, ABC):
             self, 
             performance_code: str,
             folder_navigator: FolderNavigator,
-            dimension_names: List[Tuple[str, str, str]],
-            feature_model_type: Type[FeatureModel],
             logger: LBPLogger,
             round_digits: int = 3,
             **study_params
@@ -45,7 +43,13 @@ class EvaluationModel(ParameterHandling, ABC):
         self.nav = folder_navigator
         self.logger = logger
 
+        # By default, the evaluation model is deactivated from the system
+        self.active: bool = False
+
         # Feature model configuration
+        feature_model_type = self._declare_feature_model_type()
+        if not isinstance(feature_model_type, type) or not issubclass(feature_model_type, FeatureModel):
+            raise ValueError("Feature model type must be a subclass of FeatureModel.")
         self.feature_model_type: Type[FeatureModel] = feature_model_type
         self.feature_model: Optional[FeatureModel] = None
 
@@ -53,12 +57,7 @@ class EvaluationModel(ParameterHandling, ABC):
         self.dim_names: List[str] = []
         self.dim_iterator_names: List[str] = []
         self.dim_param_names: List[str] = []
-
-        # Initialize the dimensional layers, in the form of [('dim_name', 'dim_iterator_name', 'dim_parameter_name'), (...), ...]
-        # Note that the names must represent the namig convention in the code
-        # e.g. [('layers', 'layer_id', 'limitLayers), [...], ...)
-        # 'layers' is the name of the dimension, 'layer_id' is used to define the current id, limitLayers is the name of the variable that defines the number of layers.
-        self._initialize_dimensions(dimension_names)
+        self._initialize_dimensions()
 
         # Performance storage and configuration
         self.round_digits: int = round_digits
@@ -70,6 +69,29 @@ class EvaluationModel(ParameterHandling, ABC):
         self.set_model_parameters(**study_params)
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    @abstractmethod
+    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
+        """
+        Declare the hierarchical dimension structure for evaluation.
+        This defines the dimensions and their iterators for multi-dimensional evaluation.
+        Note that the names must represent the naming convention used in the code and database.
+        
+        Returns:
+            List of (dimension_name, iterator_name, parameter_name) tuples
+            e.g., [('layers', 'layer_id', 'n_layers'), ('segments', 'segment_id', 'n_segments')]
+        """
+        ...
+
+    @abstractmethod
+    def _declare_feature_model_type(self) -> Type[FeatureModel]:
+        """
+        Declare the feature model type to use for feature extraction.
+        
+        Returns:
+            Class of the feature model to use
+        """
+        ...
+
     @abstractmethod
     def _compute_target_value(self) -> float:
         """
@@ -88,7 +110,7 @@ class EvaluationModel(ParameterHandling, ABC):
         Args:
             feature_model: FeatureModel instance to use for feature extraction
         """
-        # Directly set the feature model instance (many-to-one relationship)
+        # Directly set the feature model instance (one-to-one relationship)
         self.feature_model = feature_model
 
     def run(self, exp_nr: int, visualize_flag: bool, debug_flag: bool, **exp_params) -> None:
@@ -194,8 +216,22 @@ class EvaluationModel(ParameterHandling, ABC):
         pass
 
     # === PRIVATE API METHODS (Called internally) ===
-    def _initialize_dimensions(self, dim_list: List[Tuple[str, str, str]]) -> None:
+    def _initialize_dimensions(self) -> None:
         """Parse dimension configuration into separate lists."""
+        # get the dimension names from the declare_dimensions method
+        dim_list = self._declare_dimensions()
+
+        # Validate the dimension list
+        if dim_list is None:
+            raise ValueError("No dimensions declared in the model. Please implement declare_dimensions method.")
+        elif not isinstance(dim_list, list):
+            raise ValueError("Declared dimensions must be a list of tuples (dimension_name, iterator_name, parameter_name).")
+        elif not all(isinstance(dim, tuple) and len(dim) == 3 for dim in dim_list):
+            raise ValueError("Each dimension must be a tuple of (dimension_name, iterator_name, parameter_name).")
+        else:
+            self.logger.debug(f"Declared dimensions: {dim_list}")
+
+        # Store dimension names in separate lists for easy access
         self.dim_names = [dim[0] for dim in dim_list]
         self.dim_iterator_names = [dim[1] for dim in dim_list]
         self.dim_param_names = [dim[2] for dim in dim_list]

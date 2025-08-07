@@ -1,4 +1,4 @@
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, Optional
 
 from ..utils import FolderNavigator, LBPLogger
 from ..interfaces.evaluation import EvaluationModel
@@ -33,54 +33,29 @@ class EvaluationSystem:
         self.evaluation_models = {}
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, evaluation_class: Type[EvaluationModel], performance_code: str, study_params: Dict[str, Any]) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], study_params: Dict[str, Any], round_digits: Optional[int] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         
         Args:
-            evaluation_class: Class of evaluation model to instantiate
             performance_code: Code identifying the performance metric
+            evaluation_class: Class of evaluation model to instantiate
             study_params: Study parameters for model configuration
         """
+        # Validate if evaluation_model is the correct type
+        if not issubclass(evaluation_class, EvaluationModel):
+            raise TypeError(f"Expected a subclass of EvaluationModel, got {type(evaluation_class).__name__}")
+
         self.logger.info(f"Adding '{evaluation_class.__name__}' model to evaluate performance '{performance_code}'")
         eval_model = evaluation_class(
-            performance_code,
+            performance_code=performance_code,
             folder_navigator=self.nav,
             logger=self.logger,
-            **study_params
+            study_params=study_params,
+            round_digits=round_digits,
+            **kwargs
         )
         self.evaluation_models[performance_code] = eval_model
-
-    # def add_feature_model_instances(self, study_params: Dict[str, Any]) -> None:
-    #     """
-    #     Create feature model instances for evaluation models.
-        
-    #     Optimizes by sharing feature model instances where possible.
-        
-    #     Args:
-    #         study_params: Study parameters for feature model configuration
-    #     """
-    #     feature_model_dict = {}
-
-    #     for eval_model in self.evaluation_models.values():
-    #         feature_model_type = eval_model.feature_model_type
-            
-    #         # Share feature model instances of the same type
-    #         if feature_model_type not in feature_model_dict:
-    #             eval_model.feature_model = feature_model_type(
-    #                 performance_code=eval_model.performance_code, 
-    #                 folder_navigator=eval_model.nav, 
-    #                 logger=self.logger, 
-    #                 round_digits=eval_model.round_digits,
-    #                 **study_params
-    #             )
-    #             feature_model_dict[feature_model_type] = eval_model.feature_model
-    #             self.logger.info(f"Adding feature model instance '{type(eval_model.feature_model).__name__}' to evaluation model '{type(eval_model).__name__}'")
-    #         else:
-    #             # Reuse existing feature model instance
-    #             eval_model.feature_model = feature_model_dict[feature_model_type]
-    #             eval_model.feature_model.initialize_for_code(eval_model.performance_code)
-    #             self.logger.info(f"Reusing existing feature model instance '{type(eval_model.feature_model).__name__}' for evaluation model '{type(eval_model).__name__}'")
             
     def run(self, study_record: Dict[str, Any], exp_nr: int, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
         """

@@ -42,7 +42,7 @@ def main():
     create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=3, n_layers=3, n_segments=2)
 
     # Initialize the study and run evaluation
-    lbp_manager.initialize_study(study_code)
+    lbp_manager.initialize_for_study(study_code)
 
     # Run evaluations for each experiment
     for exp_nr in range(1, 4):

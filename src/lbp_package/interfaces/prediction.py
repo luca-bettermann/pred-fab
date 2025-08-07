@@ -50,7 +50,6 @@ class PredictionModel(ParameterHandling, ABC):
                  performance_codes: List[str],
                  folder_navigator: FolderNavigator,
                  logger: LBPLogger,
-                 feature_model_types: Optional[Dict[str, Type[FeatureModel]]] = None,
                  round_digits: int = 3,
                  **model_params):
         """
@@ -65,16 +64,24 @@ class PredictionModel(ParameterHandling, ABC):
         self.nav = folder_navigator
         self.logger = logger
 
+        # By default, the prediction model is deactivated from the system
+        self.active: bool = False
+
+        # Set input keys this model requires for prediction
+        self.input = self.declare_inputs()
+        if not self.input or not isinstance(self.input, list):
+            raise ValueError("Model must declare a list of input keys (X) to predict")
+
         # List of performance codes this model predicts (passed by system)
-        self.y_codes = performance_codes
-        if not self.y_codes:
-            raise ValueError("Model must specify performance codes (y) to predict")
-        
+        self.output = performance_codes
+        if not self.output or not isinstance(self.output, list):
+            raise ValueError("Model must specify a list of performance codes (y) to predict")
+
         # Store preprocessing state for denormalization during prediction
         self.preprocessing_state: Optional[PreprocessingState] = None
 
         # Initialize the model types for the extraction of additional input features
-        self.feature_model_types = feature_model_types or {}
+        self.feature_model_types: Dict[str, Type[FeatureModel]] = self._declare_feature_model_types()
         self.feature_models: List[FeatureModel] = []
 
         # Apply parameter handling - consistent with FeatureModel/EvaluationModel
@@ -139,26 +146,18 @@ class PredictionModel(ParameterHandling, ABC):
         self.feature_models.append(feature_model)
 
     # === OPTIONAL METHODS ===
-    def _load_data(self, exp_nr: int, debug_flag: bool = False) -> Dict[str, Any]:
+    def _declare_feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
         """
-        Load domain-specific, unstructured data for this experiment.
+        Declare feature model types to use for feature extraction.
         
-        Data Responsibility: This method handles complex, domain-specific data
-        that the DataInterface doesn't manage (geometry files, sensor streams,
-        environmental data, images, etc.).
-
-        Note that this is not a replacement of feature extraction, rather it loads
-        data that serves as a meaningful input but not a performance feature.
-
-        Args:
-            exp_nr: Experiment number
-            debug_flag: Whether debug mode is active (no file I/O)
-            
+        This method can be overridden to specify which feature models
+        should be used for this prediction model.
+        
         Returns:
-            Dictionary of loaded data {key: data}
-            Keys should match those declared in declare_inputs()
+            Dictionary of feature model types {feature_code: FeatureModelClass}
+            e.g., {"energy_consumption": EnergyFeature, "path_deviation": PathDeviationFeature}
         """
-        return {}  # Default: no external data loading
+        return {}
         
     def preprocess(self, 
                    global_preprocessed_X: Dict[str, Any], 

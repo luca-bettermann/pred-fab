@@ -43,24 +43,34 @@ class PredictionSystem:
         
         self.logger.info("Initialized PredictionSystem")
 
-    def add_model(self, model: PredictionModel) -> None:
+    def add_prediction_model(self, prediction_model: Type[PredictionModel], study_params: Dict[str, Any], round_digits: Optional[int] = None, **kwargs) -> None:
         """
-        Add a prediction model to the system.
+        Add an prediction model to the system.
         
         Args:
-            model: Instance of PredictionModel or subclass
+            performance_code: Code identifying the performance metric
+            evaluation_class: Class of evaluation model to instantiate
+            study_params: Study parameters for model configuration
         """
-        if not isinstance(model, PredictionModel):
-            raise TypeError("Model must be an instance of PredictionModel or its subclass")
-        
-        self.prediction_models.append(model)
-        self.logger.info(f"Added model: {type(model).__name__} for performance codes: {model.y_codes}")
+        # Validate if prediction_model is the correct type
+        if not issubclass(prediction_model, PredictionModel):
+            raise TypeError(f"Expected a subclass of PredictionModel, got {type(prediction_model).__name__}")
+
+        model_instance = prediction_model(
+            folder_navigator=self.nav,
+            logger=self.logger,
+            study_params=study_params,
+            round_digits=round_digits,
+            **kwargs
+        )
+        self.prediction_models.append(model_instance)
+        self.logger.info(f"Added model: {type(model_instance).__name__} for performance codes: {model_instance.output}")
     
     def get_required_performance_codes(self) -> List[str]:
         """Get all unique performance codes that need to be predicted across all models."""
         all_codes = set()
         for model in self.prediction_models:
-            all_codes.update(model.y_codes)
+            all_codes.update(model.output)
         return list(all_codes)
     
     def train(self, historical_evaluation_data: Dict[str, Any]) -> None:
@@ -93,7 +103,7 @@ class PredictionSystem:
             
             # Extract relevant features and targets for this specific model
             model_X = self._extract_model_features(global_X, X_keys, model.declare_inputs())
-            model_y = self._extract_model_targets(global_y, model.y_codes, historical_evaluation_data["performances"])
+            model_y = self._extract_model_targets(global_y, model.output, historical_evaluation_data["performances"])
             
             # Allow model to customize preprocessing (denormalization, custom scaling, etc.)
             processed_X, processed_y = model.preprocess(model_X, model_y, self.preprocessing_state)
@@ -123,6 +133,8 @@ class PredictionSystem:
 
         # Collect predictions from all models
         all_predictions = {}
+
+        # TODO: add feature extraction to the predict method
         
         for model in self.prediction_models:
             # Set structured parameters in model using existing parameter handling
@@ -138,10 +150,10 @@ class PredictionSystem:
             model_predictions = model.predict(input_dict)  # Shape: (n_targets,)
             
             # Denormalize predictions back to original [0,1] performance scale
-            denormalized_predictions = self._denormalize_predictions(model_predictions, model.y_codes)
+            denormalized_predictions = self._denormalize_predictions(model_predictions, model.output)
             
             # Store predictions by performance code
-            for i, perf_code in enumerate(model.y_codes):
+            for i, perf_code in enumerate(model.output):
                 all_predictions[perf_code] = float(denormalized_predictions[i])
                 
         return all_predictions

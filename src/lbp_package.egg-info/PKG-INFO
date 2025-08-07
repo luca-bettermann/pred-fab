@@ -203,6 +203,35 @@ Optimization system for automated parameter adjustment based on evaluation resul
 #### DataInterface
 Abstract base class providing standardized database and data source integration. This interface abstracts away specific database implementations, allowing the framework to work with various data backends (SQL databases, NoSQL systems, APIs, files).
 
+##### Data Responsibility Architecture
+
+The framework maintains clear boundaries between structured and unstructured data handling:
+
+**DataInterface Responsibilities (Structured Data):**
+- **Study/Experiment Metadata**: Records, parameters, configurations
+- **Universal Format**: Standardized across all domains and studies  
+
+**Model Responsibilities (Unstructured Data):** 
+- **Domain-Specific Data**: Geometry files, sensor streams, images, proprietary formats
+- **Raw Experimental Data**: Measurements, time series, CAD models, process data
+- **Local Processing**: Format conversion, preprocessing, domain-specific validation
+
+##### Expected Study Structure
+
+The DataInterface expects a hierarchical study organization:
+
+```
+Study Level:
+├── Study Parameters (target values, equipment settings, tolerances)
+├── Performance Records (which metrics to evaluate)
+└── Experiments/
+    ├── Experiment 001/
+    │   ├── Experiment Parameters (process conditions, dimensions)
+    │   └── Raw Data Files (handled by models, not DataInterface)
+    ├── Experiment 002/
+    └── ...
+```
+
 **Abstract Methods:**
 - `get_study_record(study_code)` → `Dict`: Retrieves comprehensive study metadata including configuration parameters, active performance metrics, and study-level settings. Must return a dictionary with study identification, parameter and performance fields.
 - `get_exp_record(exp_code)` → `Dict`: Fetches experiment-specific data including experimental conditions and execution parameters. Return dictionary must contain experiment identification and associated metadata.
@@ -309,7 +338,7 @@ Runtime parameter field names must match iterator names (second element) from `d
 ```python
 dimension_names = [('layers', 'layer_id', 'n_layers')]
 #                             ^^^^^^^^
-#                             This name must be used in runtime_parameter()
+#                             This name should be set as runtime_parameter()
 
 @dataclass
 class MyFeatureModel(FeatureModel):

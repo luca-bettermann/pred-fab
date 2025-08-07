@@ -1,34 +1,10 @@
 # Configuration template for Learning by Printing (LbP) system
 # Copy this file to config.yaml and adjust the mappings for your project
 
-# Evaluation model mappings
-# Maps performance codes to fully qualified class paths
-evaluation:
-  performance_1: "your_module.YourEvaluationClass1" 
-  performance_2: "your_module.YourEvaluationClass2"
-
-# Prediction model mappings (to be added)
-# prediction:
-#   model_1: "your_module.YourMLModel1"
-#   model_2: "your_module.YourMLModel2"
-
-# Calibration/Optimization mappings (to be added)  
-# calibration:
-#   optimizer_1: "your_module.YourOptimizer1"
-#   optimizer_2: "your_module.YourOptimizer2"
-
-# System settings
+# Default system settings
 system:
-  # Default execution modes
-  debug_mode: false
-  visualize_flag: false
-  
-  # Numerical precision
-  round_digits: 3
-  
-  # Logging
-  log_level: 'INFO'
-  
-  # Performance evaluation
-  performance_bounds_check: true
-  performance_warning_threshold: 0.1
+  debug_flag: false # Set to true for debugging
+  visualize_flag: false # Set to true to visualize the evaluation process
+  round_digits: 3 # Number of decimal places for rounding
+  eval_flag: true # Set to true to enable evaluation
+  pred_flag: true # Set to true to enable prediction

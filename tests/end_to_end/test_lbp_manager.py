@@ -47,7 +47,7 @@ class TestLBPManager:
             )
             
             # Initialize study
-            manager.initialize_study("test")
+            manager.initialize_for_study("test")
             
             assert manager.study_code == "test"
             assert manager.nav.study_code == "test"
@@ -82,7 +82,7 @@ class TestLBPManager:
             )
             
             # Initialize study
-            manager.initialize_study("test")
+            manager.initialize_for_study("test")
             
             # Run evaluation
             manager.run_evaluation(
@@ -127,6 +127,6 @@ class TestLBPManager:
         
         # Test initialization with missing config
         with pytest.raises(FileNotFoundError, match="Configuration file not found"):
-            manager.initialize_study("test")
-            manager.initialize_study("test")
+            manager.initialize_for_study("test")
+            manager.initialize_for_study("test")
     
