@@ -31,7 +31,7 @@ class EnergyConsumption(EvaluationModel):
         """Return target energy value."""
         return self.target_energy
     
-    def _compute_scaling_factor(self) -> Optional[float]:
+    def _declare_scaling_factor(self) -> Optional[float]:
         """Return maximum energy for normalization."""
         return self.max_energy
 

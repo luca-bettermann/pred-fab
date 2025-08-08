@@ -33,7 +33,7 @@ class EvaluationSystem:
         self.evaluation_models = {}
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], study_params: Dict[str, Any], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], study_params: Dict[str, Any], round_digits: int, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         
@@ -68,16 +68,18 @@ class EvaluationSystem:
             debug_flag: Whether to run in debug mode (no writing/saving)
             **exp_params: Experiment parameters
         """
-        self.logger.info(f"Running evaluation system for experiment {exp_nr}")
-        
+        # Make sure at least one evaluation model has been activated
+        active_models = {code: model for code, model in self.evaluation_models.items() if model.active}
+        assert len(active_models) > 0, "No evaluation models have been activated."
+        self.logger.info(f"Running evaluation system for experiment {self.nav.get_experiment_code(exp_nr)}")
+
         # Initialize all models before execution
         self._model_exp_initialization(**exp_params)
 
         # Execute each evaluation model
-        for performance_code, eval_model in self.evaluation_models.items():
-            self.logger.console_info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}' evaluation model...")
+        for performance_code, eval_model in active_models.items():
+            self.logger.console_info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
             eval_model.run(exp_nr, visualize_flag, debug_flag, **exp_params)
-            self.logger.info(f"Finished evaluation for '{performance_code}' with '{type(eval_model).__name__}' model.")
 
             # Push results to database if not in debug mode
             if not debug_flag:

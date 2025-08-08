@@ -10,7 +10,7 @@ class PredictionSystem:
     Orchestrates prediction models with consistent data preprocessing.
     
     Handles the complete prediction workflow:
-    1. Data collection from structured (DataInterface) and unstructured (models) sources
+    1. Data collection from structured (DataInterface) and unstructured (FeatureModel) sources
     2. Global preprocessing for consistency across models
     3. Model-specific preprocessing and training
     4. Prediction with denormalization
@@ -18,7 +18,8 @@ class PredictionSystem:
     Data Responsibility Boundary:
     - DataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
     - PredictionSystem: Coordinates parameter collection and delegates to models
-    - PredictionModel: Loads domain-specific unstructured data via _load_data()
+    - FeatureModel: Loads domain-specific unstructured data via _load_data() and computes features
+    - PredictionModel: Manages FeatureModel instances and implements ML prediction logic
     """
     
     def __init__(self, 
@@ -43,7 +44,7 @@ class PredictionSystem:
         
         self.logger.info("Initialized PredictionSystem")
 
-    def add_prediction_model(self, prediction_model: Type[PredictionModel], study_params: Dict[str, Any], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_prediction_model(self, prediction_model: Type[PredictionModel], study_params: Dict[str, Any], round_digits: int, **kwargs) -> None:
         """
         Add an prediction model to the system.
         
@@ -73,12 +74,12 @@ class PredictionSystem:
             all_codes.update(model.output)
         return list(all_codes)
     
-    def train(self, historical_evaluation_data: Dict[str, Any]) -> None:
+    def train(self, input_X: Dict[str, Any]) -> None:
         """
         Train all models with consistent data collection and preprocessing.
         
         Data Flow:
-        1. Extract structured parameters from historical data (via DataInterface)
+        1. Extract structured parameters from input X data (via DataInterface)
         2. For each model: collect parameters + load domain-specific data via _load_data()
         3. Apply global preprocessing for consistency across models
         4. Train individual models with model-specific preprocessing via preprocess()
@@ -94,7 +95,7 @@ class PredictionSystem:
         self.logger.info("Training prediction models on historical data")
         
         # Step 1: Collect data from all models and apply global preprocessing
-        global_X, global_y, X_keys = self._global_preprocess_and_collect(historical_evaluation_data)
+        global_X, global_y, X_keys = self._global_preprocess_and_collect(input_X)
         self.logger.info(f"Global preprocessing completed: X with {len(X_keys)} features, y{global_y.shape}")
         
         # Step 2: Train each model with model-specific preprocessing
@@ -102,8 +103,8 @@ class PredictionSystem:
             self.logger.info(f"Training model {i+1}/{len(self.prediction_models)}: {type(model).__name__}")
             
             # Extract relevant features and targets for this specific model
-            model_X = self._extract_model_features(global_X, X_keys, model.declare_inputs())
-            model_y = self._extract_model_targets(global_y, model.output, historical_evaluation_data["performances"])
+            model_X = self._extract_model_features(global_X, X_keys, model._declare_inputs())
+            model_y = self._extract_model_targets(global_y, model.output, input_X["performances"])
             
             # Allow model to customize preprocessing (denormalization, custom scaling, etc.)
             processed_X, processed_y = model.preprocess(model_X, model_y, self.preprocessing_state)
@@ -112,19 +113,19 @@ class PredictionSystem:
             model.train(processed_X, processed_y)
             self.logger.info(f"Model {i+1} training completed")
 
-    def predict(self, X_parameters: Dict[str, Any], exp_nr: int) -> Dict[str, float]:
+    def predict(self, X_parameters: Dict[str, Any], exp_nr: int, visualize_flag: bool, debug_flag: bool) -> Dict[str, float]:
         """
         Get predictions for all performance metrics for a single upcoming experiment.
         
         Data Flow:
-        1. Set parameters in models using parameter handling system
-        2. Load domain-specific data for the experiment via model._load_data()
-        3. Construct complete input dictionary per model requirements
-        4. Get predictions and denormalize to original [0,1] scale
+        1. Use unified input preparation (same as training)
+        2. Get predictions and denormalize to original [0,1] scale
         
         Args:
             X_parameters: Parameter values {param_name: value} - from DataInterface
             exp_nr: Experiment number for loading domain-specific data
+            visualize_flag: Whether to show visualizations during feature computation
+            debug_flag: Whether to run in debug mode
             
         Returns:
             Dictionary {performance_code: predicted_value} for all performance codes
@@ -133,30 +134,65 @@ class PredictionSystem:
 
         # Collect predictions from all models
         all_predictions = {}
-
-        # TODO: add feature extraction to the predict method
         
-        for model in self.prediction_models:
-            # Set structured parameters in model using existing parameter handling
-            model.set_experiment_parameters(**X_parameters)
-            
-            # Load domain-specific data for this experiment
-            external_data = model._load_data(exp_nr)
-            
-            # Construct complete input dictionary from parameters + external data
-            input_dict = self._construct_input_dict(model, X_parameters, external_data)
+        for pred_model in self.prediction_models:
+            # Use unified input preparation (same logic as training)
+            input_dict = self._prepare_experiment_input(pred_model, X_parameters, exp_nr, 
+                                                      visualize_flag, debug_flag)
             
             # Get model predictions (normalized scale)
-            model_predictions = model.predict(input_dict)  # Shape: (n_targets,)
+            model_predictions = pred_model.predict(input_dict)  # Shape: (n_targets,)
             
             # Denormalize predictions back to original [0,1] performance scale
-            denormalized_predictions = self._denormalize_predictions(model_predictions, model.output)
+            denormalized_predictions = self._denormalize_predictions(model_predictions, pred_model.output)
             
             # Store predictions by performance code
-            for i, perf_code in enumerate(model.output):
+            for i, perf_code in enumerate(pred_model.output):
                 all_predictions[perf_code] = float(denormalized_predictions[i])
                 
         return all_predictions
+    
+    def _prepare_experiment_input(self, model: PredictionModel, exp_params: Dict[str, Any], 
+                                exp_nr: int, visualize_flag: bool = False, debug_flag: bool = False) -> Dict[str, Any]:
+        """
+        Unified method to prepare input data for both training and prediction.
+        
+        This ensures consistent data preparation between training and prediction flows.
+        
+        Args:
+            model: PredictionModel instance
+            exp_params: Experiment parameters from DataInterface  
+            exp_nr: Experiment number
+            visualize_flag: Whether to show visualizations during feature computation
+            debug_flag: Whether to run in debug mode
+            
+        Returns:
+            Complete input dictionary for the model
+        """
+        # Set parameters in model using parameter handling system
+        model.set_experiment_parameters(**exp_params)
+        
+        # Run feature models to compute external data
+        feature_data = {}
+        for code, feature_model in model.feature_models.items():
+            feature_model.run(code, exp_nr, visualize_flag, debug_flag)
+            feature_data[code] = feature_model.features[code]
+        
+        # Construct complete input dictionary for the model's requirements
+        input_dict = {}
+        for key in model._declare_inputs():
+            if key in exp_params:
+                # Structured parameter from DataInterface
+                input_dict[key] = exp_params[key]
+            elif key in feature_data:
+                # Feature data from FeatureModel computation
+                input_dict[key] = feature_data[key]
+            else:
+                # Check if it's a model attribute (from parameter handling decorators)
+                if hasattr(model, key):
+                    input_dict[key] = getattr(model, key)
+                    
+        return input_dict
     
     def _global_preprocess_and_collect(self, historical_data: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], np.ndarray, List[str]]:
         """
@@ -164,7 +200,7 @@ class PredictionSystem:
         
         Data Collection Strategy:
         1. Use parameter handling to set structured parameters (from DataInterface)
-        2. Call _load_data on each model to get domain-specific data
+        2. Run feature models to compute domain-specific features (same as prediction)
         3. Combine into unified input representation with global normalization
         """
         self.logger.info("Collecting data from all models and applying global preprocessing")
@@ -177,28 +213,23 @@ class PredictionSystem:
         # Collect all unique input keys required by all models
         all_input_keys = set()
         for model in self.prediction_models:
-            all_input_keys.update(model.declare_inputs())
+            all_input_keys.update(model._declare_inputs())
         all_input_keys = list(all_input_keys)
         
         # Collect data for all experiments across all models
         collected_X = {key: [] for key in all_input_keys}
         
         for exp_nr in exp_numbers:
-            # Set structured parameters in all models for this experiment
+            # Set structured parameters for this experiment
             exp_params = {key: values[exp_numbers.index(exp_nr)] for key, values in parameters.items()}
             
             for model in self.prediction_models:
-                # Set parameters using parameter handling system
-                model.set_experiment_parameters(**exp_params)
-                
-                # Load domain-specific data via model's _load_data method
-                external_data = model._load_data(exp_nr)
-                
-                # Construct complete input dictionary for this experiment
-                input_dict = self._construct_input_dict(model, exp_params, external_data)
+                # Use unified input preparation (same logic as prediction)
+                input_dict = self._prepare_experiment_input(model, exp_params, exp_nr, 
+                                                          visualize_flag=False, debug_flag=False)
                 
                 # Collect values for all keys required by this model
-                for key in model.declare_inputs():
+                for key in model._declare_inputs():
                     if key in input_dict:
                         collected_X[key].append(input_dict[key])
         
@@ -220,30 +251,6 @@ class PredictionSystem:
         y = np.array([performances[code] for code in y_codes]).T  # Shape: (n_samples, n_targets)
         
         return X_arrays, y, all_input_keys
-    
-    def _construct_input_dict(self, model: PredictionModel, parameters: Dict[str, Any], external_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Construct complete input dictionary for a model's requirements.
-        
-        Combines structured parameters (from DataInterface) with domain-specific
-        external data (from model._load_data()) according to what the model declared.
-        """
-        input_dict = {}
-        
-        # Add all inputs that the model declared it needs
-        for key in model.declare_inputs():
-            if key in parameters:
-                # Structured parameter from DataInterface
-                input_dict[key] = parameters[key]
-            elif key in external_data:
-                # Domain-specific data from model._load_data()
-                input_dict[key] = external_data[key]
-            else:
-                # Check if it's a model attribute (from parameter handling decorators)
-                if hasattr(model, key):
-                    input_dict[key] = getattr(model, key)
-                    
-        return input_dict
     
     def _denormalize_predictions(self, predictions: np.ndarray, y_codes: List[str]) -> np.ndarray:
         """Denormalize predictions back to original [0,1] performance scale."""

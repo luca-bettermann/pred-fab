@@ -8,12 +8,6 @@ from ..interfaces import DataInterface, EvaluationModel, PredictionModel
 from ..utils import FolderNavigator, LBPLogger
 
 # TODO:
-# - Figure out how to properly initialize PredictionSystem (currently in initialize_study)
-# -> idea: config file defines initialization of evaluationsystem and predictionsystem
-# -> by default, subsystems are toggled as disabled
-# -> evaluationmodels get activated by matching performance codes of study
-# -> predictionmodels get activated by outputs matching with performance codes
-# -> feature models are mapped directly in the evaluation and prediction model instances
 
 # - Add example prediction model, using feature models
 # - Continue with the prediction model and system implementation
@@ -83,7 +77,7 @@ class LBPManager:
         self._load_config()
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], **kwargs) -> None:
         """
         Add an evaluation model to the system.
         Args:
@@ -91,10 +85,10 @@ class LBPManager:
             evaluation_class: Class of evaluation model to instantiate
             **kwargs: Additional parameters for model initialization
         """
-        round_digits = self._get_default_attribute('round_digits', round_digits)
+        round_digits = self._get_default_attribute('round_digits', kwargs.get('round_digits', None))
         self.eval_system.add_evaluation_model(performance_code, evaluation_class, self.study_params, round_digits, **kwargs)
 
-    def add_prediction_model(self, prediction_class: Type[PredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_prediction_model(self, prediction_class: Type[PredictionModel], **kwargs) -> None:
         """
         Add a prediction model to the system.
         
@@ -103,7 +97,7 @@ class LBPManager:
             prediction_class: Class of prediction model to instantiate
             **kwargs: Additional parameters for model initialization
         """
-        round_digits = self._get_default_attribute('round_digits', round_digits)
+        round_digits = self._get_default_attribute('round_digits', kwargs.get('round_digits', None))
         self.pred_system.add_prediction_model(prediction_class, self.study_params, round_digits, **kwargs)
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, eval_flag: Optional[bool] = None, pred_flag: Optional[bool] = None) -> None:
@@ -189,10 +183,9 @@ class LBPManager:
             raise RuntimeError("Evaluation system is not initialized. Please call initialize_study() first.")
 
         # Use system defaults if not explicitly provided
-        debug_flag = debug_flag if debug_flag is not None else self._get_default_attribute('debug_mode')
-        visualize_flag = visualize_flag if visualize_flag is not None else self._get_default_attribute('visualize_flag')
-
-        self.logger.info(f"Execution flags: debug_mode={debug_flag}, visualize_flag={visualize_flag}")
+        debug_flag = self._get_default_attribute('debug_flag', debug_flag)
+        visualize_flag = self._get_default_attribute('visualize_flag', visualize_flag)
+        assert debug_flag is not None and visualize_flag is not None, "flags must be set to True or False."
 
         # Configure debug mode if needed
         if debug_flag and not self.logger.debug_mode:
@@ -214,7 +207,7 @@ class LBPManager:
             study_record=self.study_record,
             exp_nr=exp_nr, 
             exp_record=self.exp_record, 
-            visualize_flag=visualize_flag, 
+            visualize_flag=visualize_flag,
             debug_flag=debug_flag,
             **exp_vars
         )
@@ -280,8 +273,10 @@ class LBPManager:
         """
         if value is None:
             assert key in self.defaults, f"Default attribute '{key}' not found in system configuration."
-            self.logger.debug(f"Retrieved default attribute '{key}': {self.defaults[key]}")
-            return self.defaults[key]
+            value = self.defaults[key]
+            assert value is not None, f"Default attribute '{key}' is None. Please check the configuration."
+            self.logger.debug(f"Retrieved default attribute '{key}': {value}")
+            return value
         else:
             self.logger.debug(f"Using provided value for '{key}': {value}")
             return value
@@ -353,53 +348,50 @@ class LBPManager:
                     performance_code=code,
                     folder_navigator=self.nav,
                     logger=self.logger,
-                    round_digits=eval_model.round_digits,
+                    round_digits=model.round_digits,
                     **self.study_params
                 )
                 
                 # Store the feature model instance in the dictionary
-                self.logger.info(f"Added feature model instance '{type(feature_model_instance).__name__}' to '{type(eval_model).__name__}' model")
+                self.logger.info(f"Added feature model instance '{type(feature_model_instance).__name__}' to '{type(model).__name__}' model")
 
             else:
                 # Reuse existing feature model instance
                 feature_model_instance = feature_model_dict[feature_model_type]
-                feature_model_instance.initialize_for_code(eval_model.performance_code)
-                self.logger.info(f"Reusing existing feature model instance '{type(eval_model.feature_model).__name__}' for evaluation model '{type(eval_model).__name__}'")
+                feature_model_instance.initialize_for_code(model.performance_code)
+                self.logger.info(f"Reusing existing feature model instance '{type(feature_model_instance).__name__}' for model '{type(model).__name__}'")
 
             # Add the feature model instance to the model
-            model.add_feature_model(feature_model_instance)
+            model.add_feature_model(code=code, feature_model=feature_model_instance)
             feature_model_dict[feature_model_type] = feature_model_instance
-
 
     def _initialization_step_summary(self, pred_model_by_code) -> str:
         """Generate summary of initialization results."""
         assert self.eval_system is not None and self.pred_system is not None
         val_eval_models = [eval_model for eval_model in self.eval_system.evaluation_models.values() if eval_model.active]
-        val_prediction_models = [pred_model for pred_model in self.pred_system.prediction_models if pred_model.active]
-        
-        # Create mapping of performance codes to prediction models
-        # pred_model_by_code = {}
-        # for pred_model in val_prediction_models:
-        #     for code in pred_model.output:
-        #         pred_model_by_code[code] = pred_model
+        val_pred_models = {code: model for code, model in pred_model_by_code.items() if model.active}
         
         summary = f"Loaded {len(self.performance_records)} performance attributes, {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Feature Model':<20} {'Evaluation Model':<20} {'Prediction Model':<20}\033[0m"
         
-        for code, eval_model in self.eval_system.evaluation_models.items():
-            if eval_model.active:
-                pred_model_name = type(pred_model_by_code[code]).__name__ if code in pred_model_by_code else "None"
-                summary += f"\n{code:<20} {type(eval_model.feature_model).__name__:<20} {type(eval_model).__name__:<20} {pred_model_name:<20}"
+        for performance_record in self.performance_records:
+            code = performance_record.get("Code")
+            eval_model = self.eval_system.evaluation_models.get(code)
+            feature_model = eval_model.feature_model if eval_model else None
+            pred_model = val_pred_models.get(code, None)
+            summary += f"\n{code:<20} {type(feature_model).__name__:<20} {type(eval_model).__name__:<20} {type(pred_model).__name__:<20}"
         return summary + "\n"
 
     def _evaluation_step_summary(self) -> str:
         """Generate summary of evaluation results."""
         assert self.eval_system is not None
 
-        summary = f"Evaluated {len(self.performance_mapping)} performance attributes, using {len(self.eval_system.evaluation_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in self.eval_system.evaluation_models.values()]))} feature models.\n\n"
+        active_eval_models = {code: model for code, model in self.eval_system.evaluation_models.items() if model.active}
+        
+        summary = f"Evaluated {len(active_eval_models)} performance attributes, using {len(active_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in active_eval_models.values()]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Dimensions':<30} {'Performance Value':<20}\033[0m"
 
-        for code, eval_model in self.eval_system.evaluation_models.items():
+        for code, eval_model in active_eval_models.items():
             dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
             dimensions = "(" + dimensions + ")"
             summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {eval_model.performance_metrics.get('Value', 0):<20}"

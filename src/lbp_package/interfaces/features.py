@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
@@ -49,7 +49,6 @@ class FeatureModel(ParameterHandling, ABC):
 
         # Apply dataclass-based parameter handling
         self.set_model_parameters(**study_params)
-        self._validate_parameters()
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
@@ -85,15 +84,15 @@ class FeatureModel(ParameterHandling, ABC):
         ...
 
     # === PUBLIC API METHODS (Called externally) ===
-    def initialize_for_code(self, performance_code: str) -> None:
+    def initialize_for_code(self, associated_code: str) -> None:
         """
         Initialize feature storage for a new performance code.
         
         Args:
             performance_code: Code identifying the performance metric
         """
-        self.associated_codes.append(performance_code)
-        self.features[performance_code] = np.empty([])
+        self.associated_codes.append(associated_code)
+        self.features[associated_code] = np.empty([])
 
     def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, debug_flag: bool, **dims_dict) -> None:
         """
@@ -127,7 +126,7 @@ class FeatureModel(ParameterHandling, ABC):
                 indices = tuple(dims_dict.values())
 
                 assert code in self.associated_codes, f"Associated code '{code}' not initialized in feature model."
-                assert self.features[code] is not None, f"Feature storage for '{code}' is not initialized."
+                assert isinstance(self.features[code], np.ndarray), f"Feature storage for '{code}' is not initialized as numpy array."
                 self.features[code][indices] = value
                 self.logger.debug(f"Extracted feature '{code}': {round(value, self.round_digits) if value is not None else value}")
 
@@ -146,14 +145,9 @@ class FeatureModel(ParameterHandling, ABC):
             dim_sizes: Dimensions of the feature array to create
         """
         self.logger.info(f"Resetting '{type(self).__name__}' feature model for new experiment")
-        self._validate_parameters()
         self.features[performance_code] = np.empty(dim_sizes)
         
     # === OPTIONAL METHODS ===
-    def _validate_parameters(self) -> None:
-        """Optional parameter validation logic to check values after initialization."""
-        pass
-
     def _initialization_step(self, code: str, exp_nr: int) -> None:
         """
         Optional initialization logic before feature extraction.

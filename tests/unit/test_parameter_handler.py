@@ -14,10 +14,6 @@ class MockParameterClass(ParameterHandling):
     exp_param2: bool = exp_parameter(False) # type: ignore
     runtime_param1: str = runtime_parameter() # type: ignore
     runtime_param2: int = runtime_parameter() # type: ignore
-    
-    def _validate_parameters(self):
-        """Mock validation method."""
-        pass
 
 
 class TestParameterHandler:

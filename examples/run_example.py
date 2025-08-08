@@ -37,9 +37,9 @@ def main():
     
     # Generate data for 3 experiments of "test" study
     create_study_json_files(str(local_dir), study_code=study_code)
-    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=1, n_layers=2, n_segments=2)
-    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=2, n_layers=2, n_segments=3)
-    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=3, n_layers=3, n_segments=2)
+    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=1, layer_time=30.0, layer_height=0.25, n_layers=2, n_segments=2)
+    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=2, layer_time=40.0, layer_height=0.20, n_layers=2, n_segments=3)
+    create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=3, layer_time=50.0, layer_height=0.15, n_layers=3, n_segments=2)
 
     # Initialize the study and run evaluation
     lbp_manager.initialize_for_study(study_code)

@@ -26,8 +26,10 @@ evaluation:
 # System settings
 system:
   # Default execution mode settings
-  debug_mode: false
+  debug_flag: false
   visualize_flag: false
+  eval_flag: true
+  pred_flag: true
   
   # Default rounding precision for numerical results
   round_digits: 3

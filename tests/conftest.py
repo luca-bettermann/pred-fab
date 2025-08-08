@@ -14,7 +14,7 @@ from examples.file_data_interface import FileDataInterface
 
 def get_mock_study_params() -> Dict[str, Any]:
     """Return standard study parameters."""
-    return {
+    return {        
         "target_deviation": 0.0,
         "max_deviation": 0.5,
         "target_energy": 0.0,
@@ -22,12 +22,13 @@ def get_mock_study_params() -> Dict[str, Any]:
         "power_rating": 50.0
     }
 
-def get_mock_exp_params() -> Dict[str, Any]:
+def get_mock_exp_params(layer_time: float = 30.0, layer_height: float = 0.2) -> Dict[str, Any]:
     """Return standard experiment parameters."""
     return {
         "n_layers": 2,
         "n_segments": 2,
-        "layerTime": 30.0,
+        "layerTime": layer_time,
+        "layerHeight": layer_height
     }
 
 def generate_path_data(n_layers: int = 2, n_segments: int = 2, noise: bool = False) -> Dict[str, Any]:
@@ -92,6 +93,17 @@ def _add_noise(magnitude: float) -> float:
     """Add random noise to path points."""
     return randint(-10, 10) * 0.1 * magnitude if magnitude != 0 else 0
 
+def generate_temperature_data(base_temp: int = 20, fluctuation: int = 2) -> Dict[str, Any]:
+    """Generate a time series of temperature data with continuous changes."""
+    temperatures = []
+    current_temp = base_temp
+    for i in range(10):
+        # Simulate a temperature reading with some fluctuation
+        temp = current_temp + randint(-fluctuation, fluctuation)
+        temperatures.append(temp)
+        current_temp = temp
+    return {"temperature": temperatures}
+
 def create_study_json_files(base_folder: str, study_code: str = "test"):
     """Generate the file structure for an experiment."""
     
@@ -122,6 +134,8 @@ def create_exp_json_files(
         base_folder: str, 
         study_code: str = "test", 
         exp_nr: int = 1, 
+        layer_time: float = 30.0,
+        layer_height: float = 0.2,
         n_layers: int = 2,
         n_segments: int = 2
         ):
@@ -139,7 +153,7 @@ def create_exp_json_files(
     exp_data = {
         "Code": exp_code,
         "System Performance": None,
-        "Parameters": get_mock_exp_params(),
+        "Parameters": get_mock_exp_params(layer_time=layer_time, layer_height=layer_height),
         "Status": "Evaluation"
     }
     with open(os.path.join(exp_dir, "exp_params.json"), 'w') as f:

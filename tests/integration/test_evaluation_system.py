@@ -23,16 +23,18 @@ class TestEvaluationSystem:
         
         # Add path deviation model
         eval_system.add_evaluation_model(
-            PathEvaluation, 
             "path_deviation", 
-            mock_study_params
+            PathEvaluation, 
+            mock_study_params,
+            round_digits=3
         )
         
         # Add energy consumption model
         eval_system.add_evaluation_model(
-            EnergyConsumption,
             "energy_consumption", 
-            mock_study_params
+            EnergyConsumption,
+            mock_study_params,
+            round_digits=3
         )
         
         assert len(eval_system.evaluation_models) == 2
@@ -50,9 +52,9 @@ class TestEvaluationSystem:
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add evaluation models
-        eval_system.add_evaluation_model(PathEvaluation, "path_deviation", mock_study_params)
-        eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption", mock_study_params)
-        
+        eval_system.add_evaluation_model("path_deviation", PathEvaluation, mock_study_params, round_digits=3)
+        eval_system.add_evaluation_model("energy_consumption", EnergyConsumption, mock_study_params, round_digits=3)
+
         # Verify evaluation models are properly added
         assert "path_deviation" in eval_system.evaluation_models
         assert "energy_consumption" in eval_system.evaluation_models
@@ -72,9 +74,9 @@ class TestEvaluationSystem:
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add two evaluation models with same feature model type
-        eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption_1", mock_study_params)
-        eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption_2", mock_study_params)
-        
+        eval_system.add_evaluation_model("energy_consumption_1", EnergyConsumption, mock_study_params, round_digits=3)
+        eval_system.add_evaluation_model("energy_consumption_2", EnergyConsumption, mock_study_params, round_digits=3)
+
         # Verify both evaluation models are properly added
         assert "energy_consumption_1" in eval_system.evaluation_models
         assert "energy_consumption_2" in eval_system.evaluation_models
@@ -94,9 +96,9 @@ class TestEvaluationSystem:
         eval_system = EvaluationSystem(nav, mock_data_interface, test_logger)
         
         # Add evaluation models
-        eval_system.add_evaluation_model(PathEvaluation, "path_deviation", mock_study_params)
-        eval_system.add_evaluation_model(EnergyConsumption, "energy_consumption", mock_study_params)
-        
+        eval_system.add_evaluation_model("path_deviation", PathEvaluation, mock_study_params, round_digits=3)
+        eval_system.add_evaluation_model("energy_consumption", EnergyConsumption, mock_study_params, round_digits=3)
+
         # Verify evaluation models were added successfully
         assert "path_deviation" in eval_system.evaluation_models
         assert "energy_consumption" in eval_system.evaluation_models

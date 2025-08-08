@@ -47,11 +47,11 @@ class PredictionModel(ParameterHandling, ABC):
     """
 
     def __init__(self,
-                 performance_codes: List[str],
                  folder_navigator: FolderNavigator,
                  logger: LBPLogger,
+                 study_params: Dict[str, Any],
                  round_digits: int = 3,
-                 **model_params):
+                 **kwargs):
         """
         Initialize prediction model.
         
@@ -67,13 +67,16 @@ class PredictionModel(ParameterHandling, ABC):
         # By default, the prediction model is deactivated from the system
         self.active: bool = False
 
+        # Round digits for outputs
+        self.round_digits = round_digits
+
         # Set input keys this model requires for prediction
-        self.input = self.declare_inputs()
+        self.input = self._declare_inputs()
         if not self.input or not isinstance(self.input, list):
             raise ValueError("Model must declare a list of input keys (X) to predict")
 
-        # List of performance codes this model predicts (passed by system)
-        self.output = performance_codes
+        # Set output performance codes this model predicts
+        self.output = self._declare_outputs()
         if not self.output or not isinstance(self.output, list):
             raise ValueError("Model must specify a list of performance codes (y) to predict")
 
@@ -82,15 +85,14 @@ class PredictionModel(ParameterHandling, ABC):
 
         # Initialize the model types for the extraction of additional input features
         self.feature_model_types: Dict[str, Type[FeatureModel]] = self._declare_feature_model_types()
-        self.feature_models: List[FeatureModel] = []
+        self.feature_models: Dict[str, FeatureModel] = {}
 
-        # Apply parameter handling - consistent with FeatureModel/EvaluationModel
-        self.set_model_parameters(**model_params)
-        self._validate_parameters()
+        # Set parameters
+        self.set_model_parameters(**study_params)
     
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def declare_inputs(self) -> List[str]:
+    def _declare_inputs(self) -> List[str]:
         """
         Declare all input keys this model requires for prediction.
         
@@ -101,6 +103,20 @@ class PredictionModel(ParameterHandling, ABC):
         Returns:
             List of input keys this model expects in X
             e.g., ["n_layers", "temperature", "geometry_mesh", "sensor_data"]
+        """
+        ...
+
+    @abstractmethod
+    def _declare_outputs(self) -> List[str]:
+        """
+        Declare all output keys this model predicts.
+        
+        This defines the complete output interface y. Can include:
+        - Performance codes (from dataclass fields using parameter_handler)
+        
+        Returns:
+            List of output keys this model predicts
+            e.g., ["energy_consumption", "path_deviation"]
         """
         ...
     
@@ -135,7 +151,7 @@ class PredictionModel(ParameterHandling, ABC):
         ...
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_feature_model(self, feature_model: FeatureModel) -> None:
+    def add_feature_model(self, code: str, feature_model: FeatureModel) -> None:
         """
         Predefined logic of how feature models are added to prediction models.
         
@@ -143,7 +159,7 @@ class PredictionModel(ParameterHandling, ABC):
             feature_model: FeatureModel instance to use for feature extraction
         """
         # Append the feature model instance (one-to-many relationship)
-        self.feature_models.append(feature_model)
+        self.feature_models[code] = feature_model
 
     # === OPTIONAL METHODS ===
     def _declare_feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
@@ -186,7 +202,4 @@ class PredictionModel(ParameterHandling, ABC):
         self.preprocessing_state = preprocessing_state
         return global_preprocessed_X, global_preprocessed_y
 
-    def _validate_parameters(self) -> None:
-        """Optional parameter validation - can be overridden by subclasses."""
-        pass
 

@@ -38,7 +38,7 @@ class TestPathDeviationEvaluation:
         )
         
         assert eval_model._compute_target_value() == 0.0
-        assert eval_model._compute_scaling_factor() == 0.5
+        assert eval_model._declare_scaling_factor() == 0.5
     
     def test_dimensional_setup(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
         """Test dimensional configuration."""
@@ -108,7 +108,7 @@ class TestEnergyConsumption:
 
         mock_exp_params.update(mock_study_params)
         eval_model.set_experiment_parameters(**mock_exp_params)
-        assert eval_model._compute_scaling_factor() == 10000.0
+        assert eval_model._declare_scaling_factor() == 10000.0
 
     def test_scalar_evaluation(self, temp_dir, test_logger, mock_study_params):
         """Test scalar evaluation (no dimensions)."""

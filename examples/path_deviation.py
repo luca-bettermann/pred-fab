@@ -38,7 +38,7 @@ class PathEvaluation(EvaluationModel):
         """Return target deviation (ideally 0)."""
         return self.target_deviation
 
-    def _compute_scaling_factor(self) -> Optional[float]:
+    def _declare_scaling_factor(self) -> Optional[float]:
         """Return maximum acceptable deviation."""
         return self.max_deviation
 

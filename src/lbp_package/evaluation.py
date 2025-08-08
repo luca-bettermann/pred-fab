@@ -4,11 +4,198 @@ import pandas as pd
 import itertools
 from typing import Any, Dict, List, Type, Tuple, Optional
 from dataclasses import dataclass
+
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
+from .utils.folder_navigator import FolderNavigator
+from .utils.parameter_handler import ParameterHandling
+from .utils.log_manager import LBPLogger
 
-from .features import FeatureModel
-from ..utils import ParameterHandling, FolderNavigator, LBPLogger
+
+@dataclass
+class FeatureModel(ParameterHandling, ABC):
+    """
+    Abstract base class for feature extraction models.
+    
+    Provides a standardized interface for extracting features from experimental data.
+    Uses dataclass-based parameter handling for clean configuration management.
+    """
+    
+    def __init__(self, 
+                 performance_code: str,
+                 folder_navigator: FolderNavigator, 
+                 logger: LBPLogger,
+                 round_digits: int,
+                 **study_params) -> None:
+        """
+        Initialize feature extraction model.
+
+        Args:
+            performance_code: Code identifying the performance metric
+            folder_navigator: File system navigation utility
+            logger: Logger instance for debugging and monitoring
+            **study_params: Study parameters for configuration
+        """
+        self.nav = folder_navigator
+        self.logger = logger
+        self.round_digits = round_digits
+
+        # Feature storage - supports multiple performance codes per model
+        self.features: Dict[str, NDArray[np.float64]] = {}
+        self.performance_codes: List[str] = []
+        self.initialize_for_performance_code(performance_code)
+
+        # Track processed dimensions to avoid duplicate computation
+        self.processed_dims: List = []
+        self.is_processed_state: bool = False
+
+        # Temporary storage for current feature computation
+        self.current_feature: Dict[str, float] = {}
+
+        # Apply dataclass-based parameter handling
+        self.set_model_parameters(**study_params)
+        self._validate_parameters()
+
+    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    @abstractmethod
+    def _load_data(self, exp_nr: int) -> Any:
+        """
+        Load data for feature extraction.
+        
+        Args:
+            exp_nr: Experiment number
+            
+        Returns:
+            Loaded data object
+        """
+        ...
+
+    @abstractmethod
+    def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]:
+        """
+        Extract features from loaded data.
+        
+        Args:
+            data: Data object from _load_data
+            visualize_flag: Whether to show visualizations
+            
+        Returns:
+            Dictionary mapping performance codes to feature values
+        """
+        ...
+
+    # === PUBLIC API METHODS (Called externally) ===
+    def initialize_for_performance_code(self, performance_code: str) -> None:
+        """
+        Initialize feature storage for a new performance code.
+        
+        Args:
+            performance_code: Code identifying the performance metric
+        """
+        self.performance_codes.append(performance_code)
+        self.features[performance_code] = np.empty([])
+
+    def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, debug_flag: bool, **dims_dict) -> None:
+        """
+        Execute the feature extraction pipeline.
+
+        Args:
+            performance_code: Code identifying the performance metric
+            exp_nr: Experiment number
+            visualize_flag: Whether to show visualizations
+            **dims_dict: Runtime parameters for dimensional indexing
+        """
+        # Set runtime parameters for current extraction
+        self.set_runtime_parameters(**dims_dict)
+
+        # Optional initialization step
+        self._initialization_step(performance_code, exp_nr, **dims_dict)
+
+        # Check if dimensions already processed
+        self._set_processed_state(**dims_dict)
+
+        if not self.is_processed_state:
+            if not debug_flag:
+                # Fetch and load data
+                self._fetch_data(exp_nr)
+            
+            # Load data for feature extraction
+            current_data = self._load_data(exp_nr)
+
+                # Compute features
+            feature_dict = self._compute_features(current_data, visualize_flag)
+            
+            # Store results in feature arrays
+            for perf_code, value in feature_dict.items():
+                indices = tuple(dims_dict.values())
+
+                assert perf_code in self.performance_codes, f"Performance code '{perf_code}' not initialized in feature model."
+                assert self.features[perf_code] is not None, f"Feature storage for '{perf_code}' is not initialized."
+                self.features[perf_code][indices] = value
+                self.logger.debug(f"Extracted feature '{perf_code}': {round(value, self.round_digits) if value is not None else value}")
+
+        else:
+            self.logger.info("Data already processed for these dimensions, skipping")
+
+        # Optional cleanup step
+        self._cleanup_step(performance_code, exp_nr, **dims_dict)
+
+    def reset_for_new_experiment(self, performance_code: str, dim_sizes: List[int]) -> None:
+        """
+        Reset feature storage for a new experiment.
+        
+        Args:
+            performance_code: Code identifying the performance metric
+            dim_sizes: Dimensions of the feature array to create
+        """
+        self.logger.info(f"Resetting '{type(self).__name__}' feature model for new experiment")
+        self._validate_parameters()
+        self.features[performance_code] = np.empty(dim_sizes)
+        
+    # === OPTIONAL METHODS ===
+    def _fetch_data(self, exp_nr: int) -> None:
+        """
+        Fetch data from external sources if needed.
+        
+        Args:
+            exp_nr: Experiment number
+        """
+        pass
+
+    def _validate_parameters(self) -> None:
+        """Optional parameter validation logic to check values after initialization."""
+        pass
+
+    def _initialization_step(self, performance_code: str, exp_nr: int, **dims_dict) -> None:
+        """
+        Optional initialization logic before feature extraction.
+        
+        Args:
+            performance_code: Code identifying the performance metric
+            exp_nr: Experiment number
+            **dims_dict: Runtime parameters for dimensional indexing
+        """
+        pass
+
+    def _cleanup_step(self, performance_code: str, exp_nr: int, **dims_dict) -> None:
+        """
+        Optional cleanup logic after feature extraction.
+        
+        Args:
+            performance_code: Code identifying the performance metric
+            exp_nr: Experiment number
+            **dims_dict: Runtime parameters for dimensional indexing
+        """
+        pass
+    
+    # === PRIVATE API METHODS (Called internally) ===
+    def _set_processed_state(self, **dims_indices) -> None:
+        """Check if current dimensions have been processed."""
+        if dims_indices in self.processed_dims:
+            self.is_processed_state = True
+        else:
+            self.processed_dims.append(dims_indices)
+            self.is_processed_state = False
 
 
 @dataclass
@@ -24,6 +211,8 @@ class EvaluationModel(ParameterHandling, ABC):
             self, 
             performance_code: str,
             folder_navigator: FolderNavigator,
+            dimension_names: List[Tuple[str, str, str]],
+            feature_model_type: Type[FeatureModel],
             logger: LBPLogger,
             round_digits: int = 3,
             **study_params
@@ -43,13 +232,7 @@ class EvaluationModel(ParameterHandling, ABC):
         self.nav = folder_navigator
         self.logger = logger
 
-        # By default, the evaluation model is deactivated from the system
-        self.active: bool = False
-
         # Feature model configuration
-        feature_model_type = self._declare_feature_model_type()
-        if not isinstance(feature_model_type, type) or not issubclass(feature_model_type, FeatureModel):
-            raise ValueError("Feature model type must be a subclass of FeatureModel.")
         self.feature_model_type: Type[FeatureModel] = feature_model_type
         self.feature_model: Optional[FeatureModel] = None
 
@@ -57,7 +240,12 @@ class EvaluationModel(ParameterHandling, ABC):
         self.dim_names: List[str] = []
         self.dim_iterator_names: List[str] = []
         self.dim_param_names: List[str] = []
-        self._set_dim_lists()
+
+        # Initialize the dimensional layers, in the form of [('dim_name', 'dim_iterator_name', 'dim_parameter_name'), (...), ...]
+        # Note that the names must represent the namig convention in the code
+        # e.g. [('layers', 'layer_id', 'limitLayers), [...], ...)
+        # 'layers' is the name of the dimension, 'layer_id' is used to define the current id, limitLayers is the name of the variable that defines the number of layers.
+        self._initialize_dimensions(dimension_names)
 
         # Performance storage and configuration
         self.round_digits: int = round_digits
@@ -70,29 +258,6 @@ class EvaluationModel(ParameterHandling, ABC):
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
-        """
-        Declare the hierarchical dimension structure for evaluation.
-        This defines the dimensions and their iterators for multi-dimensional evaluation.
-        Note that the names must represent the naming convention used in the code and database.
-        
-        Returns:
-            List of (dimension_name, iterator_name, parameter_name) tuples
-            e.g., [('layers', 'layer_id', 'n_layers'), ('segments', 'segment_id', 'n_segments')]
-        """
-        ...
-
-    @abstractmethod
-    def _declare_feature_model_type(self) -> Type[FeatureModel]:
-        """
-        Declare the feature model type to use for feature extraction.
-        
-        Returns:
-            Class of the feature model to use
-        """
-        ...
-
-    @abstractmethod
     def _compute_target_value(self) -> float:
         """
         Compute the target value for performance evaluation.
@@ -103,16 +268,6 @@ class EvaluationModel(ParameterHandling, ABC):
         ...
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_feature_model(self, feature_model: FeatureModel, **kwargs) -> None:
-        """
-        Predefined logic of how feature models are added to evaluation models.
-        
-        Args:
-            feature_model: FeatureModel instance to use for feature extraction
-        """
-        # Directly set the feature model instance (one-to-one relationship)
-        self.feature_model = feature_model
-
     def run(self, exp_nr: int, visualize_flag: bool, debug_flag: bool, **exp_params) -> None:
         """
         Execute the evaluation pipeline.
@@ -131,10 +286,11 @@ class EvaluationModel(ParameterHandling, ABC):
         self.feature_model.set_experiment_parameters(**exp_params)
 
         # Process all dimensional combinations
-        total_dims = len(list(itertools.product(*self._compute_dim_ranges())))
+        dim_ranges = itertools.product(*self._compute_dim_ranges())
+        total_dims = len(list(dim_ranges))
         self.logger.info(f"Processing {total_dims} dimensional combinations")
-        
-        for i, dims in enumerate(itertools.product(*self._compute_dim_ranges())):
+
+        for i, dims in enumerate(dim_ranges):
 
             # Create runtime parameters for current dimensions
             dims_dict = dict(zip(self.dim_iterator_names, dims))
@@ -166,6 +322,7 @@ class EvaluationModel(ParameterHandling, ABC):
             dim_sizes: Dimensions of the performance array to create
         """
         self.logger.info(f"Resetting evaluation model '{type(self).__name__}' for new experiment")
+        self._validate_parameters()
 
         # Initialize performance array: [target_value, diff, performance_value]
         self.performance_array = np.empty(dim_sizes + [3,])
@@ -175,7 +332,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.performance_metrics[key] = None
             
     # === OPTIONAL METHODS ===
-    def _declare_scaling_factor(self) -> Optional[float]:
+    def _compute_scaling_factor(self) -> Optional[float]:
         """
         Optionally compute scaling factor for performance normalization.
         
@@ -183,6 +340,10 @@ class EvaluationModel(ParameterHandling, ABC):
             Scaling factor or None for default scaling
         """
         return None
+
+    def _validate_parameters(self) -> None:
+        """Validate parameter values after initialization."""
+        pass
 
     def _aggregate_performance(self, performance_value_array: NDArray[np.float64]) -> None:
         """
@@ -211,22 +372,8 @@ class EvaluationModel(ParameterHandling, ABC):
         pass
 
     # === PRIVATE API METHODS (Called internally) ===
-    def _set_dim_lists(self) -> None:
+    def _initialize_dimensions(self, dim_list: List[Tuple[str, str, str]]) -> None:
         """Parse dimension configuration into separate lists."""
-        # get the dimension names from the declare_dimensions method
-        dim_list = self._declare_dimensions()
-
-        # Validate the dimension list
-        if dim_list is None:
-            raise ValueError("No dimensions declared in the model. Please implement declare_dimensions method.")
-        elif not isinstance(dim_list, list):
-            raise ValueError("Declared dimensions must be a list of tuples (dimension_name, iterator_name, parameter_name).")
-        elif not all(isinstance(dim, tuple) and len(dim) == 3 for dim in dim_list):
-            raise ValueError("Each dimension must be a tuple of (dimension_name, iterator_name, parameter_name).")
-        else:
-            self.logger.debug(f"Declared dimensions: {dim_list}")
-
-        # Store dimension names in separate lists for easy access
         self.dim_names = [dim[0] for dim in dim_list]
         self.dim_iterator_names = [dim[1] for dim in dim_list]
         self.dim_param_names = [dim[2] for dim in dim_list]
@@ -247,7 +394,7 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Compute evaluation components
         target_value = self._compute_target_value()
-        scaling_factor = self._declare_scaling_factor()
+        scaling_factor = self._compute_scaling_factor()
 
         # Evaluate performance based on feature and target values
         if (feature_value is None or np.isnan(feature_value)) or target_value is None:
