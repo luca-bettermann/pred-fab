@@ -114,7 +114,7 @@ class DataInterface(ABC):
         ...
 
     @abstractmethod
-    def get_study_dataset(self, study_record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_nrs: List[int] = []) -> Dict[str, Dict[str, Any]]:
         """
         Retrieve the complete dataset for a study.
         
@@ -123,7 +123,7 @@ class DataInterface(ABC):
         
         Returns:
             Dictionary containing experiment dicts with all relevant parameters
-            and performances.
+            and performances. Filter for specific experiment numbers if needed (no-op if empty).
             Dict[exp_code_1, {param_name: value, performance_code: value}]
         """
         ...

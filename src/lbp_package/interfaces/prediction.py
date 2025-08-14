@@ -13,23 +13,20 @@ class PreprocessingState:
     Stores preprocessing transformation parameters for consistent denormalization.
     
     This ensures that predictions can be properly denormalized to match
-    the original performance scale [0, 1].
+    the original scale. Uses a unified approach where all columns are treated
+    equally regardless of whether they are inputs or outputs.
     """
     
-    # Global preprocessing state - stores normalization parameters
-    global_X_mean: Optional[np.ndarray] = None
-    global_X_std: Optional[np.ndarray] = None
-    global_X_min: Optional[np.ndarray] = None
-    global_X_max: Optional[np.ndarray] = None
+    # Unified normalization parameters - stores parameters for all columns
+    normalization_params: Optional[Dict[str, Optional[Dict[str, float]]]] = None
     
-    global_y_mean: Optional[Dict[str, float]] = None
-    global_y_std: Optional[Dict[str, float]] = None
-    global_y_min: Optional[Dict[str, float]] = None
-    global_y_max: Optional[Dict[str, float]] = None
+    # Track which normalization method was used for reversal
+    normalization_method: str = "standardize"  # "standardize", "minmax", or "none"
     
-    # Track which normalization methods were used for reversal
-    X_normalization_method: str = "standardize"  # "standardize", "minmax", or "none"
-    y_normalization_method: str = "none"  # Performance values [0,1] usually don't need normalization
+    def __post_init__(self):
+        """Initialize normalization parameters dictionary."""
+        if self.normalization_params is None:
+            self.normalization_params = {}
 
 
 @dataclass 

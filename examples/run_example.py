@@ -1,8 +1,14 @@
 from pathlib import Path
-
 from lbp_package import LBPManager
+
+from .energy_consumption import EnergyConsumption
+from .path_deviation import PathEvaluation
+from .predict_all import PredictExample
 from .file_data_interface import FileDataInterface
 from tests.conftest import create_study_json_files, create_exp_json_files
+
+# TODO
+# - Incorporate "Value Sign" field from airtable in code
 
 def main():
     # Get paths relative to this file
@@ -10,7 +16,7 @@ def main():
     local_dir = root_dir / "local"
     logs_dir = root_dir / "logs"
 
-    # Define study code and experiment number
+    # Define study code
     study_code = "test"
 
     # Ensure directories exist
@@ -28,11 +34,16 @@ def main():
         data_interface=interface
     )
 
-    # Get the examples directory
-    examples_dir = Path(__file__).parent
-    local_dir = examples_dir / "local"
-    
-    # Create the local directory if it doesn't exist
+    # Add the example evaluation models to the LBPManager
+    lbp_manager.add_evaluation_model("energy_consumption", EnergyConsumption)
+    lbp_manager.add_evaluation_model("path_deviation", PathEvaluation)
+
+    # Add the example prediction model to the LBPManager
+    lbp_manager.add_prediction_model(PredictExample)
+
+    # Get the parent directory and create local directory if it doesn't exist
+    parent_dir = Path(__file__).parent
+    local_dir = parent_dir / "local"
     local_dir.mkdir(exist_ok=True)
     
     # Generate data for 3 experiments of "test" study
@@ -45,12 +56,12 @@ def main():
     lbp_manager.initialize_for_study(study_code)
 
     # Run evaluations for each experiment
-    for exp_nr in range(1, 4):
-        lbp_manager.run_evaluation(
-            exp_nr=exp_nr,
-            visualize_flag=False,
-            debug_flag=True
-        )
+    lbp_manager.run_evaluation(exp_nr=1)
+    lbp_manager.run_evaluation(exp_nr=2)
+    lbp_manager.run_evaluation(exp_nr=3)
+
+    # Run predictions for all experiments
+    lbp_manager.run_training()
 
 
 

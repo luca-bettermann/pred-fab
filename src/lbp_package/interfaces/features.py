@@ -52,18 +52,18 @@ class FeatureModel(ParameterHandling, ABC):
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def _load_data(self, exp_nr: int, debug_flag: bool) -> Any:
+    def _load_data(self, exp_code: str) -> Any:
         """
         Load domain-specific, unstructured data for feature extraction. Potentially requires
-        a database connection to access raw data files or streams. Handle debug mode as needed.
+        a database connection to access raw data files or streams.
 
         Data Responsibility Boundary: This method handles complex, domain-specific data
         that the DataInterface doesn't manage (geometry files, sensor streams, images,
         environmental data, etc.). The DataInterface handles structured metadata only.
 
         Args:
-            exp_nr: Experiment number
-            
+            exp_code: Experiment code
+
         Returns:
             Loaded data object (format depends on domain requirements)
         """
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.associated_codes.append(associated_code)
         self.features[associated_code] = np.empty([])
 
-    def run(self, performance_code: str, exp_nr: int, visualize_flag: bool, debug_flag: bool, **dims_dict) -> None:
+    def run(self, performance_code: str, exp_code: str, visualize_flag: bool, **dims_dict) -> None:
         """
         Execute the feature extraction pipeline.
 
@@ -108,7 +108,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.set_runtime_parameters(**dims_dict)
 
         # Optional initialization step
-        self._initialization_step(performance_code, exp_nr)
+        self._initialization_step(performance_code, exp_code)
 
         # Check if dimensions already processed
         self._set_processed_state(**dims_dict)
@@ -116,7 +116,7 @@ class FeatureModel(ParameterHandling, ABC):
         if not self.is_processed_state:
 
             # Load data for feature extraction
-            current_data = self._load_data(exp_nr, debug_flag)
+            current_data = self._load_data(exp_code)
 
             # Compute features
             feature_dict = self._compute_features(current_data, visualize_flag)
@@ -134,7 +134,7 @@ class FeatureModel(ParameterHandling, ABC):
             self.logger.info("Data already processed for these dimensions, skipping")
 
         # Optional cleanup step
-        self._cleanup_step(performance_code, exp_nr)
+        self._cleanup_step(performance_code, exp_code)
 
     def reset_for_new_experiment(self, performance_code: str, dim_sizes: List[int]) -> None:
         """
@@ -148,23 +148,23 @@ class FeatureModel(ParameterHandling, ABC):
         self.features[performance_code] = np.empty(dim_sizes)
         
     # === OPTIONAL METHODS ===
-    def _initialization_step(self, code: str, exp_nr: int) -> None:
+    def _initialization_step(self, performance_code: str, exp_code: str) -> None:
         """
         Optional initialization logic before feature extraction.
         
         Args:
-            code: Code identifying the associated metric
-            exp_nr: Experiment number
+            performance_code: Code identifying the associated metric
+            exp_code: Experiment code
         """
         pass
 
-    def _cleanup_step(self, code: str, exp_nr: int) -> None:
+    def _cleanup_step(self, performance_code: str, exp_code: str) -> None:
         """
         Optional cleanup logic after feature extraction.
         
         Args:
-            code: Code identifying the associated metric
-            exp_nr: Experiment number
+            performance_code: Code identifying the associated metric
+            exp_code: Experiment code
         """
         pass
     

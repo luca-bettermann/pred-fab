@@ -63,11 +63,8 @@ class EnergyFeature(FeatureModel):
             round_digits=round_digits,
             **study_params
         )
-        
-        # Initialize feature storage for energy consumption
-        self.features["energy_consumption"] = np.empty([])
 
-    def _load_data(self, exp_nr: int, debug_flag: bool = False) -> Any:
+    def _load_data(self, exp_code: str) -> Any:
         """No data loading required for energy calculation."""
         return None
 

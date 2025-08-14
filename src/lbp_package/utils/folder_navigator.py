@@ -60,7 +60,7 @@ class FolderNavigator:
             raise ValueError("Study code must be set before generating experiment code")
         return f"{self.study_code}_{str(exp_nr).zfill(3)}"
 
-    def get_experiment_folder(self, exp_nr: int) -> str:
+    def get_experiment_folder(self, exp_code: str) -> str:
         """
         Get full path to local experiment folder.
 
@@ -72,10 +72,9 @@ class FolderNavigator:
         """
         if self.study_folder is None:
             raise ValueError("Study code must be set before getting experiment folder")
-        exp_code = self.get_experiment_code(exp_nr)
         return os.path.join(self.study_folder, exp_code)
 
-    def get_server_experiment_folder(self, exp_nr: int) -> str:
+    def get_server_experiment_folder(self, exp_code: str) -> str:
         """
         Get full path to server experiment folder.
 
@@ -89,7 +88,6 @@ class FolderNavigator:
             raise ValueError("Server folder must be set before getting server experiment folder")
         if self.study_code is None:
             raise ValueError("Study code must be set before getting experiment folder")
-        exp_code = self.get_experiment_code(exp_nr)
         return os.path.join(self.server_folder, self.study_code, exp_code)
 
     def list_experiments(self) -> List[str]:

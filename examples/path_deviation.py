@@ -76,18 +76,16 @@ class PathDeviationFeature(FeatureModel):
         # Initialize feature storage for path deviation
         self.features["path_deviation"] = np.empty([])
 
-    def _load_data(self, exp_nr: int, debug_flag: bool = False) -> Dict[str, Any]:
-        """Load designed and measured path data."""
-        exp_code = self.nav.get_experiment_code(exp_nr)
-        
+    def _load_data(self, exp_code: str) -> Dict[str, Any]:
+        """Load designed and measured path data."""        
         # Load designed paths
-        designed_path = os.path.join(self.nav.get_experiment_folder(exp_nr), 
+        designed_path = os.path.join(self.nav.get_experiment_folder(exp_code), 
                                    f"{exp_code}_designed_paths.json")
         with open(designed_path, 'r') as f:
             designed_data = json.load(f)
             
         # Load measured paths  
-        measured_path = os.path.join(self.nav.get_experiment_folder(exp_nr),
+        measured_path = os.path.join(self.nav.get_experiment_folder(exp_code),
                                    f"{exp_code}_measured_paths.json")
         with open(measured_path, 'r') as f:
             measured_data = json.load(f)

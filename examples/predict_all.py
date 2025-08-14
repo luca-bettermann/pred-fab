@@ -42,7 +42,7 @@ class TemperatureExtraction(FeatureModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def _load_data(self, exp_nr: int, debug_flag: bool) -> Any:
+    def _load_data(self, exp_nr: int) -> Any:
         """
         Load the data required for temperature feature extraction.
         """

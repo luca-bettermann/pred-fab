@@ -134,6 +134,7 @@ class EvaluationModel(ParameterHandling, ABC):
         total_dims = len(list(itertools.product(*self._compute_dim_ranges())))
         self.logger.info(f"Processing {total_dims} dimensional combinations")
         
+        exp_code = self.nav.get_experiment_code(exp_nr)
         for i, dims in enumerate(itertools.product(*self._compute_dim_ranges())):
 
             # Create runtime parameters for current dimensions
@@ -142,7 +143,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.set_runtime_parameters(**dims_dict)
 
             # Extract features
-            self.feature_model.run(self.performance_code, exp_nr, visualize_flag, debug_flag, **dims_dict)
+            self.feature_model.run(self.performance_code, exp_code, visualize_flag, debug_flag, **dims_dict)
 
             # Compute performance for current dimensions
             self._initialization_step()
@@ -151,7 +152,7 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Save results and aggregate performance
         if not debug_flag:
-            self._save_results_locally(exp_nr)
+            self._save_results_locally(exp_code)
         else:
             self.logger.info("Debug mode: Skipping result saving")
             
@@ -287,10 +288,9 @@ class EvaluationModel(ParameterHandling, ABC):
             f"performance={np.round(performance_value, self.round_digits) if performance_value is not None else None}"
         )
 
-    def _save_results_locally(self, exp_nr: int) -> None:
+    def _save_results_locally(self, exp_code: str) -> None:
         """Save evaluation results to CSV file."""
-        folder_path = os.path.join(self.nav.get_experiment_folder(exp_nr), 'results')
-        exp_code = self.nav.get_experiment_code(exp_nr) 
+        folder_path = os.path.join(self.nav.get_experiment_folder(exp_code), 'results')
 
         # Create results directory if needed
         if not os.path.isdir(folder_path):

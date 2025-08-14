@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple, Optional, Type
+from typing import Any, Dict, List, Tuple, Optional, Type, Set
 import numpy as np
 
 from ..interfaces import DataInterface, PreprocessingState, PredictionModel, FeatureModel
@@ -37,8 +37,10 @@ class PredictionSystem:
         self.nav = folder_navigator
         self.interface = data_interface
         self.logger = logger
+
         self.prediction_models: List[PredictionModel] = []
-        
+        self.pred_model_by_code: Dict[str, PredictionModel] = {}
+
         # Store global preprocessing state for consistent normalization/denormalization
         self.preprocessing_state = PreprocessingState()
         
@@ -66,54 +68,193 @@ class PredictionSystem:
         )
         self.prediction_models.append(model_instance)
         self.logger.info(f"Added model: {type(model_instance).__name__} for performance codes: {model_instance.output}")
-    
+
     def get_required_performance_codes(self) -> List[str]:
         """Get all unique performance codes that need to be predicted across all models."""
         all_codes = set()
         for model in self.prediction_models:
             all_codes.update(model.output)
         return list(all_codes)
-    
-    def train(self, input_X: Dict[str, Any]) -> None:
+
+    def activate_prediction_model(self, code: str, recompute: bool = False) -> None:
+        if len(self.pred_model_by_code) == 0 or recompute:
+            self.pred_model_by_code = self._get_pred_model_by_code()
+
+        assert code in self.pred_model_by_code, f"No prediction model for performance code '{code}' has been initialized."
+        prediction_model = self.pred_model_by_code[code]
+
+        if prediction_model.active:
+            self.logger.warning(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
+        else:
+            prediction_model.active = True
+            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}'")
+
+    def train(self, study_dataset: Dict[str, Dict[str, Any]]) -> None:
         """
         Train all models with consistent data collection and preprocessing.
+
+        Args:
+            study_dataset: Dictionary of experiments {exp_code: {param_name/perf_name: value, ...}}
+
+        The study dataset includes all parameters and performance metrics for each experiment.
         
         Data Flow:
-        1. Extract structured parameters from input X data (via DataInterface)
-        2. For each model: collect parameters + load domain-specific data via _load_data()
-        3. Apply global preprocessing for consistency across models
-        4. Train individual models with model-specific preprocessing via preprocess()
-        
-        Args:
-            historical_evaluation_data: Complete evaluation history
-                Expected format: {
-                    "parameters": Dict[str, List],  # {param_code: [values]} - from DataInterface
-                    "performances": Dict[str, List],  # {perf_code: [values]} - from evaluation results
-                    "experiment_numbers": List[int],  # Experiment identifiers
-                }
+        1. Filter study dataset to relevant parameters and performances
+        2. Load additional data from FeatureModels
+        3. Apply global preprocessing to inputs and performances and return X and y
+        4. Train each model with its own preprocessing logic
         """
-        self.logger.info("Training prediction models on historical data")
+
+        # Step 1: Filter study dataset to relevant parameters and performances
+        parameters: List[str] = []
+        performances: List[str] = []
+        for pred_model in self.prediction_models:
+            parameters.extend(pred_model.input)
+            performances.extend(pred_model.output)
+
+        # Get all unique entry keys across all experiments
+        existing_entries: Set[str] = set()
+        for exp_entries in study_dataset.values():
+            existing_entries.update(exp_entries.keys())
+
+        # validate that all required entries are present in the dataset
+        valid_entries = parameters + performances
+        for entry in valid_entries:
+            if entry not in existing_entries:
+                raise ValueError(f"Study dataset is missing required entry '{entry}'")
+            
+        # Filter dataset to only include valid entries
+        dataset = {
+            exp_code: {key: value for key, value in entries.items() if key in valid_entries}
+            for exp_code, entries in study_dataset.items()
+        }
+
+        # Step 2: Compute additional data from FeatureModels
+        for pred_model in self.prediction_models:
+            # Skip models that are not active or have no feature models defined
+            if not pred_model.active or not pred_model.feature_models:
+                self.logger.debug(f"Skipping prediction model {type(pred_model).__name__} for data loading - not active or no feature models defined")
+                continue
+
+            # Compute input data for each feature model
+            for feature_code, feature_model in pred_model.feature_models.items():
+                for exp_code, entries in dataset.items():
+                    feature_model.run(feature_code, exp_code=exp_code, visualize_flag=False, debug_flag=False)
+                    entries[feature_code] = feature_model.features[feature_code]
+        self.logger.info(f"Feature models executed, features added to the dataset for {len(dataset)} experiments")
+
+        # Think about adding features to airtable?
+        # What do we want to store in the database, what should be stored locally?
+        # For now, lets settle for: add above/below target for the airtable. (1, -1, 0)
+
+        # Step 3: Apply global normalization to the dataset
+        normalized_data, exp_codes = self._global_dataset_normalization(dataset)
+        self.logger.info(f"Global preprocessing completed: {len(normalized_data)} columns normalized for {len(exp_codes)} experiments")
         
-        # Step 1: Collect data from all models and apply global preprocessing
-        global_X, global_y, X_keys = self._global_preprocess_and_collect(input_X)
-        self.logger.info(f"Global preprocessing completed: X with {len(X_keys)} features, y{global_y.shape}")
-        
-        # Step 2: Train each model with model-specific preprocessing
+        # Step 4: Train each model with model-specific preprocessing
         for i, model in enumerate(self.prediction_models):
+            if not model.active:
+                continue
+                
             self.logger.info(f"Training model {i+1}/{len(self.prediction_models)}: {type(model).__name__}")
             
             # Extract relevant features and targets for this specific model
-            model_X = self._extract_model_features(global_X, X_keys, model._declare_inputs())
-            model_y = self._extract_model_targets(global_y, model.output, input_X["performances"])
+            model_X = self._extract_model_data(normalized_data, model.input)
+            model_y = self._extract_model_data(normalized_data, model.output)
+            
+            # Convert y to numpy array format expected by preprocess method
+            y_array = np.column_stack([model_y[col] for col in model.output])
             
             # Allow model to customize preprocessing (denormalization, custom scaling, etc.)
-            processed_X, processed_y = model.preprocess(model_X, model_y, self.preprocessing_state)
+            processed_X, processed_y = model.preprocess(model_X, y_array, self.preprocessing_state)
             
             # Train the model with its processed data
             model.train(processed_X, processed_y)
             self.logger.info(f"Model {i+1} training completed")
 
-    def predict(self, X_parameters: Dict[str, Any], exp_nr: int, visualize_flag: bool, debug_flag: bool) -> Dict[str, float]:
+    
+    def _global_dataset_normalization(self, dataset: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, np.ndarray], List[str]]:
+        """
+        Normalize all columns in the dataset uniformly.
+        
+        Treats each column as its own entity rather than separating parameters and performances.
+        This simplifies the normalization logic and makes it more flexible.
+        
+        Args:
+            dataset: Dictionary of experiments {exp_code: {column_name: value, ...}}
+            
+        Returns:
+            Tuple of (normalized_data, exp_codes) where:
+            - normalized_data: Dict mapping column names to normalized arrays
+            - exp_codes: List of experiment codes (for reference)
+        """
+        # Extract all experiments and their values
+        exp_codes = list(dataset.keys())
+        n_samples = len(exp_codes)
+        
+        if n_samples == 0:
+            raise ValueError("Dataset is empty")
+        
+        # Get all unique column names across all experiments
+        all_columns = set()
+        for exp_data in dataset.values():
+            all_columns.update(exp_data.keys())
+        
+        # Initialize normalized data dictionary and normalization parameters
+        normalized_data = {}
+        if self.preprocessing_state.normalization_params is None:
+            self.preprocessing_state.normalization_params = {}
+        
+        # Normalize each column independently
+        for column in all_columns:
+            # Extract values for this column across all experiments
+            values = [dataset[exp_code].get(column, 0) for exp_code in exp_codes]
+            values_array = np.array(values)
+            
+            # Apply normalization based on preprocessing state configuration
+            if self.preprocessing_state.normalization_method == "standardize":
+                mean_val = np.mean(values_array)
+                std_val = np.std(values_array)
+                
+                if std_val > 0:  # Avoid division by zero
+                    normalized_values = (values_array - mean_val) / std_val
+                    self.preprocessing_state.normalization_params[column] = {
+                        'mean': float(mean_val), 
+                        'std': float(std_val)
+                    }
+                else:
+                    normalized_values = values_array
+                    self.preprocessing_state.normalization_params[column] = {
+                        'mean': float(mean_val), 
+                        'std': 1.0
+                    }
+                    
+            elif self.preprocessing_state.normalization_method == "minmax":
+                min_val = np.min(values_array)
+                max_val = np.max(values_array)
+                
+                if max_val > min_val:  # Avoid division by zero
+                    normalized_values = (values_array - min_val) / (max_val - min_val)
+                    self.preprocessing_state.normalization_params[column] = {
+                        'min': float(min_val),
+                        'max': float(max_val)
+                    }
+                else:
+                    normalized_values = values_array
+                    self.preprocessing_state.normalization_params[column] = {
+                        'min': float(min_val),
+                        'max': float(min_val)
+                    }
+            else:  # "none" or any other value
+                normalized_values = values_array
+                self.preprocessing_state.normalization_params[column] = None
+            
+            normalized_data[column] = normalized_values
+        
+        self.logger.info(f"Normalized {len(all_columns)} columns using '{self.preprocessing_state.normalization_method}' method")
+        return normalized_data, exp_codes
+    
+    def predict(self, X_parameters: Dict[str, Any], exp_code: str, visualize_flag: bool) -> Dict[str, float]:
         """
         Get predictions for all performance metrics for a single upcoming experiment.
         
@@ -130,16 +271,15 @@ class PredictionSystem:
         Returns:
             Dictionary {performance_code: predicted_value} for all performance codes
         """
-        self.logger.debug(f"Predicting performance for experiment {exp_nr}")
+        self.logger.debug(f"Predicting performance for experiment {exp_code}")
 
         # Collect predictions from all models
         all_predictions = {}
         
         for pred_model in self.prediction_models:
             # Use unified input preparation (same logic as training)
-            input_dict = self._prepare_experiment_input(pred_model, X_parameters, exp_nr, 
-                                                      visualize_flag, debug_flag)
-            
+            input_dict = self._prepare_experiment_input(pred_model, X_parameters, exp_code, visualize_flag)
+
             # Get model predictions (normalized scale)
             model_predictions = pred_model.predict(input_dict)  # Shape: (n_targets,)
             
@@ -152,8 +292,16 @@ class PredictionSystem:
                 
         return all_predictions
     
-    def _prepare_experiment_input(self, model: PredictionModel, exp_params: Dict[str, Any], 
-                                exp_nr: int, visualize_flag: bool = False, debug_flag: bool = False) -> Dict[str, Any]:
+    def _get_pred_model_by_code(self) -> Dict[str, PredictionModel]:
+        # Prep prediction system output dict
+        pred_model_by_code = {}
+        for pred_model in self.prediction_models:
+            for code in pred_model.output:
+                assert code not in pred_model_by_code, f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration."
+                pred_model_by_code[code] = pred_model
+        return pred_model_by_code
+    
+    def _prepare_experiment_input(self, model: PredictionModel, exp_params: Dict[str, Any], exp_code: str, visualize_flag: bool) -> Dict[str, Any]:
         """
         Unified method to prepare input data for both training and prediction.
         
@@ -175,7 +323,7 @@ class PredictionSystem:
         # Run feature models to compute external data
         feature_data = {}
         for code, feature_model in model.feature_models.items():
-            feature_model.run(code, exp_nr, visualize_flag, debug_flag)
+            feature_model.run(code, exp_code, visualize_flag)
             feature_data[code] = feature_model.features[code]
         
         # Construct complete input dictionary for the model's requirements
@@ -193,81 +341,49 @@ class PredictionSystem:
                     input_dict[key] = getattr(model, key)
                     
         return input_dict
+
     
-    def _global_preprocess_and_collect(self, historical_data: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], np.ndarray, List[str]]:
-        """
-        Collect data from all models and apply global preprocessing for consistency.
-        
-        Data Collection Strategy:
-        1. Use parameter handling to set structured parameters (from DataInterface)
-        2. Run feature models to compute domain-specific features (same as prediction)
-        3. Combine into unified input representation with global normalization
-        """
-        self.logger.info("Collecting data from all models and applying global preprocessing")
-        
-        # Extract structured data from DataInterface and evaluation results
-        parameters = historical_data["parameters"]  # From DataInterface
-        performances = historical_data["performances"]  # From evaluation results
-        exp_numbers = historical_data["experiment_numbers"]
-        
-        # Collect all unique input keys required by all models
-        all_input_keys = set()
-        for model in self.prediction_models:
-            all_input_keys.update(model._declare_inputs())
-        all_input_keys = list(all_input_keys)
-        
-        # Collect data for all experiments across all models
-        collected_X = {key: [] for key in all_input_keys}
-        
-        for exp_nr in exp_numbers:
-            # Set structured parameters for this experiment
-            exp_params = {key: values[exp_numbers.index(exp_nr)] for key, values in parameters.items()}
-            
-            for model in self.prediction_models:
-                # Use unified input preparation (same logic as prediction)
-                input_dict = self._prepare_experiment_input(model, exp_params, exp_nr, 
-                                                          visualize_flag=False, debug_flag=False)
-                
-                # Collect values for all keys required by this model
-                for key in model._declare_inputs():
-                    if key in input_dict:
-                        collected_X[key].append(input_dict[key])
-        
-        # Convert to arrays and apply global normalization (default: standardization)
-        X_arrays = {}
-        for key, values in collected_X.items():
-            if values:  # Only process non-empty lists
-                X_arrays[key] = np.array(values)
-                
-                # Apply normalization based on preprocessing state configuration
-                if self.preprocessing_state.X_normalization_method == "standardize":
-                    mean_val = np.mean(X_arrays[key])
-                    std_val = np.std(X_arrays[key])
-                    if std_val > 0:  # Avoid division by zero
-                        X_arrays[key] = (X_arrays[key] - mean_val) / std_val
-                        
-        # Convert performance data to array format
-        y_codes = list(performances.keys())
-        y = np.array([performances[code] for code in y_codes]).T  # Shape: (n_samples, n_targets)
-        
-        return X_arrays, y, all_input_keys
-    
-    def _denormalize_predictions(self, predictions: np.ndarray, y_codes: List[str]) -> np.ndarray:
-        """Denormalize predictions back to original [0,1] performance scale."""
-        if self.preprocessing_state.y_normalization_method == "standardize":
+    def _denormalize_predictions(self, predictions: np.ndarray, column_codes: List[str]) -> np.ndarray:
+        """Denormalize predictions back to original scale using unified normalization parameters."""
+        if self.preprocessing_state.normalization_method == "standardize":
             # Reverse standardization if it was applied
             denormalized = np.zeros_like(predictions)
-            for i, code in enumerate(y_codes):
-                if (self.preprocessing_state.global_y_mean and 
-                    self.preprocessing_state.global_y_std and
-                    code in self.preprocessing_state.global_y_mean):
-                    denormalized[i] = (predictions[i] * self.preprocessing_state.global_y_std[code] + 
-                                     self.preprocessing_state.global_y_mean[code])
+            for i, code in enumerate(column_codes):
+                if (self.preprocessing_state.normalization_params and 
+                    code in self.preprocessing_state.normalization_params and
+                    self.preprocessing_state.normalization_params[code] is not None):
+                    
+                    params = self.preprocessing_state.normalization_params[code]
+                    denormalized[i] = (predictions[i] * params['std'] + params['mean'])
+                else:
+                    denormalized[i] = predictions[i]
+            return denormalized
+            
+        elif self.preprocessing_state.normalization_method == "minmax":
+            # Reverse min-max normalization
+            denormalized = np.zeros_like(predictions)
+            for i, code in enumerate(column_codes):
+                if (self.preprocessing_state.normalization_params and 
+                    code in self.preprocessing_state.normalization_params and
+                    self.preprocessing_state.normalization_params[code] is not None):
+                    
+                    params = self.preprocessing_state.normalization_params[code]
+                    denormalized[i] = predictions[i] * (params['max'] - params['min']) + params['min']
                 else:
                     denormalized[i] = predictions[i]
             return denormalized
         else:
             return predictions  # No normalization was applied, return as-is
+    
+    def _extract_model_data(self, normalized_data: Dict[str, np.ndarray], required_columns: List[str]) -> Dict[str, np.ndarray]:
+        """Extract only the data relevant to a specific model from normalized dataset."""
+        model_data = {}
+        for column in required_columns:
+            if column in normalized_data:
+                model_data[column] = normalized_data[column]
+            else:
+                self.logger.warning(f"Model requires column '{column}' not found in normalized data")
+        return model_data
     
     def _extract_model_features(self, X: Dict[str, np.ndarray], all_keys: List[str], model_keys: List[str]) -> Dict[str, np.ndarray]:
         """Extract only the features relevant to a specific model from global dataset."""

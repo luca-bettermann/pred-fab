@@ -56,8 +56,14 @@ class EvaluationSystem:
             **kwargs
         )
         self.evaluation_models[performance_code] = eval_model
+
+    def activate_evaluation_model(self, code: str) -> None:
+        # Activate evaluation model
+        assert code not in self.evaluation_models, f"No evaluation model for performance code '{code}' has been initialized."
+        self.evaluation_models[code].active = True
+        self.logger.info(f"Activated evaluation model for performance code '{code}'")
             
-    def run(self, study_record: Dict[str, Any], exp_nr: int, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
+    def run(self, study_record: Dict[str, Any], exp_code: str, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
         """
         Execute evaluation for all models.
         
@@ -71,7 +77,7 @@ class EvaluationSystem:
         # Make sure at least one evaluation model has been activated
         active_models = {code: model for code, model in self.evaluation_models.items() if model.active}
         assert len(active_models) > 0, "No evaluation models have been activated."
-        self.logger.info(f"Running evaluation system for experiment {self.nav.get_experiment_code(exp_nr)}")
+        self.logger.info(f"Running evaluation system for experiment {exp_code}")
 
         # Initialize all models before execution
         self._model_exp_initialization(**exp_params)
@@ -79,7 +85,7 @@ class EvaluationSystem:
         # Execute each evaluation model
         for performance_code, eval_model in active_models.items():
             self.logger.console_info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
-            eval_model.run(exp_nr, visualize_flag, debug_flag, **exp_params)
+            eval_model.run(exp_code, visualize_flag, debug_flag, **exp_params)
 
             # Push results to database if not in debug mode
             if not debug_flag:
