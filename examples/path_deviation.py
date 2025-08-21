@@ -12,15 +12,17 @@ from lbp_package.utils import runtime_parameter, model_parameter, exp_parameter
 class PathEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
 
-    # Experiment parameters
-    target_deviation: Optional[float] = model_parameter()
+    # Model parameters
+    target_deviation: Optional[float] = model_parameter(default=0.1)
     max_deviation: Optional[float] = model_parameter()
+    
+    # Experiment parameters
     n_layers: Optional[int] = exp_parameter()
     n_segments: Optional[int] = exp_parameter()
 
     # Passing initialization parameters to the parent class
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
         """Declare dimensions for path evaluation with the corresponding structure."""
@@ -54,39 +56,22 @@ class PathDeviationFeature(FeatureModel):
     layer_id: Optional[int] = runtime_parameter()
     segment_id: Optional[int] = runtime_parameter()
 
-
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator, 
-            logger, 
-            round_digits: int,
-            **study_params
-            ):
-        
-        """Initialize path deviation feature model."""
-        super().__init__(
-            associated_code=performance_code,
-            folder_navigator=folder_navigator,
-            logger=logger,
-            round_digits=round_digits,
-            **study_params
-        )
+    # Passing initialization parameters to the parent class
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         
         # Initialize feature storage for path deviation
         self.features["path_deviation"] = np.empty([])
 
-    def _load_data(self, exp_code: str) -> Dict[str, Any]:
+    def _load_data(self, exp_code: str, exp_folder: str) -> Dict[str, Any]:
         """Load designed and measured path data."""        
         # Load designed paths
-        designed_path = os.path.join(self.nav.get_experiment_folder(exp_code), 
-                                   f"{exp_code}_designed_paths.json")
+        designed_path = os.path.join(exp_folder, f"{exp_code}_designed_paths.json")
         with open(designed_path, 'r') as f:
             designed_data = json.load(f)
-            
-        # Load measured paths  
-        measured_path = os.path.join(self.nav.get_experiment_folder(exp_code),
-                                   f"{exp_code}_measured_paths.json")
+
+        # Load measured paths
+        measured_path = os.path.join(exp_folder, f"{exp_code}_measured_paths.json")
         with open(measured_path, 'r') as f:
             measured_data = json.load(f)
             

@@ -98,7 +98,7 @@ class FileDataInterface(DataInterface):
         
         return exp_data.get("Parameters", {})
     
-    def get_study_dataset(self, study_record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Retrieve the complete dataset for a study by reading all experiment files.
         
@@ -124,7 +124,11 @@ class FileDataInterface(DataInterface):
                 
             exp_code = item
             exp_data = {}
-            
+
+            # Skip if experiment code is not in the restricted list and list not empty
+            if restrict_to_exp_codes and exp_code not in restrict_to_exp_codes:
+                continue
+
             try:
                 # Load experiment parameters
                 exp_params_path = os.path.join(item_path, "exp_params.json")
@@ -132,13 +136,23 @@ class FileDataInterface(DataInterface):
                     with open(exp_params_path, 'r') as f:
                         exp_params = json.load(f).get("Parameters", {})
                         exp_data.update(exp_params)
-                
-                # Load performance results if they exist
+
+                # Load performance json file if it exists
                 results_dir = os.path.join(item_path, "results")
-                if os.path.exists(results_dir):
-                    # Look for performance result files
-                    for result_file in os.listdir(results_dir):
-                        if result_file.endswith("_performance.json"):
+                assert os.path.exists(results_dir), f"Results directory does not exist: {results_dir}. Run evaluation first"
+
+                performance_file = os.path.join(results_dir, f"{exp_code}_performance.json")
+                assert os.path.exists(performance_file), f"Performance file does not exist: {performance_file}. Run evaluation first"
+
+                with open(performance_file, 'r') as f:
+                    perf_data = json.load(f)
+                    # Extract the aggregated Value from performance metrics
+                    if "Value" in perf_data:
+                        exp_data["Value"] = perf_data["Value"]
+
+                # Look for performance result files
+                for result_file in os.listdir(results_dir):
+                    if result_file.endswith("_performance.json"):
                             performance_code = result_file.replace(f"{exp_code}_", "").replace("_performance.json", "")
                             
                             with open(os.path.join(results_dir, result_file), 'r') as f:
@@ -157,8 +171,8 @@ class FileDataInterface(DataInterface):
                 continue
         
         return dataset
-    
-    def push_to_database(self, exp_record: Dict[str, Any], value_dict: Dict[str, Any]) -> None:
+
+    def push_to_database(self, exp_record: Dict[str, Any], performance_metrics: Dict[str, Dict[str, Any]]) -> None:
         """
         Save performance results to local JSON files in the experiment's results directory.
         
@@ -175,26 +189,11 @@ class FileDataInterface(DataInterface):
         exp_dir = os.path.join(self.local_folder, study_code, exp_code)
         results_dir = os.path.join(exp_dir, "results")
         os.makedirs(results_dir, exist_ok=True)
-        
-        # Determine performance code from evaluation system context
-        # This is a simplification - in a real system you'd pass the performance_code
-        # For now, we'll save all metrics in the value_dict
-        
-        # Save each performance metric separately
-        for key, value in value_dict.items():
-            if key == "Value":  # This is the main aggregated performance value
-                # We need to infer the performance code from the calling context
-                # For testing purposes, we'll store this in a generic performance file
-                perf_file = os.path.join(results_dir, f"{exp_code}_performance.json")
-                
-                perf_data = {
-                    "Value": value,
-                    "timestamp": self._get_timestamp(),
-                    "metadata": {k: v for k, v in value_dict.items() if k != "Value"}
-                }
-                
-                with open(perf_file, 'w') as f:
-                    json.dump(perf_data, f, indent=2)
+
+        # Create performance json file
+        perf_file = os.path.join(results_dir, f"{exp_code}_performance.json")
+        with open(perf_file, 'w') as f:
+            json.dump(performance_metrics, f, indent=2)
     
     def _get_timestamp(self) -> str:
         """Get current timestamp as string."""

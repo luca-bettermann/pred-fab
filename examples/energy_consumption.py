@@ -1,4 +1,3 @@
-import numpy as np
 from typing import Dict, Any, List, Tuple, Type, Optional
 from dataclasses import dataclass
 
@@ -11,13 +10,11 @@ class EnergyConsumption(EvaluationModel):
 
     # Model parameters
     target_energy: Optional[float] = model_parameter(0.0)
-
-    # Experiment parameters
-    max_energy: Optional[float] = exp_parameter()
+    max_energy: Optional[float] = model_parameter()
 
     # Passing initialization parameters to the parent class
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
         """Declare dimensions for energy evaluation (no dimensions)."""
@@ -46,25 +43,11 @@ class EnergyFeature(FeatureModel):
     # Experiment parameters
     layerTime: Optional[float] = exp_parameter()
 
-    def __init__(
-            self, 
-            performance_code: str, 
-            folder_navigator, 
-            logger, 
-            round_digits: int,
-            **study_params
-            ):
-        
-        """Initialize energy feature model."""
-        super().__init__(
-            associated_code=performance_code,
-            folder_navigator=folder_navigator,
-            logger=logger,
-            round_digits=round_digits,
-            **study_params
-        )
+    # Passing initialization parameters to the parent class
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    def _load_data(self, exp_code: str) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
         """No data loading required for energy calculation."""
         return None
 

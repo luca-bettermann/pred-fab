@@ -22,11 +22,11 @@ def get_mock_study_params() -> Dict[str, Any]:
         "power_rating": 50.0
     }
 
-def get_mock_exp_params(layer_time: float = 30.0, layer_height: float = 0.2) -> Dict[str, Any]:
+def get_mock_exp_params(n_layers: int = 2, n_segments: int = 2, layer_time: float = 30.0, layer_height: float = 0.2) -> Dict[str, Any]:
     """Return standard experiment parameters."""
     return {
-        "n_layers": 2,
-        "n_segments": 2,
+        "n_layers": n_layers,
+        "n_segments": n_segments,
         "layerTime": layer_time,
         "layerHeight": layer_height
     }
@@ -153,7 +153,7 @@ def create_exp_json_files(
     exp_data = {
         "Code": exp_code,
         "System Performance": None,
-        "Parameters": get_mock_exp_params(layer_time=layer_time, layer_height=layer_height),
+        "Parameters": get_mock_exp_params(n_layers=n_layers, n_segments=n_segments, layer_time=layer_time, layer_height=layer_height),
         "Status": "Evaluation"
     }
     with open(os.path.join(exp_dir, "exp_params.json"), 'w') as f:

@@ -4,7 +4,8 @@
   "Parameters": {
     "n_layers": 2,
     "n_segments": 2,
-    "layerTime": 30.0
+    "layerTime": 30.0,
+    "layerHeight": 0.25
   },
   "Status": "Evaluation"
 }

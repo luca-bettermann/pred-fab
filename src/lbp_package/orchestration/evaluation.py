@@ -1,4 +1,5 @@
 from typing import Any, Dict, Type, Optional
+import numpy as np
 
 from ..utils import FolderNavigator, LBPLogger
 from ..interfaces.evaluation import EvaluationModel
@@ -17,8 +18,7 @@ class EvaluationSystem:
         self,
         folder_navigator: FolderNavigator,
         data_interface: DataInterface,
-        logger: LBPLogger
-    ) -> None:
+        logger: LBPLogger):
         """
         Initialize evaluation system.
         
@@ -27,13 +27,17 @@ class EvaluationSystem:
             data_interface: Database interface for data access
             logger: Logger instance for debugging and monitoring
         """
-        self.nav = folder_navigator
-        self.interface = data_interface
-        self.logger = logger
-        self.evaluation_models = {}
+        self.nav: FolderNavigator = folder_navigator
+        self.interface: DataInterface = data_interface
+        self.logger: LBPLogger = logger
+
+        self.evaluation_models: Dict[str, EvaluationModel] = {}
+        self.performance_metrics: Dict[str, Dict[str, Optional[np.floating]]] = {}
+
+        self.study_params: Dict[str, Any] = {}
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], study_params: Dict[str, Any], round_digits: int, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: int, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         
@@ -49,20 +53,19 @@ class EvaluationSystem:
         self.logger.info(f"Adding '{evaluation_class.__name__}' model to evaluate performance '{performance_code}'")
         eval_model = evaluation_class(
             performance_code=performance_code,
-            folder_navigator=self.nav,
             logger=self.logger,
-            study_params=study_params,
             round_digits=round_digits,
             **kwargs
         )
         self.evaluation_models[performance_code] = eval_model
 
-    def activate_evaluation_model(self, code: str) -> None:
-        # Activate evaluation model
-        assert code not in self.evaluation_models, f"No evaluation model for performance code '{code}' has been initialized."
+    def activate_evaluation_model(self, code: str, study_params: Dict[str, Any]) -> None:
+        # Activate evaluation model and apply dataclass-based parameter handling
+        assert code in self.evaluation_models, f"No evaluation model for performance code '{code}' has been initialized."
         self.evaluation_models[code].active = True
-        self.logger.info(f"Activated evaluation model for performance code '{code}'")
-            
+        self.evaluation_models[code].set_model_parameters(**study_params)
+        self.logger.info(f"Activated evaluation model for performance code '{code}' and set study parameters.")
+
     def run(self, study_record: Dict[str, Any], exp_code: str, exp_record: Dict[str, Any], visualize_flag: bool = False, debug_flag: bool = True, **exp_params) -> None:
         """
         Execute evaluation for all models.
@@ -85,16 +88,20 @@ class EvaluationSystem:
         # Execute each evaluation model
         for performance_code, eval_model in active_models.items():
             self.logger.console_info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
-            eval_model.run(exp_code, visualize_flag, debug_flag, **exp_params)
+            exp_folder = self.nav.get_experiment_folder(exp_code)
 
-            # Push results to database if not in debug mode
-            if not debug_flag:
-                self.logger.info(f"Pushing results to database for '{performance_code}'...")
-                self.interface.push_to_database(exp_record, eval_model.performance_metrics)
-            else:
-                self.logger.info(f"Debug mode: Skipping database push for '{performance_code}'")
+            # Run evaluation and return dict with "Value", "Performance", "Robustness" and "Resilience" as keys
+            aggr_performance_metrics = eval_model.run(exp_code, exp_folder, visualize_flag, debug_flag, **exp_params)
+            self.performance_metrics[performance_code] = aggr_performance_metrics
 
         self.logger.console_info("All evaluations completed successfully.")
+
+        # Push results to database if not in debug mode
+        if not debug_flag:
+            self.logger.info(f"Pushing results to database for {self.performance_metrics.keys()}...")
+            self.interface.push_to_database(exp_record, self.performance_metrics)
+        else:
+            self.logger.info(f"Debug mode: Skipping database push for {self.performance_metrics.keys()}")
 
         # Update system-wide performance metrics
         if not debug_flag:
@@ -112,8 +119,9 @@ class EvaluationSystem:
             **exp_params: Experiment parameters
         """
         for eval_model in self.evaluation_models.values():
+            assert eval_model.feature_model is not None, f"Feature model for evaluation '{eval_model.performance_code}' is not set."
             self.logger.info(f"Initializing arrays of evaluation model '{eval_model.performance_code}' and its feature model '{type(eval_model.feature_model).__name__}'")
-
+            
             # Configure models with experiment parameters
             eval_model.set_experiment_parameters(**exp_params)
             eval_model.feature_model.set_experiment_parameters(**exp_params)

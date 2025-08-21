@@ -1,0 +1,22 @@
+{
+  "energy_consumption": {
+    "Target_Avg": 0.0,
+    "Target_Std": 0.0,
+    "Diff_Abs_Avg": 1500.0,
+    "Diff_Sign_Avg": 1.0,
+    "Performance_Avg": 0.85,
+    "Performance": null,
+    "Robustness": null,
+    "Resilience": null
+  },
+  "path_deviation": {
+    "Target_Avg": 0.0,
+    "Target_Std": 0.0,
+    "Diff_Abs_Avg": 0.474,
+    "Diff_Sign_Avg": 1.0,
+    "Performance_Avg": 0.089,
+    "Performance": null,
+    "Robustness": null,
+    "Resilience": null
+  }
+}

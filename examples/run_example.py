@@ -1,14 +1,27 @@
 from pathlib import Path
 from lbp_package import LBPManager
 
-from .energy_consumption import EnergyConsumption
-from .path_deviation import PathEvaluation
-from .predict_all import PredictExample
-from .file_data_interface import FileDataInterface
+from examples.energy_consumption import EnergyConsumption
+from examples.path_deviation import PathEvaluation
+from examples.predict_all import PredictExample
+from examples.file_data_interface import FileDataInterface
 from tests.conftest import create_study_json_files, create_exp_json_files
 
-# TODO
+# TODO NOW
 # - Incorporate "Value Sign" field from airtable in code
+# - Remove self.nav from interfaces. Only orchestration should handle navigation.
+
+# TODO FUTURE
+# - Features are immutable, whereas performance can change based on targets.
+# - Hence, prediction models should predict features, not performance.
+# - Therefore, features should be stored in the database, 
+#   if we want to train prediction models based on that database.
+# - Evaluation only becomes relevant once we want to optimize.
+#   In the most elegant structure, evaluation should happen in the optimizer stage.
+# - However, that part of the structure is not crucial. Important is,
+#   how we plan to store features in the database. Making the airtable more complex
+#   does not sound appealing. Switching to a more traditional, query-based
+#   database solution might be worth considering.
 
 def main():
     # Get paths relative to this file
@@ -39,7 +52,7 @@ def main():
     lbp_manager.add_evaluation_model("path_deviation", PathEvaluation)
 
     # Add the example prediction model to the LBPManager
-    lbp_manager.add_prediction_model(PredictExample)
+    lbp_manager.add_prediction_model(["energy_consumption", "path_deviation"], PredictExample)
 
     # Get the parent directory and create local directory if it doesn't exist
     parent_dir = Path(__file__).parent
@@ -59,9 +72,14 @@ def main():
     lbp_manager.run_evaluation(exp_nr=1)
     lbp_manager.run_evaluation(exp_nr=2)
     lbp_manager.run_evaluation(exp_nr=3)
+    # ERROR:
+    # FIX RESULTS FILE MANAGEMENT
 
     # Run predictions for all experiments
     lbp_manager.run_training()
+
+    # Calibrate the upcoming experiment
+    lbp_manager.run_calibration(exp_nr=4)
 
 
 

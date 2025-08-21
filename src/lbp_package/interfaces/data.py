@@ -114,16 +114,20 @@ class DataInterface(ABC):
         ...
 
     @abstractmethod
-    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_nrs: List[int] = []) -> Dict[str, Dict[str, Any]]:
+    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
         """
         Retrieve the complete dataset for a study.
         
         Data Boundary: Returns structured data that can be used for analysis,
         not raw experimental data files or proprietary formats.
-        
+
+        Args:
+            study_record: Study record dictionary from get_study_record()
+            restrict_to_exp_codes: List of specific experiment codes to include (empty [] means include all)
+
         Returns:
             Dictionary containing experiment dicts with all relevant parameters
-            and performances. Filter for specific experiment numbers if needed (no-op if empty).
+            and performances. Filter for specific experiment codes if needed (no-op if empty).
             Dict[exp_code_1, {param_name: value, performance_code: value}]
         """
         ...

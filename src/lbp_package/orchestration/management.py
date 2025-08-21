@@ -62,9 +62,6 @@ class LBPManager:
         
         # Initialize system defaults (loaded from config)
         self.defaults = {}
-        # self.default_debug_mode: bool = False
-        # self.default_visualize_flag: bool = False
-        # self.default_round_digits: int = 3
         
         # Performance mapping
         self.performance_records: List[Dict[str, Any]] = []
@@ -86,19 +83,19 @@ class LBPManager:
             **kwargs: Additional parameters for model initialization
         """
         round_digits = self._get_default_attribute('round_digits', kwargs.get('round_digits', None))
-        self.eval_system.add_evaluation_model(performance_code, evaluation_class, self.study_params, round_digits, **kwargs)
+        self.eval_system.add_evaluation_model(performance_code, evaluation_class, round_digits, **kwargs)
 
-    def add_prediction_model(self, prediction_class: Type[PredictionModel], **kwargs) -> None:
+    def add_prediction_model(self, performance_codes: List[str], prediction_class: Type[PredictionModel], **kwargs) -> None:
         """
         Add a prediction model to the system.
         
         Args:
-            performance_code: Code identifying the performance metric
+            performance_codes: List of codes identifying the performance metrics
             prediction_class: Class of prediction model to instantiate
             **kwargs: Additional parameters for model initialization
         """
         round_digits = self._get_default_attribute('round_digits', kwargs.get('round_digits', None))
-        self.pred_system.add_prediction_model(prediction_class, self.study_params, round_digits, **kwargs)
+        self.pred_system.add_prediction_model(performance_codes, prediction_class, self.study_params, round_digits, **kwargs)
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, eval_flag: Optional[bool] = None, pred_flag: Optional[bool] = None) -> None:
         """
@@ -125,8 +122,8 @@ class LBPManager:
         self.logger.info(f"Study record retrieved from database")
         
         # Validate study parameters
-        self.study_params = self.interface.get_study_parameters(self.study_record)
-        if not self.study_params or not isinstance(self.study_params, dict):
+        study_params = self.interface.get_study_parameters(self.study_record)
+        if not study_params or not isinstance(study_params, dict):
             raise ValueError(f"Study parameters for study code '{study_code}' empty or not a dict. Please check the database configuration.")
         
         # Load performance configuration
@@ -143,17 +140,17 @@ class LBPManager:
 
             # Activate evaluation model
             if eval_flag:
-                self.eval_system.activate_evaluation_model(code)
+                self.eval_system.activate_evaluation_model(code, study_params)
 
             # Activate prediction model if it matches the output codes
             if pred_flag:
-                self.pred_system.activate_prediction_model(code)
+                self.pred_system.activate_prediction_model(code, study_params)
 
             # Add performance record to the list
             self.performance_records.append(performance_record)
 
         # Initialize feature model instances
-        self._add_feature_model_instances()
+        self._add_feature_model_instances(study_params)
 
         # Display initialization summary
         summary = self._initialization_step_summary()
@@ -207,7 +204,7 @@ class LBPManager:
         self.logger.console_summary(summary)
         self.logger.console_success(f"Successfully evaluated the performance attributes of study '{self.study_code}'.")
 
-    def run_training(self, restrict_to_exp_nrs: List[int] = []) -> None:
+    def run_training(self, restrict_to_exp_codes: List[str] = []) -> None:
         """
         Run training for all prediction models.
         
@@ -220,7 +217,7 @@ class LBPManager:
         self.logger.console_info(f"\n------- Run Training for Study: '{self.study_code}' -------")
 
         # Load study dataset
-        study_dataset = self.interface.get_study_dataset(self.study_record)
+        study_dataset = self.interface.get_study_dataset(self.study_record, restrict_to_exp_codes)
 
         # Run training for all prediction models
         self.pred_system.train(study_dataset)
@@ -228,6 +225,18 @@ class LBPManager:
         # Display training summary
         self.logger.console_success(f"Successfully trained prediction models for study '{self.study_code}'.")
 
+    def run_calibration(self, exp_nr: int, visualize_flag: bool = False) -> None:
+
+        # Load experiment parameters
+        exp_code = self.nav.get_experiment_code(exp_nr)
+        exp_record = self.interface.get_exp_record(exp_code)
+        exp_params = self.interface.get_exp_variables(exp_record)
+
+        # Predict -> this will not be used like this
+        predictions = self.pred_system.predict(exp_params, exp_code, visualize_flag)
+
+        # Add code that calibrates upcoming experiment
+        ...
 
     # === PRIVATE/INTERNAL METHODS (Internal use only) ===
     def _load_config(self) -> None:
@@ -292,8 +301,8 @@ class LBPManager:
         else:
             self.logger.debug(f"Using provided value for '{key}': {value}")
             return value
-    
-    def _add_feature_model_instances(self) -> None:
+
+    def _add_feature_model_instances(self, study_params: Dict[str, Any]) -> None:
         """
         Create feature model instances for evaluation and prediction models.
 
@@ -330,10 +339,10 @@ class LBPManager:
                 # Create a new feature model instance
                 feature_model_instance = feature_model_type(
                     performance_code=code,
-                    folder_navigator=self.nav,
                     logger=self.logger,
+                    study_params=study_params,
                     round_digits=model.round_digits,
-                    **self.study_params
+                    **model.kwargs
                 )
                 
                 # Store the feature model instance in the dictionary
@@ -355,7 +364,7 @@ class LBPManager:
         val_eval_models = {code: eval_model for code, eval_model in self.eval_system.evaluation_models.items() if eval_model.active}
         val_pred_models = {code: pred_model for code, pred_model in self.pred_system.pred_model_by_code.items() if pred_model.active}
 
-        summary = f"Loaded {len(self.performance_records)} performance attributes, {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models]))} feature models.\n\n"
+        summary = f"Loaded {len(self.performance_records)} performance attributes, {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models.values()]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Feature Model':<20} {'Evaluation Model':<20} {'Prediction Model':<20}\033[0m"
         
         for performance_record in self.performance_records:
@@ -380,7 +389,7 @@ class LBPManager:
         for code, eval_model in active_eval_models.items():
             dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
             dimensions = "(" + dimensions + ")"
-            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {eval_model.performance_metrics.get('Value', 0):<20}"
+            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {self.eval_system.performance_metrics[code].get('Value', 0):<20}"
         return summary + "\n"
 
 

@@ -10,8 +10,8 @@ class PredictExample(PredictionModel):
     """
 
     # Passing initialization parameters to the parent class
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def _declare_inputs(self) -> List[str]:
         """
@@ -19,12 +19,18 @@ class PredictExample(PredictionModel):
         """
         return ["layerTime", "layerHeight", "temperature"]
     
+    def _declare_outputs(self) -> List[str]:
+        """
+        Declare the output keys produced by this prediction model.
+        """
+        return ["path_deviation", "energy_consumption"]
+
     def _declare_feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
         """
         Declare the feature model types this prediction model uses.
         """
-        return {}
-    
+        return {"temperature": TemperatureExtraction}
+
     def train(self, X: Dict[str, ndarray], y: ndarray) -> None:
         ...
 
@@ -39,10 +45,11 @@ class TemperatureExtraction(FeatureModel):
     Example feature model that loads and extracts temperature data.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    # Passing initialization parameters to the parent class
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    def _load_data(self, exp_nr: int) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
         """
         Load the data required for temperature feature extraction.
         """

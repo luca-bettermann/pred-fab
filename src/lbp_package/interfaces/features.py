@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
-from ..utils import ParameterHandling, FolderNavigator, LBPLogger
+from ..utils import ParameterHandling, LBPLogger
 
 
 @dataclass
@@ -17,11 +17,11 @@ class FeatureModel(ParameterHandling, ABC):
     """
     
     def __init__(self, 
-                 associated_code: str,
-                 folder_navigator: FolderNavigator, 
+                 performance_code: str,
                  logger: LBPLogger,
+                 study_params: Dict[str, Any],
                  round_digits: int,
-                 **study_params) -> None:
+                 **kwargs) -> None:
         """
         Initialize feature extraction model.
 
@@ -31,14 +31,13 @@ class FeatureModel(ParameterHandling, ABC):
             logger: Logger instance for debugging and monitoring
             **study_params: Study parameters for configuration
         """
-        self.nav = folder_navigator
         self.logger = logger
         self.round_digits = round_digits
 
         # Feature storage - supports multiple performance codes per model
         self.features: Dict[str, NDArray[np.float64]] = {}
         self.associated_codes: List[str] = []
-        self.initialize_for_code(associated_code)
+        self.initialize_for_code(performance_code)
 
         # Track processed dimensions to avoid duplicate computation
         self.processed_dims: List = []
@@ -52,7 +51,7 @@ class FeatureModel(ParameterHandling, ABC):
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def _load_data(self, exp_code: str) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
         """
         Load domain-specific, unstructured data for feature extraction. Potentially requires
         a database connection to access raw data files or streams.
@@ -63,6 +62,7 @@ class FeatureModel(ParameterHandling, ABC):
 
         Args:
             exp_code: Experiment code
+            exp_folder: Experiment folder path
 
         Returns:
             Loaded data object (format depends on domain requirements)
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.associated_codes.append(associated_code)
         self.features[associated_code] = np.empty([])
 
-    def run(self, performance_code: str, exp_code: str, visualize_flag: bool, **dims_dict) -> None:
+    def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, **dims_dict) -> None:
         """
         Execute the feature extraction pipeline.
 
@@ -116,7 +116,7 @@ class FeatureModel(ParameterHandling, ABC):
         if not self.is_processed_state:
 
             # Load data for feature extraction
-            current_data = self._load_data(exp_code)
+            current_data = self._load_data(exp_code, exp_folder)
 
             # Compute features
             feature_dict = self._compute_features(current_data, visualize_flag)
@@ -131,7 +131,9 @@ class FeatureModel(ParameterHandling, ABC):
                 self.logger.debug(f"Extracted feature '{code}': {round(value, self.round_digits) if value is not None else value}")
 
         else:
+            # Skip and reset
             self.logger.info("Data already processed for these dimensions, skipping")
+            self.is_processed_state = False
 
         # Optional cleanup step
         self._cleanup_step(performance_code, exp_code)
@@ -146,6 +148,7 @@ class FeatureModel(ParameterHandling, ABC):
         """
         self.logger.info(f"Resetting '{type(self).__name__}' feature model for new experiment")
         self.features[performance_code] = np.empty(dim_sizes)
+        self.processed_dims = []
         
     # === OPTIONAL METHODS ===
     def _initialization_step(self, performance_code: str, exp_code: str) -> None:

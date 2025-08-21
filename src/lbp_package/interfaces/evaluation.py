@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
 from .features import FeatureModel
-from ..utils import ParameterHandling, FolderNavigator, LBPLogger
+from ..utils import ParameterHandling, LBPLogger
 
 
 @dataclass
@@ -23,11 +23,9 @@ class EvaluationModel(ParameterHandling, ABC):
     def __init__(
             self, 
             performance_code: str,
-            folder_navigator: FolderNavigator,
             logger: LBPLogger,
             round_digits: int = 3,
-            **study_params
-    ) -> None:
+            **kwargs) -> None:
         """
         Initialize evaluation model.
 
@@ -40,7 +38,6 @@ class EvaluationModel(ParameterHandling, ABC):
             round_digits: Number of decimal places for rounding results
             **study_params: Study parameters for configuration
         """
-        self.nav = folder_navigator
         self.logger = logger
 
         # By default, the evaluation model is deactivated from the system
@@ -63,10 +60,9 @@ class EvaluationModel(ParameterHandling, ABC):
         self.round_digits: int = round_digits
         self.performance_code = performance_code
         self.performance_array: NDArray[np.float64] = np.empty((0,))
-        self.performance_metrics: Dict[str, Optional[np.floating]] = {}
 
-        # Apply dataclass-based parameter handling
-        self.set_model_parameters(**study_params)
+        # Store kwargs so that they can be passed on to the feature models
+        self.kwargs = kwargs
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
@@ -113,17 +109,20 @@ class EvaluationModel(ParameterHandling, ABC):
         # Directly set the feature model instance (one-to-one relationship)
         self.feature_model = feature_model
 
-    def run(self, exp_nr: int, visualize_flag: bool, debug_flag: bool, **exp_params) -> None:
+    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool, **exp_params) -> Dict[str, Optional[np.floating]]:
         """
         Execute the evaluation pipeline.
         
         Args:
-            exp_nr: Experiment number
+            exp_code: Experiment code
             visualize_flag: Whether to show visualizations
             debug_flag: Whether to run in debug mode (no saving)
             **exp_params: Experiment parameters
+
+        Returns:
+            Dictionary of aggregated performance metrics.
         """
-        self.logger.info(f"Starting evaluation for experiment {exp_nr}")
+        self.logger.info(f"Starting evaluation for experiment {exp_code}")
 
         # Configure models with experiment parameters
         self.set_experiment_parameters(**exp_params)
@@ -134,7 +133,6 @@ class EvaluationModel(ParameterHandling, ABC):
         total_dims = len(list(itertools.product(*self._compute_dim_ranges())))
         self.logger.info(f"Processing {total_dims} dimensional combinations")
         
-        exp_code = self.nav.get_experiment_code(exp_nr)
         for i, dims in enumerate(itertools.product(*self._compute_dim_ranges())):
 
             # Create runtime parameters for current dimensions
@@ -143,7 +141,7 @@ class EvaluationModel(ParameterHandling, ABC):
             self.set_runtime_parameters(**dims_dict)
 
             # Extract features
-            self.feature_model.run(self.performance_code, exp_code, visualize_flag, debug_flag, **dims_dict)
+            self.feature_model.run(self.performance_code, exp_code, exp_folder, visualize_flag, **dims_dict)
 
             # Compute performance for current dimensions
             self._initialization_step()
@@ -152,12 +150,28 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # Save results and aggregate performance
         if not debug_flag:
-            self._save_results_locally(exp_code)
+            self._save_results_locally(exp_code, exp_folder)
         else:
             self.logger.info("Debug mode: Skipping result saving")
-            
-        self._aggregate_performance(self.performance_array[..., 2])
-        self.logger.info(f"Evaluation completed: {self.performance_metrics}")
+
+        # Unpack performance_array
+        target_array, diff_array, performance_array = np.split(self.performance_array, 3, axis=-1)
+
+        # Aggregate targets, diffs, signs and performance
+        aggr_metrics = self._compute_default_aggr_metrics(target_array, diff_array, performance_array)
+
+        # Compute interpretable aggregated performance metrics
+        custom_aggr_metrics = self._compute_custom_aggr_metrics(target_array, diff_array, performance_array)
+        assert isinstance(custom_aggr_metrics, dict), "Aggregation must return a dictionary"
+        assert all(key in custom_aggr_metrics for key in self._declare_custom_aggr_metrics()), "Aggregation must include all required metrics"
+
+        # Update custom aggregation metrics
+        aggr_metrics.update(custom_aggr_metrics)
+
+        # Log and return aggr_metrics
+        self.logger.info(f"Evaluation completed: {aggr_metrics}")
+        return aggr_metrics
+
 
     def reset_for_new_experiment(self, dim_sizes: List[int]) -> None:
         """
@@ -171,10 +185,6 @@ class EvaluationModel(ParameterHandling, ABC):
         # Initialize performance array: [target_value, diff, performance_value]
         self.performance_array = np.empty(dim_sizes + [3,])
 
-        # Reset performance metrics
-        for key in self.performance_metrics.keys():
-            self.performance_metrics[key] = None
-            
     # === OPTIONAL METHODS ===
     def _declare_scaling_factor(self) -> Optional[float]:
         """
@@ -184,24 +194,51 @@ class EvaluationModel(ParameterHandling, ABC):
             Scaling factor or None for default scaling
         """
         return None
-
-    def _aggregate_performance(self, performance_value_array: NDArray[np.float64]) -> None:
+    
+    def _declare_custom_aggr_metrics(self):
         """
-        Aggregate performance values across dimensions.
+        Declare custom performance metrics for the evaluation. 
         
-        Default implementation computes mean performance value.
-        Subclasses can override for custom aggregation strategies.
-        
+        By default, the custom metrics are set as:
+        - "Performance": Maximum performance across dimensions
+        - "Robustness": Measure of performance stability across dimensions
+        - "Resilience": Measure of performance recovery across dimensions
+
+        Subclasses can override this function to add their own metrics.
+
+        Returns:
+            List of custom performance metric names
+        """
+        return ["Performance", "Robustness", "Resilience"]
+
+    def _compute_custom_aggr_metrics(
+        self, 
+        target_array: NDArray[np.float64], 
+        diff_array: NDArray[np.float64], 
+        performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
+        """
+        This function computes the custom metrics declared in _declare_custom_aggr_metrics.
+
         Args:
-            performance_value_array: Array of performance values to aggregate
-        """
-        # Default: compute mean performance value
-        self.performance_metrics['Value'] = np.round(np.average(performance_value_array), self.round_digits)
+            target_array: Array of target values to aggregate
+            diff_array: Array of difference values to aggregate
+            performance_array: Array of performance values to aggregate
 
-        # Initialize other metrics as None (can be overridden)
-        self.performance_metrics['Performance'] = None
-        self.performance_metrics['Robustness'] = None
-        self.performance_metrics['Resilience'] = None
+        Returns:
+            Dict: custom_metrics
+
+        custom_metrics needs to contain the declared metrics as keys in its dictionary.
+        By default, this function returns None as values.
+
+        Subclasses can override for custom aggregation strategies.
+        """
+        custom_metrics: Dict[str, Optional[np.floating]] = {}
+
+        # Initialize metrics as None
+        for metric in self._declare_custom_aggr_metrics():
+            custom_metrics[metric] = None
+
+        return custom_metrics
 
     def _initialization_step(self) -> None:
         """Optional initialization before performance computation."""
@@ -255,9 +292,6 @@ class EvaluationModel(ParameterHandling, ABC):
             performance_value = None
             diff = None
             self.logger.warning(f"Feature or target value is None for dims {dims}, skipping performance computation.")
-        elif feature_value == 0 or feature_value is None:
-            diff = -target_value
-            performance_value = 0.0
         else:
             # Compute difference from target
             diff = feature_value - target_value
@@ -288,9 +322,37 @@ class EvaluationModel(ParameterHandling, ABC):
             f"performance={np.round(performance_value, self.round_digits) if performance_value is not None else None}"
         )
 
-    def _save_results_locally(self, exp_code: str) -> None:
+    def _compute_default_aggr_metrics(
+            self, 
+            target_array: NDArray[np.float64], 
+            diff_array: NDArray[np.float64], 
+            performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
+        """
+        Computes the default aggregation metrics.
+        
+        Args:
+            target_array: Array of target values to aggregate
+            diff_array: Array of difference values to aggregate
+            performance_array: Array of performance values to aggregate
+
+        Returns:
+            Dictionary of default aggregated metrics.
+        """
+        performance_metrics: Dict[str, Optional[np.floating]] = {}
+
+        # Default: compute mean target, diff and performance values
+        performance_metrics['Target_Avg'] = np.round(np.average(target_array), self.round_digits)
+        performance_metrics['Target_Std'] = np.round(np.std(target_array), self.round_digits)
+        performance_metrics['Diff_Abs_Avg'] = np.round(np.average(np.abs(diff_array)), self.round_digits) # absolute diff
+        performance_metrics['Diff_Sign_Avg'] = np.round(np.average(np.sign(diff_array)), self.round_digits) # sign of diff
+        performance_metrics['Performance_Avg'] = np.round(np.average(performance_array), self.round_digits)
+
+        # return the aggregated performance metrics
+        return performance_metrics
+
+    def _save_results_locally(self, exp_code: str, exp_folder: str) -> None:
         """Save evaluation results to CSV file."""
-        folder_path = os.path.join(self.nav.get_experiment_folder(exp_code), 'results')
+        folder_path = os.path.join(exp_folder, 'results')
 
         # Create results directory if needed
         if not os.path.isdir(folder_path):

@@ -1,5 +1,5 @@
 .venv/
-.examples/logs/
+examples/logs/
 build
 
 # Ignore all experiment folders except test_001

@@ -43,6 +43,7 @@ class FolderNavigator:
         Args:
             study_code: Unique identifier for the study
         """
+        assert isinstance(study_code, str) and study_code, "Study code must be a non-empty string"
         self.study_code = study_code
         self.study_folder = os.path.join(self.local_folder, self.study_code)
 
@@ -56,8 +57,7 @@ class FolderNavigator:
         Returns:
             Formatted experiment code (e.g., "STUDY_001")
         """
-        if self.study_code is None:
-            raise ValueError("Study code must be set before generating experiment code")
+        assert isinstance(exp_nr, int) and exp_nr >= 0, "Experiment number must be a non-negative integer"
         return f"{self.study_code}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
@@ -70,6 +70,7 @@ class FolderNavigator:
         Returns:
             Full path to experiment folder
         """
+        assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         if self.study_folder is None:
             raise ValueError("Study code must be set before getting experiment folder")
         return os.path.join(self.study_folder, exp_code)
@@ -79,7 +80,7 @@ class FolderNavigator:
         Get full path to server experiment folder.
 
         Args:
-            exp_nr: Experiment number
+            exp_code: Experiment code
 
         Returns:
             Full path to server experiment folder
@@ -88,6 +89,7 @@ class FolderNavigator:
             raise ValueError("Server folder must be set before getting server experiment folder")
         if self.study_code is None:
             raise ValueError("Study code must be set before getting experiment folder")
+        assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         return os.path.join(self.server_folder, self.study_code, exp_code)
 
     def list_experiments(self) -> List[str]:
