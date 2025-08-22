@@ -6,15 +6,15 @@ from typing import Dict, Any, List, Optional, Tuple, Type
 from dataclasses import dataclass
 
 from lbp_package import EvaluationModel, FeatureModel
-from lbp_package.utils import runtime_parameter, model_parameter, exp_parameter
+from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
 
 @dataclass
 class PathEvaluation(EvaluationModel):
     """Example evaluation model for path deviation assessment."""
 
     # Model parameters
-    target_deviation: Optional[float] = model_parameter(default=0.1)
-    max_deviation: Optional[float] = model_parameter()
+    target_deviation: Optional[float] = study_parameter(default=0.1)
+    max_deviation: Optional[float] = study_parameter()
     
     # Experiment parameters
     n_layers: Optional[int] = exp_parameter()
@@ -50,11 +50,11 @@ class PathDeviationFeature(FeatureModel):
     """Example feature model for path deviation calculation."""
     
     # Model parameters
-    tolerance_xyz: Optional[float] = model_parameter(0.1)
+    tolerance_xyz: Optional[float] = study_parameter(0.1)
 
     # Runtime parameters
-    layer_id: Optional[int] = runtime_parameter()
-    segment_id: Optional[int] = runtime_parameter()
+    layer_id: Optional[int] = dim_parameter()
+    segment_id: Optional[int] = dim_parameter()
 
     # Passing initialization parameters to the parent class
     def __init__(self, **kwargs):

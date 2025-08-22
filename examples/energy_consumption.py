@@ -2,15 +2,15 @@ from typing import Dict, Any, List, Tuple, Type, Optional
 from dataclasses import dataclass
 
 from lbp_package import EvaluationModel, FeatureModel
-from lbp_package.utils import runtime_parameter, model_parameter, exp_parameter
+from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
 
 @dataclass
 class EnergyConsumption(EvaluationModel):
     """Example energy consumption evaluation model."""
 
     # Model parameters
-    target_energy: Optional[float] = model_parameter(0.0)
-    max_energy: Optional[float] = model_parameter()
+    target_energy: Optional[float] = study_parameter(0.0)
+    max_energy: Optional[float] = study_parameter()
 
     # Passing initialization parameters to the parent class
     def __init__(self, **kwargs):
@@ -38,7 +38,7 @@ class EnergyFeature(FeatureModel):
     """Example feature model for energy consumption extraction."""
 
     # Model parameters
-    power_rating: Optional[float] = model_parameter(50.0)
+    power_rating: Optional[float] = study_parameter(50.0)
 
     # Experiment parameters
     layerTime: Optional[float] = exp_parameter()

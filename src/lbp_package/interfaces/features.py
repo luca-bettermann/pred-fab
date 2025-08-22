@@ -47,7 +47,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.current_feature: Dict[str, float] = {}
 
         # Apply dataclass-based parameter handling
-        self.set_model_parameters(**study_params)
+        self.set_study_parameters(**study_params)
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.associated_codes.append(associated_code)
         self.features[associated_code] = np.empty([])
 
-    def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, **dims_dict) -> None:
+    def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, **dims_dict) -> np.ndarray:
         """
         Execute the feature extraction pipeline.
 
@@ -105,13 +105,16 @@ class FeatureModel(ParameterHandling, ABC):
             **dims_dict: Runtime parameters for dimensional indexing
         """
         # Set runtime parameters for current extraction
-        self.set_runtime_parameters(**dims_dict)
+        self.set_dim_parameters(**dims_dict)
 
         # Optional initialization step
         self._initialization_step(performance_code, exp_code)
 
         # Check if dimensions already processed
         self._set_processed_state(**dims_dict)
+
+        # Compute indices from dimensions
+        indices = tuple(dims_dict.values())
 
         if not self.is_processed_state:
 
@@ -123,8 +126,6 @@ class FeatureModel(ParameterHandling, ABC):
             
             # Store results in feature arrays
             for code, value in feature_dict.items():
-                indices = tuple(dims_dict.values())
-
                 assert code in self.associated_codes, f"Associated code '{code}' not initialized in feature model."
                 assert isinstance(self.features[code], np.ndarray), f"Feature storage for '{code}' is not initialized as numpy array."
                 self.features[code][indices] = value
@@ -137,6 +138,9 @@ class FeatureModel(ParameterHandling, ABC):
 
         # Optional cleanup step
         self._cleanup_step(performance_code, exp_code)
+
+        # Return extracted feature values for the given performance code and dimension
+        return self.features[performance_code][indices]
 
     def reset_for_new_experiment(self, performance_code: str, dim_sizes: List[int]) -> None:
         """

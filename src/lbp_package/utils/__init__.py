@@ -1,10 +1,10 @@
-from .parameter_handler import ParameterHandling, runtime_parameter, model_parameter, exp_parameter
-from .folder_navigator import FolderNavigator
+from .parameter_handler import ParameterHandling, dim_parameter, study_parameter, exp_parameter
+from .local_data import LocalDataInterface
 from .log_manager import LBPLogger
 
 __all__ = [
     "ParameterHandling",
-    "runtime_parameter", "model_parameter", "exp_parameter",
-    "FolderNavigator",
+    "dim_parameter", "study_parameter", "exp_parameter",
+    "LocalDataInterface",
     "LBPLogger"
 ]

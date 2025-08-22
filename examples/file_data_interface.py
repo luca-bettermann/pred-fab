@@ -1,12 +1,16 @@
 import json
 import os
-import datetime
 from typing import Dict, Any, List
-from lbp_package import DataInterface
+from lbp_package import ExternalDataInterface
 
 
-class FileDataInterface(DataInterface):
-    """Example data interface that reads from local JSON files."""
+class FileDataInterface(ExternalDataInterface):
+    """
+    Example data interface that reads source records from local JSON files.
+    
+    This implementation focuses on source record retrieval (study/experiment metadata)
+    while hierarchical data loading is handled by the base DataInterface class.
+    """
     
     def __init__(self, local_folder: str):
         super().__init__(None)
@@ -98,13 +102,10 @@ class FileDataInterface(DataInterface):
         
         return exp_data.get("Parameters", {})
     
-    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
         """
-        Retrieve the complete dataset for a study by reading all experiment files.
-        
-        Returns:
-            Dictionary containing experiment data with parameters and performances.
-            Format: {exp_code: {param_name: value, performance_code: value}}
+        Retrieve experiment codes for the study. 
+        Note: This method only returns experiment structure - actual data should be loaded via hierarchical pattern in LBPManager.
         """
         study_code = study_record["fields"]["Code"]
         study_dir = os.path.join(self.local_folder, study_code)
@@ -123,78 +124,12 @@ class FileDataInterface(DataInterface):
                 continue
                 
             exp_code = item
-            exp_data = {}
-
+            
             # Skip if experiment code is not in the restricted list and list not empty
             if restrict_to_exp_codes and exp_code not in restrict_to_exp_codes:
                 continue
-
-            try:
-                # Load experiment parameters
-                exp_params_path = os.path.join(item_path, "exp_params.json")
-                if os.path.exists(exp_params_path):
-                    with open(exp_params_path, 'r') as f:
-                        exp_params = json.load(f).get("Parameters", {})
-                        exp_data.update(exp_params)
-
-                # Load performance json file if it exists
-                results_dir = os.path.join(item_path, "results")
-                assert os.path.exists(results_dir), f"Results directory does not exist: {results_dir}. Run evaluation first"
-
-                performance_file = os.path.join(results_dir, f"{exp_code}_performance.json")
-                assert os.path.exists(performance_file), f"Performance file does not exist: {performance_file}. Run evaluation first"
-
-                with open(performance_file, 'r') as f:
-                    perf_data = json.load(f)
-                    # Extract the aggregated Value from performance metrics
-                    if "Value" in perf_data:
-                        exp_data["Value"] = perf_data["Value"]
-
-                # Look for performance result files
-                for result_file in os.listdir(results_dir):
-                    if result_file.endswith("_performance.json"):
-                            performance_code = result_file.replace(f"{exp_code}_", "").replace("_performance.json", "")
-                            
-                            with open(os.path.join(results_dir, result_file), 'r') as f:
-                                perf_data = json.load(f)
-                                # Extract the aggregated Value from performance metrics
-                                if "Value" in perf_data:
-                                    exp_data[performance_code] = perf_data["Value"]
                 
-                # Only add experiment if we have some data
-                if exp_data:
-                    dataset[exp_code] = exp_data
-                    
-            except (FileNotFoundError, json.JSONDecodeError) as e:
-                # Skip experiments with missing or corrupted data
-                print(f"Warning: Could not load data for experiment {exp_code}: {e}")
-                continue
+            # Return minimal structure - actual data loading handled by LBPManager hierarchical pattern
+            dataset[exp_code] = {"exp_code": exp_code}
         
         return dataset
-
-    def push_to_database(self, exp_record: Dict[str, Any], performance_metrics: Dict[str, Dict[str, Any]]) -> None:
-        """
-        Save performance results to local JSON files in the experiment's results directory.
-        
-        Args:
-            exp_record: Experiment record dictionary
-            value_dict: Dictionary containing performance values and metadata
-                       Expected to contain 'Value' key with the aggregated performance
-        """
-        exp_code = exp_record["fields"]["Code"]
-        parts = exp_code.split('_')
-        study_code = '_'.join(parts[:-1])
-        
-        # Create results directory
-        exp_dir = os.path.join(self.local_folder, study_code, exp_code)
-        results_dir = os.path.join(exp_dir, "results")
-        os.makedirs(results_dir, exist_ok=True)
-
-        # Create performance json file
-        perf_file = os.path.join(results_dir, f"{exp_code}_performance.json")
-        with open(perf_file, 'w') as f:
-            json.dump(performance_metrics, f, indent=2)
-    
-    def _get_timestamp(self) -> str:
-        """Get current timestamp as string."""
-        return datetime.datetime.now().isoformat()

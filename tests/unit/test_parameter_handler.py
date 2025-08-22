@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from lbp_package.utils import (
-    ParameterHandling, model_parameter, exp_parameter, runtime_parameter
+    ParameterHandling, study_parameter, exp_parameter, dim_parameter
 )
 
 
@@ -8,12 +8,12 @@ from lbp_package.utils import (
 class MockParameterClass(ParameterHandling):
     """Test class for parameter handling."""
     
-    model_param1: float = model_parameter(1.0) # type: ignore
-    model_param2: str = model_parameter("default") # type: ignore
+    model_param1: float = study_parameter(1.0) # type: ignore
+    model_param2: str = study_parameter("default") # type: ignore
     exp_param1: int = exp_parameter(10) # type: ignore
     exp_param2: bool = exp_parameter(False) # type: ignore
-    runtime_param1: str = runtime_parameter() # type: ignore
-    runtime_param2: int = runtime_parameter() # type: ignore
+    runtime_param1: str = dim_parameter() # type: ignore
+    runtime_param2: int = dim_parameter() # type: ignore
 
 
 class TestParameterHandler:
@@ -24,7 +24,7 @@ class TestParameterHandler:
         test_obj = MockParameterClass()
         
         # Set model parameters
-        test_obj.set_model_parameters(
+        test_obj.set_study_parameters(
             model_param1=2.5,
             model_param2="updated",
             exp_param1=999,  # Should be ignored
@@ -44,7 +44,7 @@ class TestParameterHandler:
         test_obj = MockParameterClass()
         
         # Set experiment parameters
-        test_obj.set_experiment_parameters(
+        test_obj.set_exp_parameters(
             exp_param1=20,
             exp_param2=True,
             model_param1=999,  # Should be ignored
@@ -64,7 +64,7 @@ class TestParameterHandler:
         test_obj = MockParameterClass()
         
         # Set runtime parameters
-        test_obj.set_runtime_parameters(
+        test_obj.set_dim_parameters(
             runtime_param1="runtime_value",
             runtime_param2=42,
             model_param1=999,  # Should be ignored
@@ -91,9 +91,9 @@ class TestParameterHandler:
             "invalid_param": "should_be_ignored"
         }
         
-        test_obj.set_model_parameters(**all_params)
-        test_obj.set_experiment_parameters(**all_params)
-        test_obj.set_runtime_parameters(**all_params)
+        test_obj.set_study_parameters(**all_params)
+        test_obj.set_exp_parameters(**all_params)
+        test_obj.set_dim_parameters(**all_params)
         
         # Verify correct parameters were set
         assert test_obj.model_param1 == 3.0

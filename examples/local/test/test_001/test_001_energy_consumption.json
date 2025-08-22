@@ -2,11 +2,11 @@
   "layers": [
     {
       "layer_id": 0,
-      "energy_consumption": 19.4
+      "energy_consumption": 20.4
     },
     {
       "layer_id": 1,
-      "energy_consumption": 20.4
+      "energy_consumption": 19.4
     }
   ]
 }

@@ -1,8 +1,8 @@
-from .interfaces import DataInterface, FeatureModel, EvaluationModel, PredictionModel
+from .interfaces import ExternalDataInterface, FeatureModel, EvaluationModel, PredictionModel
 from .orchestration import EvaluationSystem, PredictionSystem, LBPManager
 
 __all__ = [
-    "DataInterface",
+    "ExternalDataInterface",
     "FeatureModel", 
     "EvaluationModel",
     "PredictionModel",

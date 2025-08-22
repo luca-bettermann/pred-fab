@@ -57,7 +57,7 @@ class TestPathDeviationEvaluation:
         assert eval_model.dim_param_names == ['n_layers', 'n_segments']
         
         # Test dimension sizes after setting experiment parameters
-        eval_model.set_experiment_parameters(**mock_exp_params)
+        eval_model.set_exp_parameters(**mock_exp_params)
         dim_sizes = eval_model._compute_dim_sizes()
         assert dim_sizes == [2, 2]
         
@@ -90,7 +90,7 @@ class TestEnergyConsumption:
 
         # Test setting experiment parameters
         mock_exp_params.update(mock_study_params)
-        eval_model.set_experiment_parameters(**mock_exp_params)
+        eval_model.set_exp_parameters(**mock_exp_params)
         assert eval_model.max_energy == 10000.0 # Experiment parameter set
     
     def test_target_and_scaling_computation(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
@@ -107,7 +107,7 @@ class TestEnergyConsumption:
         assert eval_model._compute_target_value() == 0.0
 
         mock_exp_params.update(mock_study_params)
-        eval_model.set_experiment_parameters(**mock_exp_params)
+        eval_model.set_exp_parameters(**mock_exp_params)
         assert eval_model._declare_scaling_factor() == 10000.0
 
     def test_scalar_evaluation(self, temp_dir, test_logger, mock_study_params):

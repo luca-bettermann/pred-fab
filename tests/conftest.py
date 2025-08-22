@@ -16,7 +16,7 @@ def get_mock_study_params() -> Dict[str, Any]:
     """Return standard study parameters."""
     return {        
         "target_deviation": 0.0,
-        "max_deviation": 0.5,
+        "max_deviation": 1.0,
         "target_energy": 0.0,
         "max_energy": 10000.0,
         "power_rating": 50.0

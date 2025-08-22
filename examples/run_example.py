@@ -44,7 +44,7 @@ def main():
         root_folder=str(root_dir),
         local_folder=str(local_dir),
         log_folder=str(logs_dir),
-        data_interface=interface
+        external_data_interface=interface
     )
 
     # Add the example evaluation models to the LBPManager
@@ -76,10 +76,10 @@ def main():
     # FIX RESULTS FILE MANAGEMENT
 
     # Run predictions for all experiments
-    lbp_manager.run_training()
+    # lbp_manager.run_training()  # TODO: Fix training implementation
 
     # Calibrate the upcoming experiment
-    lbp_manager.run_calibration(exp_nr=4)
+    # lbp_manager.run_calibration(exp_nr=4)  # TODO: Fix calibration implementation
 
 
 

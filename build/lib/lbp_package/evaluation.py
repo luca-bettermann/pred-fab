@@ -54,7 +54,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.current_feature: Dict[str, float] = {}
 
         # Apply dataclass-based parameter handling
-        self.set_model_parameters(**study_params)
+        self.set_study_parameters(**study_params)
         self._validate_parameters()
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
@@ -107,7 +107,7 @@ class FeatureModel(ParameterHandling, ABC):
             **dims_dict: Runtime parameters for dimensional indexing
         """
         # Set runtime parameters for current extraction
-        self.set_runtime_parameters(**dims_dict)
+        self.set_dim_parameters(**dims_dict)
 
         # Optional initialization step
         self._initialization_step(performance_code)
@@ -248,7 +248,7 @@ class EvaluationModel(ParameterHandling, ABC):
         self.performance_metrics: Dict[str, Optional[np.floating]] = {}
 
         # Apply dataclass-based parameter handling
-        self.set_model_parameters(**study_params)
+        self.set_study_parameters(**study_params)
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
@@ -275,9 +275,9 @@ class EvaluationModel(ParameterHandling, ABC):
         self.logger.info(f"Starting evaluation for experiment {exp_nr}")
 
         # Configure models with experiment parameters
-        self.set_experiment_parameters(**exp_params)
+        self.set_exp_parameters(**exp_params)
         assert self.feature_model is not None, "Feature model must be initialized before running evaluation."
-        self.feature_model.set_experiment_parameters(**exp_params)
+        self.feature_model.set_exp_parameters(**exp_params)
 
         # Process all dimensional combinations
         total_dims = len(list(itertools.product(*self._compute_dim_ranges())))
@@ -288,7 +288,7 @@ class EvaluationModel(ParameterHandling, ABC):
             # Create runtime parameters for current dimensions
             dims_dict = dict(zip(self.dim_iterator_names, dims))
             self.logger.debug(f"Processing dimension {i+1}/{total_dims}: {dims_dict}...")
-            self.set_runtime_parameters(**dims_dict)
+            self.set_dim_parameters(**dims_dict)
 
             # Extract features
             self.feature_model.run(self.performance_code, exp_nr, visualize_flag, **dims_dict)

@@ -36,7 +36,7 @@ class TestPathDeviationFeature:
         )
         
         # Set runtime parameters
-        feature_model.set_runtime_parameters(layer_id=0, segment_id=0)
+        feature_model.set_dim_parameters(layer_id=0, segment_id=0)
         
         # Load test data
         data = feature_model._load_data(1)
@@ -91,7 +91,7 @@ class TestEnergyFeature:
         assert feature_model.layerTime == None
         assert "energy_consumption" in feature_model.associated_codes
 
-        feature_model.set_experiment_parameters(**mock_exp_params)
+        feature_model.set_exp_parameters(**mock_exp_params)
         assert feature_model.layerTime == 30.0
 
 
@@ -108,7 +108,7 @@ class TestEnergyFeature:
         )
         
         # Set experiment parameters
-        feature_model.set_experiment_parameters(layerTime=30.0)
+        feature_model.set_exp_parameters(layerTime=30.0)
         
         # Load data (None for energy calculation)
         data = feature_model._load_data(1)
@@ -134,11 +134,11 @@ class TestEnergyFeature:
         )
         
         # Test with different layer times
-        feature_model.set_experiment_parameters(layerTime=60.0)
+        feature_model.set_exp_parameters(layerTime=60.0)
         features = feature_model._compute_features(None, visualize_flag=False)
         assert features["energy_consumption"] == 50.0 * 60.0  # 3000.0
         
         # Test with different power rating
-        feature_model.set_model_parameters(power_rating=100.0)
+        feature_model.set_study_parameters(power_rating=100.0)
         features = feature_model._compute_features(None, visualize_flag=False)
         assert features["energy_consumption"] == 100.0 * 60.0  # 6000.0

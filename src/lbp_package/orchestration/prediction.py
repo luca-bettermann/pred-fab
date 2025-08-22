@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Tuple, Optional, Type, Set
 import numpy as np
 
-from ..interfaces import DataInterface, PredictionModel
-from ..utils import FolderNavigator, LBPLogger
+from ..interfaces import ExternalDataInterface, PredictionModel
+from ..utils import LocalDataInterface, LBPLogger
 
 
 class PredictionSystem:
@@ -10,32 +10,32 @@ class PredictionSystem:
     Orchestrates prediction models with consistent data preprocessing.
     
     Handles the complete prediction workflow:
-    1. Data collection from structured (DataInterface) and unstructured (FeatureModel) sources
+    1. Data collection from structured (ExternalDataInterface) and unstructured (FeatureModel) sources
     2. Global preprocessing for consistency across models
     3. Model-specific preprocessing and training
     4. Prediction with denormalization
     
     Data Responsibility Boundary:
-    - DataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
+    - ExternalDataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
     - PredictionSystem: Coordinates parameter collection and delegates to models
     - FeatureModel: Loads domain-specific unstructured data via _load_data() and computes features
     - PredictionModel: Manages FeatureModel instances and implements ML prediction logic
     """
     
     def __init__(self, 
-                 folder_navigator: FolderNavigator,
-                 data_interface: DataInterface,
+                 local_data: LocalDataInterface,
+                 external_data: ExternalDataInterface,
                  logger: LBPLogger) -> None:
         """
         Initialize prediction system.
         
         Args:
-            folder_navigator: File system navigation utility  
-            data_interface: Interface for accessing structured study configuration
+            local_data: Local file system navigation utility  
+            external_data: Interface for accessing structured study configuration
             logger: Logger instance
         """
-        self.nav = folder_navigator
-        self.interface = data_interface
+        self.local_data = local_data
+        self.external_data = external_data
         self.logger = logger
 
         self.prediction_models: List[PredictionModel] = []
@@ -85,9 +85,9 @@ class PredictionSystem:
         if prediction_model.active:
             self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
         else:
-            prediction_model.set_model_parameters(**study_params)
+            prediction_model.set_study_parameters(**study_params)
             prediction_model.active = True
-            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}' and study parameters")
+            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}' and set study parameters")
 
     def train(self, study_dataset: Dict[str, Dict[str, Any]]) -> None:
         """
@@ -225,7 +225,7 @@ class PredictionSystem:
                 for code, feature_model in model.feature_models.items():
                     # Run feature model for each experiment
                     for exp_code in dataset.keys():
-                        feature_model.run(code, exp_code, self.nav.get_experiment_folder(exp_code), visualize_flag)
+                        feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag)
                         # Add computed feature to experiment data
                         if code in feature_model.features:
                             dataset[exp_code][code] = feature_model.features[code]
