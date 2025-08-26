@@ -1,6 +1,7 @@
 import yaml
-from importlib import import_module
-from typing import Any, Dict, List, Type, Tuple, Optional, Callable
+from typing import Any, Dict, List, Type, Tuple, Optional, Callable, Set
+import itertools
+import numpy as np
 
 from .evaluation import EvaluationSystem
 from .prediction import PredictionSystem
@@ -8,9 +9,6 @@ from ..interfaces import ExternalDataInterface, EvaluationModel, PredictionModel
 from ..utils import LocalDataInterface, LBPLogger
 
 # TODO:
-
-# - Add Parameters and Variables to the study and exp records
-# - Make the study and exp records part of the hierarchical loading / saving
 # - Adapt the code accordingly
 
 class LBPManager:
@@ -47,11 +45,11 @@ class LBPManager:
         self.local_data = LocalDataInterface(root_folder, local_folder, server_folder)
         
         # Study and experiment state
-        self.study_code = None
-        self.study_records: Dict[str, Dict[str, Any]] = {}  # study_code → study_record
-        self.exp_records: Dict[str, Dict[str, Any]] = {}  # exp_code → exp_record
-        self.study_params: Dict = {}
-        
+        self.study_records: Dict[str, Dict[str, Any]] = {}
+        self.exp_records: Dict[str, Dict[str, Any]] = {}
+        self._required_study_record_fields = ['id', 'Code', 'Parameters', 'Performance']
+        self._required_exp_record_fields = ['id', 'Code', 'Parameters']
+
         # Configuration storage
         self.config: Dict[str, Any] = {}
         self.evaluation_config: Dict[str, str] = {}
@@ -61,13 +59,10 @@ class LBPManager:
         
         # Initialize system defaults (loaded from config)
         self.defaults = {}
-        
-        # Performance mapping
-        self.performance_records: List[Dict[str, Any]] = []
 
         # Initialize system components
-        self.eval_system = EvaluationSystem(self.local_data, self.external_data, self.logger)
-        self.pred_system = PredictionSystem(self.local_data, self.external_data, self.logger)
+        self.eval_system = EvaluationSystem(self.logger)
+        self.pred_system = PredictionSystem(self.local_data, self.logger)
 
         # Load configuration file
         self._load_config()
@@ -94,7 +89,7 @@ class LBPManager:
             **kwargs: Additional parameters for model initialization
         """
         round_digits = self._get_default_attribute('round_digits', kwargs.get('round_digits', None))
-        self.pred_system.add_prediction_model(performance_codes, prediction_class, self.study_params, round_digits, **kwargs)
+        self.pred_system.add_prediction_model(performance_codes, prediction_class, round_digits, **kwargs)
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, eval_flag: Optional[bool] = None, pred_flag: Optional[bool] = None) -> None:
         """
@@ -112,41 +107,43 @@ class LBPManager:
         pred_flag = self._get_default_attribute('pred_flag', pred_flag)
 
         # Configure study context
-        self.study_code = study_code
         self.local_data.set_study_code(study_code)
         self.logger.info(f"Local data handler initialized for study '{study_code}'")
         
-        # Load study data from external source
-        self.study_record = self.external_data.get_study_record(study_code)
+        # Load study data
+        self._hierarchical_load(
+            [study_code],
+            self.study_records,
+            self.local_data.load_study_records,
+            self.external_data.pull_study_records
+            )
+        
+        # Get study record
+        if study_code in self.study_records:
+            study_record = self.study_records[study_code]
+        else:
+            raise ValueError(f"Could not load study record for {study_code}")
+
+        if not all(field in study_record for field in self._required_study_record_fields):
+            missing_fields = [field for field in self._required_study_record_fields if field not in study_record]
+            raise ValueError(f"Study record for '{study_code}' is missing required fields: {missing_fields}")
+        self.study_records[study_code] = study_record
         self.logger.info(f"Study record retrieved from external data source")
         
         # Validate study parameters
-        study_params = self.external_data.get_study_parameters(self.study_record)
+        study_params = study_record['Parameters']
         if not study_params or not isinstance(study_params, dict):
             raise ValueError(f"Study parameters for study code '{study_code}' empty or not a dict. Please check the database configuration.")
-        
-        # Load performance configuration
-        performance_records = self.external_data.get_performance_records(self.study_record)
-        assert performance_records, f"Performance records for study code '{study_code}' empty. Please check the database configuration."
-        assert isinstance(performance_records, list), f"Performance records for study code '{study_code}' not a list. Please check the database configuration."
 
         # Activate the evaluation and prediction models based on performance records
-        for performance_record in performance_records:
-            # Validate whether the performance records are dicts and contain 'Code' key, then retrieve the code
-            assert isinstance(performance_record, dict), f"Performance record for study code '{study_code}' is not a dict: {performance_record}"
-            assert "Code" in performance_record, f"Performance record missing 'Code' field: {performance_record}"
-            code = str(performance_record.get("Code"))
-
+        for performance_code in study_record['Performance']:
             # Activate evaluation model
             if eval_flag:
-                self.eval_system.activate_evaluation_model(code, study_params)
+                self.eval_system.activate_evaluation_model(performance_code, study_params)
 
             # Activate prediction model if it matches the output codes
             if pred_flag:
-                self.pred_system.activate_prediction_model(code, study_params)
-
-            # Add performance record to the list
-            self.performance_records.append(performance_record)
+                self.pred_system.activate_prediction_model(performance_code, study_params)
 
         # Initialize feature model instances
         self._add_feature_model_instances(study_params)
@@ -156,7 +153,7 @@ class LBPManager:
         self.logger.console_summary(summary)
         self.logger.console_success(f"Successfully initialized evaluation system of study '{study_code}'.")
 
-    def run_evaluation(self, exp_nrs: Optional[List[int]] = None, exp_nr: Optional[int] = None, visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None, recompute: bool = False) -> None:
+    def run_evaluation(self, study_code: str, exp_nrs: Optional[List[int]] = None, exp_nr: Optional[int] = None, visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None, recompute: bool = False) -> None:
         """
         Execute evaluation for one or multiple experiments.
         
@@ -167,9 +164,6 @@ class LBPManager:
             debug_flag: Whether to run in debug mode (uses system default if None)
             recompute: If True, skip loading existing data and recompute everything
         """
-        if not self.study_record:
-            raise RuntimeError("No study has been initialized. Please call initialize_study() first.")
-
         # Handle input compatibility
         if exp_nr is not None and exp_nrs is not None:
             raise ValueError("Provide either exp_nr OR exp_nrs, not both")
@@ -181,7 +175,8 @@ class LBPManager:
         # Use system defaults if not explicitly provided
         debug_flag = self._get_default_attribute('debug_flag', debug_flag)
         visualize_flag = self._get_default_attribute('visualize_flag', visualize_flag)
-        assert debug_flag is not None and visualize_flag is not None, "flags must be set to True or False."
+        if debug_flag is None or visualize_flag is None:
+            raise ValueError("Debug and visualize flags must be set to True or False.")
 
         # Configure debug mode if needed
         if debug_flag and not self.logger.debug_mode:
@@ -198,81 +193,88 @@ class LBPManager:
         if not self.local_data.study_code:
             raise ValueError("Study code must be set before running evaluation")
         
-        self.load_source_records(self.local_data.study_code, exp_codes, recompute=recompute)
-        self.save_source_records(self.local_data.study_code, exp_codes)
+        # Load source records and experiment data from hierarchical sources
+        self._load_source_records(self.local_data.study_code, exp_codes)
+        exp_codes_to_run = list(self._load_experiment_data(exp_codes)) if not recompute else exp_codes
 
-        # Load experiment data from hierarchical sources (skip if recompute=True)
-        if not recompute:
-            self.load_experiment_data(exp_codes)
-
-        # Run each experiment individually
-        for exp_nr, exp_code in zip(exp_nrs, exp_codes):
+        # Run each missing experiment individually
+        for exp_code in exp_codes_to_run:
             if len(exp_codes) > 1:
                 self.logger.console_info(f"\n------- Processing: '{exp_code}' -------")
             
-            # Get experiment record from memory
-            if exp_code not in self.exp_records:
-                raise RuntimeError(f"Experiment record for {exp_code} not loaded")
-            self.exp_record = self.exp_records[exp_code]
-            
             # Merge study and experiment parameters
-            exp_vars = self.external_data.get_exp_variables(self.exp_record)
-            exp_vars.update(self.study_params)
+            study_record = self.study_records[study_code]
+            exp_params = self.exp_records[exp_code]['Parameters']
+            study_params = study_record['Parameters']
+            exp_params.update(study_params)
 
             # Execute evaluation pipeline
             self.eval_system.run(
-                study_record=self.study_record,
-                exp_code=exp_code, 
-                exp_record=self.exp_record, 
+                exp_code=exp_code,
+                exp_folder=self.local_data.get_experiment_folder(exp_code),
                 visualize_flag=visualize_flag,
                 debug_flag=debug_flag,
-                **exp_vars
+                exp_params=exp_params
             )
 
-        # Save experiment data to hierarchical sources
-        self.save_experiment_data(exp_codes)
-        
-        # Display evaluation summary
-        summary = self._evaluation_step_summary()
-        self.logger.console_summary(summary)
+            # Display evaluation summary
+            summary = self.eval_system.evaluation_step_summary(exp_code)
+            self.logger.console_summary(summary)
+
+        # Save source and experiment data
+        self._save_source_records(self.local_data.study_code, exp_codes_to_run)
+        self._save_experiment_data(exp_codes_to_run)
+
+        # Update system-wide performance metrics
+        if not debug_flag:
+            self.logger.info("Updating system performance...")
+            self.external_data.update_system_performance(study_record)
+        else:
+            self.logger.info("Debug mode: Skipping system performance update")
         
         if len(exp_codes) == 1:
-            self.logger.console_success(f"Successfully evaluated the performance attributes of study '{self.study_code}'.")
+            self.logger.console_success(f"Successfully evaluated the performance attributes of study '{study_code}'.")
         else:
             self.logger.console_success(f"Successfully completed batch evaluation for {len(exp_codes)} experiments.")
 
-    def run_training(self, restrict_to_exp_codes: List[str] = []) -> None:
+    def run_training(self, study_code: str, restrict_to_exp_codes: List[str] = []) -> None:
         """
         Run training for all prediction models.
         
         This method orchestrates the training process for all active prediction models
         using the evaluation history and feature models.
         """
-        if not self.study_record or not self.study_code:
-            raise RuntimeError("No study has been initialized. Please call initialize_study() first.")
+        if study_code not in self.study_records:
+            raise RuntimeError(f"Study {study_code} has not been initialized.")
 
-        self.logger.console_info(f"\n------- Run Training for Study: '{self.study_code}' -------")
+        self.logger.console_info(f"\n------- Run Training for Study: '{study_code}' -------")
 
         # Ensure source records are loaded via hierarchical pattern
-        self.load_source_records(self.study_code, restrict_to_exp_codes)
+        self._load_source_records(study_code, restrict_to_exp_codes)
 
         # Get experiment codes from external data interface
-        study_dataset = self.external_data.get_study_dataset(self.study_record, restrict_to_exp_codes)
+        study_record = self.study_records[study_code]
+        study_dataset = self.external_data.pull_study_dataset(study_record, restrict_to_exp_codes)
         exp_codes = list(study_dataset.keys())
         
         if not exp_codes:
             raise ValueError("No experiments found for training")
         
         # Load complete experiment data using hierarchical pattern
-        self.load_experiment_data(exp_codes)
+        self._load_experiment_data(exp_codes)
         
         # Build complete dataset with parameters and performance values
         complete_dataset = {}
         for exp_code in exp_codes:
-            if exp_code in self.eval_system.exp_params and exp_code in self.eval_system.aggr_metrics:
+            if exp_code in self.exp_records and exp_code in self.eval_system.aggr_metrics:
                 # Combine parameters and performance metrics
                 exp_data = {}
-                exp_data.update(self.eval_system.exp_params[exp_code])
+                # Get parameters from the experiment record
+                exp_record = self.exp_records[exp_code]
+                if all(field not in exp_record for field in self._required_exp_record_fields):
+                    missing_fields = [field for field in self._required_exp_record_fields if field not in exp_record]
+                    raise ValueError(f"Missing required fields in experiment record for {exp_code}: {missing_fields}")
+                exp_data.update(exp_record['Parameters'])
                 exp_data.update(self.eval_system.aggr_metrics[exp_code])
                 complete_dataset[exp_code] = exp_data
 
@@ -280,14 +282,14 @@ class LBPManager:
         self.pred_system.train(complete_dataset)
 
         # Display training summary
-        self.logger.console_success(f"Successfully trained prediction models for study '{self.study_code}'.")
+        self.logger.console_success(f"Successfully trained prediction models for study '{study_code}'.")
 
     def run_calibration(self, exp_nr: int, visualize_flag: bool = False) -> None:
 
         # Load experiment parameters
         exp_code = self.local_data.get_experiment_code(exp_nr)
-        exp_record = self.external_data.get_exp_record(exp_code)
-        exp_params = self.external_data.get_exp_variables(exp_record)
+        exp_record = self.external_data.pull_exp_record(exp_code)
+        exp_params = exp_record['Parameters']
 
         # Predict -> this will not be used like this
         predictions = self.pred_system.predict(exp_params, exp_code, visualize_flag)
@@ -295,84 +297,8 @@ class LBPManager:
         # Add code that calibrates upcoming experiment
         ...
 
-    def load_experiment_data(self, exp_codes: List[str]) -> None:
-        """
-        Load experiment data using hierarchical process (memory → local → external).
-        
-        Args:
-            exp_codes: List of experiment codes to load data for
-        """
-        if not exp_codes:
-            return
-            
-        self.logger.info(f"Loading experiment data for {len(exp_codes)} experiments: {exp_codes}")
-        
-        # Load experiment parameters
-        missing = self._hierarchical_load(
-            exp_codes,
-            self.eval_system.exp_params,
-            self.local_data.load_exp_params,
-            self.external_data.load_exp_params
-        )
-        
-        # Load aggregated metrics
-        missing = self._hierarchical_load(
-            exp_codes,
-            self.eval_system.aggr_metrics,
-            self.local_data.load_aggr_metrics,
-            self.external_data.load_aggr_metrics
-        )
-        
-        # Load metrics arrays
-        missing = self._hierarchical_load(
-            exp_codes,
-            self.eval_system.metrics_arrays,
-            self.local_data.load_metrics_arrays,
-            self.external_data.load_metrics_arrays
-        )
-        
-        if missing:
-            self.logger.info(f"No existing data found for {len(missing)} experiments: {missing} - will generate during evaluation")
-
-    def save_experiment_data(self, exp_codes: List[str]) -> None:
-        """
-        Save experiment data using hierarchical process (memory → local → external).
-        
-        Args:
-            exp_codes: List of experiment codes to save data for
-        """
-        if not exp_codes:
-            return
-            
-        self.logger.info(f"Saving experiment data for {len(exp_codes)} experiments: {exp_codes}")
-        
-        # Save experiment parameters
-        self._hierarchical_save(
-            exp_codes,
-            self.eval_system.exp_params,
-            self.local_data.save_exp_params,
-            self.external_data.save_exp_params
-        )
-        
-        # Save aggregated metrics
-        self._hierarchical_save(
-            exp_codes,
-            self.eval_system.aggr_metrics,
-            self.local_data.save_aggr_metrics,
-            self.external_data.save_aggr_metrics
-        )
-        
-        # Save metrics arrays
-        self._hierarchical_save(
-            exp_codes,
-            self.eval_system.metrics_arrays,
-            self.local_data.save_metrics_arrays,
-            self.external_data.save_metrics_arrays
-        )
-        
-        self.logger.info(f"Completed saving experiment data for {len(exp_codes)} experiments")
-
-    def load_source_records(self, study_code: str, exp_codes: List[str], recompute: bool = False) -> None:
+    # === PRIVATE/INTERNAL METHODS (Internal use only) ===
+    def _load_source_records(self, study_code: str, exp_codes: List[str]) -> None:
         """
         Load source records (study/experiment metadata) using hierarchical process.
         
@@ -384,34 +310,27 @@ class LBPManager:
         self.logger.info(f"Loading source records for study {study_code} and {len(exp_codes)} experiments")
         
         # Load study record
-        if recompute or study_code not in self.study_records:
-            missing = self._hierarchical_load(
-                [study_code],
-                self.study_records,
-                self.local_data.load_study_records,
-                self.external_data.load_study_records
-            )
-            if missing:
-                raise ValueError(f"Could not load study record for {study_code}")
+        missing = self._hierarchical_load(
+            [study_code],
+            self.study_records,
+            self.local_data.load_study_records,
+            self.external_data.pull_study_records
+        )
+        if missing:
+            raise ValueError(f"Could not load study record for {study_code}")
         
-        # Load experiment records  
-        if recompute:
-            # Clear existing records if recomputing
-            for exp_code in exp_codes:
-                self.exp_records.pop(exp_code, None)
-                
+        # Load experiment records
         missing = self._hierarchical_load(
             exp_codes,
             self.exp_records,
             self.local_data.load_exp_records,
-            self.external_data.load_exp_records
+            self.external_data.pull_exp_records
         )
-        
         if missing:
             raise ValueError(f"Could not load experiment records for: {missing}")
             
 
-    def save_source_records(self, study_code: str, exp_codes: List[str]) -> None:
+    def _save_source_records(self, study_code: str, exp_codes: List[str]) -> None:
         """
         Save source records (study/experiment metadata) using hierarchical process.
         
@@ -426,7 +345,7 @@ class LBPManager:
             [study_code],
             self.study_records,
             self.local_data.save_study_records,
-            self.external_data.save_study_records
+            self.external_data.push_study_records
         )
         
         # Save experiment records
@@ -434,10 +353,84 @@ class LBPManager:
             exp_codes,
             self.exp_records,
             self.local_data.save_exp_records,
-            self.external_data.save_exp_records
+            self.external_data.push_exp_records
         )
 
-    # === PRIVATE/INTERNAL METHODS (Internal use only) ===
+    def _load_experiment_data(self, exp_codes: List[str]) -> Set[str]:
+        """
+        Load experiment data using hierarchical process (memory → local → external).
+        
+        Args:
+            exp_codes: List of experiment codes to load data for
+        """
+        self.logger.info(f"Loading experiment data for {len(exp_codes)} experiments: {exp_codes}")
+                
+        # Load aggregated metrics
+        missing_aggr_metrics = self._hierarchical_load(
+            exp_codes,
+            self.eval_system.aggr_metrics,
+            self.local_data.load_aggr_metrics,
+            self.external_data.pull_aggr_metrics
+        )
+        
+        if missing_aggr_metrics:
+            self.logger.info(f"No aggr metrics found for {len(missing_aggr_metrics)} experiments: {missing_aggr_metrics} - will generate during evaluation.")
+
+        # Load metrics arrays
+        missing_metric_arrays = self._hierarchical_load(
+            exp_codes,
+            self.eval_system.metrics_arrays,
+            self.local_data.load_metrics_arrays,
+            self.external_data.pull_metrics_arrays
+        )
+
+        if missing_metric_arrays:
+            self.logger.info(f"No metrics arrays found for {len(missing_metric_arrays)} experiments: {missing_metric_arrays} - will generate during evaluation.")
+
+        return set(missing_aggr_metrics).union(set(missing_metric_arrays))
+
+    def _save_experiment_data(self, exp_codes: List[str]) -> None:
+        """
+        Save experiment data using hierarchical process (memory → local → external).
+        
+        Args:
+            exp_codes: List of experiment codes to save data for
+        """
+        if not exp_codes:
+            return
+            
+        self.logger.info(f"Saving experiment data for {len(exp_codes)} experiments: {exp_codes}")
+                
+        # Save aggregated metrics
+        self._hierarchical_save(
+            exp_codes,
+            self.eval_system.aggr_metrics,
+            self.local_data.save_aggr_metrics,
+            self.external_data.push_aggr_metrics
+        )
+
+        # Compute column names of metrics arrays
+        metric_names = {}
+        dim_combinations = {}
+        dim_iterators = {}
+        for perf_code, eval_model in self.eval_system.evaluation_models.items():
+            metric_names[perf_code] = eval_model.performance_array_dims
+            dim_combinations[perf_code] = eval_model.dim_combinations
+            dim_iterators[perf_code] = eval_model.dim_iterator_names
+
+        # Save metrics arrays
+        self._hierarchical_save(
+            exp_codes,
+            self.eval_system.metrics_arrays,
+            self.local_data.save_metrics_arrays,
+            self.external_data.push_metrics_arrays,
+            metric_names=metric_names,
+            dim_combinations=dim_combinations,
+            dim_iterators=dim_iterators,
+        )
+        
+        self.logger.info(f"Completed saving experiment data for {len(exp_codes)} experiments")
+
     def _hierarchical_load(self, 
                            target_codes: List[str],
                            memory_storage: Dict[str, Any],
@@ -479,7 +472,8 @@ class LBPManager:
                            memory_storage: Dict[str, Any],
                            local_saver: Callable[[List[str], Dict[str, Any]], None],
                            external_saver: Callable[[List[str], Dict[str, Any]], None],
-                           debug: bool = True) -> None:
+                           debug: bool = True,
+                           **kwargs) -> None:
         """
         Universal hierarchical data saving: Memory → Local Files → External Source
         
@@ -498,11 +492,11 @@ class LBPManager:
         data_to_save = {code: memory_storage[code] for code in codes_to_save}
         
         # 3. Save to local files
-        local_saver(codes_to_save, data_to_save)
+        local_saver(codes_to_save, data_to_save, **kwargs)
 
         # 4. Save to external source (skip if in debug mode)
         if not debug:
-            external_saver(codes_to_save, data_to_save)
+            external_saver(codes_to_save, data_to_save, **kwargs)
 
     def _load_config(self) -> None:
         """
@@ -552,9 +546,11 @@ class LBPManager:
             The value of the default attribute
         """
         if value is None:
-            assert key in self.defaults, f"Default attribute '{key}' not found in system configuration."
+            if key not in self.defaults:
+                raise ValueError(f"Default attribute '{key}' not found in system configuration.")
             value = self.defaults[key]
-            assert value is not None, f"Default attribute '{key}' is None. Please check the configuration."
+            if value is None:
+                raise ValueError(f"Default attribute '{key}' is None. Please check the configuration.")
             self.logger.debug(f"Retrieved default attribute '{key}': {value}")
             return value
         else:
@@ -623,32 +619,16 @@ class LBPManager:
         val_eval_models = {code: eval_model for code, eval_model in self.eval_system.evaluation_models.items() if eval_model.active}
         val_pred_models = {code: pred_model for code, pred_model in self.pred_system.pred_model_by_code.items() if pred_model.active}
 
-        summary = f"Loaded {len(self.performance_records)} performance attributes, {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models.values()]))} feature models.\n\n"
+        summary = f"Activated {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models.values()]))} feature models.\n\n"
         summary += f"\033[1m{'Performance Code':<20} {'Feature Model':<20} {'Evaluation Model':<20} {'Prediction Model':<20}\033[0m"
-        
-        for performance_record in self.performance_records:
-            code = performance_record.get("Code")
-            assert isinstance(code, str), f"Performance record code must be a string: {performance_record}"
-                
+
+        for code in self.eval_system.evaluation_models:
             eval_model = val_eval_models.get(code, None)
             feature_model = eval_model.feature_model if eval_model else None
             pred_model = val_pred_models.get(code, None)
             summary += f"\n{code:<20} {type(feature_model).__name__:<20} {type(eval_model).__name__:<20} {type(pred_model).__name__:<20}"
         return summary + "\n"
 
-    def _evaluation_step_summary(self) -> str:
-        """Generate summary of evaluation results."""
-        assert self.eval_system is not None
 
-        active_eval_models = {code: model for code, model in self.eval_system.evaluation_models.items() if model.active}
-        
-        summary = f"Evaluated {len(active_eval_models)} performance attributes, using {len(active_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in active_eval_models.values()]))} feature models.\n\n"
-        summary += f"\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Dimensions':<30} {'Performance Value':<20}\033[0m"
-
-        for code, eval_model in active_eval_models.items():
-            dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
-            dimensions = "(" + dimensions + ")"
-            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {self.eval_system.aggr_metrics[code].get('Performance_Avg', None):<20}"
-        return summary + "\n"
 
 

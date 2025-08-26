@@ -5,17 +5,12 @@ from examples.energy_consumption import EnergyConsumption
 from examples.path_deviation import PathEvaluation
 from examples.predict_all import PredictExample
 from examples.file_data_interface import FileDataInterface
-from tests.conftest import create_study_json_files, create_exp_json_files
+from tests.conftest import create_study_json_file, create_exp_json_files
 
 # TODO NOW
-# - Incorporate "Value Sign" field from airtable in code
-# - Remove self.nav from interfaces. Only orchestration should handle navigation.
+# - ...
 
 # TODO FUTURE
-# - Features are immutable, whereas performance can change based on targets.
-# - Hence, prediction models should predict features, not performance.
-# - Therefore, features should be stored in the database, 
-#   if we want to train prediction models based on that database.
 # - Evaluation only becomes relevant once we want to optimize.
 #   In the most elegant structure, evaluation should happen in the optimizer stage.
 # - However, that part of the structure is not crucial. Important is,
@@ -60,7 +55,7 @@ def main():
     local_dir.mkdir(exist_ok=True)
     
     # Generate data for 3 experiments of "test" study
-    create_study_json_files(str(local_dir), study_code=study_code)
+    create_study_json_file(str(local_dir), study_code=study_code)
     create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=1, layer_time=30.0, layer_height=0.25, n_layers=2, n_segments=2)
     create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=2, layer_time=40.0, layer_height=0.20, n_layers=2, n_segments=3)
     create_exp_json_files(str(local_dir), study_code=study_code, exp_nr=3, layer_time=50.0, layer_height=0.15, n_layers=3, n_segments=2)
@@ -69,14 +64,11 @@ def main():
     lbp_manager.initialize_for_study(study_code)
 
     # Run evaluations for each experiment
-    lbp_manager.run_evaluation(exp_nr=1)
-    lbp_manager.run_evaluation(exp_nr=2)
-    lbp_manager.run_evaluation(exp_nr=3)
-    # ERROR:
-    # FIX RESULTS FILE MANAGEMENT
+    lbp_manager.run_evaluation(study_code, exp_nr=1, recompute=True)
+    lbp_manager.run_evaluation(study_code, exp_nrs=[2, 3], recompute=True)
 
     # Run predictions for all experiments
-    # lbp_manager.run_training()  # TODO: Fix training implementation
+    lbp_manager.run_training(study_code)
 
     # Calibrate the upcoming experiment
     # lbp_manager.run_calibration(exp_nr=4)  # TODO: Fix calibration implementation

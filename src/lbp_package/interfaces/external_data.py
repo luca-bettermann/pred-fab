@@ -44,7 +44,7 @@ class ExternalDataInterface(ABC):
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def get_study_record(self, study_code: str) -> Dict[str, Any]:
+    def pull_study_record(self, study_code: str) -> Dict[str, Any]:
         """
         Retrieve study metadata by study code.
         
@@ -52,12 +52,12 @@ class ExternalDataInterface(ABC):
             study_code: Unique study identifier
 
         Returns:
-            Study record with "id", "Code" and "Parameters" keys
+            Study record with "Code" and "Parameters" keys
         """
         ...
 
     @abstractmethod
-    def get_exp_record(self, exp_code: str) -> Dict[str, Any]:
+    def pull_exp_record(self, exp_code: str) -> Dict[str, Any]:
         """
         Retrieve experiment metadata by experiment code.
         
@@ -65,25 +65,12 @@ class ExternalDataInterface(ABC):
             exp_code: Unique experiment identifier
 
         Returns:
-            Experiment record with "id", "Code" and "Parameters" keys
+            Experiment record with "Code" and "Parameters" keys
         """
         ...
 
     @abstractmethod
-    def get_study_parameters(self, study_record: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract study parameters for @study_parameter fields.
-        
-        Args:
-            study_record: Study record from get_study_record()
-
-        Returns:
-            Dictionary of study parameters {param_name: value}
-        """
-        ...
-
-    @abstractmethod
-    def get_performance_records(self, study_record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def pull_performance_records(self, study_record: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Get performance metric configurations for a study.
         
@@ -96,20 +83,7 @@ class ExternalDataInterface(ABC):
         ...
 
     @abstractmethod
-    def get_exp_variables(self, exp_record: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract experiment parameters for @exp_parameter fields.
-        
-        Args:
-            exp_record: Experiment record from get_exp_record()
-
-        Returns:
-            Dictionary of experiment variables {param_name: value}
-        """
-        ...
-
-    @abstractmethod
-    def get_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
+    def pull_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
         """
         Retrieve complete structured dataset for a study.
         
@@ -122,8 +96,8 @@ class ExternalDataInterface(ABC):
         """
         ...
 
-    # === OPTIONAL METHODS ===
-    def load_aggr_metrics(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    # === OPTIONAL METHODS ===        
+    def pull_aggr_metrics(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
         Load aggregated metrics from external source for multiple experiments.
         
@@ -136,7 +110,7 @@ class ExternalDataInterface(ABC):
         # Default implementation returns all as missing
         return exp_codes, {}
 
-    def load_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, np.ndarray]]]:
+    def pull_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, np.ndarray]]]:
         """
         Load metrics arrays from external source for multiple experiments.
         
@@ -149,20 +123,28 @@ class ExternalDataInterface(ABC):
         # Default implementation returns all as missing
         return exp_codes, {}
 
-    def load_exp_params(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """
-        Load experiment parameters from external source for multiple experiments.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            
-        Returns:
-            Tuple of (missing_exp_codes, exp_params_dict)
-        """
-        # Default implementation returns all as missing
-        return exp_codes, {}
+    def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save study records to external source."""
+        # Default implementation - override in subclasses
+        pass
 
-    def load_study_records(self, study_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save experiment records to external source."""
+        # Default implementation - override in subclasses
+        pass
+
+    def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save aggregated metrics to external source."""
+        # Default implementation - override in subclasses
+        pass
+
+    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]], **kwargs) -> None:
+        """Save metrics arrays to external source."""
+        # Default implementation - override in subclasses
+        pass
+
+    # === PUBLIC API METHODS (Called externally) ===
+    def pull_study_records(self, study_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
         Load study records from external source.
         
@@ -177,13 +159,13 @@ class ExternalDataInterface(ABC):
         
         for study_code in study_codes:
             try:
-                study_records_dict[study_code] = self.get_study_record(study_code)
+                study_records_dict[study_code] = self.pull_study_record(study_code)
             except:
                 missing_study_codes.append(study_code)
                 
         return missing_study_codes, study_records_dict
 
-    def load_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def pull_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
         Load experiment records from external source.
         
@@ -198,49 +180,11 @@ class ExternalDataInterface(ABC):
         
         for exp_code in exp_codes:
             try:
-                exp_records_dict[exp_code] = self.get_exp_record(exp_code)
+                exp_records_dict[exp_code] = self.pull_exp_record(exp_code)
             except:
                 missing_exp_codes.append(exp_code)
                 
         return missing_exp_codes, exp_records_dict
-
-    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save aggregated metrics to external source."""
-        # Default implementation - override in subclasses
-        pass
-
-    def save_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """Save metrics arrays to external source."""
-        # Default implementation - override in subclasses
-        pass
-
-    def save_exp_params(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save experiment parameters to external source."""
-        # Default implementation - override in subclasses
-        pass
-
-    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save study records to external source."""
-        # Default implementation - override in subclasses
-        pass
-
-    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save experiment records to external source."""
-        # Default implementation - override in subclasses
-        pass
-
-    def load_experiments_from_database(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]], Dict[str, Dict[str, np.ndarray]], Dict[str, Dict[str, Any]]]:
-        """
-        Load experiment data from database for multiple experiments.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            
-        Returns:
-            Tuple of (missing_exp_codes, aggr_metrics_dict, metrics_arrays_dict, exp_params_dict)
-        """
-        # Default implementation returns all as missing
-        return exp_codes, {}, {}, {}
 
     # === OPTIONAL METHODS ===
     def update_system_performance(self, study_record: Dict[str, Any]) -> None:

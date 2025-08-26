@@ -46,7 +46,8 @@ class LocalDataInterface:
         Args:
             study_code: Unique identifier for the study
         """
-        assert isinstance(study_code, str) and study_code, "Study code must be a non-empty string"
+        if not isinstance(study_code, str) or not study_code:
+            raise ValueError("Study code must be a non-empty string")
         self.study_code = study_code
         self.study_folder = os.path.join(self.local_folder, self.study_code)
 
@@ -60,7 +61,8 @@ class LocalDataInterface:
         Returns:
             Formatted experiment code (e.g., "STUDY_001")
         """
-        assert isinstance(exp_nr, int) and exp_nr >= 0, "Experiment number must be a non-negative integer"
+        if not isinstance(exp_nr, int) or exp_nr < 0:
+            raise ValueError("Experiment number must be a non-negative integer")
         return f"{self.study_code}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
@@ -73,7 +75,8 @@ class LocalDataInterface:
         Returns:
             Full path to experiment folder
         """
-        assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
+        if not isinstance(exp_code, str) or not exp_code:
+            raise ValueError("Experiment code must be a non-empty string")
         if self.study_folder is None:
             raise ValueError("Study code must be set before getting experiment folder")
         return os.path.join(self.study_folder, exp_code)
@@ -199,6 +202,24 @@ class LocalDataInterface:
         return is_connected
 
     # === DATA LOADING METHODS ===
+    def load_study_records(self, study_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load study records from local files."""
+        return self._load_files_generic(
+            codes=study_codes,
+            subdirs=["{code}"],
+            filename="study_record",
+            require_study_code=False
+        )
+
+    def load_exp_records(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load experiment records from local files."""
+        return self._load_files_generic(
+            codes=exp_codes,
+            subdirs=["{code}"],
+            filename="exp_record",
+            require_study_code=True
+        )
+        
     def load_aggr_metrics(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Load aggregated metrics from local files for multiple experiments."""
         return self._load_files_generic(
@@ -247,34 +268,97 @@ class LocalDataInterface:
                 
         return missing_exp_codes, metrics_arrays_dict
 
-    def load_exp_params(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load experiment parameters from local files for multiple experiments."""
-        return self._load_files_generic(
+    # === DATA SAVING METHODS ===
+    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save aggregated metrics to local files (single summary file per experiment)."""
+        self._save_files_generic(
             codes=exp_codes,
-            subdirs=["{code}"],
-            filename="exp_params",
-            require_study_code=True,
-            extract_key="Parameters"
+            data=data,
+            subdirs=["{code}", "results"],
+            filename="{code}_performance",
+            wrap_in_parameters=False
         )
 
-    def load_study_records(self, study_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load study records from local files."""
-        return self._load_files_generic(
+    def save_metrics_arrays(
+            self, 
+            exp_codes: List[str], 
+            metrics_array: Dict[str, Dict[str, np.ndarray]],
+            **kwargs
+            ) -> None:
+        """Save metrics arrays to local CSV files with custom column names.
+        
+        Args:
+            exp_codes: List of experiment codes to save
+            metrics_array: Nested dictionary {exp_code: {perf_code: np.ndarray}}
+            **kwargs: Additional parameters including:
+                - metric_names: Dict mapping performance codes to column names
+                - dim_combinations: Dict with dimensional combination data
+                - dim_iterators: Dict with dimensional iterator names
+        """
+        if not self.study_code:
+            raise ValueError("Study code must be set before saving")
+        if not all(key in kwargs for key in ['metric_names', 'dim_combinations', 'dim_iterators']):
+            raise ValueError("Missing required keyword arguments")
+
+        # Extract parameters from kwargs
+        metric_names = kwargs.get('metric_names', {})
+        dim_combinations = kwargs.get('dim_combinations', {})
+        dim_iterators = kwargs.get('dim_iterators', {})
+                    
+        for exp_code in exp_codes:
+            if exp_code in metrics_array:
+                metric_array = metrics_array[exp_code]
+
+                if not (metric_array.keys() == metric_names.keys() == dim_combinations.keys() == dim_iterators.keys()):
+                    raise ValueError(f"Incoherent performance codes in dictionaries for experiment {exp_code}")
+
+                # Build directory path
+                results_dir = os.path.join(self.local_folder, self.study_code, exp_code, "results")
+                os.makedirs(results_dir, exist_ok=True)
+                
+                # Handle nested data (iterate over performance codes)
+                for perf_code, array in metric_array.items():
+                    file_name = f"{exp_code}_{perf_code}.csv"
+                    file_path = os.path.join(results_dir, file_name)
+
+                    # unpack
+                    names = metric_names[perf_code]
+                    dim_comb = dim_combinations[perf_code][exp_code]
+                    dim_iter = dim_iterators[perf_code]
+
+                    # build matrix
+                    values = array.reshape(-1, len(names))
+                    matrix = np.empty((len(values), len(dim_iter + names)))
+                    matrix[:, len(dim_iter):] = values
+                    if dim_comb.size:
+                        matrix[:, :(len(dim_iter))] = dim_comb.reshape(-1, len(dim_iter))
+
+                    # save as csv
+                    df = pd.DataFrame(matrix, columns=dim_iter + names)
+                    df.to_csv(file_path, index=False)
+            
+            else:
+                raise ValueError(f"No data found for experiment code {exp_code} to save metrics arrays.")
+            
+    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save study records to local files."""
+        self._save_files_generic(
             codes=study_codes,
-            subdirs=["{code}"],
-            filename="study_params",
-            require_study_code=False
+            data=data,
+            subdirs=[],
+            filename="study_record",
         )
 
-    def load_exp_records(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load experiment records from local files."""
-        return self._load_files_generic(
+    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        """Save experiment records to local files."""
+        self._save_files_generic(
             codes=exp_codes,
+            data=data,
             subdirs=["{code}"],
             filename="exp_record",
-            require_study_code=True
         )
 
+    # === INTERNAL METHODS ===
     def _load_files_generic(self, 
                             codes: List[str], 
                             subdirs: List[str],
@@ -316,63 +400,6 @@ class LocalDataInterface:
                 missing_codes.append(code)
                 
         return missing_codes, result_dict
-
-    # === DATA SAVING METHODS ===
-    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save aggregated metrics to local files (single summary file per experiment)."""
-        self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}", "results"],
-            filename="{code}_performance",
-            wrap_in_parameters=False
-        )
-
-    def save_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]]) -> None:
-        """Save metrics arrays to local CSV files."""
-        if not self.study_code:
-            raise ValueError("Study code must be set before saving")
-            
-        for exp_code in exp_codes:
-            if exp_code in data:
-                # Build directory path
-                results_dir = os.path.join(self.local_folder, self.study_code, exp_code, "results")
-                os.makedirs(results_dir, exist_ok=True)
-                
-                # Handle nested data (iterate over performance codes)
-                for perf_code, array in data[exp_code].items():
-                    file_name = f"{exp_code}_{perf_code}.csv"
-                    file_path = os.path.join(results_dir, file_name)
-                    df = pd.DataFrame(array)
-                    df.to_csv(file_path, index=False)
-
-    def save_exp_params(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save experiment parameters to local files."""
-        self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}"],
-            filename="exp_params",
-            wrap_in_parameters=True
-        )
-
-    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save study records to local files."""
-        self._save_files_generic(
-            codes=study_codes,
-            data=data,
-            subdirs=["{code}"],
-            filename="study_record",
-        )
-
-    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]]) -> None:
-        """Save experiment records to local files."""
-        self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}"],
-            filename="exp_record",
-        )
 
     def _save_files_generic(self, 
                             codes: List[str], 

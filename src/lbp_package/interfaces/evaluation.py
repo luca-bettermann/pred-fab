@@ -56,6 +56,9 @@ class EvaluationModel(ParameterHandling, ABC):
         self.dim_param_names: List[str] = []
         self._set_dim_lists()
 
+        # Store dimensional combinations per exp
+        self.dim_combinations: Dict[str, NDArray] = {}
+
         # Performance configuration
         self.round_digits: int = round_digits
         self.performance_code = performance_code
@@ -133,7 +136,8 @@ class EvaluationModel(ParameterHandling, ABC):
         metrics_array = np.empty(self._compute_dim_sizes() + [len(self.performance_array_dims),])
 
         # Process all dimensional combinations
-        total_dims = len(list(itertools.product(*self._compute_dim_ranges())))
+        self.dim_combinations[exp_code] = np.array(list(itertools.product(*self._compute_dim_ranges())))
+        total_dims = len(self.dim_combinations[exp_code])
         self.logger.info(f"Processing {total_dims} dimensional combinations")
 
         for i, dims in enumerate(itertools.product(*self._compute_dim_ranges())):
@@ -164,12 +168,6 @@ class EvaluationModel(ParameterHandling, ABC):
             metrics_array[dims][3] = performance_value
 
             self._cleanup_step()
-
-        # Save results and aggregate performance
-        if not debug_flag:
-            self._save_results_locally(exp_code, exp_folder, metrics_array)
-        else:
-            self.logger.info("Debug mode: Skipping result saving")
 
         # Unpack metrics_array
         feature_array = metrics_array[..., 0]
@@ -338,44 +336,6 @@ class EvaluationModel(ParameterHandling, ABC):
 
         # return the aggregated performance metrics
         return default_metrics
-
-    def _save_results_locally(self, exp_code: str, exp_folder: str, performance_array: NDArray[np.float64]) -> None:
-        """Save evaluation results to CSV file."""
-        folder_path = os.path.join(exp_folder, 'results')
-
-        # Create results directory if needed
-        if not os.path.isdir(folder_path):
-            os.makedirs(folder_path, exist_ok=True)
-
-        results = []
-
-        # Export results for all dimensional combinations
-        for indices in itertools.product(*self._compute_dim_ranges()):
-            interval_dict = {}
-            interval_dict['exp_code'] = exp_code
-
-            # Add dimensional indices
-            indices_dict = dict(zip(self.dim_iterator_names, indices))
-            interval_dict.update(indices_dict)
-
-            # Add evaluation results
-            assert self.feature_model is not None, "Feature model must be initialized before adding evaluation results."
-            feature_value = self.feature_model.features[self.performance_code][indices]
-            target_value = performance_array[indices][0]
-            diff_value = performance_array[indices][1]
-            performance_value = performance_array[indices][2]
-
-            interval_dict['feature_value'] = round(feature_value, self.round_digits)
-            interval_dict['target_value'] = round(target_value, self.round_digits)
-            interval_dict['diff_value'] = round(diff_value, self.round_digits)
-            interval_dict['performance_value'] = round(performance_value, self.round_digits)
-            results.append(interval_dict)
-
-        # Save to CSV
-        results_csv = os.path.join(folder_path, f"{exp_code}_{self.performance_code}.csv")
-        df = pd.DataFrame(results)
-        df.to_csv(results_csv, index=False)
-        self.logger.info(f"Results saved locally to: {results_csv}")
 
     def _compute_dim_sizes(self) -> List[int]:
         """Get sizes of all dimensions from parameter values."""

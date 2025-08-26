@@ -24,18 +24,15 @@ class PredictionSystem:
     
     def __init__(self, 
                  local_data: LocalDataInterface,
-                 external_data: ExternalDataInterface,
                  logger: LBPLogger) -> None:
         """
         Initialize prediction system.
         
         Args:
             local_data: Local file system navigation utility  
-            external_data: Interface for accessing structured study configuration
             logger: Logger instance
         """
         self.local_data = local_data
-        self.external_data = external_data
         self.logger = logger
 
         self.prediction_models: List[PredictionModel] = []
@@ -46,14 +43,15 @@ class PredictionSystem:
         
         self.logger.info("Initialized PredictionSystem")
 
-    def add_prediction_model(self, performance_codes: List[str], prediction_model: Type[PredictionModel], study_params: Dict[str, Any], round_digits: int, **kwargs) -> None:
+    def add_prediction_model(self, performance_codes: List[str], prediction_model: Type[PredictionModel], round_digits: int, **kwargs) -> None:
         """
         Add an prediction model to the system.
         
         Args:
             performance_codes: List of codes identifying the performance metrics
-            evaluation_class: Class of evaluation model to instantiate
-            study_params: Study parameters for model configuration
+            prediction_model: Class of prediction model to instantiate
+            round_digits: Number of digits to round results to
+            **kwargs: Additional parameters for model initialization
         """
         # Validate if prediction_model is the correct type
         if not issubclass(prediction_model, PredictionModel):
@@ -79,7 +77,8 @@ class PredictionSystem:
         if len(self.pred_model_by_code) == 0 or recompute:
             self.pred_model_by_code = self._get_pred_model_by_code()
 
-        assert code in self.pred_model_by_code, f"No prediction model for performance code '{code}' has been initialized."
+        if code not in self.pred_model_by_code:
+            raise ValueError(f"No prediction model for performance code '{code}' has been initialized.")
         prediction_model = self.pred_model_by_code[code]
 
         if prediction_model.active:
@@ -185,7 +184,8 @@ class PredictionSystem:
         pred_model_by_code = {}
         for pred_model in self.prediction_models:
             for code in pred_model.output:
-                assert code not in pred_model_by_code, f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration."
+                if code in pred_model_by_code:
+                    raise ValueError(f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration.")
                 pred_model_by_code[code] = pred_model
         return pred_model_by_code
     

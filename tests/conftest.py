@@ -104,7 +104,7 @@ def generate_temperature_data(base_temp: int = 20, fluctuation: int = 2) -> Dict
         current_temp = temp
     return {"temperature": temperatures}
 
-def create_study_json_files(base_folder: str, study_code: str = "test"):
+def create_study_json_file(base_folder: str, study_code: str = "test"):
     """Generate the file structure for an experiment."""
     
     # Create directory structure
@@ -113,22 +113,13 @@ def create_study_json_files(base_folder: str, study_code: str = "test"):
     
     # Create study_params.json (overwrite if it exists)
     study_data = {
-        "study_name": f"Test Study {study_code}",
-        "description": "Generated test study",
-        "Parameters": get_mock_study_params()
+        "id": f"study_{study_code}",
+        "Code": study_code,
+        "Parameters": get_mock_study_params(),
+        "Performance": ["path_deviation", "energy_consumption"]
     }
-    with open(os.path.join(study_dir, "study_params.json"), 'w') as f:
+    with open(os.path.join(study_dir, "study_record.json"), 'w') as f:
         json.dump(study_data, f, indent=2)
-
-    # Create performance_records.json (overwrite if it exists)
-    perf_data = {
-        "records": [
-            {"Code": "path_deviation", "Performance": "Path Deviation", "Optimal Value": 0.0, "Description": "Deviation from designed path"},
-            {"Code": "energy_consumption", "Performance": "Energy Consumption", "Optimal Value": 0.0, "Description": "Energy consumed during operation"}
-        ]
-    }
-    with open(os.path.join(study_dir, "performance_records.json"), 'w') as f:
-        json.dump(perf_data, f, indent=2)
 
 def create_exp_json_files(
         base_folder: str, 
@@ -151,12 +142,13 @@ def create_exp_json_files(
 
     # Create exp_params.json (overwrite if it exists)
     exp_data = {
+        "id": f"exp_{exp_code}",
         "Code": exp_code,
         "System Performance": None,
         "Parameters": get_mock_exp_params(n_layers=n_layers, n_segments=n_segments, layer_time=layer_time, layer_height=layer_height),
         "Status": "Evaluation"
     }
-    with open(os.path.join(exp_dir, "exp_params.json"), 'w') as f:
+    with open(os.path.join(exp_dir, "exp_record.json"), 'w') as f:
         json.dump(exp_data, f, indent=2)
 
     # Create designed path data files (overwrite if they exist)
@@ -211,7 +203,7 @@ def mock_config():
 def mock_data_interface(temp_dir):
     """Create mock data interface with test data files."""
     # Generate test data files using the shared utility
-    create_study_json_files(temp_dir, study_code="test")
+    create_study_json_file(temp_dir, study_code="test")
     create_exp_json_files(temp_dir, study_code="test", exp_nr=1)
     
     # Return interface pointing to temp directory with generated files
@@ -228,7 +220,7 @@ def test_logger(temp_dir):
 def setup_test_data(temp_dir):
     """Setup test data files using the shared utility."""
     # Generate complete test data structure
-    create_study_json_files(temp_dir, study_code="test")
+    create_study_json_file(temp_dir, study_code="test")
     create_exp_json_files(temp_dir, study_code="test", exp_nr=1)
     
     return {
