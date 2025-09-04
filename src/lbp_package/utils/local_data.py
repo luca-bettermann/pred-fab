@@ -225,7 +225,7 @@ class LocalDataInterface:
         return self._load_files_generic(
             codes=exp_codes,
             subdirs=["{code}", "results"],
-            filename="{code}_performance",
+            filename="performance",
             require_study_code=True
         )
 
@@ -247,10 +247,10 @@ class LocalDataInterface:
                 if os.path.exists(results_dir):
                     found_csv = False
                     for filename in os.listdir(results_dir):
-                        if filename.endswith('.csv') and filename.startswith(exp_code):
+                        if filename.endswith('.csv'):
                             found_csv = True
                             # Extract performance code from filename
-                            performance_code = filename.replace(f"{exp_code}_", "").replace(".csv", "")
+                            performance_code = filename.replace(".csv", "")
                             csv_path = os.path.join(results_dir, filename)
                             
                             # Load CSV as numpy array
@@ -269,13 +269,14 @@ class LocalDataInterface:
         return missing_exp_codes, metrics_arrays_dict
 
     # === DATA SAVING METHODS ===
-    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """Save aggregated metrics to local files (single summary file per experiment)."""
-        self._save_files_generic(
+        return self._save_files_generic(
             codes=exp_codes,
             data=data,
             subdirs=["{code}", "results"],
-            filename="{code}_performance",
+            filename="performance",
+            recompute=recompute,
             wrap_in_parameters=False
         )
 
@@ -283,8 +284,9 @@ class LocalDataInterface:
             self, 
             exp_codes: List[str], 
             metrics_array: Dict[str, Dict[str, np.ndarray]],
+            recompute: bool,
             **kwargs
-            ) -> None:
+            ) -> bool:
         """Save metrics arrays to local CSV files with custom column names.
         
         Args:
@@ -305,6 +307,7 @@ class LocalDataInterface:
         dim_combinations = kwargs.get('dim_combinations', {})
         dim_iterators = kwargs.get('dim_iterators', {})
                     
+        saved = False
         for exp_code in exp_codes:
             if exp_code in metrics_array:
                 metric_array = metrics_array[exp_code]
@@ -318,44 +321,52 @@ class LocalDataInterface:
                 
                 # Handle nested data (iterate over performance codes)
                 for perf_code, array in metric_array.items():
-                    file_name = f"{exp_code}_{perf_code}.csv"
+                    file_name = f"{perf_code}.csv"
                     file_path = os.path.join(results_dir, file_name)
 
-                    # unpack
-                    names = metric_names[perf_code]
-                    dim_comb = dim_combinations[perf_code][exp_code]
-                    dim_iter = dim_iterators[perf_code]
+                    # Only save if file doesn't exist or recompute is True
+                    if not os.path.exists(file_path) or recompute:
+                        # unpack
+                        names = metric_names[perf_code]
+                        dim_comb = dim_combinations[perf_code][exp_code]
+                        dim_iter = dim_iterators[perf_code]
 
-                    # build matrix
-                    values = array.reshape(-1, len(names))
-                    matrix = np.empty((len(values), len(dim_iter + names)))
-                    matrix[:, len(dim_iter):] = values
-                    if dim_comb.size:
-                        matrix[:, :(len(dim_iter))] = dim_comb.reshape(-1, len(dim_iter))
+                        # build matrix
+                        values = array.reshape(-1, len(names))
+                        matrix = np.empty((len(values), len(dim_iter + names)))
+                        matrix[:, len(dim_iter):] = values
+                        if dim_comb.size:
+                            matrix[:, :(len(dim_iter))] = dim_comb.reshape(-1, len(dim_iter))
 
-                    # save as csv
-                    df = pd.DataFrame(matrix, columns=dim_iter + names)
-                    df.to_csv(file_path, index=False)
-            
+                        # save as csv
+                        df = pd.DataFrame(matrix, columns=dim_iter + names)
+                        df.to_csv(file_path, index=False)
+                        if not saved:
+                            saved = True
+
             else:
                 raise ValueError(f"No data found for experiment code {exp_code} to save metrics arrays.")
-            
-    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+        # Return whether any files were saved
+        return saved
+    
+    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """Save study records to local files."""
-        self._save_files_generic(
+        return self._save_files_generic(
             codes=study_codes,
             data=data,
             subdirs=[],
             filename="study_record",
+            recompute=recompute,
         )
 
-    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
+    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """Save experiment records to local files."""
-        self._save_files_generic(
+        return self._save_files_generic(
             codes=exp_codes,
             data=data,
             subdirs=["{code}"],
             filename="exp_record",
+            recompute=recompute,
         )
 
     # === INTERNAL METHODS ===
@@ -406,11 +417,13 @@ class LocalDataInterface:
                             data: Dict[str, Dict[str, Any]], 
                             subdirs: List[str],
                             filename: str,
-                            wrap_in_parameters: bool = False) -> None:
+                            recompute: bool,
+                            wrap_in_parameters: bool = False) -> bool:
         """Simple save function for non-nested data."""
         if not self.study_code:
             raise ValueError("Study code must be set before saving")
             
+        saved = False
         for code in codes:
             if code in data:
                 # Build directory path
@@ -419,13 +432,21 @@ class LocalDataInterface:
                 dir_path = os.path.join(*dir_parts)
                 os.makedirs(dir_path, exist_ok=True)
                 
-                # Handle simple data
-                code_data = data[code]
-                if wrap_in_parameters:
-                    code_data = {"Parameters": code_data}
-                
                 file_name = filename.replace("{code}", code)
                 file_path = os.path.join(dir_path, f"{file_name}.json")
                 
-                with open(file_path, 'w') as f:
-                    json.dump(code_data, f, indent=2)
+                # Only save if file doesn't exist or recompute is True
+                if not os.path.exists(file_path) or recompute:
+                    # Handle simple data
+                    code_data = data[code]
+                    if wrap_in_parameters:
+                        code_data = {"Parameters": code_data}
+                    
+                    with open(file_path, 'w') as f:
+                        json.dump(code_data, f, indent=2)
+                    if not saved:
+                        saved = True
+            else:
+                raise ValueError(f"No data found for code {code} to save.")
+        # return wheter or not files actually were saved
+        return saved

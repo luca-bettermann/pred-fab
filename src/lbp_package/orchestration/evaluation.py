@@ -32,7 +32,7 @@ class EvaluationSystem:
 
         # Storage of metrics in memory  
         self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {}
-        self.metrics_arrays: Dict[str, Dict[str, np.ndarray]] = {}
+        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}
 
     # === PUBLIC API METHODS (Called externally) ===
     def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: int, **kwargs) -> None:
@@ -58,14 +58,21 @@ class EvaluationSystem:
         self.evaluation_models[performance_code] = eval_model
 
     def activate_evaluation_model(self, code: str, study_params: Dict[str, Any]) -> None:
-        # Activate evaluation model and apply dataclass-based parameter handling
+        # Skip evaluation model activation altogether if no models are available, but do not raise an error
+        if len(self.evaluation_models) == 0:
+            self.logger.warning("No evaluation models available to activate.")
+            return
+
+        # Raise error if no evaluation model for the given code is found 
         if code not in self.evaluation_models:
             raise ValueError(f"No evaluation model for performance code '{code}' has been initialized.")
+
+        # Activate evaluation model and apply dataclass-based parameter handling
         self.evaluation_models[code].active = True
         self.evaluation_models[code].set_study_parameters(**study_params)
         self.logger.info(f"Activated evaluation model for performance code '{code}' and set study parameters.")
 
-    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool = False, debug_flag: bool = True, exp_params: dict = {}) -> None:
+    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool, exp_params: dict) -> None:
         """
         Execute evaluation for all models.
         
@@ -87,20 +94,20 @@ class EvaluationSystem:
 
         # Initialize arrays dictionaries for exp_code
         self.aggr_metrics[exp_code] = {}
-        self.metrics_arrays[exp_code] = {}
+        self.metric_arrays[exp_code] = {}
 
         # Execute each evaluation model
         for performance_code, eval_model in active_models.items():
             self.logger.info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
 
             # Run evaluation and return dict with "Value", "Performance", "Robustness" and "Resilience" as keys
-            eval_aggr_metrics, eval_metrics_array = eval_model.run(exp_code, exp_folder, visualize_flag, debug_flag, **exp_params)
-            
+            eval_aggr_metrics, eval_metrics_array = eval_model.run(
+                exp_code, exp_folder, visualize_flag, debug_flag, **exp_params
+                )
+
             # Store the computed features and performances in memory
             self.aggr_metrics[exp_code][performance_code] = eval_aggr_metrics
-            self.metrics_arrays[exp_code][performance_code] = eval_metrics_array
-
-        self.logger.console_info("All evaluations completed successfully.")
+            self.metric_arrays[exp_code][performance_code] = eval_metrics_array
 
     def evaluation_step_summary(self, exp_code: str) -> str:
         """Generate summary of evaluation results."""

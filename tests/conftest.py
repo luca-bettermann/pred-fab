@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from src.lbp_package.utils.log_manager import LBPLogger
-from examples.file_data_interface import FileDataInterface
+from examples.external_data import MockDataInterface
 
 
 def get_mock_study_params() -> Dict[str, Any]:
@@ -144,9 +144,12 @@ def create_exp_json_files(
     exp_data = {
         "id": f"exp_{exp_code}",
         "Code": exp_code,
-        "System Performance": None,
-        "Parameters": get_mock_exp_params(n_layers=n_layers, n_segments=n_segments, layer_time=layer_time, layer_height=layer_height),
-        "Status": "Evaluation"
+        "Parameters": get_mock_exp_params(
+            n_layers=n_layers,
+            n_segments=n_segments,
+            layer_time=layer_time,
+            layer_height=layer_height
+        ),
     }
     with open(os.path.join(exp_dir, "exp_record.json"), 'w') as f:
         json.dump(exp_data, f, indent=2)
@@ -207,7 +210,7 @@ def mock_data_interface(temp_dir):
     create_exp_json_files(temp_dir, study_code="test", exp_nr=1)
     
     # Return interface pointing to temp directory with generated files
-    return FileDataInterface(temp_dir)
+    return MockDataInterface(temp_dir)
 
 @pytest.fixture
 def test_logger(temp_dir):

@@ -1,8 +1,9 @@
-from typing import Dict, Any, List, Type, Optional
+from typing import Dict, Any, List, Type
 from numpy import ndarray
 
+from utils import generate_temperature_data
+from visualize import visualize_temperature
 from lbp_package import PredictionModel, FeatureModel
-from tests.conftest import generate_temperature_data
 
 class PredictExample(PredictionModel):
     """
@@ -51,19 +52,26 @@ class TemperatureExtraction(FeatureModel):
 
     def _load_data(self, exp_code: str, exp_folder: str) -> Any:
         """
-        Load the data required for temperature feature extraction.
+        Mock loading of raw temperature data by generating it.
         """
-        # For demonstration, we generate mock temperature data
-        return generate_temperature_data()
 
-    def _compute_features(self, data: Dict[str, Any]) -> Dict[str, ndarray]:
+        # Generate mock temperature data
+        temperature_time_series = generate_temperature_data(
+            base_temp=20,
+            fluctuation=3
+        )
+        return {"temperature": temperature_time_series}
+
+    def _compute_features(self, data: Dict[str, Any], visualize_flag: bool) -> Dict[str, float]:
         """
         Extract temperature features from the provided data.
         """
-        # Example extraction logic
-        return {
-            "temperature": data.get("temperature", 0.0)
-        }
+
+        if visualize_flag:
+            visualize_temperature(data["temperature"])
+
+        # No feature extraction needed, as we use the raw temperature data directly
+        return data
+
     
-    def get_required_inputs(self) -> List[str]:
-        return ["temperature"]
+

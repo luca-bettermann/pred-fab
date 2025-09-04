@@ -1,6 +1,6 @@
 from lbp_package.utils import FolderNavigator
-from examples.path_deviation import PathDeviationFeature
-from examples.energy_consumption import EnergyFeature
+from examples.evaluation_geometry import PathDeviationFeature
+from examples.evaluation_energy import EnergyFeature
 
 
 class TestPathDeviationFeature:

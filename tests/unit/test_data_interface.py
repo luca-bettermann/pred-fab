@@ -1,5 +1,5 @@
 import pytest
-from examples.file_data_interface import FileDataInterface
+from examples.external_data import MockDataInterface
 
 
 class TestDataInterface:
@@ -7,7 +7,7 @@ class TestDataInterface:
     
     def test_example_data_interface_initialization(self, temp_dir):
         """Test ExampleDataInterface initialization."""
-        interface = FileDataInterface(temp_dir)
+        interface = MockDataInterface(temp_dir)
         
         assert interface.local_folder == temp_dir
         assert interface.client is None

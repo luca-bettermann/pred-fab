@@ -74,21 +74,28 @@ class PredictionSystem:
         return list(all_codes)
 
     def activate_prediction_model(self, code: str, study_params: Dict[str, Any], recompute: bool = False) -> None:
+        if len(self.prediction_models) == 0:
+            self.logger.warning("No prediction models available to activate.")
+            return
+
+        # Reset the performance code to prediction model mapping if necessary
         if len(self.pred_model_by_code) == 0 or recompute:
             self.pred_model_by_code = self._get_pred_model_by_code()
 
+        # Log warning if no model is found for the given code
         if code not in self.pred_model_by_code:
-            raise ValueError(f"No prediction model for performance code '{code}' has been initialized.")
-        prediction_model = self.pred_model_by_code[code]
+            self.logger.warning(f"No prediction model for performance code '{code}' has been initialized.")
 
-        if prediction_model.active:
-            self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
-        else:
+        # If a model is found, activate it
+        prediction_model = self.pred_model_by_code[code]
+        if not prediction_model.active:
             prediction_model.set_study_parameters(**study_params)
             prediction_model.active = True
-            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}' and set study parameters")
+            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}' and set study parameters.")
+        else:
+            self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
 
-    def train(self, study_dataset: Dict[str, Dict[str, Any]]) -> None:
+    def train(self, study_dataset: Dict[str, Dict[str, Any]], visualize_flag: bool, debug_flag: bool) -> None:
         """
         Train all models with unified data processing.
 
@@ -99,8 +106,8 @@ class PredictionSystem:
         dataset = self._filter_dataset(study_dataset)
         
         # 2. Add feature data
-        self._add_feature_data(dataset, self.prediction_models, visualize_flag=False)
-        
+        self._add_feature_data(dataset, self.prediction_models, visualize_flag, debug_flag)
+
         # 3. Get all input and output columns
         all_inputs = []
         all_outputs = []
@@ -121,6 +128,7 @@ class PredictionSystem:
         # 6. Train each model
         for model in self.prediction_models:
             if not model.active:
+                self.logger.warning(f"Skipping inactive model: {type(model).__name__}")
                 continue
                 
             self.logger.info(f"Training model: {type(model).__name__}")
@@ -132,7 +140,7 @@ class PredictionSystem:
             model.train(X, y)
             self.logger.info(f"Model training completed")
 
-    def predict(self, exp_params: Dict[str, Any], exp_code: str, visualize_flag: bool) -> Dict[str, float]:
+    def predict(self, exp_params: Dict[str, Any], exp_code: str, visualize_flag: bool, debug_flag: bool) -> Dict[str, float]:
         """
         Get predictions for all performance metrics for a single upcoming experiment.
         
@@ -161,7 +169,7 @@ class PredictionSystem:
             single_exp_data = {exp_code: dict(exp_params)}
             
             # 2. Add feature data
-            self._add_feature_data(single_exp_data, [pred_model], visualize_flag)
+            self._add_feature_data(single_exp_data, [pred_model], visualize_flag, debug_flag)
             
             # 3. Prepare and normalize inputs only (inference mode)
             input_data = self._prepare_and_normalize_data(
@@ -218,14 +226,14 @@ class PredictionSystem:
         self.logger.info(f"Filtered dataset: {len(filtered_dataset)}/{len(study_dataset)} experiments")
         return filtered_dataset
 
-    def _add_feature_data(self, dataset: Dict[str, Dict[str, Any]], models: List[PredictionModel], visualize_flag: bool) -> None:
+    def _add_feature_data(self, dataset: Dict[str, Dict[str, Any]], models: List[PredictionModel], visualize_flag: bool, debug_flag: bool) -> None:
         """Add feature model data to experiments in-place."""
         for model in models:
             if hasattr(model, 'feature_models') and model.feature_models:
                 for code, feature_model in model.feature_models.items():
                     # Run feature model for each experiment
                     for exp_code in dataset.keys():
-                        feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag)
+                        feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag, debug_flag)
                         # Add computed feature to experiment data
                         if code in feature_model.features:
                             dataset[exp_code][code] = feature_model.features[code]

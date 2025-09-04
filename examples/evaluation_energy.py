@@ -47,7 +47,7 @@ class EnergyFeature(FeatureModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any:
         """No data loading required for energy calculation."""
         return None
 

@@ -51,7 +51,7 @@ class FeatureModel(ParameterHandling, ABC):
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     @abstractmethod
-    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any:
         """
         Load domain-specific, unstructured data for feature extraction. Potentially requires
         a database connection to access raw data files or streams.
@@ -94,7 +94,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.associated_codes.append(associated_code)
         self.features[associated_code] = np.empty([])
 
-    def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, **dims_dict) -> np.ndarray:
+    def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool, **dims_dict) -> np.ndarray:
         """
         Execute the feature extraction pipeline.
 
@@ -108,7 +108,7 @@ class FeatureModel(ParameterHandling, ABC):
         self.set_dim_parameters(**dims_dict)
 
         # Optional initialization step
-        self._initialization_step(performance_code, exp_code)
+        self._initialization_step(performance_code, exp_code, exp_folder, visualize_flag, debug_flag)
 
         # Check if dimensions already processed
         self._set_processed_state(**dims_dict)
@@ -119,7 +119,7 @@ class FeatureModel(ParameterHandling, ABC):
         if not self.is_processed_state:
 
             # Load data for feature extraction
-            current_data = self._load_data(exp_code, exp_folder)
+            current_data = self._load_data(exp_code, exp_folder, debug_flag)
 
             # Compute features
             feature_dict = self._compute_features(current_data, visualize_flag)
@@ -137,7 +137,7 @@ class FeatureModel(ParameterHandling, ABC):
             self.is_processed_state = False
 
         # Optional cleanup step
-        self._cleanup_step(performance_code, exp_code)
+        self._cleanup_step(performance_code, exp_code, exp_folder, visualize_flag, debug_flag)
 
         # Return extracted feature values for the given performance code and dimension
         return self.features[performance_code][indices]
@@ -155,23 +155,29 @@ class FeatureModel(ParameterHandling, ABC):
         self.processed_dims = []
         
     # === OPTIONAL METHODS ===
-    def _initialization_step(self, performance_code: str, exp_code: str) -> None:
+    def _initialization_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
         """
         Optional initialization logic before feature extraction.
         
         Args:
             performance_code: Code identifying the associated metric
             exp_code: Experiment code
+            exp_folder: Experiment folder
+            visualize_flag: Whether to show visualizations
+            debug_flag: Whether to enable debugging
         """
         pass
 
-    def _cleanup_step(self, performance_code: str, exp_code: str) -> None:
+    def _cleanup_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
         """
         Optional cleanup logic after feature extraction.
         
         Args:
             performance_code: Code identifying the associated metric
             exp_code: Experiment code
+            exp_folder: Experiment folder
+            visualize_flag: Whether to show visualizations
+            debug_flag: Whether to enable debugging
         """
         pass
     

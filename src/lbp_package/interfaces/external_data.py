@@ -52,7 +52,7 @@ class ExternalDataInterface(ABC):
             study_code: Unique study identifier
 
         Returns:
-            Study record with "Code" and "Parameters" keys
+            Study record with "id", "Code" and "Parameters" and "Performance" keys
         """
         ...
 
@@ -65,20 +65,7 @@ class ExternalDataInterface(ABC):
             exp_code: Unique experiment identifier
 
         Returns:
-            Experiment record with "Code" and "Parameters" keys
-        """
-        ...
-
-    @abstractmethod
-    def pull_performance_records(self, study_record: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Get performance metric configurations for a study.
-        
-        Args:
-            study_record: Study record from get_study_record()
-
-        Returns:
-            List of performance records with "Code" field
+            Experiment record with "id", "Code" and "Parameters" keys
         """
         ...
 
@@ -123,25 +110,69 @@ class ExternalDataInterface(ABC):
         # Default implementation returns all as missing
         return exp_codes, {}
 
-    def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
-        """Save study records to external source."""
+    def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+        """
+        Save study records to external source.
+        
+        Args:
+            study_codes: List of study codes to save
+            data: Dict mapping study codes to study record data
+            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
+            **kwargs: Additional arguments for implementation-specific options
+            
+        Returns:
+            True if data was actually written/overwritten, False otherwise
+        """
         # Default implementation - override in subclasses
-        pass
+        return False
 
-    def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
-        """Save experiment records to external source."""
+    def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+        """
+        Save experiment records to external source.
+        
+        Args:
+            exp_codes: List of experiment codes to save
+            data: Dict mapping experiment codes to experiment record data
+            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
+            **kwargs: Additional arguments for implementation-specific options
+            
+        Returns:
+            True if data was actually written/overwritten, False otherwise
+        """
         # Default implementation - override in subclasses
-        pass
+        return False
 
-    def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], **kwargs) -> None:
-        """Save aggregated metrics to external source."""
+    def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+        """
+        Save aggregated metrics to external source.
+        
+        Args:
+            exp_codes: List of experiment codes to save
+            data: Dict mapping experiment codes to aggregated metrics data
+            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
+            **kwargs: Additional arguments for implementation-specific options
+            
+        Returns:
+            True if data was actually written/overwritten, False otherwise
+        """
         # Default implementation - override in subclasses
-        pass
+        return False
 
-    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]], **kwargs) -> None:
-        """Save metrics arrays to external source."""
+    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]], recompute: bool, **kwargs) -> bool:
+        """
+        Save metrics arrays to external source.
+        
+        Args:
+            exp_codes: List of experiment codes to save
+            data: Dict mapping experiment codes to metrics arrays data
+            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
+            **kwargs: Additional arguments for implementation-specific options
+            
+        Returns:
+            True if data was actually written/overwritten, False otherwise
+        """
         # Default implementation - override in subclasses
-        pass
+        return False
 
     # === PUBLIC API METHODS (Called externally) ===
     def pull_study_records(self, study_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:

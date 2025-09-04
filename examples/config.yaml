@@ -3,14 +3,10 @@
 # System settings
 system:
   # Default execution mode settings
-  debug_flag: false
-  visualize_flag: false
-  eval_flag: true
-  pred_flag: true
-  
+  debug_flag: false       # Debug mode skips all external data loading/saving
+  recompute_flag: false   # Recompute mode forces re-evaluation and saving of all data
+  visualize_flag: true    # Visualization mode enables plotting (if configured)
+
   # Default rounding precision for numerical results
   round_digits: 3
   
-  # Performance evaluation settings
-  performance_bounds_check: true
-  performance_warning_threshold: 0.1

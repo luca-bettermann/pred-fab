@@ -1,6 +1,4 @@
-import os
 import numpy as np
-import pandas as pd
 import itertools
 from typing import Any, Dict, List, Type, Tuple, Optional
 from dataclasses import dataclass
@@ -148,10 +146,10 @@ class EvaluationModel(ParameterHandling, ABC):
             self.set_dim_parameters(**dims_dict)
 
             # Extract features
-            feature_value = self.feature_model.run(self.performance_code, exp_code, exp_folder, visualize_flag, **dims_dict)
+            feature_value = self.feature_model.run(self.performance_code, exp_code, exp_folder, visualize_flag, debug_flag, **dims_dict)
 
             # Compute performance for current dimensions
-            self._initialization_step()
+            self._initialization_step(exp_code, exp_folder, visualize_flag, debug_flag)
 
             # Compute evaluation components
             target_value = self._compute_target_value()
@@ -167,14 +165,14 @@ class EvaluationModel(ParameterHandling, ABC):
             metrics_array[dims][2] = scaling_factor
             metrics_array[dims][3] = performance_value
 
-            self._cleanup_step()
+            self._cleanup_step(exp_code, exp_folder, visualize_flag, debug_flag)
 
         # Unpack metrics_array
         feature_array = metrics_array[..., 0]
         performance_array = metrics_array[..., 3]
 
         # Aggregate targets, diffs, signs and performance
-        aggr_metrics = self._compute_default_aggr_metrics(feature_array, performance_array)
+        aggr_metrics = self._compute_default_aggr_metrics("Feature_Avg", feature_array, "Performance_Avg", performance_array)
 
         # Compute interpretable aggregated performance metrics
         custom_aggr_metrics = self._compute_custom_aggr_metrics(feature_array, performance_array)
@@ -241,11 +239,11 @@ class EvaluationModel(ParameterHandling, ABC):
 
         return custom_metrics
 
-    def _initialization_step(self) -> None:
+    def _initialization_step(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
         """Optional initialization before performance computation."""
         pass
 
-    def _cleanup_step(self) -> None:
+    def _cleanup_step(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
         """Optional cleanup after performance computation."""
         pass
 
@@ -316,7 +314,9 @@ class EvaluationModel(ParameterHandling, ABC):
 
     def _compute_default_aggr_metrics(
             self, 
+            key_feature_avg: str,
             feature_array: NDArray[np.float64], 
+            key_performance_avg: str,
             performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
         """
         Computes the default aggregation metrics.
@@ -331,8 +331,8 @@ class EvaluationModel(ParameterHandling, ABC):
         default_metrics: Dict[str, Optional[np.floating]] = {}
 
         # Default: compute mean feature and performance values
-        default_metrics['Feature_Avg'] = np.round(np.average(feature_array), self.round_digits)
-        default_metrics['Performance_Avg'] = np.round(np.average(performance_array), self.round_digits)
+        default_metrics[key_feature_avg] = np.round(np.average(feature_array), self.round_digits)
+        default_metrics[key_performance_avg] = np.round(np.average(performance_array), self.round_digits)
 
         # return the aggregated performance metrics
         return default_metrics

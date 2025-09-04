@@ -1,9 +1,9 @@
-from .file_data_interface import FileDataInterface
-from .path_deviation import PathEvaluation
-from .energy_consumption import EnergyConsumption
+from .external_data import MockDataInterface
+from .evaluation_geometry import PathEvaluation
+from .evaluation_energy import EnergyConsumption
 
 __all__ = [
-    "FileDataInterface",
+    "MockDataInterface",
     "PathEvaluation",
     "EnergyConsumption"
 ]
