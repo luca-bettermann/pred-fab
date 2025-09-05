@@ -21,7 +21,7 @@ class MockDataInterface(ExternalDataInterface):
             "Code": study_code,
             "Parameters": {        
                 "target_deviation": 0.0,
-                "max_deviation": 1.0,
+                "max_deviation": 5.0,
                 "target_energy": 0.0,
                 "max_energy": 10000.0,
                 "power_rating": 50.0

@@ -1,6 +1,7 @@
 import math
 from typing import Dict, Any, List, Optional, Tuple, Type
 from dataclasses import dataclass
+import numpy as np
 
 from lbp_package import EvaluationModel, FeatureModel
 from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
@@ -56,9 +57,12 @@ class PathEvaluation(EvaluationModel):
         if not visualize_flag:
             return
 
-        # Action: layer is finished
+        # type safety checks
         assert isinstance(self.n_segments, int), "n_segments must be an integer"
-        if self.segment_id == self.n_segments - 1:
+        assert isinstance(self.n_layers, int), "n_layers must be an integer"
+
+        # Action: final evaluation is done
+        if self.layer_id == self.n_layers - 1 and self.segment_id == self.n_segments - 1:
 
             # validate that the feature model has path coordinates
             feature_model = self.feature_model
@@ -67,18 +71,17 @@ class PathEvaluation(EvaluationModel):
             
             # Type cast to access attributes after runtime check
             assert isinstance(self.layer_id, int), "layer_id must be an integer"
-            avg_deviation_list = list(feature_model.features['path_deviation'][self.layer_id, :])
             visualize_geometry(
                 exp_code,
-                self.layer_id,
-                feature_model.designed_path_coords, 
-                feature_model.measured_path_coords, 
-                avg_deviation_list
-                )
-            
-            # reset storage
-            feature_model.designed_path_coords = []
-            feature_model.measured_path_coords = []
+                feature_model.designed_path_coords,
+                feature_model.measured_path_coords,
+                float(np.average(feature_model.features['path_deviation']))
+            )
+
+            # Reset stored coordinates for next evaluation
+            assert isinstance(self.feature_model, PathDeviationFeature), "Feature model must be of type PathDeviationFeature"
+            self.feature_model.designed_path_coords = {}
+            self.feature_model.measured_path_coords = {}
 
 
 @dataclass
@@ -101,8 +104,8 @@ class PathDeviationFeature(FeatureModel):
         super().__init__(**kwargs)
 
         # Store designed and measured filament coordinates for visualizations
-        self.designed_path_coords: List[Dict[str, float]] = []
-        self.measured_path_coords: List[Dict[str, float]] = []
+        self.designed_path_coords: Dict[int, List[Dict[str, float]]] = {}
+        self.measured_path_coords: Dict[int, List[Dict[str, float]]] = {}
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
     def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Dict[str, Any]:
@@ -144,8 +147,17 @@ class PathDeviationFeature(FeatureModel):
 
             # Store coordinates for visualizations
             if visualize_flag:
-                self.designed_path_coords.append(d_point)
-                self.measured_path_coords.append(m_point)
+                assert isinstance(self.layer_id, int), "layer_id must be an integer"
+
+                # Initialize lists if not already present
+                if self.layer_id not in self.designed_path_coords:
+                    self.designed_path_coords[self.layer_id] = []
+                if self.layer_id not in self.measured_path_coords:
+                    self.measured_path_coords[self.layer_id] = []
+
+                # Append current points
+                self.designed_path_coords[self.layer_id].append(d_point)
+                self.measured_path_coords[self.layer_id].append(m_point)
 
             # Calculate 3D Euclidean distance
             dx = d_point["x"] - m_point["x"]

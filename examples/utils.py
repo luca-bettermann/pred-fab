@@ -10,8 +10,8 @@ def generate_path_data(n_layers: int = 2, n_segments: int = 2, noise: bool = Fal
         n_segments: Number of segments per layer
     """
     layers = []
-    xy_deviation = 2 if noise else 0.0
-    z_deviation = 0.1 if noise else 0.0
+    xy_deviation = 3 if noise else 0.0
+    z_deviation = 0.02 if noise else 0.0
     
     for layer_id in range(n_layers):
         segments = []
