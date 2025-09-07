@@ -97,7 +97,7 @@ class ExternalDataInterface(ABC):
         # Default implementation returns all as missing
         return exp_codes, {}
 
-    def pull_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, np.ndarray]]]:
+    def pull_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, np.ndarray]]:
         """
         Load metrics arrays from external source for multiple experiments.
         
@@ -109,7 +109,7 @@ class ExternalDataInterface(ABC):
         """
         # Default implementation returns all as missing
         return exp_codes, {}
-
+            
     def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """
         Save study records to external source.
@@ -158,7 +158,7 @@ class ExternalDataInterface(ABC):
         # Default implementation - override in subclasses
         return False
 
-    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, np.ndarray]], recompute: bool, **kwargs) -> bool:
+    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, np.ndarray], recompute: bool, **kwargs) -> bool:
         """
         Save metrics arrays to external source.
         
@@ -173,7 +173,7 @@ class ExternalDataInterface(ABC):
         """
         # Default implementation - override in subclasses
         return False
-
+    
     # === PUBLIC API METHODS (Called externally) ===
     def pull_study_records(self, study_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """

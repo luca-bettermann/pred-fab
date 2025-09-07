@@ -30,9 +30,10 @@ class EvaluationSystem:
 
         self.evaluation_models: Dict[str, EvaluationModel] = {}
 
-        # Storage of metrics in memory  
-        self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {}
-        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}
+        # Storage of metrics in memory 
+        self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {} # dict_keys: exp_code, perf_code
+        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}   # dict_keys: perf_code, exp_code
+        self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}        # dict_keys: perf_code, exp_code
 
     # === PUBLIC API METHODS (Called externally) ===
     def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: int, **kwargs) -> None:
@@ -58,21 +59,48 @@ class EvaluationSystem:
         self.evaluation_models[performance_code] = eval_model
 
     def activate_evaluation_model(self, code: str, study_params: Dict[str, Any]) -> None:
-        # Skip evaluation model activation altogether if no models are available, but do not raise an error
-        if len(self.evaluation_models) == 0:
-            self.logger.warning("No evaluation models available to activate.")
-            return
-
-        # Raise error if no evaluation model for the given code is found 
+        # Activate evaluation model and apply dataclass-based parameter handling
         if code not in self.evaluation_models:
             raise ValueError(f"No evaluation model for performance code '{code}' has been initialized.")
-
-        # Activate evaluation model and apply dataclass-based parameter handling
         self.evaluation_models[code].active = True
         self.evaluation_models[code].set_study_parameters(**study_params)
+
+        # Initialize metrics array, dim array and dim size storage for this performance code
+        if code not in self.metric_arrays:
+            self.metric_arrays[code] = {}
+        if code not in self.dim_sizes:
+            self.dim_sizes[code] = {}
+
         self.logger.info(f"Activated evaluation model for performance code '{code}' and set study parameters.")
 
-    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool, exp_params: dict) -> None:
+    def initialize_for_exp(self, exp_code, **exp_params) -> None:
+        """
+        Set experiment parameters for all evaluation models and their feature models.
+        
+        Args:
+            exp_code: Experiment code
+            exp_params: Experiment parameters
+        """
+        # Initialize arrays dictionaries for exp_code, if they have not been loaded yet
+        if exp_code not in self.aggr_metrics:
+            self.aggr_metrics[exp_code] = {}
+
+        for eval_model in self.evaluation_models.values():
+            assert eval_model.feature_model is not None, f"Feature model for evaluation '{eval_model.performance_code}' is not set."
+            self.logger.info(f"Set exp parameters for '{eval_model.performance_code}' and '{type(eval_model.feature_model).__name__}'")
+
+            # Configure models with experiment parameters
+            eval_model.set_exp_parameters(**exp_params)
+            eval_model.feature_model.set_exp_parameters(**exp_params)
+
+            # Initialize feature model arrays with correct dimensions
+            dim_sizes = eval_model._get_dim_sizes()
+            eval_model.feature_model.reset_for_new_experiment(eval_model.performance_code, dim_sizes)
+
+            # Store dimension sizes for performance code and experiment
+            self.dim_sizes[eval_model.performance_code][exp_code] = dim_sizes
+
+    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool = False, debug_flag: bool = True) -> None:
         """
         Execute evaluation for all models.
         
@@ -89,25 +117,18 @@ class EvaluationSystem:
             raise ValueError("No evaluation models have been activated.")
         self.logger.info(f"Running evaluation system for experiment {exp_code}")
 
-        # Initialize all models before execution
-        self._model_exp_initialization(**exp_params)
-
-        # Initialize arrays dictionaries for exp_code
-        self.aggr_metrics[exp_code] = {}
-        self.metric_arrays[exp_code] = {}
-
         # Execute each evaluation model
         for performance_code, eval_model in active_models.items():
             self.logger.info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
 
             # Run evaluation and return dict with "Value", "Performance", "Robustness" and "Resilience" as keys
-            eval_aggr_metrics, eval_metrics_array = eval_model.run(
-                exp_code, exp_folder, visualize_flag, debug_flag, **exp_params
-                )
-
+            aggr_metrics, metrics_array, dim_array = eval_model.run(exp_code, exp_folder, visualize_flag, debug_flag)
+            
             # Store the computed features and performances in memory
-            self.aggr_metrics[exp_code][performance_code] = eval_aggr_metrics
-            self.metric_arrays[exp_code][performance_code] = eval_metrics_array
+            self.aggr_metrics[exp_code][performance_code] = aggr_metrics
+            self.metric_arrays[performance_code][exp_code] = metrics_array
+
+        self.logger.console_info("All evaluations completed successfully.")
 
     def evaluation_step_summary(self, exp_code: str) -> str:
         """Generate summary of evaluation results."""
@@ -116,28 +137,25 @@ class EvaluationSystem:
         summary = f"\n\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Dimensions':<30} {'Performance Value':<20}\033[0m"
 
         for code, eval_model in active_eval_models.items():
-            dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, eval_model._compute_dim_sizes())])
+            dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, self.dim_sizes[code][exp_code])])
             dimensions = "(" + dimensions + ")"
             summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {self.aggr_metrics[exp_code][code].get('Performance_Avg', None):<20}"
         return summary + "\n"
-
-    # === PRIVATE/INTERNAL METHODS (Internal use only) ===
-    def _model_exp_initialization(self, **exp_params) -> None:
+    
+    def invert_dict_structure(self, dict_to_invert: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """
-        Initialize all evaluation models for the current experiment.
+        Invert a nested dictionary structure from {outer_key: {inner_key: value}} to {inner_key: {outer_key: value}}.
         
         Args:
-            exp_params: Experiment parameters
+            dict_to_invert: Dictionary to invert
+
+        Returns:
+            Inverted dictionary
         """
-        for eval_model in self.evaluation_models.values():
-            assert eval_model.feature_model is not None, f"Feature model for evaluation '{eval_model.performance_code}' is not set."
-            self.logger.info(f"Initializing arrays of evaluation model '{eval_model.performance_code}' and its feature model '{type(eval_model.feature_model).__name__}'")
-            
-            # Configure models with experiment parameters
-            eval_model.set_exp_parameters(**exp_params)
-            eval_model.feature_model.set_exp_parameters(**exp_params)
-
-            # Initialize arrays with correct dimensions
-            dim_sizes = eval_model._compute_dim_sizes()
-            eval_model.feature_model.reset_for_new_experiment(eval_model.performance_code, dim_sizes)
-
+        inverted_dict: Dict[str, Dict[str, Any]] = {}
+        for outer_key, inner_dict in dict_to_invert.items():
+            for inner_key, value in inner_dict.items():
+                if inner_key not in inverted_dict:
+                    inverted_dict[inner_key] = {}
+                inverted_dict[inner_key][outer_key] = value
+        return inverted_dict

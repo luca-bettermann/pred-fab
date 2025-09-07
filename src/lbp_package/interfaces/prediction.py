@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Type
 from dataclasses import dataclass
 import numpy as np
+from enum import Enum
 
 from .features import FeatureModel
 from ..utils import ParameterHandling, LBPLogger
@@ -20,6 +21,12 @@ class PredictionModel(ParameterHandling, ABC):
     - DataInterface: Handles structured study/experiment metadata and parameters
     - PredictionModel: Loads domain-specific, unstructured data (geometry graph, sensor data, etc.)
     """
+
+    # Nested enum class for dataset types
+    class DatasetType(Enum):
+        """Enum defining the type of dataset a prediction model uses for training."""
+        AGGR_METRICS = "avg_feature"  # Uses aggregated performance metrics
+        METRIC_ARRAYS = "feature_array"      # Uses granular metric arrays
 
     def __init__(self,
                  performance_codes: List[str],
@@ -43,28 +50,27 @@ class PredictionModel(ParameterHandling, ABC):
         # Round digits for outputs
         self.round_digits = round_digits
 
-        # Set input keys this model requires for prediction
-        self.input = self._declare_inputs()
+        # Validate input keys this model requires for prediction
         if not self.input or not isinstance(self.input, list):
             raise ValueError("Model must declare a list of input keys (X) to predict")
 
-        # Set output performance codes this model predicts
+        # Set output performance codes this model predicts and validate
         self.output = performance_codes
         if not self.output or not isinstance(self.output, list):
             raise ValueError("Model must specify a list of performance codes (y) to predict")
 
         # Initialize the model types for the extraction of additional input features
-        self.feature_model_types: Dict[str, Type[FeatureModel]] = self._declare_feature_model_types()
         self.feature_models: Dict[str, FeatureModel] = {}
 
         # Store kwargs so that they can be passed on to the feature models
         self.kwargs = kwargs
 
-    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    # === ABSTRACT PROPERTIES ===
+    @property
     @abstractmethod
-    def _declare_inputs(self) -> List[str]:
+    def input(self) -> List[str]:
         """
-        Declare all input keys this model requires for prediction.
+        Define all input keys this model requires for prediction.
         
         This defines the complete input interface X. Can include:
         - Parameter names (from dataclass fields using parameter_handler)
@@ -75,7 +81,35 @@ class PredictionModel(ParameterHandling, ABC):
             e.g., ["n_layers", "temperature", "geometry_mesh", "sensor_data"]
         """
         ...
+
+    @property
+    @abstractmethod
+    def dataset_type(self) -> DatasetType:
+        """
+        Define whether this model trains on aggregated metrics or metric arrays.
+        
+        Returns:
+            DatasetType.AGGR_METRICS: Model uses aggregated performance metrics
+            DatasetType.METRIC_ARRAYS: Model uses granular metric arrays
+        """
+        ...
+
+    # === OPTIONAL PROPERTIES ===
+    @property
+    def feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
+        """
+        Set feature model types to use for feature extraction.
+        
+        This property can be overridden to specify which feature models
+        should be used for this prediction model.
+        
+        Returns:
+            Dictionary of feature model types {feature_code: FeatureModelClass}
+            e.g., {"energy_consumption": EnergyFeature, "path_deviation": PathDeviationFeature}
+        """
+        return {}
     
+    # === ABSTRACT METHODS ===
     @abstractmethod
     def train(self, X: np.ndarray, y: np.ndarray) -> None:
         """
@@ -86,10 +120,6 @@ class PredictionModel(ParameterHandling, ABC):
                Order matches self.input declaration
             y: Target variables for training, shape (n_samples, n_targets)
                Order matches self.output declaration
-            
-        Note:
-            Cross-validation and hyperparameter tuning should be
-            implemented within this method by the user, if needed.
         """
         ...
     
@@ -108,31 +138,7 @@ class PredictionModel(ParameterHandling, ABC):
         """
         ...
 
-    # === PUBLIC API METHODS (Called externally) ===
-    def add_feature_model(self, code: str, feature_model: FeatureModel) -> None:
-        """
-        Predefined logic of how feature models are added to prediction models.
-        
-        Args:
-            feature_model: FeatureModel instance to use for feature extraction
-        """
-        # Append the feature model instance (one-to-many relationship)
-        self.feature_models[code] = feature_model
-
     # === OPTIONAL METHODS ===
-    def _declare_feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
-        """
-        Declare feature model types to use for feature extraction.
-        
-        This method can be overridden to specify which feature models
-        should be used for this prediction model.
-        
-        Returns:
-            Dictionary of feature model types {feature_code: FeatureModelClass}
-            e.g., {"energy_consumption": EnergyFeature, "path_deviation": PathDeviationFeature}
-        """
-        return {}
-        
     def preprocess(self, 
                    preprocessed_X: Dict[str, Any], 
                    preprocessed_y: np.ndarray) -> Tuple[Dict[str, Any], np.ndarray]:
@@ -156,5 +162,17 @@ class PredictionModel(ParameterHandling, ABC):
             Override this method for model-specific transformations.
         """
         return preprocessed_X, preprocessed_y
+    
+    # === PUBLIC API METHODS ===
+    def add_feature_model(self, code: str, feature_model: FeatureModel) -> None:
+        """
+        Predefined logic of how feature models are added to prediction models.
+        
+        Args:
+            feature_model: FeatureModel instance to use for feature extraction
+        """
+        # Append the feature model instance (one-to-many relationship)
+        self.feature_models[code] = feature_model
+    
 
 

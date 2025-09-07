@@ -95,7 +95,7 @@ class PredictionSystem:
         else:
             self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
 
-    def train(self, study_dataset: Dict[str, Dict[str, Any]], visualize_flag: bool, debug_flag: bool) -> None:
+    def train(self, parameters: Dict[str, Dict], avg_features: Dict[str, Any], feature_arrays: Dict[str, Any], visualize_flag: bool, debug_flag: bool) -> None:
         """
         Train all models with unified data processing.
 
@@ -103,29 +103,34 @@ class PredictionSystem:
             study_dataset: Dictionary of experiments {exp_code: {param_name/perf_name: value, ...}}
         """
         # 1. Filter dataset to required columns
-        dataset = self._filter_dataset(study_dataset)
-        
-        # 2. Add feature data
-        self._add_feature_data(dataset, self.prediction_models, visualize_flag, debug_flag)
+        input_keys, output_keys, array_keys = self._get_required_keys()
+       
+        # 2. Construct input, output and array data lists
+        assert parameters.keys() == avg_features.keys() == feature_arrays.keys(), "Inconsistent data keys"
+        input_data = []
+        output_data = []
+        arrays = []
+        for exp_code in parameters.keys():
+            input_data.append([v for k, v in parameters[exp_code].items() if k in input_keys])
+            output_data.append([v for k, v in avg_features[exp_code].items() if k in output_keys])
+            arrays.append([v for k, v in feature_arrays[exp_code].items() if k in array_keys])
 
-        # 3. Get all input and output columns
-        all_inputs = []
-        all_outputs = []
-        for model in self.prediction_models:
-            all_inputs.extend(model.input)
-            all_outputs.extend(model.output)
-        
+        # 3. Add feature data
+        missing_keys = [key for key in input_keys if key not in list(parameters.values())[0]]
+        exp_codes = list(parameters.keys())
+        features = self._add_feature_data(missing_keys, exp_codes, visualize_flag, debug_flag)
+        input_data = [inp + feat for inp, feat in zip(input_data, features)]
+
+        # test normalization and denormalization
+        normalized_input = self._normalize_data(input_data, input_keys, is_training=True)
+        denormalized_input = self._denormalize_data(normalized_input, input_keys)
+
         # 4. Prepare and normalize inputs (training mode)
-        input_data = self._prepare_and_normalize_data(
-            dataset, list(set(all_inputs)), is_training=True
-        )
+        input_data = self._normalize_data(input_data, input_keys, is_training=True)
+        output_data = self._normalize_data(output_data, output_keys, is_training=True)
+        arrays = self._normalize_data(arrays, array_keys, is_training=True)
         
-        # 5. Prepare and normalize outputs (training mode) 
-        output_data = self._prepare_and_normalize_data(
-            dataset, list(set(all_outputs)), is_training=True
-        )
-        
-        # 6. Train each model
+        # 5. Train each model
         for model in self.prediction_models:
             if not model.active:
                 self.logger.warning(f"Skipping inactive model: {type(model).__name__}")
@@ -172,7 +177,7 @@ class PredictionSystem:
             self._add_feature_data(single_exp_data, [pred_model], visualize_flag, debug_flag)
             
             # 3. Prepare and normalize inputs only (inference mode)
-            input_data = self._prepare_and_normalize_data(
+            input_data = self._normalize_data(
                 single_exp_data, pred_model.input, is_training=False
             )
             
@@ -185,7 +190,7 @@ class PredictionSystem:
             for i, perf_code in enumerate(pred_model.output):
                 all_predictions[perf_code] = float(denormalized[i])
                 
-        return all_predictions        
+        return all_predictions   
     
     def _get_pred_model_by_code(self) -> Dict[str, PredictionModel]:
         # Prep prediction system output dict
@@ -196,67 +201,60 @@ class PredictionSystem:
                     raise ValueError(f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration.")
                 pred_model_by_code[code] = pred_model
         return pred_model_by_code
-    
-    def _extract_columns(self, data: Dict[str, np.ndarray], required_columns: List[str]) -> Dict[str, np.ndarray]:
-        """Extract only the columns relevant to a model from dataset."""
-        extracted_data = {}
-        for column in required_columns:
-            if column in data:
-                extracted_data[column] = data[column]
-            else:
-                self.logger.warning(f"Model requires column '{column}' not found in data")
-        return extracted_data
 
-    def _filter_dataset(self, study_dataset: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _get_required_keys(self) -> Tuple[List[str], List[str], List[str]]:
         """Filter dataset to only experiments containing all required columns."""
-        required_columns = set()
+        input_keys = set()
+        output_keys = set()
+        array_keys = set()
         for model in self.prediction_models:
-            required_columns.update(model.input)
-            required_columns.update(model.output)
-        
-        filtered_dataset = {}
-        for exp_code, exp_data in study_dataset.items():
-            # Check if experiment has all required columns
-            if required_columns.issubset(exp_data.keys()):
-                filtered_dataset[exp_code] = exp_data
+            input_keys.update(model.input)
+            if model.dataset_type == model.DatasetType.AGGR_METRICS:
+                output_keys.update(model.output)
+            elif model.dataset_type == model.DatasetType.METRIC_ARRAYS:
+                array_keys.update(model.output)
             else:
-                missing_columns = required_columns - exp_data.keys()
-                self.logger.warning(f"Skipping experiment {exp_code}: missing columns {missing_columns}")
-        
-        self.logger.info(f"Filtered dataset: {len(filtered_dataset)}/{len(study_dataset)} experiments")
-        return filtered_dataset
+                raise ValueError(f"Unknown dataset type for model {type(model).__name__}")
+        return list(input_keys), list(output_keys), list(array_keys)
 
-    def _add_feature_data(self, dataset: Dict[str, Dict[str, Any]], models: List[PredictionModel], visualize_flag: bool, debug_flag: bool) -> None:
+    def _add_feature_data(self, input_keys: List[str], exp_codes: List[str], visualize_flag: bool, debug_flag: bool) -> List[List[Any]]:
         """Add feature model data to experiments in-place."""
-        for model in models:
-            if hasattr(model, 'feature_models') and model.feature_models:
-                for code, feature_model in model.feature_models.items():
-                    # Run feature model for each experiment
-                    for exp_code in dataset.keys():
-                        feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag, debug_flag)
-                        # Add computed feature to experiment data
-                        if code in feature_model.features:
-                            dataset[exp_code][code] = feature_model.features[code]
+        # Prepare mapping of performance codes to feature models
+        feature_models_by_code = {}
+        for pred_model in self.prediction_models:
+            if not pred_model.active:
+                continue
+            for code, feature_model in pred_model.feature_models.items():
+                if code not in feature_models_by_code:
+                    feature_models_by_code[code] = feature_model
 
-    def _prepare_and_normalize_data(self, dataset: Dict[str, Dict[str, Any]], target_columns: List[str], is_training: bool = True) -> Dict[str, np.ndarray]:
-        """Prepare and normalize data for model training or inference."""
-        exp_codes = list(dataset.keys())
-        n_samples = len(exp_codes)
+        # Run required feature models for the given exp_codes
+        features = []
+        for exp_code in exp_codes:
+            exp_features = []
+            for code in input_keys:
+                if code not in feature_models_by_code:
+                    raise ValueError(f"Input key '{code}' required by active prediction models has no associated feature model.")
+                
+                feature_model = feature_models_by_code[code]
+                self.logger.info(f"Computing feature '{code}' for experiment '{exp_code}' using {type(feature_model).__name__}")
+                feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag, debug_flag)
+
+                # Add computed feature to experiment data
+                if code in feature_model.features:
+                    exp_features.append(feature_model.features[code])
+                else:
+                    raise ValueError(f"Feature model '{type(feature_model).__name__}' did not compute expected feature '{code}' for experiment '{exp_code}'")
+            features.append(exp_features)
+        return features
+
+    def _normalize_data(self, data: List[List[Any]], keys: List[str], is_training: bool = True) -> np.ndarray:
+        """Normalize data for model training or inference."""
+        # data array with shape (n_samples, n_features)
+        data_array = np.array(data)
         
-        if n_samples == 0:
-            raise ValueError("Dataset is empty")
-        
-        # Get all unique column names across all experiments
-        all_columns = set()
-        for exp_data in dataset.values():
-            all_columns.update(exp_data.keys())
-        
-        # Normalize each column independently using standardization
-        normalized_data = {}
-        for column in all_columns:
-            # Extract values for this column across all experiments
-            values = [dataset[exp_code].get(column, 0) for exp_code in exp_codes]
-            values_array = np.array(values)
+        for col_idx, key in enumerate(keys):
+            values_array = data_array[:, col_idx]
             
             if is_training:
                 # Training mode: compute and store normalization parameters
@@ -264,47 +262,43 @@ class PredictionSystem:
                 std_val = np.std(values_array)
                 
                 if std_val > 0:  # Avoid division by zero
-                    normalized_values = (values_array - mean_val) / std_val
-                    self.normalization_params[column] = {
+                    data_array[:, col_idx] = (values_array - mean_val) / std_val
+                    self.normalization_params[key] = {
                         'mean': float(mean_val), 
                         'std': float(std_val)
                     }
                 else:
-                    normalized_values = values_array
-                    self.normalization_params[column] = {
+                    # Keep original values when std is 0
+                    self.normalization_params[key] = {
                         'mean': float(mean_val), 
                         'std': 1.0
                     }
             else:
                 # Inference mode: apply stored normalization parameters
-                if column in self.normalization_params:
-                    params = self.normalization_params[column]
+                if key in self.normalization_params:
+                    params = self.normalization_params[key]
                     if params['std'] > 0:
-                        normalized_values = (values_array - params['mean']) / params['std']
-                    else:
-                        normalized_values = values_array
+                        data_array[:, col_idx] = (values_array - params['mean']) / params['std']
                 else:
                     # Column not seen during training, use as-is
-                    normalized_values = values_array
-                    self.logger.warning(f"Column '{column}' not seen during training, using raw values")
-            
-            normalized_data[column] = normalized_values
+                    self.logger.warning(f"Column '{key}' not seen during training, using raw values")
         
         if is_training:
-            self.logger.info(f"Normalized {len(all_columns)} columns using standardization")
-        
-        return self._extract_columns(normalized_data, target_columns)
+            self.logger.info(f"Normalized {data_array.shape[1]} columns using standardization")
+        return data_array
 
-    def _denormalize_predictions(self, predictions: np.ndarray, column_codes: List[str]) -> np.ndarray:
-        """Denormalize predictions back to original scale using standardization parameters."""
-        # Reverse standardization
-        denormalized = np.zeros_like(predictions)
-        for i, code in enumerate(column_codes):
+    def _denormalize_data(self, data: np.ndarray, column_codes: List[str]) -> np.ndarray:
+        """Denormalize data back to original scale using stored normalization parameters."""
+        denormalized = np.copy(data)
+        
+        for col_idx, code in enumerate(column_codes):
             if code in self.normalization_params:
                 params = self.normalization_params[code]
-                denormalized[i] = (predictions[i] * params['std'] + params['mean'])
+                if params['std'] > 0:
+                    denormalized[:, col_idx] = (data[:, col_idx] * params['std'] + params['mean'])
             else:
-                denormalized[i] = predictions[i]
+                self.logger.warning(f"Column '{code}' not seen during training, using raw values")
+        
         return denormalized
     
     def _dict_to_array(self, data: Dict[str, np.ndarray], column_order: List[str]) -> np.ndarray:

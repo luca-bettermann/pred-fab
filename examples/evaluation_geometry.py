@@ -29,23 +29,35 @@ class PathEvaluation(EvaluationModel):
         super().__init__(**kwargs)
 
     # === ABSTRACT METHODS (Must be implemented by subclasses) ===
-    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
-        """Declare dimensions for path evaluation with the corresponding structure."""
-        dimension_names = [
-            ('layers', 'layer_id', 'n_layers'),
-            ('segments', 'segment_id', 'n_segments')
-        ]
-        return dimension_names
-    
-    def _declare_feature_model_type(self) -> Type[FeatureModel]:
+    @property
+    def dim_names(self) -> List[str]:
+        """Return the declared dimensions."""
+        return ['layers', 'segments']
+
+    @property
+    def dim_param_names(self) -> List[str]:
+        """Return the dimension parameter names."""
+        return ['n_layers', 'n_segments']
+
+    @property
+    def dim_iterator_names(self) -> List[str]:
+        """Return the dimension iterator names."""
+        return ['layer_id', 'segment_id']
+
+    @property
+    def feature_model_type(self) -> Type[FeatureModel]:
         """Declare the feature model type to use for feature extraction."""
         return PathDeviationFeature
 
-    def _compute_target_value(self) -> Optional[float]:
+    @property
+    def target_value(self) -> Optional[float]:
         """Return target deviation (ideally 0)."""
         return self.target_deviation
 
-    def _declare_scaling_factor(self) -> Optional[float]:
+    @property
+    def scaling_factor(self) -> Optional[float]:
+        """Return scaling factor for the current evaluation context."""
+        return self.max_deviation
         """Return maximum acceptable deviation."""
         return self.max_deviation
     

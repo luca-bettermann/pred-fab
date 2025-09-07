@@ -2,7 +2,6 @@ from typing import Dict, Any, List, Type
 from numpy import ndarray
 
 from utils import generate_temperature_data
-from visualize import visualize_temperature
 from lbp_package import PredictionModel, FeatureModel
 
 class PredictExample(PredictionModel):
@@ -14,32 +13,35 @@ class PredictExample(PredictionModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _declare_inputs(self) -> List[str]:
+    @property
+    def input(self) -> List[str]:
         """
         Declare the input keys required for this prediction model.
         """
         return ["layerTime", "layerHeight", "temperature"]
-    
-    def _declare_outputs(self) -> List[str]:
+        
+    @property
+    def dataset_type(self) -> PredictionModel.DatasetType:
         """
-        Declare the output keys produced by this prediction model.
+        Specify the type of dataset this prediction model works with.
         """
-        return ["path_deviation", "energy_consumption"]
+        return PredictionModel.DatasetType.AGGR_METRICS
 
-    def _declare_feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
+    @property
+    def feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
         """
         Declare the feature model types this prediction model uses.
         """
         return {"temperature": TemperatureExtraction}
 
     def train(self, X: Dict[str, ndarray], y: ndarray) -> None:
-        ...
+        pass
 
     def predict(self, X: Dict[str, ndarray]) -> Dict[str, ndarray]:
         """
         Perform prediction based on the input features.
         """
-        ...
+        return {}
 
 class TemperatureExtraction(FeatureModel):
     """
@@ -50,7 +52,7 @@ class TemperatureExtraction(FeatureModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _load_data(self, exp_code: str, exp_folder: str) -> Any:
+    def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any:
         """
         Mock loading of raw temperature data by generating it.
         """
@@ -66,12 +68,11 @@ class TemperatureExtraction(FeatureModel):
         """
         Extract temperature features from the provided data.
         """
-
-        if visualize_flag:
-            visualize_temperature(data["temperature"])
-
+        temp_data = data["temperature"]
+        if len(temp_data) == 0:
+            raise ValueError("Temperature data is empty.")
         # No feature extraction needed, as we use the raw temperature data directly
-        return data
+        return {"temperature": sum(temp_data)/len(temp_data)}
 
     
 

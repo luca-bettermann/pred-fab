@@ -37,7 +37,7 @@ class TestPathDeviationEvaluation:
             **mock_study_params
         )
         
-        assert eval_model._compute_target_value() == 0.0
+        assert eval_model.target_value() == 0.0
         assert eval_model._declare_scaling_factor() == 0.5
     
     def test_dimensional_setup(self, temp_dir, test_logger, mock_study_params, mock_exp_params):
@@ -58,7 +58,7 @@ class TestPathDeviationEvaluation:
         
         # Test dimension sizes after setting experiment parameters
         eval_model.set_exp_parameters(**mock_exp_params)
-        dim_sizes = eval_model._compute_dim_sizes()
+        dim_sizes = eval_model._get_dim_sizes()
         assert dim_sizes == [2, 2]
         
         # Test dimension ranges
@@ -104,7 +104,7 @@ class TestEnergyConsumption:
             **mock_study_params
         )
         
-        assert eval_model._compute_target_value() == 0.0
+        assert eval_model.target_value() == 0.0
 
         mock_exp_params.update(mock_study_params)
         eval_model.set_exp_parameters(**mock_exp_params)
@@ -127,7 +127,7 @@ class TestEnergyConsumption:
         assert eval_model.dim_param_names == []
         
         # Test dimension sizes for scalar
-        dim_sizes = eval_model._compute_dim_sizes()
+        dim_sizes = eval_model._get_dim_sizes()
         assert dim_sizes == []
         
         # Test dimension ranges for scalar

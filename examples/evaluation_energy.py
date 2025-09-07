@@ -16,19 +16,33 @@ class EnergyConsumption(EvaluationModel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _declare_dimensions(self) -> List[Tuple[str, str, str]]:
-        """Declare dimensions for energy evaluation (no dimensions)."""
-        return []  # No dimensions for energy consumption
-    
-    def _declare_feature_model_type(self) -> Type[FeatureModel]:
+    @property
+    def feature_model_type(self) -> Type[FeatureModel]:
         """Declare the feature model type to use for feature extraction."""
         return EnergyFeature
+        
+    @property
+    def dim_names(self) -> List[str]:
+        """Return the dimension names."""
+        return []
+
+    @property
+    def dim_param_names(self) -> List[str]:
+        """Return the dimension parameter names."""
+        return []
+
+    @property
+    def dim_iterator_names(self) -> List[str]:
+        """Return the dimension iterator names."""
+        return []
     
-    def _compute_target_value(self) -> Optional[float]:
+    @property
+    def target_value(self) -> Optional[float]:
         """Return target energy value."""
         return self.target_energy
-    
-    def _declare_scaling_factor(self) -> Optional[float]:
+
+    @property
+    def scaling_factor(self) -> Optional[float]:
         """Return maximum energy for normalization."""
         return self.max_energy
 

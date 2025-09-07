@@ -5,7 +5,6 @@ from examples.evaluation_energy import EnergyConsumption
 from examples.evaluation_geometry import PathEvaluation
 from examples.prediction import PredictExample
 from examples.external_data import MockDataInterface
-from tests.conftest import create_study_json_file, create_exp_json_files
 
 # TODO NOW
 # - Implement prediction Example
@@ -46,11 +45,11 @@ def main():
     lbp_manager.add_prediction_model(["energy_consumption", "path_deviation"], PredictExample, round_digits=4, additional_param=None)
     
     # Initialize the study and run evaluation
-    lbp_manager.initialize_for_study(study_code, recompute_flag=True)
+    lbp_manager.initialize_for_study(study_code)
 
     # Run evaluations for each experiment
-    lbp_manager.run_evaluation(study_code, exp_nr=1, recompute_flag=True, visualize_flag=True)
-    lbp_manager.run_evaluation(study_code, exp_nrs=[2, 3], recompute_flag=True, visualize_flag=True)
+    lbp_manager.run_evaluation(study_code, exp_nr=1)
+    lbp_manager.run_evaluation(study_code, exp_nrs=[2, 3])
 
     # Run predictions for all experiments
     lbp_manager.run_training(study_code, exp_nrs=[1, 2, 3])

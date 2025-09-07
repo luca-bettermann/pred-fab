@@ -68,13 +68,3 @@ def visualize_geometry(
     ax.set_title(f"EXP: '{exp_code}' - {len(designed_layer)} Layers\n\nAvg Path Deviation = {avg_deviation:.3f}")
     ax.legend()
     plt.show(block=True)
-
-def visualize_temperature(temperature_data: Dict[str, Any]) -> None:
-    """Visualize the temperature data."""
-    plt.figure(figsize=(10, 6))
-    plt.plot(temperature_data["time"], temperature_data["temperature"], label="Temperature")
-    plt.xlabel("Time")
-    plt.ylabel("Temperature (°C)")
-    plt.title("Temperature Over Time")
-    plt.legend()
-    plt.show()

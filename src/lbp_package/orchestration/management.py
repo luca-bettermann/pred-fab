@@ -145,7 +145,7 @@ class LBPManager:
             exp_nr: Optional[int] = None, 
             visualize_flag: Optional[bool] = None, 
             debug_flag: Optional[bool] = None, 
-            recompute_flag: Optional[bool] = False) -> None:
+            recompute_flag: Optional[bool] = None) -> None:
         """
         Execute evaluation for one or multiple experiments.
         
@@ -157,7 +157,7 @@ class LBPManager:
             recompute_flag: Force a recompute of the evaluation (uses system default if None)
         """
         # Check if study has been initialized
-        self._validate_initialization(study_code, self.study_records)
+        self.local_data.check_availability(study_code, self.study_records)
 
         # Handle input compatibility
         exp_codes = self._convert_exp_nrs(exp_nr, exp_nrs)
@@ -182,6 +182,10 @@ class LBPManager:
         for exp_code in exp_codes:
             self.logger.console_info(f"\nStart evaluation of '{exp_code}'...")
 
+            # Set experiment parameters for all evaluation and feature models
+            exp_params = exp_records[exp_code]['Parameters']
+            self.eval_system.initialize_for_exp(exp_code, **exp_params)
+
             # Check whether evaluation is needed
             if exp_code in exp_codes_with_missing_data or recompute_flag:
 
@@ -190,8 +194,7 @@ class LBPManager:
                     exp_code=exp_code,
                     exp_folder=self.local_data.get_experiment_folder(exp_code),
                     visualize_flag=visualize_flag,
-                    debug_flag=debug_flag,
-                    exp_params=exp_records[exp_code]['Parameters']
+                    debug_flag=debug_flag
                 )
 
             # Display evaluation summary
@@ -216,49 +219,27 @@ class LBPManager:
         using the evaluation history and feature models.
         """
         # Check if study has been initialized
-        self._validate_initialization(study_code, self.study_records)
+        self.local_data.check_availability(study_code, self.study_records)
 
         # Set flags with system defaults if not explicitly provided
         visualize_flag, debug_flag, recompute_flag = self._validate_system_flags(visualize_flag, debug_flag, recompute_flag)
 
-        self.logger.console_info(f"\n------- Run Training for Study: '{study_code}' -------\n")
+        self.logger.console_info(f"\n------- Run Training for {len(exp_nrs)} Experiments of Study '{study_code}' -------\n")
 
         # Get experiment codes and load the corresponding records
         exp_codes = [self.local_data.get_experiment_code(exp_nr) for exp_nr in exp_nrs]
         exp_records = self._load_and_save_exp_records(exp_codes, debug_flag, recompute_flag=False)
 
         # Load complete experiment data using hierarchical pattern
-        self._load_evaluation_data(exp_codes, debug_flag, recompute_flag)
-        
-        # Build complete dataset with parameters and performance values
-        dataset = {}
-        for exp_code in exp_codes:
+        missing_codes = self._load_evaluation_data(exp_codes, debug_flag, recompute_flag)
+        if missing_codes:
+            raise ValueError(f"Cannot run training, missing evaluation data for experiments: {missing_codes}")
 
-            # Verify that exp_code exists in all required data structures
-            assert exp_code in exp_records, f"'{exp_code}' missing in exp_records"
-            assert exp_code in self.eval_system.aggr_metrics, f"'{exp_code}' missing in aggr_metrics"
-            assert exp_code in self.eval_system.metric_arrays, f"'{exp_code}' missing in metrics_arrays"
-
-            # Verify that the experiment record contains all required fields
-            exp_record = exp_records[exp_code]
-            if all(field not in exp_record for field in self._required_exp_record_fields):
-                missing_fields = [field for field in self._required_exp_record_fields if field not in exp_record]
-                raise ValueError(f"Missing required fields in experiment record for {exp_code}: {missing_fields}")
-
-            # Construct experiment data dictionary and add it to the dataset
-            # First, add the parameters
-            dataset[exp_code] = {}
-            dataset[exp_code].update(exp_record['Parameters'])
-
-            # Second, add the average feature values to the dataset
-            avg_feature_values = self.eval_system.aggr_metrics[exp_code].get("Feature_Avg")
-            dataset[exp_code]["Feature_Avg"] = avg_feature_values
-
-            # Third, add the feature values on a per-dimension basis
-            # dataset[exp_code].update(self.eval_system.metrics_arrays[exp_code])
+        # Prepare training inputs
+        parameters, avg_features, feature_arrays = self._get_train_inputs(exp_records)
 
         # Run training for all prediction models
-        self.pred_system.train(dataset, visualize_flag, debug_flag)
+        self.pred_system.train(parameters, avg_features, feature_arrays, visualize_flag, debug_flag)
 
         # Display training summary
         self.logger.console_success(f"Successfully trained prediction models for study '{study_code}'.")
@@ -363,7 +344,7 @@ class LBPManager:
             List of experiment codes that have missing or incomplete data
         """
         self.logger.info(f"Loading experiment data for {len(exp_codes)} experiments: {exp_codes}")
-                
+
         # Load aggregated metrics
         missing_aggr_codes = self._hierarchical_load(
             "aggregated metrics",
@@ -374,25 +355,24 @@ class LBPManager:
             debug_flag,
             recompute_flag
         )
-        
-        if missing_aggr_codes:
-            self.logger.info(f"No aggr metrics found for {len(missing_aggr_codes)} experiments: {missing_aggr_codes} - will generate during evaluation.")
 
-        # Load metrics arrays
-        missing_array_codes = self._hierarchical_load(
-            "metric arrays",
-            exp_codes,
-            self.eval_system.metric_arrays,
-            self.local_data.load_metrics_arrays,
-            self.external_data.pull_metrics_arrays,
-            debug_flag,
-            recompute_flag
-        )
+        for perf_code, metric_array in self.eval_system.metric_arrays.items():
+            # Load metrics arrays
+            missing_array_codes = self._hierarchical_load(
+                f"'{perf_code}' metric array",
+                exp_codes,
+                metric_array,
+                self.local_data.load_metrics_arrays,
+                self.external_data.pull_metrics_arrays,
+                debug_flag,
+                recompute_flag,
+                perf_code=perf_code
+            )
 
-        if missing_array_codes:
-            self.logger.info(f"No metric arrays found for {len(missing_array_codes)} experiments: {missing_array_codes} - will generate during evaluation.")
-
-        return list(set(missing_aggr_codes).union(set(missing_array_codes)))
+        missing_codes = set(missing_aggr_codes + missing_array_codes)
+        if missing_codes:
+            self.logger.info(f"No metrics found for {len(missing_codes)} experiments: {missing_codes} - will generate during evaluation.")
+        return list(missing_codes)
 
     def _save_evaluation_data(self, exp_codes: List[str], debug_flag: bool, recompute_flag: bool) -> None:
         """
@@ -417,28 +397,24 @@ class LBPManager:
             recompute_flag
         )
 
-        # Compute column names of metrics arrays
-        metric_names = {}
-        dim_combinations = {}
-        dim_iterators = {}
-        for perf_code, eval_model in self.eval_system.evaluation_models.items():
-            metric_names[perf_code] = eval_model.performance_array_dims
-            dim_combinations[perf_code] = eval_model.dim_combinations
-            dim_iterators[perf_code] = eval_model.dim_iterator_names
+        # Iterate over performances
+        for perf_code, metric_array in self.eval_system.metric_arrays.items():
+            # Get column names for saving
+            dim_iterator_names = self.eval_system.evaluation_models[perf_code].dim_iterator_names
+            metric_names = self.eval_system.evaluation_models[perf_code].metric_names
 
-        # Save metrics arrays
-        self._hierarchical_save(
-            "metric arrays",
-            exp_codes,
-            self.eval_system.metric_arrays,
-            self.local_data.save_metrics_arrays,
-            self.external_data.push_metrics_arrays,
-            debug_flag,
-            recompute_flag,
-            metric_names=metric_names,
-            dim_combinations=dim_combinations,
-            dim_iterators=dim_iterators
-        )
+            # Save metrics arrays
+            self._hierarchical_save(
+                f"'{perf_code}' metric array",
+                exp_codes,
+                metric_array,
+                self.local_data.save_metrics_arrays,
+                self.external_data.push_metrics_arrays,
+                debug_flag,
+                recompute_flag,
+                perf_code=perf_code,
+                column_names=dim_iterator_names + metric_names
+            )
 
         self.logger.info(f"Completed saving experiment data for {len(exp_codes)} experiments")
 
@@ -449,7 +425,8 @@ class LBPManager:
                            local_loader: Callable[[List[str]], Tuple[List[str], Dict[str, Any]]],
                            external_loader: Callable[[List[str]], Tuple[List[str], Any]],
                            debug: Optional[bool],
-                           recompute: Optional[bool]) -> List[str]:
+                           recompute: Optional[bool],
+                           **kwargs) -> List[str]:
         """
         Universal hierarchical data loading with missing-only processing.
         
@@ -472,7 +449,7 @@ class LBPManager:
         
         # 2. Load from local files
         if not recompute:
-            missing_local, local_data = local_loader(missing_memory)
+            missing_local, local_data = local_loader(missing_memory, **kwargs)
             memory_storage.update(local_data)
             self._check_for_retrieved_codes(missing_memory, missing_local, dtype, "local files", console_output=True)
         else:
@@ -664,6 +641,40 @@ class LBPManager:
             model.add_feature_model(code=code, feature_model=feature_model_instance)
             feature_model_dict[feature_model_type] = feature_model_instance
 
+    def _get_train_inputs(self, exp_records: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        # Initialize input dicts
+        parameters = {}
+        avg_features = {}
+        feature_arrays = {}
+
+        for exp_code, exp_record in exp_records.items():
+            # Verify that the experiment record contains all required fields
+            if all(field not in exp_record for field in self._required_exp_record_fields):
+                missing_fields = [field for field in self._required_exp_record_fields if field not in exp_record]
+                raise ValueError(f"Missing required fields in experiment record for {exp_code}: {missing_fields}")
+
+            # Add the relevant data to the input dictionaries
+            parameters[exp_code] = exp_record['Parameters']
+            
+            # Initialize avg_features and feature_arrays dicts
+            if exp_code not in avg_features:
+                avg_features[exp_code] = {}
+            if exp_code not in feature_arrays:
+                feature_arrays[exp_code] = {}
+
+            # Populate avg_features and feature_arrays
+            for perf_code, eval_model in self.eval_system.evaluation_models.items():
+                if not eval_model.active:
+                    continue
+                
+                # Build feature dicts with keys exp_code, perf_code
+                avg_features[exp_code][perf_code] = self.eval_system.aggr_metrics[exp_code][perf_code].get("Feature_Avg", {})
+                array = self.eval_system.metric_arrays[perf_code][exp_code]
+
+                # Extract feature array regardless of dimensionality
+                feature_arrays[exp_code][perf_code] = array[..., -len(eval_model.metric_names)]     
+        return parameters, avg_features, feature_arrays
+
     def _initialization_step_summary(self) -> str:
         """Generate summary of initialization results."""
         assert self.eval_system is not None and self.pred_system is not None
@@ -688,7 +699,3 @@ class LBPManager:
         assert isinstance(debug_flag, bool), "Debug flag must be boolean."
         assert isinstance(recompute_flag, bool), "Recompute flag must be boolean."
         return visualize_flag, debug_flag, recompute_flag
-
-    def _validate_initialization(self, code: str, memory: Dict[str, Any]) -> None:
-        if code not in memory:
-            raise ValueError(f"{code} is not available in memory.")

@@ -41,8 +41,8 @@ class MockDataInterface(ExternalDataInterface):
         # hardcoded parameters
         params = {
             'test_001': [2, 2, 30.0, 0.2],
-            'test_002': [3, 3, 40.0, 0.3],
-            'test_003': [4, 4, 50.0, 0.4],
+            'test_002': [3, 4, 40.0, 0.3],
+            'test_003': [4, 3, 50.0, 0.4],
         }
 
         exp_data = {
