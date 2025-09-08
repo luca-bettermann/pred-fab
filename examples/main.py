@@ -12,6 +12,9 @@ from examples.external_data import MockDataInterface
 # TODO FUTURE
 # - Evaluation only becomes relevant once we want to optimize.
 #   In the most elegant structure, evaluation should happen in the optimizer stage.
+# - Right now, the feature model does not contain dimensionalities. This means, that
+#   that when we connect PredictionModel with FeatureModel, it is without
+#   dimensionality information. This needs to be adjusted.
 
 def main():
     # Get paths relative to this file and make sure directories exist
@@ -55,7 +58,12 @@ def main():
     lbp_manager.run_training(study_code, exp_nrs=[1, 2, 3])
 
     # Calibrate the upcoming experiment
-    # lbp_manager.run_calibration(exp_nr=4)  # TODO: Fix calibration implementation    
+    param_ranges = {
+        "layerTime": (0.0, 1.0),
+        "layerHeight": (10, 100),
+    }
+    lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
+
 
 
 if __name__ == "__main__":

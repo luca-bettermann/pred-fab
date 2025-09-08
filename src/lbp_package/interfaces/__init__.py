@@ -1,11 +1,13 @@
-from .external_data import ExternalDataInterface
-from .features import FeatureModel
-from .evaluation import EvaluationModel
-from .prediction import PredictionModel
+from .external_data import IExternalData
+from .features import IFeatureModel
+from .evaluation import IEvaluationModel
+from .prediction import IPredictionModel
+from .calibration import ICalibrationModel
 
 __all__ = [
-    "ExternalDataInterface",
-    "FeatureModel", 
-    "EvaluationModel",
-    "PredictionModel"
+    "IExternalData",
+    "IFeatureModel", 
+    "IEvaluationModel",
+    "IPredictionModel",
+    "ICalibrationModel"
 ]

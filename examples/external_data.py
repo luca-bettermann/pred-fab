@@ -1,9 +1,9 @@
 import os
 from typing import Dict, Any, List
-from lbp_package import ExternalDataInterface
+from lbp_package import IExternalData
 
 
-class MockDataInterface(ExternalDataInterface):
+class MockDataInterface(IExternalData):
     """
     Example data interface that mocks an external data source by returning hardcoded JSON data.
     """

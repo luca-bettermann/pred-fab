@@ -81,12 +81,12 @@ class LBPLogger:
     
     def console_success(self, message: str) -> None:
         """Print success message to console and log."""
-        print(f"✅ {message}")
+        print(f"\n✅ {message}")
         self.logger.info(f"CONSOLE SUCCESS: \n\n{message}\n")
     
     def console_warning(self, message: str) -> None:
         """Print warning to console and log."""
-        print(f"⚠️ {message}")
+        print(f"\n⚠️ {message}")
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
 
     def console_summary(self, message: str) -> None:

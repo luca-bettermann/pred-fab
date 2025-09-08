@@ -2,7 +2,7 @@ from typing import Any, Dict, Type, Optional, List
 import numpy as np
 
 from ..utils import LBPLogger
-from ..interfaces.evaluation import EvaluationModel
+from ..interfaces.evaluation import IEvaluationModel
 
 
 class EvaluationSystem:
@@ -28,7 +28,7 @@ class EvaluationSystem:
         """
         self.logger: LBPLogger = logger
 
-        self.evaluation_models: Dict[str, EvaluationModel] = {}
+        self.evaluation_models: Dict[str, IEvaluationModel] = {}
 
         # Storage of metrics in memory 
         self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {} # dict_keys: exp_code, perf_code
@@ -36,17 +36,19 @@ class EvaluationSystem:
         self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}        # dict_keys: perf_code, exp_code
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: int, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: int, calibration_weight: Optional[float] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         
         Args:
             performance_code: Code identifying the performance metric
             evaluation_class: Class of evaluation model to instantiate
-            study_params: Study parameters for model configuration
+            round_digits: Number of digits to round results to
+            calibration_weight: Optional weight for calibration objective function
+            **kwargs: Additional parameters for model initialization
         """
         # Validate if evaluation_model is the correct type
-        if not issubclass(evaluation_class, EvaluationModel):
+        if not issubclass(evaluation_class, IEvaluationModel):
             raise TypeError(f"Expected a subclass of EvaluationModel, got {type(evaluation_class).__name__}")
 
         self.logger.info(f"Adding '{evaluation_class.__name__}' model to evaluate performance '{performance_code}'")
@@ -54,6 +56,7 @@ class EvaluationSystem:
             performance_code=performance_code,
             logger=self.logger,
             round_digits=round_digits,
+            calibration_weight=calibration_weight,
             **kwargs
         )
         self.evaluation_models[performance_code] = eval_model
@@ -112,7 +115,7 @@ class EvaluationSystem:
             **exp_params: Experiment parameters
         """
         # Make sure at least one evaluation model has been activated
-        active_models = {code: model for code, model in self.evaluation_models.items() if model.active}
+        active_models = self.get_active_eval_models()
         if len(active_models) == 0:
             raise ValueError("No evaluation models have been activated.")
         self.logger.info(f"Running evaluation system for experiment {exp_code}")
@@ -140,7 +143,7 @@ class EvaluationSystem:
             dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, self.dim_sizes[code][exp_code])])
             dimensions = "(" + dimensions + ")"
             summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {self.aggr_metrics[exp_code][code].get('Performance_Avg', None):<20}"
-        return summary + "\n"
+        return summary
     
     def invert_dict_structure(self, dict_to_invert: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """
@@ -159,3 +162,34 @@ class EvaluationSystem:
                     inverted_dict[inner_key] = {}
                 inverted_dict[inner_key][outer_key] = value
         return inverted_dict
+    
+    def get_calibration_weights(self) -> Dict[str, float]:
+        """
+        Get calibration weights from all evaluation models.
+        
+        Returns:
+            Dictionary mapping performance codes to their calibration weights
+            
+        Raises:
+            ValueError: If any active evaluation model lacks calibration weight
+        """
+        weights = {}
+        for code, eval_model in self.get_active_eval_models().items():
+            if eval_model.calibration_weight is None:
+                raise ValueError(f"Evaluation model '{code}' is active but has no calibration weight defined. "
+                               f"Set calibration_weight when adding the model to enable calibration.")
+            weights[code] = eval_model.calibration_weight
+        
+        if not weights:
+            raise ValueError("No active evaluation models with calibration weights found.")
+            
+        return weights
+    
+    def get_active_eval_models(self) -> Dict[str, IEvaluationModel]:
+        """
+        Get all active evaluation models.
+        
+        Returns:
+            Dictionary of active evaluation models {performance_code: model}
+        """
+        return {code: model for code, model in self.evaluation_models.items() if model.active}

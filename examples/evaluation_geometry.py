@@ -3,13 +3,13 @@ from typing import Dict, Any, List, Optional, Tuple, Type
 from dataclasses import dataclass
 import numpy as np
 
-from lbp_package import EvaluationModel, FeatureModel
+from lbp_package import IEvaluationModel, IFeatureModel
 from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
 from utils import generate_path_data
 from visualize import visualize_geometry
 
 @dataclass
-class PathEvaluation(EvaluationModel):
+class PathEvaluation(IEvaluationModel):
     """Example evaluation model for path deviation assessment."""
 
     # Model parameters
@@ -45,7 +45,7 @@ class PathEvaluation(EvaluationModel):
         return ['layer_id', 'segment_id']
 
     @property
-    def feature_model_type(self) -> Type[FeatureModel]:
+    def feature_model_type(self) -> Type[IFeatureModel]:
         """Declare the feature model type to use for feature extraction."""
         return PathDeviationFeature
 
@@ -97,7 +97,7 @@ class PathEvaluation(EvaluationModel):
 
 
 @dataclass
-class PathDeviationFeature(FeatureModel):
+class PathDeviationFeature(IFeatureModel):
     """Example feature model for path deviation calculation."""
     
     # Model parameters

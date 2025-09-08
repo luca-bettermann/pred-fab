@@ -64,7 +64,7 @@ def exp_parameter(default=None, **kwargs):
 
 def dim_parameter():
     """Mark a dataclass field as a dimensional parameter (changes during execution)."""
-    return field(default=None, metadata={'param_type': 'runtime'})
+    return field(default=None, metadata={'param_type': 'dimension'})
 
 @dataclass
 class ParameterHandling(ABC):
@@ -86,8 +86,12 @@ class ParameterHandling(ABC):
 
     def set_dim_parameters(self, **kwargs) -> None:
         """Set dimensional parameters (fields marked with @dim_parameter)."""
-        runtime_param_names = {f.name for f in fields(self) if f.metadata.get('param_type') == 'runtime'}
+        runtime_param_names = {f.name for f in fields(self) if f.metadata.get('param_type') == 'dimension'}
         for key, value in kwargs.items():
             if key in runtime_param_names:
                 setattr(self, key, value)
+
+    def get_dim_parameters(self) -> dict:
+        """Get current dimensional parameters as a dictionary."""
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.metadata.get('param_type') == 'dimension'}
 

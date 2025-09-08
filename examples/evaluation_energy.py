@@ -1,11 +1,11 @@
 from typing import Dict, Any, List, Tuple, Type, Optional
 from dataclasses import dataclass
 
-from lbp_package import EvaluationModel, FeatureModel
+from lbp_package import IEvaluationModel, IFeatureModel
 from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
 
 @dataclass
-class EnergyConsumption(EvaluationModel):
+class EnergyConsumption(IEvaluationModel):
     """Example energy consumption evaluation model."""
 
     # Model parameters
@@ -17,7 +17,7 @@ class EnergyConsumption(EvaluationModel):
         super().__init__(**kwargs)
 
     @property
-    def feature_model_type(self) -> Type[FeatureModel]:
+    def feature_model_type(self) -> Type[IFeatureModel]:
         """Declare the feature model type to use for feature extraction."""
         return EnergyFeature
         
@@ -48,7 +48,7 @@ class EnergyConsumption(EvaluationModel):
 
 
 @dataclass
-class EnergyFeature(FeatureModel):
+class EnergyFeature(IFeatureModel):
     """Example feature model for energy consumption extraction."""
 
     # Model parameters

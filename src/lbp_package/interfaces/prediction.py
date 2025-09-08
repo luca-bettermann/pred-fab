@@ -4,12 +4,12 @@ from dataclasses import dataclass
 import numpy as np
 from enum import Enum
 
-from .features import FeatureModel
+from .features import IFeatureModel
 from ..utils import ParameterHandling, LBPLogger
 
 
 @dataclass 
-class PredictionModel(ParameterHandling, ABC):
+class IPredictionModel(ParameterHandling, ABC):
     """
     Abstract interface for prediction models.
     
@@ -60,12 +60,14 @@ class PredictionModel(ParameterHandling, ABC):
             raise ValueError("Model must specify a list of performance codes (y) to predict")
 
         # Initialize the model types for the extraction of additional input features
-        self.feature_models: Dict[str, FeatureModel] = {}
+        self.feature_models: Dict[str, IFeatureModel] = {}
 
         # Store kwargs so that they can be passed on to the feature models
         self.kwargs = kwargs
 
     # === ABSTRACT PROPERTIES ===
+        ...
+
     @property
     @abstractmethod
     def input(self) -> List[str]:
@@ -96,7 +98,7 @@ class PredictionModel(ParameterHandling, ABC):
 
     # === OPTIONAL PROPERTIES ===
     @property
-    def feature_model_types(self) -> Dict[str, Type[FeatureModel]]:
+    def feature_model_types(self) -> Dict[str, Type[IFeatureModel]]:
         """
         Set feature model types to use for feature extraction.
         
@@ -111,7 +113,7 @@ class PredictionModel(ParameterHandling, ABC):
     
     # === ABSTRACT METHODS ===
     @abstractmethod
-    def train(self, X: np.ndarray, y: np.ndarray) -> None:
+    def train(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
         """
         Train the prediction model on processed data.
         
@@ -120,6 +122,13 @@ class PredictionModel(ParameterHandling, ABC):
                Order matches self.input declaration
             y: Target variables for training, shape (n_samples, n_targets)
                Order matches self.output declaration
+               
+        Returns:
+            Dictionary containing training metrics:
+            {
+                "training_score": float,        # Primary metric (R² for regression, accuracy for classification)
+                "training_samples": int         # Number of training samples
+            }
         """
         ...
     
@@ -164,7 +173,7 @@ class PredictionModel(ParameterHandling, ABC):
         return preprocessed_X, preprocessed_y
     
     # === PUBLIC API METHODS ===
-    def add_feature_model(self, code: str, feature_model: FeatureModel) -> None:
+    def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
         """
         Predefined logic of how feature models are added to prediction models.
         

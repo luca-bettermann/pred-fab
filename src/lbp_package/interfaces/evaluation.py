@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
-from .features import FeatureModel
+from .features import IFeatureModel
 from ..utils import ParameterHandling, LBPLogger
 
 
 @dataclass
-class EvaluationModel(ParameterHandling, ABC):
+class IEvaluationModel(ParameterHandling, ABC):
     """
     Abstract base class for evaluation models.
     
@@ -23,18 +23,18 @@ class EvaluationModel(ParameterHandling, ABC):
             performance_code: str,
             logger: LBPLogger,
             round_digits: int = 3,
+            calibration_weight: Optional[float] = None,
             **kwargs) -> None:
         """
         Initialize evaluation model.
 
         Args:
             performance_code: Code identifying the performance metric
-            folder_navigator: File system navigation utility
-            dimension_names: List of (dimension_name, iterator_name, parameter_name) tuples
-            feature_model_type: Class of feature model to use
             logger: Logger instance for debugging and monitoring
             round_digits: Number of decimal places for rounding results
-            **study_params: Study parameters for configuration
+            calibration_weight: Optional weight for calibration objective function.
+                              If None, this model cannot be used in calibration.
+            **kwargs: Additional parameters for configuration
         """
         self.logger = logger
 
@@ -42,9 +42,9 @@ class EvaluationModel(ParameterHandling, ABC):
         self.active: bool = False
 
         # Feature model validation
-        if not isinstance(self.feature_model_type, type) or not issubclass(self.feature_model_type, FeatureModel):
+        if not isinstance(self.feature_model_type, type) or not issubclass(self.feature_model_type, IFeatureModel):
             raise ValueError("Feature model type must be a subclass of FeatureModel.")
-        self.feature_model: Optional[FeatureModel] = None
+        self.feature_model: Optional[IFeatureModel] = None
 
         # Dimensional configuration
         self._validate_dim_properties()
@@ -54,13 +54,18 @@ class EvaluationModel(ParameterHandling, ABC):
         self.performance_code = performance_code
         self.metric_names = ["feature_value", "target_value", "scaling_factor", "performance_value"]
 
+        # Calibration configuration
+        self.calibration_weight = calibration_weight
+        if calibration_weight is not None:
+            self.logger.info(f"EvaluationModel '{performance_code}' set with calibration weight: {calibration_weight}")
+
         # Store kwargs so that they can be passed on to the feature models
         self.kwargs = kwargs
 
     # === ABSTRACT PROPERTIES (Must be implemented by subclasses) ===
     @property
     @abstractmethod
-    def feature_model_type(self) -> Type[FeatureModel]:
+    def feature_model_type(self) -> Type[IFeatureModel]:
         """
         Property to access the feature model class.
 
@@ -173,7 +178,7 @@ class EvaluationModel(ParameterHandling, ABC):
         pass
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_feature_model(self, feature_model: FeatureModel, **kwargs) -> None:
+    def add_feature_model(self, feature_model: IFeatureModel, **kwargs) -> None:
         """
         Predefined logic of how feature models are added to evaluation models.
         
@@ -231,14 +236,14 @@ class EvaluationModel(ParameterHandling, ABC):
             self.logger.debug(f"Computing performance for dimensions: {dims}...")
             performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
 
+            self._cleanup_step(exp_code, exp_folder, visualize_flag, debug_flag)
+
             # Store results in performance array
             metrics_array[dims][:num_dims] = dims
             metrics_array[dims][num_dims] = feature_value
             metrics_array[dims][num_dims + 1] = target_value
             metrics_array[dims][num_dims + 2] = scaling_factor
             metrics_array[dims][num_dims + 3] = performance_value
-
-            self._cleanup_step(exp_code, exp_folder, visualize_flag, debug_flag)
 
         # Unpack metrics_array
         feature_array = metrics_array[..., num_dims]

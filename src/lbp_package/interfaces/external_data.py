@@ -35,7 +35,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 import numpy as np
 
-class ExternalDataInterface(ABC):
+class IExternalData(ABC):
     """Abstract base class for accessing structured study and experiment metadata."""
 
     def __init__(self, client: Any = None):

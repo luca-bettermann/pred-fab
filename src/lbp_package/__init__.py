@@ -1,10 +1,10 @@
-from .interfaces import ExternalDataInterface, FeatureModel, EvaluationModel, PredictionModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel
 from .orchestration import LBPManager
 
 __all__ = [
-    "ExternalDataInterface",
-    "FeatureModel", 
-    "EvaluationModel",
-    "PredictionModel",
+    "IExternalData",
+    "IFeatureModel", 
+    "IEvaluationModel",
+    "IPredictionModel",
     "LBPManager"
 ]

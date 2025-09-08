@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Type, Tuple, Optional, Callable
 
 from .evaluation import EvaluationSystem
 from .prediction import PredictionSystem
-from ..interfaces import ExternalDataInterface, EvaluationModel, PredictionModel
+from ..interfaces import IExternalData, IEvaluationModel, IPredictionModel, ICalibrationModel
 from ..utils import LocalDataInterface, LBPLogger
 
 
@@ -20,7 +20,7 @@ class LBPManager:
             root_folder: str,
             local_folder: str, 
             log_folder: str, 
-            external_data_interface: ExternalDataInterface,
+            external_data_interface: IExternalData,
             server_folder: Optional[str] = None
             ):
         """
@@ -61,31 +61,37 @@ class LBPManager:
         # Initialize system components
         self.eval_system = EvaluationSystem(self.logger)
         self.pred_system = PredictionSystem(self.local_data, self.logger)
+        self.calibration_model: Optional[ICalibrationModel] = None
 
         # Load configuration file
         self._load_config()
+        self.logger.console_info("\n------- Welcome to Learning by Printing -------\n")
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[EvaluationModel], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: Optional[int] = None, calibration_weight: Optional[float] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         Args:
             performance_code: Code identifying the performance metric
             evaluation_class: Class of evaluation model to instantiate
             round_digits: Number of decimal places to round evaluations (optional)
+            calibration_weight: Optional weight for calibration objective function
             **kwargs: Additional parameters for model initialization
         """
         round_digits = self._get_default_attribute('round_digits', round_digits)
         if not isinstance(round_digits, int):
             raise ValueError("Round digits must be an integer.")
-        self.eval_system.add_evaluation_model(performance_code, evaluation_class, round_digits, **kwargs)
+        self.eval_system.add_evaluation_model(performance_code, evaluation_class, round_digits, calibration_weight, **kwargs)
+        
+        weight_msg = f" with calibration weight {calibration_weight}" if calibration_weight is not None else ""
+        self.logger.console_info(f"Added evaluation model '{evaluation_class.__name__}' for performance '{performance_code}'{weight_msg}.")
 
-    def add_prediction_model(self, performance_codes: List[str], prediction_class: Type[PredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
+    def add_prediction_model(self, performance_codes: List[str], prediction_class: Type[IPredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
         """
         Add a prediction model to the system.
         
         Args:
-            performance_codes: List of codes identifying the performance metrics
+            performance_codes: List[str]: List of codes identifying the performance metrics
             prediction_class: Class of prediction model to instantiate
             round_digits: Number of decimal places to round predictions (optional)
             **kwargs: Additional parameters for model initialization
@@ -94,6 +100,21 @@ class LBPManager:
         if not isinstance(round_digits, int):
             raise ValueError("Round digits must be an integer.")
         self.pred_system.add_prediction_model(performance_codes, prediction_class, round_digits, **kwargs)
+        self.logger.console_info(f"Added prediction model '{prediction_class.__name__}' for performance codes: {performance_codes}.")
+
+    def add_calibration_model(self, calibration_class: Type[ICalibrationModel], **kwargs) -> None:
+        """
+        Add a calibration model to the system.
+        
+        Args:
+            calibration_class: Class of calibration model to instantiate
+            **kwargs: Additional parameters for model initialization
+        """
+        if self.calibration_model is not None:
+            raise ValueError("Calibration model already exists. Only one calibration model is supported per LBPManager.")
+            
+        self.calibration_model = calibration_class(logger=self.logger, **kwargs)
+        self.logger.console_info(f"Added calibration model '{calibration_class.__name__}'.")
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, recompute_flag: Optional[bool] = None) -> None:
         """
@@ -200,7 +221,7 @@ class LBPManager:
             # Display evaluation summary
             summary = self.eval_system.evaluation_step_summary(exp_code)
             self.logger.console_summary(summary)
-            self.logger.console_success(f"Concluded evaluation of '{exp_code}'.\n")
+        self.logger.console_success(f"Concluded evaluation of '{exp_codes[0] if len(exp_codes) == 1 else exp_codes}'.")
 
         # Save experiment data in batch
         self._save_evaluation_data(exp_codes, debug_flag, recompute_flag)
@@ -235,29 +256,89 @@ class LBPManager:
         if missing_codes:
             raise ValueError(f"Cannot run training, missing evaluation data for experiments: {missing_codes}")
 
-        # Prepare training inputs
-        parameters, avg_features, feature_arrays = self._get_train_inputs(exp_records)
+        # Prepare training inputs and outputs
+        parameters, avg_features, dim_arrays, feature_arrays = self._get_train_inputs(exp_records)
 
         # Run training for all prediction models
-        self.pred_system.train(parameters, avg_features, feature_arrays, visualize_flag, debug_flag)
+        self.pred_system.train(parameters, avg_features, dim_arrays, feature_arrays, visualize_flag, debug_flag)
 
         # Display training summary
+        summary = self.pred_system.training_step_summary()
+        self.logger.console_summary(summary)
         self.logger.console_success(f"Successfully trained prediction models for study '{study_code}'.")
 
-    def run_calibration(self, exp_nr: int, visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None) -> None:
+    def run_calibration(self, exp_nr: int, param_ranges: Dict[str, Tuple[float, float]], 
+                       visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None) -> Dict[str, float]:
+        """
+        Run calibration to find optimal parameters for upcoming experiment.
+        
+        Args:
+            exp_nr: Experiment number for the upcoming experiment
+            param_ranges: Parameter bounds {param_name: (min_val, max_val)}
+            visualize_flag: Whether to show visualizations during optimization
+            debug_flag: Whether to run in debug mode
+            
+        Returns:
+            Dictionary of optimal parameters {param_name: optimal_value}
+        """
+        # Validate calibration model exists
+        if self.calibration_model is None:
+            raise ValueError("No calibration model added. Use add_calibration_model() first.")
+            
         # Set flags with system defaults if not explicitly provided
         visualize_flag, debug_flag, _ = self._validate_system_flags(visualize_flag=visualize_flag, debug_flag=debug_flag)
 
-        # Load experiment parameters
+        # Get experiment code
         exp_code = self.local_data.get_experiment_code(exp_nr)
-        exp_record = self.external_data.pull_exp_record(exp_code)
-        exp_params = exp_record['Parameters']
-
-        # Predict -> this will not be used like this
-        predictions = self.pred_system.predict(exp_params, exp_code, visualize_flag, debug_flag)
-
-        # Add code that calibrates upcoming experiment
-        ...
+        
+        self.logger.console_info(f"Running calibration for experiment {exp_nr} ({exp_code})")
+        
+        # Get calibration weights from evaluation models
+        try:
+            calibration_weights = self.eval_system.get_calibration_weights()
+            self.calibration_model.set_performance_weights(calibration_weights)
+        except ValueError as e:
+            raise ValueError(f"Cannot run calibration: {e}")
+        
+        # Create prediction function
+        def predict_fn(params: Dict[str, float]) -> Dict[str, float]:
+            return self.pred_system.predict(params, exp_code, visualize_flag=False, debug_flag=True)
+        
+        # Create evaluation function  
+        def evaluate_fn(exp_code: str, predicted_features: Dict[str, float]) -> Dict[str, float]:
+            """Evaluate predicted features using existing evaluation logic."""
+            import numpy as np
+            performances = {}
+            
+            for code, eval_model in self.eval_system.get_active_eval_models().items():
+                if eval_model.calibration_weight is None:
+                    continue
+                    
+                if code in predicted_features:
+                    feature_value = np.array(predicted_features[code])
+                    performance_value = eval_model._compute_performance(
+                        feature_value, eval_model.target_value, eval_model.scaling_factor
+                    )
+                    performances[code] = float(performance_value) if performance_value is not None else 0.0
+                else:
+                    raise ValueError(f"Predicted features do not contain required performance code '{code}' for evaluation.")
+            
+            return performances
+        
+        # Extract parameter keys from ranges
+        param_keys = list(param_ranges.keys())
+        
+        # Run calibration
+        optimal_params = self.calibration_model.calibrate(
+            exp_code=exp_code,
+            predict_fn=predict_fn,
+            evaluate_fn=evaluate_fn,
+            param_keys=param_keys,
+            param_ranges=param_ranges
+        )
+        
+        self.logger.console_success(f"Calibration completed. Optimal parameters: {optimal_params}")
+        return optimal_params
 
     # === PRIVATE/INTERNAL METHODS (Internal use only) ===
     def _convert_exp_nrs(self, exp_nr: Optional[int], exp_nrs: Optional[List[int]]) -> List[str]:
@@ -641,10 +722,12 @@ class LBPManager:
             model.add_feature_model(code=code, feature_model=feature_model_instance)
             feature_model_dict[feature_model_type] = feature_model_instance
 
-    def _get_train_inputs(self, exp_records: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    def _get_train_inputs(self, exp_records: Dict[str, Dict[str, Any]]
+                          ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
         # Initialize input dicts
         parameters = {}
         avg_features = {}
+        dim_arrays = {}
         feature_arrays = {}
 
         for exp_code, exp_record in exp_records.items():
@@ -661,24 +744,26 @@ class LBPManager:
                 avg_features[exp_code] = {}
             if exp_code not in feature_arrays:
                 feature_arrays[exp_code] = {}
+            if exp_code not in dim_arrays:
+                dim_arrays[exp_code] = {}
 
             # Populate avg_features and feature_arrays
-            for perf_code, eval_model in self.eval_system.evaluation_models.items():
-                if not eval_model.active:
-                    continue
-                
+            for perf_code, eval_model in self.eval_system.get_active_eval_models().items():
                 # Build feature dicts with keys exp_code, perf_code
                 avg_features[exp_code][perf_code] = self.eval_system.aggr_metrics[exp_code][perf_code].get("Feature_Avg", {})
                 array = self.eval_system.metric_arrays[perf_code][exp_code]
 
                 # Extract feature array regardless of dimensionality
-                feature_arrays[exp_code][perf_code] = array[..., -len(eval_model.metric_names)]     
-        return parameters, avg_features, feature_arrays
+                boundary = len(eval_model.dim_iterator_names)
+                dim_arrays[exp_code][perf_code] = array[..., :boundary]
+                feature_arrays[exp_code][perf_code] = array[..., boundary]
+
+        return parameters, avg_features, dim_arrays, feature_arrays
 
     def _initialization_step_summary(self) -> str:
         """Generate summary of initialization results."""
         assert self.eval_system is not None and self.pred_system is not None
-        val_eval_models = {code: eval_model for code, eval_model in self.eval_system.evaluation_models.items() if eval_model.active}
+        val_eval_models = self.eval_system.get_active_eval_models()
         val_pred_models = {code: pred_model for code, pred_model in self.pred_system.pred_model_by_code.items() if pred_model.active}
 
         summary = f"Activated {len(val_eval_models)} evaluation models and {len(set([type(e.feature_model).__name__ for e in val_eval_models.values()]))} feature models.\n\n"
@@ -689,7 +774,7 @@ class LBPManager:
             feature_model = eval_model.feature_model if eval_model else None
             pred_model = val_pred_models.get(code, None)
             summary += f"\n{code:<20} {type(feature_model).__name__:<20} {type(eval_model).__name__:<20} {type(pred_model).__name__:<20}"
-        return summary + "\n"
+        return summary
 
     def _validate_system_flags(self, visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None, recompute_flag: Optional[bool] = None) -> Tuple[bool, bool, bool]:
         visualize_flag = self._get_default_attribute('visualize_flag', visualize_flag)

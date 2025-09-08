@@ -8,7 +8,7 @@ from ..utils import ParameterHandling, LBPLogger
 
 
 @dataclass
-class FeatureModel(ParameterHandling, ABC):
+class IFeatureModel(ParameterHandling, ABC):
     """
     Abstract base class for feature extraction models.
     
