@@ -33,13 +33,13 @@ def main():
         root_folder=str(root_dir),
         local_folder=str(local_dir),
         log_folder=str(logs_dir),
-        external_data_interface=interface
+        external_data_interface=interface,
     )
 
     # Add the example evaluation models to the LBPManager
     # Add any additional parameters that should be passed to the EvaluationModel or its FeatureModel (optional)
-    lbp_manager.add_evaluation_model("energy_consumption", EnergyConsumption, calibration_weight=0.3, additional_param=None)
-    lbp_manager.add_evaluation_model("path_deviation", PathEvaluation, calibration_weight=0.7, round_digits=3)
+    lbp_manager.add_evaluation_model("energy_consumption", EnergyConsumption, weight=0.3, additional_param=None)
+    lbp_manager.add_evaluation_model("path_deviation", PathEvaluation, weight=0.7, round_digits=3)
 
     # Add the example prediction model to the LBPManager
     # Add any additional parameters that should be passed to the PredictExample or its FeatureModel (optional)

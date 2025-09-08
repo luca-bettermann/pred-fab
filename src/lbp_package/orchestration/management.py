@@ -1,4 +1,3 @@
-import yaml
 from typing import Any, Dict, List, Type, Tuple, Optional, Callable
 
 from .evaluation import EvaluationSystem
@@ -14,13 +13,17 @@ class LBPManager:
     Manages the complete workflow including study initialization,
     evaluation execution, and coordination between different subsystems.
     """
-    
+
     def __init__(
             self, 
             root_folder: str,
             local_folder: str, 
             log_folder: str, 
             external_data_interface: IExternalData,
+            debug_flag: bool = False,
+            recompute_flag: bool = False,
+            visualize_flag: bool = True,
+            round_digits: int = 3,
             server_folder: Optional[str] = None
             ):
         """
@@ -36,7 +39,13 @@ class LBPManager:
         self.logger = LBPLogger(self.logger_name, log_folder)
         self.logger.info("Initializing LBP Manager")
         self.external_data = external_data_interface
-        
+
+        # System settings
+        self.debug_flag = debug_flag
+        self.recompute_flag = recompute_flag
+        self.visualize_flag = visualize_flag
+        self.round_digits = round_digits
+
         # Initialize local data handler
         self.local_data = LocalDataInterface(root_folder, local_folder, server_folder)
         
@@ -63,12 +72,10 @@ class LBPManager:
         self.pred_system = PredictionSystem(self.local_data, self.logger)
         self.calibration_model: Optional[ICalibrationModel] = None
 
-        # Load configuration file
-        self._load_config()
         self.logger.console_info("\n------- Welcome to Learning by Printing -------\n")
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: Optional[int] = None, calibration_weight: Optional[float] = None, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: Optional[int] = None, weight: Optional[float] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         Args:
@@ -81,9 +88,9 @@ class LBPManager:
         round_digits = self._get_default_attribute('round_digits', round_digits)
         if not isinstance(round_digits, int):
             raise ValueError("Round digits must be an integer.")
-        self.eval_system.add_evaluation_model(performance_code, evaluation_class, round_digits, calibration_weight, **kwargs)
+        self.eval_system.add_evaluation_model(performance_code, evaluation_class, round_digits, weight, **kwargs)
         
-        weight_msg = f" with calibration weight {calibration_weight}" if calibration_weight is not None else ""
+        weight_msg = f" with calibration weight {weight}" if weight is not None else ""
         self.logger.console_info(f"Added evaluation model '{evaluation_class.__name__}' for performance '{performance_code}'{weight_msg}.")
 
     def add_prediction_model(self, performance_codes: List[str], prediction_class: Type[IPredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
@@ -308,7 +315,7 @@ class LBPManager:
             performances = {}
             
             for code, eval_model in self.eval_system.get_active_eval_models().items():
-                if eval_model.calibration_weight is None:
+                if eval_model.weight is None:
                     continue
                     
                 if code in predicted_features:
@@ -360,7 +367,7 @@ class LBPManager:
         self.logger.console_summary(summary)
         
         # Format optimal params for console display (remove numpy types)
-        formatted_params = {k: float(v) for k, v in optimal_params.items()}
+        formatted_params = {k: round(float(v), self.round_digits) for k, v in optimal_params.items()}
         self.logger.console_success(f"Calibration completed. Optimal parameters: {formatted_params}")
         return optimal_params
 
@@ -628,49 +635,9 @@ class LBPManager:
         else:
             self.logger.info(f"Debug mode: Skipped pushing {dtype} {codes_to_save} to external source.")
 
-    def _load_config(self) -> None:
-        """
-        Load configuration from config.yaml file and organize into sections.
-        
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            yaml.YAMLError: If config file has invalid YAML syntax
-            ValueError: If config structure is invalid
-        """
-        self.logger.info("Loading configuration from config.yaml file")
-        config_path = self.local_data.root_folder + "/config.yaml"
-
-        try:
-            with open(config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file not found at {config_path}. Please ensure the file exists.")
-        except yaml.YAMLError as e:
-            raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
-
-        if not isinstance(self.config, dict):
-            raise ValueError("Configuration file must contain a valid dictionary structure.")
-
-        # Extract and store configuration sections
-        self.system_config = self.config.get('system', {})
-        self.evaluation_config = self.config.get('evaluation', {})
-        self.prediction_config = self.config.get('prediction', {})
-        self.calibration_config = self.config.get('calibration', {})
-        
-        # Set defaults
-        for config in [self.system_config, self.evaluation_config, self.prediction_config, self.calibration_config]:
-            for key, value in config.items():
-                self.defaults[key] = value
-
-            # Add logs 
-            self.logger.info(f"Loaded {config} configuration with {len(config)} settings")
-            if len(config) > 0:
-                defaults_str = ', '.join([f"{key}={value}" for key, value in config.items()])
-                self.logger.debug(f"{config} defaults: {defaults_str}")
-
     def _get_default_attribute(self, key: str, value: Any) -> Any:
         """
-        Retrieve a default attribute value from the system configuration.
+        Retrieve a default attribute value from the LBP manager configuration.
 
         Args:
             key: The key of the default attribute to retrieve
@@ -679,11 +646,9 @@ class LBPManager:
             The value of the default attribute
         """
         if value is None:
-            if key not in self.defaults:
-                raise ValueError(f"Default attribute '{key}' not found in system configuration.")
-            value = self.defaults[key]
-            if value is None:
-                raise ValueError(f"Default attribute '{key}' is None. Please check the configuration.")
+            if not hasattr(self, key):
+                raise ValueError(f"Default attribute '{key}' not found in LBP manager configuration.")
+            value = getattr(self, key)
             self.logger.debug(f"Retrieved default attribute '{key}': {value}")
             return value
         else:

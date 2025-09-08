@@ -5,8 +5,8 @@ import numpy as np
 
 from lbp_package import IEvaluationModel, IFeatureModel
 from lbp_package.utils import dim_parameter, study_parameter, exp_parameter
-from utils import generate_path_data
-from visualize import visualize_geometry
+from .utils.mock_data import generate_path_data
+from .utils.visualize import visualize_geometry
 
 @dataclass
 class PathEvaluation(IEvaluationModel):

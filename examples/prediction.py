@@ -3,7 +3,7 @@ from numpy import ndarray
 from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 
-from utils import generate_temperature_data
+from .utils.mock_data import generate_temperature_data
 from lbp_package import IPredictionModel, IFeatureModel
 
 class PredictExample(IPredictionModel):

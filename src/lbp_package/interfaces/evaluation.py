@@ -23,7 +23,7 @@ class IEvaluationModel(ParameterHandling, ABC):
             performance_code: str,
             logger: LBPLogger,
             round_digits: int = 3,
-            calibration_weight: Optional[float] = None,
+            weight: Optional[float] = None,
             **kwargs) -> None:
         """
         Initialize evaluation model.
@@ -55,9 +55,9 @@ class IEvaluationModel(ParameterHandling, ABC):
         self.metric_names = ["feature_value", "target_value", "scaling_factor", "performance_value"]
 
         # Calibration configuration
-        self.calibration_weight = calibration_weight
-        if calibration_weight is not None:
-            self.logger.info(f"EvaluationModel '{performance_code}' set with calibration weight: {calibration_weight}")
+        self.weight = weight
+        if weight is not None:
+            self.logger.info(f"EvaluationModel '{performance_code}' set with calibration weight: {weight}")
 
         # Store kwargs so that they can be passed on to the feature models
         self.kwargs = kwargs

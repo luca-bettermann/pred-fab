@@ -36,7 +36,7 @@ class EvaluationSystem:
         self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}        # dict_keys: perf_code, exp_code
 
     # === PUBLIC API METHODS (Called externally) ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: int, calibration_weight: Optional[float] = None, **kwargs) -> None:
+    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: int, weight: Optional[float] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.
         
@@ -56,7 +56,7 @@ class EvaluationSystem:
             performance_code=performance_code,
             logger=self.logger,
             round_digits=round_digits,
-            calibration_weight=calibration_weight,
+            weight=weight,
             **kwargs
         )
         self.evaluation_models[performance_code] = eval_model
@@ -175,10 +175,10 @@ class EvaluationSystem:
         """
         weights = {}
         for code, eval_model in self.get_active_eval_models().items():
-            if eval_model.calibration_weight is None:
+            if eval_model.weight is None:
                 raise ValueError(f"Evaluation model '{code}' is active but has no calibration weight defined. "
                                f"Set calibration_weight when adding the model to enable calibration.")
-            weights[code] = eval_model.calibration_weight
+            weights[code] = eval_model.weight
         
         if not weights:
             raise ValueError("No active evaluation models with calibration weights found.")
