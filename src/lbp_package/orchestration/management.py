@@ -102,7 +102,7 @@ class LBPManager:
         self.pred_system.add_prediction_model(performance_codes, prediction_class, round_digits, **kwargs)
         self.logger.console_info(f"Added prediction model '{prediction_class.__name__}' for performance codes: {performance_codes}.")
 
-    def add_calibration_model(self, calibration_class: Type[ICalibrationModel], **kwargs) -> None:
+    def set_calibration_model(self, calibration_class: Type[ICalibrationModel], **kwargs) -> None:
         """
         Add a calibration model to the system.
         
@@ -110,11 +110,8 @@ class LBPManager:
             calibration_class: Class of calibration model to instantiate
             **kwargs: Additional parameters for model initialization
         """
-        if self.calibration_model is not None:
-            raise ValueError("Calibration model already exists. Only one calibration model is supported per LBPManager.")
-            
         self.calibration_model = calibration_class(logger=self.logger, **kwargs)
-        self.logger.console_info(f"Added calibration model '{calibration_class.__name__}'.")
+        self.logger.console_info(f"\nSet calibration model to '{calibration_class.__name__}'.")
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, recompute_flag: Optional[bool] = None) -> None:
         """
@@ -291,7 +288,7 @@ class LBPManager:
         # Get experiment code
         exp_code = self.local_data.get_experiment_code(exp_nr)
         
-        self.logger.console_info(f"Running calibration for experiment {exp_nr} ({exp_code})")
+        self.logger.console_info(f"\n------- Run Calibration for Experiment '{exp_code}' -------\n")
         
         # Get calibration weights from evaluation models
         try:
@@ -337,7 +334,34 @@ class LBPManager:
             param_ranges=param_ranges
         )
         
-        self.logger.console_success(f"Calibration completed. Optimal parameters: {optimal_params}")
+        # Get evaluation count from calibration model
+        evaluation_count = getattr(self.calibration_model, '_eval_count', 0)
+        
+        # Get predicted features and performance values for optimal parameters for summary
+        # Validate optimal parameters before evaluation
+        predicted_features = None
+        performance_values = None
+        
+        if optimal_params and all(isinstance(v, (int, float)) for v in optimal_params.values()):
+            predicted_features = predict_fn(optimal_params)
+            calibration_weights = self.eval_system.get_calibration_weights()
+            if predicted_features and all(code in predicted_features for code in calibration_weights.keys()):
+                performance_values = evaluate_fn(exp_code, predicted_features)
+            else:
+                self.logger.warning(f"Prediction function returned incomplete features for summary")
+        else:
+            self.logger.warning(f"Invalid optimal parameters for summary: {optimal_params}")
+        
+        # Display calibration summary
+        summary = self.calibration_model.calibration_step_summary(
+            exp_code, param_ranges, optimal_params, evaluation_count, 
+            predicted_features, performance_values
+        )
+        self.logger.console_summary(summary)
+        
+        # Format optimal params for console display (remove numpy types)
+        formatted_params = {k: float(v) for k, v in optimal_params.items()}
+        self.logger.console_success(f"Calibration completed. Optimal parameters: {formatted_params}")
         return optimal_params
 
     # === PRIVATE/INTERNAL METHODS (Internal use only) ===

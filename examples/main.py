@@ -5,9 +5,7 @@ from examples.evaluation_energy import EnergyConsumption
 from examples.evaluation_geometry import PathEvaluation
 from examples.prediction import PredictExample
 from examples.external_data import MockDataInterface
-
-# TODO NOW
-# - Implement prediction Example
+from examples.calibration import RandomSearchCalibration, DifferentialEvolutionCalibration
 
 # TODO FUTURE
 # - Evaluation only becomes relevant once we want to optimize.
@@ -40,12 +38,14 @@ def main():
 
     # Add the example evaluation models to the LBPManager
     # Add any additional parameters that should be passed to the EvaluationModel or its FeatureModel (optional)
-    lbp_manager.add_evaluation_model("energy_consumption", EnergyConsumption, additional_param=None)
-    lbp_manager.add_evaluation_model("path_deviation", PathEvaluation, round_digits=3)
+    lbp_manager.add_evaluation_model("energy_consumption", EnergyConsumption, calibration_weight=0.3, additional_param=None)
+    lbp_manager.add_evaluation_model("path_deviation", PathEvaluation, calibration_weight=0.7, round_digits=3)
 
     # Add the example prediction model to the LBPManager
     # Add any additional parameters that should be passed to the PredictExample or its FeatureModel (optional)
     lbp_manager.add_prediction_model(["energy_consumption", "path_deviation"], PredictExample, round_digits=4, additional_param=None)
+    
+    # Add calibration model
     
     # Initialize the study and run evaluation
     lbp_manager.initialize_for_study(study_code)
@@ -62,8 +62,14 @@ def main():
         "layerTime": (0.0, 1.0),
         "layerHeight": (10, 100),
     }
-    lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
 
+    # Calibrate using Random Search
+    lbp_manager.set_calibration_model(RandomSearchCalibration, n_evaluations=100)
+    lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
+    
+    # Calibrate using Differential Evolution
+    lbp_manager.set_calibration_model(DifferentialEvolutionCalibration, maxiter=10, seed=42)
+    lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
 
 
 if __name__ == "__main__":
