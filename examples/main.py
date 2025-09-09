@@ -1,5 +1,6 @@
 from pathlib import Path
 from lbp_package import LBPManager
+import time
 
 from examples.evaluation_energy import EnergyConsumption
 from examples.evaluation_geometry import PathEvaluation
@@ -24,16 +25,13 @@ def main():
 
     # Define study code
     study_code = "test"
-    
-    # Create data interface that reads from local files
-    interface = MockDataInterface(str(local_dir))
 
     # Initialize LBPManager with the local folder and data interface
     lbp_manager = LBPManager(
         root_folder=str(root_dir),
         local_folder=str(local_dir),
         log_folder=str(logs_dir),
-        external_data_interface=interface,
+        external_data_interface=MockDataInterface(str(local_dir))
     )
 
     # Add the example evaluation models to the LBPManager
@@ -48,13 +46,17 @@ def main():
     # Add calibration model
     
     # Initialize the study and run evaluation
+    time.sleep(1)
     lbp_manager.initialize_for_study(study_code)
 
     # Run evaluations for each experiment
+    time.sleep(1)
     lbp_manager.run_evaluation(study_code, exp_nr=1)
+    time.sleep(1)
     lbp_manager.run_evaluation(study_code, exp_nrs=[2, 3])
 
     # Run predictions for all experiments
+    time.sleep(1)
     lbp_manager.run_training(study_code, exp_nrs=[1, 2, 3])
 
     # Calibrate the upcoming experiment
@@ -64,10 +66,12 @@ def main():
     }
 
     # Calibrate using Random Search
+    time.sleep(1)
     lbp_manager.set_calibration_model(RandomSearchCalibration, n_evaluations=100)
     lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
     
     # Calibrate using Differential Evolution
+    time.sleep(1)
     lbp_manager.set_calibration_model(DifferentialEvolutionCalibration, maxiter=10, seed=42)
     lbp_manager.run_calibration(exp_nr=4, param_ranges=param_ranges)
 

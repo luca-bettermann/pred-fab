@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 
-class LocalDataInterface:
+class LocalData:
     """
     Manages local file system navigation and operations for LBP framework.
     

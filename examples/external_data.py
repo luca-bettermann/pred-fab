@@ -57,35 +57,4 @@ class MockDataInterface(IExternalData):
         }
         return exp_data
     
-    def pull_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
-        """
-        Retrieve experiment codes for the study. 
-        Note: This method only returns experiment structure - actual data should be loaded via hierarchical pattern in LBPManager.
-        """
-        study_code = study_record["Code"]
-        study_dir = os.path.join(self.local_folder, study_code)
-        
-        dataset = {}
-        
-        # Find all experiment directories
-        if not os.path.exists(study_dir):
-            return dataset
-            
-        for item in os.listdir(study_dir):
-            item_path = os.path.join(study_dir, item)
-            
-            # Skip files, only process directories that look like experiments
-            if not os.path.isdir(item_path) or not item.startswith(study_code):
-                continue
-                
-            exp_code = item
-            
-            # Skip if experiment code is not in the restricted list and list not empty
-            if restrict_to_exp_codes and exp_code not in restrict_to_exp_codes:
-                continue
-                
-            # Return minimal structure - actual data loading handled by LBPManager hierarchical pattern
-            dataset[exp_code] = {"exp_code": exp_code}
-        
-        return dataset
 

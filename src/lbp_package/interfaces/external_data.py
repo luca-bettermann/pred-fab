@@ -10,13 +10,14 @@ DATA RESPONSIBILITY:
 - **Boundary:** FeatureModel._load_data() handles domain-specific unstructured data
 
 DATA LOADING PRINCIPLES:
-=============
-- Hierarchical approach to the loading and storing of training data.
-- First, check if data is available in memory, i.e. stored in the EvaluationSystem.
-- Second, load the data from local files.
-- Third, query the database for any missing data. Return error if not available.
-- Once the data is retrieved, load it in memory and store it as local files.
-- This ensures that the database is only queried once.
+========================
+- Hierarchical approach to loading and storing structured data.
+- First, check if data is available in memory (current session cache).
+- Second, load data from local JSON/CSV files if available.
+- Third, query external source for any missing data. Return error if not available.
+- Once retrieved from external source, automatically store as local files.
+- Data is always stored locally - there is no "database-only" mode.
+- recompute_flag=True forces loading from external source, bypassing local cache.
 
 CORE METHODS:
 =============
@@ -66,20 +67,6 @@ class IExternalData(ABC):
 
         Returns:
             Experiment record with "id", "Code" and "Parameters" keys
-        """
-        ...
-
-    @abstractmethod
-    def pull_study_dataset(self, study_record: Dict[str, Any], restrict_to_exp_codes: List[str] = []) -> Dict[str, Dict[str, Any]]:
-        """
-        Retrieve complete structured dataset for a study.
-        
-        Args:
-            study_record: Study record from get_study_record()
-            restrict_to_exp_codes: Filter to specific experiments ([] = all)
-
-        Returns:
-            Dict[exp_code, {param_name: value, performance_code: value}]
         """
         ...
 

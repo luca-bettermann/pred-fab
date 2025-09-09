@@ -2,450 +2,419 @@
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 
-## Project Structure
-
-```
-lbp_package/
-├── src/lbp_package/           # Core framework code
-│   ├── evaluation.py          # Base classes for evaluation models
-│   ├── data_interface.py      # Data access interface
-│   ├── orchestration.py       # System orchestration
-│   └── utils/                 # Utility modules
-├── examples/                  # Self-contained working example
-│   ├── *.py                   # Implementation files
-│   ├── config.yaml           # Configuration
-│   ├── local/                # Auto-generated data files
-│   └── logs/                 # Auto-generated log files
-├── tests/                    # Comprehensive test suite
-│   ├── unit/                 # Unit tests
-│   ├── integration/          # Integration tests
-│   ├── end_to_end/          # End-to-end tests
-│   ├── test_data.py         # Shared test data utilities
-│   └── conftest.py          # Test fixtures and configuration
-├── README.md                # This file
-└── configTEMPLATE.yaml      # Template for the config file
-
-```
-
-
-## 1. Introduction & Quick Start
-
-### 1.1 Learning by Printing Overview
+## Overview
 
 Learning by Printing is an iterative manufacturing optimization approach that systematically improves printing processes through automated performance evaluation and parameter adjustment. The framework enables closed-loop learning where each experiment provides feedback for process refinement.
 
 For detailed methodology, see: [An Introduction to Learning by Printing](https://mediatum.ub.tum.de/doc/1781543/1781543.pdf)
 
-### 1.2 Quick Start Guide
+## Framework Structure
 
-#### Prerequisites
+```
+lbp_package/
+├── interfaces/               # Abstract base classes defining contracts
+│   ├── external_data.py     # Data source interface
+│   ├── features.py          # Feature extraction interface  
+│   ├── evaluation.py        # Performance evaluation interface
+│   ├── prediction.py        # ML prediction interface
+│   └── calibration.py       # Optimization interface
+├── orchestration/           # Workflow management classes
+│   ├── management.py        # LBPManager - main orchestrator
+│   ├── evaluation.py        # EvaluationSystem
+│   └── prediction.py        # PredictionSystem  
+└── utils/                   # Supporting utilities
+    ├── parameter_handler.py # Parameter management system
+    ├── local_data.py        # File operations
+    └── logger.py            # Logging utilities
+```
+
+## Architecture Overview
+
+![LBP Framework Architecture](src/lbp_package/UML_diagram.png)
+
+This diagram illustrates the interface-based architecture of the LBP framework, showing the relationships between core interfaces and orchestration components.
+
+## Installation
+
+### Prerequisites
 - Python 3.9+
-- `uv` package manager
+- Git
 
-#### Installation
+### Install from Source
 
 ```bash
 # Clone repository
 git clone <repository-url>
-cd lbp_package
+cd lbp-package
 
 # Setup virtual environment and install dependencies
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv sync
+
+# Or with pip
+pip install -e .
 ```
 
-#### Configuration
+### Dependencies
 
-1. **Environment Setup**: Copy `.envTEMPLATE` to `.env` and configure paths:
-   ```bash
-   cp .envTEMPLATE .env
-   # Edit .env with your local paths and database credentials
-   ```
+The framework has minimal core dependencies:
+- `numpy` - Array operations and numerical computing
+- `pandas` - Data structure handling for CSV export
 
-2. **System Configuration**: Copy `configTEMPLATE.yaml` to `config.yaml`:
-   ```bash
-   cp configTEMPLATE.yaml config.yaml
-   # Edit config.yaml to map your performance codes to evaluation classes
-   ```
+**Note**: The [examples repository](https://github.com/your-org/lbp-examples) may have additional dependencies for visualization and domain-specific implementations, but the core framework is lightweight.
 
-#### 5-Minute Example
-This code snippet will allow you to get your project started, although more implementation is needed before you get useable results.
+## Quick Start
 
 ```python
-from src.lbp_package.orchestration import LBPManager
-from examples.mock_data_interface import ExampleDataInterface
+from lbp_package import LBPManager
 
-# Initialize system
-data_interface = ExampleDataInterface("/tmp", {}, {})
+# Initialize system (external data interface is optional)
 manager = LBPManager(
-    local_folder="/path/to/local",
-    server_folder="/path/to/server", 
-    log_folder="/path/to/logs",
-    data_interface=data_interface
+    root_folder=".",
+    local_folder="./data",
+    log_folder="./logs"
+    # external_data_interface=YourDataInterface()  # Optional
 )
 
-# Run evaluation
-manager.initialize_study("MY_STUDY")
-manager.run_evaluation(exp_nr=1, debug_flag=True)
+# Add your evaluation models (with weights for calibration)
+manager.add_evaluation_model("performance_code", YourEvaluationModel, weight=1.0)
+
+# Run workflows with optional flag overrides
+manager.initialize_for_study("study_001")
+manager.run_evaluation(
+    "study_001",
+    exp_nrs=[1, 2, 3], 
+    debug_flag=True,  # Override default
+    visualize_flag=True
+)
 ```
 
-### Running the Example
+For complete working examples, see the [LBP Examples Repository](https://github.com/your-org/lbp-examples).
 
-The `examples/` folder contains a complete, self-sufficient demonstration:
+## Core Concepts
 
-```bash
-# Navigate to examples and run the main script
-cd examples
-python run_example.py
+### Parameter Management System
+Elegant decorator-based system distinguishing three parameter types:
+
+```python
+@dataclass
+class MyEvaluationModel(IEvaluationModel):
+    # Study-level parameters (constant across all experiments)
+    power_rating: float = study_parameter(50.0)
+    max_speed: float = study_parameter(100.0)
+    
+    # Experiment-level parameters (vary between experiments)  
+    layer_time: float = exp_parameter()
+    temperature: float = exp_parameter(200.0)
+    
+    # Dimensional parameters (change during execution)
+    layer_id: int = dim_parameter()
+    segment_id: int = dim_parameter()
 ```
-
-This will automatically:
-- Generate example data files if they don't exist
-- Initialize a study called "test" with 2 performance metrics
-- Load experimental data from JSON files
-- Execute path deviation and energy consumption evaluations
-- Display results and performance summaries
-
-#### Project Structure
-```
-lbp_package/
-├── src/lbp_package/          # Core framework
-├── examples/                 # Implementation examples  
-├── tests/                    # Test suite
-├── config.yaml              # System configuration
-└── .env                     # Environment variables
-```
-
-## Data Structure
-
-The framework expects data in a structured format. The examples folder demonstrates one possibility of this organization. The crucial part is that the DataInterface knows how to navigate the database structure or in the example case the file-based
-
-```
-examples/
-├── main.py                     # Main execution script
-├── file_data_interface.py      # File-based data interface implementation
-├── path_deviation.py           # Path deviation evaluation model
-├── energy_consumption.py       # Energy consumption evaluation model
-├── config.yaml                 # System configuration file
-├── setup_example_data.py       # Standalone data generation script
-├── local/                      # Data storage directory
-│   └── test/                   # Study folder (generated automatically)
-│       ├── study_params.json           # Study-level parameters
-│       ├── performance_records.json    # Performance metric definitions
-│       └── test_001/                   # Experiment folder
-│           ├── exp_params.json         # Experiment-specific parameters
-│           ├── test_001_designed_paths.json   # Designed path data
-│           └── test_001_measured_paths.json   # Measured path data
-└── logs/                       # Log files (created automatically)
-    └── LBPManager_session_*.log     # Execution logs
-```
-
-The data files are automatically generated when running `main.py`.
-
-## 2. Architecture & Framework Design
-
-### 2.1 System Overview
-
-![LBP Base Classes](src/lbp_package/UML_base_classes.png)
-
-The framework follows a modular architecture with clear separation between orchestration (system management, grey) and interface classes (extension points, highlighted in color).
-
-### 2.2 Orchestration Classes
-
-#### LBPManager
-Main entry point that coordinates the complete workflow and acts as the central hub connecting all subsystems. The LBPManager is responsible for:
-- **System Initialization**: Loads configuration files, establishes database connections through the DataInterface, and initializes all subsystems
-- **Study Management**: Manages study-level configuration and parameters that persist across multiple experiments
-- **Subsystem Coordination**: Distributes functionality to EvaluationSystem, PredictionSystem, and Calibration components
-- **External Source Integration**: Handles connections to databases, file systems, and external APIs through configurable interfaces
-- **Workflow Orchestration**: Coordinates the complete learning loop from evaluation through prediction to calibration
-
-**Key Methods:**
-- `initialize_study(study_code)`: Loads study configuration, initializes all subsystems, and prepares the framework for experiment execution
-- `run_evaluation(exp_nr)`: Executes the complete evaluation pipeline for a specific experiment
-- `_load_config()`: Parses configuration files and distributes settings to appropriate subsystems
-- System configuration loading and management with runtime override capabilities
-
-#### EvaluationSystem  
-Orchestrates multiple evaluation models for comprehensive performance assessment. The system enables parallel evaluation of different performance metrics and supports dimensional evaluation that can be executed incrementally as data becomes available.
-
-**Key Features:**
-- **Multi-Performance Evaluation**: Manages multiple evaluation models simultaneously, each targeting different performance aspects
-- **Dimensional Independence**: Processes evaluation dimensions (layers, segments, etc.) independently, enabling real-time evaluation during manufacturing
-- **Feature Model Optimization**: Shares feature model instances across evaluation models to avoid redundant data processing
-- **Incremental Processing**: Can evaluate performance metrics as soon as dimensional data is available, supporting online monitoring
-
-**Key Methods:**
-- `add_evaluation_model(evaluation_class, performance_code, study_params)`: Registers evaluation models for specific performance metrics
-- `add_feature_model_instances(study_params)`: Initializes and optimizes feature model sharing across evaluations
-- `run(exp_nr, exp_record, **exp_params)`: Executes complete evaluation pipeline with dimensional iteration and result aggregation
-
-#### PredictionSystem *(to be added)*
-ML model management and inference execution for predicting performance outcomes and optimizing process parameters.
-
-#### Calibration *(to be added)*
-Optimization system for automated parameter adjustment based on evaluation results and prediction models.
-
-### 2.3 Interface Classes (Extension Points)
-
-#### DataInterface
-Abstract base class providing standardized database and data source integration. This interface abstracts away specific database implementations, allowing the framework to work with various data backends (SQL databases, NoSQL systems, APIs, files).
-
-##### Data Responsibility Architecture
-
-The framework maintains clear boundaries between structured and unstructured data handling:
-
-**DataInterface Responsibilities (Structured Data):**
-- **Study/Experiment Metadata**: Records, parameters, configurations
-- **Universal Format**: Standardized across all domains and studies  
-
-**Model Responsibilities (Unstructured Data):** 
-- **Domain-Specific Data**: Geometry files, sensor streams, images, proprietary formats
-- **Raw Experimental Data**: Measurements, time series, CAD models, process data
-- **Local Processing**: Format conversion, preprocessing, domain-specific validation
-
-##### Expected Study Structure
-
-The DataInterface expects a hierarchical study organization:
-
-```
-Study Level:
-├── Study Parameters (target values, equipment settings, tolerances)
-├── Performance Records (which metrics to evaluate)
-└── Experiments/
-    ├── Experiment 001/
-    │   ├── Experiment Parameters (process conditions, dimensions)
-    │   └── Raw Data Files (handled by models, not DataInterface)
-    ├── Experiment 002/
-    └── ...
-```
-
-**Abstract Methods:**
-- `get_study_record(study_code)` → `Dict`: Retrieves comprehensive study metadata including configuration parameters, active performance metrics, and study-level settings. Must return a dictionary with study identification, parameter and performance fields.
-- `get_exp_record(exp_code)` → `Dict`: Fetches experiment-specific data including experimental conditions and execution parameters. Return dictionary must contain experiment identification and associated metadata.
-- `get_study_parameters(study_record)` → `Dict`: Extracts study-level parameters that define model configurations, target values, and evaluation criteria. These parameters are typically constant across all experiments within a study.
-- `get_performance_records(study_record)` → `List[Dict]`: Returns list of performance metric configurations for the study. Each dictionary must contain a 'Code' field that matches the performance codes used in the configuration mapping.
-- `get_exp_variables(exp_record)` → `Dict`: Extracts experiment-specific variables including process parameters, environmental conditions, and dimensional settings (n_layers, n_segments, etc.).
-
-**Optional Methods:**
-- `push_to_database(exp_record, performance_code, value_dict)`: Stores evaluation results back to the database with performance metrics
-- `update_system_performance(study_record)`: Updates aggregated system-wide performance metrics and study progress indicators
-
-#### FeatureModel & EvaluationModel: Paired Architecture
-FeatureModel and EvaluationModel work as paired structures with a one-to-one, or in certain cases, a many-to-one mapping relationship. In these instances, multiple EvaluationModels can share a single FeatureModel instance to optimize computational efficiency. This design recognizes that different performance metrics often require similar feature extraction processes, avoiding redundant computation while maintaining clean separation of evaluation logic. However, the simplest architecture case provides one FeatureModel per EvaluationModel.
-
-#### FeatureModel
-Abstract base class for extracting quantitative features from experimental data. FeatureModels handle data loading, preprocessing, and feature computation while supporting multi-dimensional evaluation and parameter-driven configuration.
-
-**Abstract Methods:**
-- `_load_data(exp_nr)` → `Any`: Loads and preprocesses raw experimental data for the specified experiment. Return type is flexible to accommodate various data formats (JSON, CSV, images, sensor data).
-- `_compute_features(data, visualize_flag)` → `Dict[str, float]`: Extracts quantitative features from loaded data. Returns dictionary mapping performance codes to computed feature values. The visualize_flag enables optional visualization output for debugging and analysis.
-
-**Optional Methods:**
-- `_initialization_step(performance_code)`: Performs setup operations before feature extraction, such as initializing computational resources or loading calibration data
-- `_cleanup_step(performance_code)`: Handles post-processing cleanup, resource deallocation, or temporary file removal
-- `_fetch_data(exp_nr)`: Downloads or retrieves data from external sources if not locally available
-- `_validate_parameters()`: Validates parameter configurations and ensures computational prerequisites are met
-
-**Parameter Integration:** Inherits from `ParameterHandling` for seamless parameter management across model, experiment, and runtime scopes.
-
-#### EvaluationModel  
-Abstract base class for performance evaluation that compares extracted features against target criteria. Supports multi-dimensional analysis with automated aggregation and configurable scaling strategies.
-
-**Abstract Methods:**
-- `_compute_target_value()` → `float`: Defines the target value for performance evaluation. This represents the ideal or desired performance level for the specific metric.
-
-**Optional Methods:**
-- `_compute_scaling_factor()` → `Optional[float]`: Provides normalization factor for performance values, enabling consistent performance metrics across different scales and units
-- `_aggregate_performance(performance_array)`: Defines custom aggregation strategy for combining performance values across dimensions (default: mean aggregation)
-- `_initialization_step()`: Setup operations before performance computation
-- `_cleanup_step()`: Post-processing cleanup after performance evaluation
-
-**Key Features:**
-- **Dimensional Evaluation**: Supports structured evaluation across multiple dimensions (layers, segments, time steps) with independent processing
-- **Automatic Performance Aggregation**: Combines dimensional results into overall performance metrics
-- **Feature Model Integration**: Seamlessly integrates with paired FeatureModel for optimized computation
-
-### 2.4 Utility Classes
-
-#### ParameterHandling
-Sophisticated dataclass-based parameter management system supporting three distinct parameter categories with automatic type checking and IDE support. Each class inheriting from ParameterHandling automatically gains parameter management capabilities.
 
 **Parameter Types:**
-- `model_parameter(default_value)`: **Model Configuration Parameters** - Define the fundamental behavior and configuration of models. Set during class initialization and remain constant throughout the study. Examples: tolerance values, algorithm settings, model hyperparameters.
-- `exp_parameter(default_value)`: **Experiment-Specific Parameters** - Values that vary between experiments within a study. Define experimental conditions and setup parameters. Examples: number of layers, process temperatures, material properties.
-- `runtime_parameter()`: **Runtime Execution Parameters** - Dynamic values that change during execution, typically representing current processing state. Examples: current layer_id, segment_id, iteration counters.
+- **`@study_parameter`**: Study-wide constants shared across all experiments (numerical model configuration, equipment limits)
+- **`@exp_parameter`**: Experiment-specific parameters that vary between experiments (numerical process settings, material properties)  
+- **`@dim_parameter`**: Dynamic runtime parameters that change during execution to track current dimensional position
 
-**Built-in Functionality:**
-All classes inheriting from ParameterHandling automatically receive:
-- `set_model_parameters(**kwargs)`: Safely sets model parameters with automatic filtering
-- `set_experiment_parameters(**kwargs)`: Updates experiment-specific parameters
-- `set_runtime_parameters(**kwargs)`: Sets dynamic runtime values
-- Automatic parameter validation and type checking
-- Clean separation of parameter concerns with IDE autocomplete support
+**Critical Parameter Requirements**:
+- **Numerical types only**: Use `float` and `int` types for all parameters
+- **No string parameters**: String parameters will cause errors in prediction and calibration workflows  
+- **Default values**: Provide defaults for `@study_parameter` and `@exp_parameter` where possible
+- **Type consistency**: Parameter types must match between record data and model declarations
 
-#### FolderNavigator
-Centralized file system organization utility that enforces consistent naming conventions across studies, experiments, and results. Handles both local and server-side file management with automatic path generation and validation.
+**Automatic Parameter Access**: Once declared with decorators, parameters become automatically available as `self` attributes in all model methods.
 
-**Key Features:**
-- Automatic experiment code generation with zero-padding
-- Consistent directory structure across studies
-- Server synchronization support
-- File operation utilities with error handling
+### Dynamic Dimensionality System
+Framework creates and manages multi-dimensional arrays automatically based on your dimension configuration:
 
-#### LBPLogger
-Enhanced logging system providing dual output channels (file and console) with intelligent formatting, debug mode switching, and ANSI code handling for clean log files.
+**Concept**: Dimensionality defines the discrete evaluation structure - how your analysis is segmented (layers, segments, time steps, spatial regions, etc.). The framework dynamically creates and manages multi-dimensional arrays based on your dimension definitions.
 
-**Logging Methods:**
-- File-only logging: `debug()`, `info()`, `warning()`, `error()`
-- Console + file logging: `console_info()`, `console_success()`, `console_warning()`, `console_summary()`
-- Debug mode switching with automatic file renaming
-- Clean log file output with ANSI escape sequence removal
+**Key Benefits**:
+- **Automatic Array Creation**: Framework creates feature and performance arrays sized `[n_layers, n_segments, ...]`
+- **Dynamic Iteration**: Automatically loops through all dimensional combinations `(0,0), (0,1), (1,0), (1,1)`  
+- **Database Alignment**: Dimension parameter names must match fields in your data records for dynamic configuration
+- **Scalable**: Works with any number of dimensions - add new dimensions just by extending the lists
 
-#### System Configuration
-YAML-based configuration system supporting modular configuration loading with runtime override capabilities.
+### Hierarchical Data Flow
+Three-tier data management system providing complete database independence while enabling seamless integration:
 
-**Configuration Sections:**
-- **evaluation**: Performance code to evaluation class mappings
-- **prediction**: ML model configurations (to be added)
-- **calibration**: Optimization algorithm settings (to be added)  
-- **system**: Global system defaults (debug_mode, visualize_flag, round_digits, logging levels)
+**Data Loading Hierarchy** (Memory → Local → External):
+1. **Memory First**: Check if data already loaded in current session
+2. **Local Files**: Load from JSON/CSV files in local filesystem  
+3. **External Source**: Query database/API only if data missing from local cache
+4. **Automatic Caching**: Once loaded from external, automatically saved locally for future use
 
-### 2.5 Critical Implementation Notes
+**Data Loading Control**:
+- **`recompute_flag=False`**: Use hierarchical loading (memory → local → external)
+- **`recompute_flag=True`**: Force loading from external source, bypassing local cache. Force overwritting of local files.
 
-#### ⚠️ Dimension Naming Conventions
-The parameter name (third element) in `dimension_names` must exactly match your database field names to ensure proper parameter injection:
+**Complete Database Independence**: Framework works fully without any external data interface. Manual data creation with JSON files supported. Add external data interface later without changing existing workflows.
+
+### Data Separation of Concerns
+Clear boundary between structured and unstructured data handling:
+
+**Structured Data** (Handled by framework): Study/experiment records, feature arrays, performance results with standardized JSON/CSV format.
+
+**Unstructured Data** (Complete user control): Domain-specific raw data (CAD files, sensor streams, images, proprietary formats) loaded via `FeatureModel._load_data()`.
+
+## API Reference
+
+The framework uses **interface-based design** with five core interfaces:
+
+### IExternalData (Optional - Database/API Integration)
+
+**Purpose**: Interface structured metadata access when integrating with databases/APIs. Framework works completely standalone without this interface.
+
+**Required Methods:**
 ```python
-dimension_names = [('layers', 'layer_id', 'n_layers')]
-#                                           ^^^^^^^^^ 
-#                                           Must match database parameter name
+def pull_study_record(self, study_code: str) -> Dict[str, Any]
+def pull_exp_record(self, exp_code: str) -> Dict[str, Any]
 ```
 
-#### ⚠️ Runtime Parameter Naming  
-Runtime parameter field names must match iterator names (second element) from `dimension_names` for automatic parameter setting:
+**Required Record Structure:**
+
+Study records must contain these fields:
 ```python
-dimension_names = [('layers', 'layer_id', 'n_layers')]
-#                             ^^^^^^^^
-#                             This name should be set as runtime_parameter()
-
-@dataclass
-class MyFeatureModel(FeatureModel):
-    layer_id: int = runtime_parameter()  # Must match iterator name exactly
+{
+    "id": int,                    # Unique study identifier
+    "Code": str,                  # Study code (matches study_code parameter)
+    "Parameters": Dict[str, Any], # Study-level parameters (@study_parameter values)
+    "Performance": List[str]      # List of performance metric codes
+}
 ```
 
-#### ⚠️ Config File Class Paths
-Configuration file must contain accurate, fully qualified class paths that can be imported by Python's import system:
-```yaml
-evaluation:
-  path_deviation: 'examples.path_deviation.PathDeviationEvaluation'
-  #               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  #               Must be importable Python path with correct module structure
-```
-
-#### ⚠️ Environment Configuration
-Configure `.env` file with all required paths and credentials. Reference `.envTEMPLATE` for complete variable list including database tokens and folder paths.
-
-## 3. Implementation Example
-
-### 3.1 Example Overview
-
-![LBP Test Example](examples/UML_test_example.png)
-
-The `examples/` directory demonstrates a complete 3D printing case study implementing path deviation and energy consumption metrics. This example showcases the paired FeatureModel/EvaluationModel architecture and proper inheritance from framework base classes.
-
-### 3.2 Implementation Walkthrough
-
-#### PathDeviationEvaluation & PathDeviationFeature
-Comprehensive geometric accuracy assessment comparing designed tool paths against measured execution paths. Demonstrates multi-dimensional evaluation across layers and segments.
-
+Experiment records must contain these fields:
 ```python
-@dataclass
-class PathDeviationEvaluation(EvaluationModel):
-    target_deviation: float = model_parameter()      # Target accuracy level
-    max_deviation: float = model_parameter()         # Maximum acceptable deviation
-    n_layers: int = exp_parameter()                  # Number of manufacturing layers
-    n_segments: int = exp_parameter()                # Segments per layer
-
-    def __init__(self, performance_code, folder_navigator, logger, **study_params):
-        dimension_names = [
-            ('layers', 'layer_id', 'n_layers'),      # ← Critical naming convention
-            ('segments', 'segment_id', 'n_segments') # ← Must match database fields
-        ]
-        super().__init__(performance_code, folder_navigator, dimension_names, 
-                        PathDeviationFeature, logger, **study_params)
+{
+    "id": int,                    # Unique experiment identifier  
+    "Code": str,                  # Experiment code (matches exp_code parameter)
+    "Parameters": Dict[str, Any]  # Experiment-level parameters (@exp_parameter values)
+}
 ```
 
-#### EnergyConsumption & EnergyFeature  
-Power consumption analysis during manufacturing process. Demonstrates scalar evaluation (no dimensions) with simple feature computation.
-
+**Optional Methods** (default implementations provided):
 ```python
-@dataclass
-class EnergyFeature(FeatureModel):
-    power_rating: float = model_parameter(50.0)     # Equipment power rating
-    layerTime: float = exp_parameter()              # Time per layer
-
-    def _compute_features(self, data, visualize_flag):
-        energy_consumption = self.power_rating * self.layerTime  # P × t = Energy
-        return {"energy_consumption": energy_consumption}
+def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
+def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
+def pull_aggr_metrics(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]
+def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
 ```
 
-#### ExampleDataInterface
-Mock implementation demonstrating proper database integration patterns and parameter naming consistency:
+**Import**: `from lbp_package import IExternalData`
 
+### IFeatureModel (Core - Domain-Specific Data Loading)
+
+**Purpose**: Extract numerical features from domain-specific raw data. YOU have complete control over data format and loading mechanism.
+
+**Required Methods:**
 ```python
-class ExampleDataInterface(DataInterface):
-    def get_study_parameters(self, study_record):
-        return {
-            "target_deviation": 0.0,
-            "max_deviation": 0.5,
-            "n_layers": 2,        # ← Matches dimension parameter name exactly
-            "n_segments": 2       # ← Must align with EvaluationModel expectations  
-        }
-
-    def get_performance_records(self, study_record):
-        return [
-            {"Code": "path_deviation", "Active": True},      # ← 'Code' field required
-            {"Code": "energy_consumption", "Active": True}   # ← Must match config.yaml keys
-        ]
+def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any
+def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]
 ```
 
-### 3.3 Configuration Example
+**Return Structure Requirements**:
+- `_compute_features()` must return `Dict[str, float]` with string keys and numerical values
+- Feature keys become available for use in `IPredictionModel.input` field
+- All values must be finite numbers (no NaN, inf) - framework validates automatically
 
-The working `examples/config.yaml` demonstrates proper class path mapping and system configuration:
+**Key Responsibility**: Load unstructured data (CAD files, sensor streams, proprietary formats) and convert to numerical features.
 
-```yaml
-evaluation:
-  path_deviation: 'examples.path_deviation.PathDeviationEvaluation'
-  energy_consumption: 'examples.energy_consumption.EnergyConsumption'
+**Parameter Access**: Use `@study_parameter`, `@exp_parameter`, `@dim_parameter` decorators - automatically available as `self.attribute_name`.
 
-system:
-  debug_mode: false      # Default execution mode
-  visualize_flag: false  # Default visualization setting
-  round_digits: 3        # Numerical precision for results
-  log_level: 'INFO'      # Logging verbosity
+**Import**: `from lbp_package import IFeatureModel`
+
+### IEvaluationModel (Core - Performance Assessment)
+
+**Purpose**: Evaluate feature values against target values with automatic dimensionality handling.
+
+**Required Properties:**
+```python
+@property
+def dim_names(self) -> List[str]                    # ['layers', 'segments']
+@property  
+def dim_param_names(self) -> List[str]              # ['n_layers', 'n_segments'] 
+@property
+def dim_iterator_names(self) -> List[str]           # ['layer_id', 'segment_id']
+@property
+def feature_model_type(self) -> Type[IFeatureModel] # Associated feature model class
+@property
+def target_value(self) -> float                     # Performance target (NOT Optional!)
 ```
 
-### 3.4 Testing Infrastructure
+**Critical Naming Requirements**:
+- `dim_param_names` must **exactly match** field names in experiment record `"Parameters"` section
+- `dim_iterator_names` must **exactly match** `@dim_parameter` attribute names in your class
+- Mismatch will cause runtime errors during dimension configuration
 
-The comprehensive test suite validates framework functionality and demonstrates proper usage patterns:
+**Key Responsibility**: Framework automatically creates multi-dimensional arrays and iterates through all combinations based on your dimension configuration.
 
-```bash
-# Run all tests with detailed output
-python tests/run_tests.py --verbose
+**Import**: `from lbp_package import IEvaluationModel`
 
-# Test specific categories  
-python tests/run_tests.py --unit          # Core functionality tests
-python tests/run_tests.py --integration   # Component interaction tests
-python tests/run_tests.py --end-to-end    # Complete workflow tests
+### IPredictionModel (Optional - ML Workflows)
 
-# Generate coverage report
-python tests/run_tests.py --coverage
+**Purpose**: Train ML models on evaluation results and predict performance for new parameter combinations.
+
+**Required Properties:**
+```python
+@property
+def input(self) -> List[str]                                # Input feature names
+@property  
+def dataset_type(self) -> IPredictionModel.DatasetType     # AGGR_METRICS or METRIC_ARRAYS
 ```
 
-**Test Categories:**
-- **Unit Tests**: Validate individual component functionality, parameter handling, and utility classes
-- **Integration Tests**: Verify proper interaction between FeatureModels, EvaluationModels, and the EvaluationSystem
-- **End-to-End Tests**: Test complete workflows including configuration loading, study initialization, and evaluation execution
+**Required Methods:**
+```python
+def train(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]
+def predict(self, X: np.ndarray) -> np.ndarray
+```
 
-The test suite demonstrates proper framework usage patterns and validates all critical functionality including the naming convention requirements and parameter handling mechanisms highlighted throughout this documentation.
+**Input Field Requirements**:
+- `input` field names must match available parameter names or feature keys
+- Framework automatically extracts these fields from experiment records and feature results
+- Use parameter names from `@study_parameter`, `@exp_parameter`, or feature keys from `_compute_features()`
+
+**Required Return Structure for `train()`**:
+```python
+{
+    "training_score": float,      # Primary metric (R² for regression, accuracy for classification)  
+    "training_samples": int       # Number of training samples used
+}
+```
+
+**DatasetType Options**:
+- `AGGR_METRICS`: Uses aggregated performance metrics for training
+- `METRIC_ARRAYS`: Uses granular metric arrays for training
+
+**Import**: `from lbp_package import IPredictionModel`
+
+### ICalibrationModel (Optional - Process Optimization)
+
+**Purpose**: Optimize process parameters using any optimization algorithm of your choice.
+
+**Required Method:**
+```python
+def optimize(self, param_ranges: Dict[str, Tuple[float, float]], 
+             objective_fn: Callable[[Dict[str, float]], float]) -> Dict[str, float]
+```
+
+**Key Responsibility**: Implement optimization logic. Framework provides objective function based on evaluation model weights. You choose the optimization algorithm (scipy, scikit-optimize, genetic algorithms, etc.).
+
+**Import**: `from lbp_package import ICalibrationModel`
+
+### LBPManager (Orchestration)
+
+**Purpose**: Main orchestration class coordinating the complete learning workflow.
+
+**Initialization:**
+```python
+from lbp_package import LBPManager
+
+manager = LBPManager(
+    root_folder=".", local_folder="./data", log_folder="./logs",
+    external_data_interface=None,  # Optional
+    debug_flag=False, recompute_flag=False, visualize_flag=True
+)
+```
+
+**Model Registration:**
+```python
+manager.add_evaluation_model(performance_code: str, model_class: Type, weight: float = None)
+manager.add_prediction_model(performance_codes: List[str], model_class: Type) 
+manager.set_calibration_model(model_class: Type)
+```
+
+**Registration Requirements**:
+- **`performance_code`**: Must match codes listed in study record `"Performance"` array
+- **`weight`**: Required for calibration workflow - defines relative importance in multi-objective optimization
+- **`performance_codes`** (prediction): Must be subset of registered evaluation model codes
+- **Calibration dependency**: Requires at least one evaluation model with `weight > 0`
+
+**Workflow Execution:**
+```python
+manager.initialize_for_study(study_code: str)
+manager.run_evaluation(study_code: str, exp_nrs: List[int], **flag_overrides)
+manager.run_training(study_code: str, exp_nrs: List[int], **flag_overrides)
+manager.run_calibration(exp_nr: int, param_ranges: Dict[str, Tuple[float, float]])
+```
+
+**Flag System Requirements**:
+- **`debug_flag`**: `True` = skip external data operations, `False` = use external data interface if available  
+- **`recompute_flag`**: `True` = force recomputation and overwrite existing results, `False` = use cached results
+- **`visualize_flag`**: `True` = enable visualizations during processing, `False` = skip visualizations
+- **Flag precedence**: Method-level overrides > initialization defaults
+
+**Parameter Range Requirements** (for calibration):
+- Keys must match parameter names in experiment records
+- Values must be `(min_value, max_value)` tuples with `min_value < max_value`
+- Only numerical parameters supported - framework validates against `@exp_parameter` types
+
+## Configuration
+
+### Data Structure (Standalone Operation)
+
+If working without external data interface, create these JSON structures manually:
+
+**Study Record** (`./data/thermal_study/study_record.json`):
+```json
+{
+    "id": 1,
+    "Code": "thermal_study", 
+    "Parameters": {
+        "target_temp": 200.0,
+        "sampling_rate": 1000.0
+    },
+    "Performance": [
+        "temperature_control"
+    ]
+}
+```
+
+**Experiment Record** (`./data/thermal_study/thermal_study_001/exp_record.json`):  
+```json
+{
+    "id": 1,
+    "Code": "thermal_study_001",
+    "Parameters": {
+        "n_layers": 5,
+        "n_segments": 8,
+        "print_speed": 50.0
+    }
+}
+```
+
+The framework automatically creates the folder structure and manages all result files.
+
+## Key Features
+
+- **Interface-Based Design**: Clean contracts for feature extraction, evaluation, prediction, and calibration
+- **Database Independence**: Works standalone with JSON files or integrates with existing databases  
+- **Hierarchical Data Flow**: Automatic caching (memory → local → external) with recompute control
+- **Dynamic Dimensionality**: Automatic multi-dimensional array management for complex analysis
+- **Flag-Based Configuration**: Runtime control without configuration files - pure programmatic setup
+- **Parameter Management**: Elegant decorator-based system for study, experiment, and dimensional parameters
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+<!-- ## Citation
+
+If you use this framework in your research, please cite:
+
+```bibtex
+@article{learning_by_printing,
+  title={An Introduction to Learning by Printing},
+  author={Your Authors},
+  journal={Your Journal},
+  year={2024},
+  url={https://mediatum.ub.tum.de/doc/1781543/1781543.pdf}
+}
+``` -->
+
+## Support
+
+- **Examples Repository**: [LBP Examples](https://github.com/your-org/lbp-examples) - Complete working implementations
+- **Issues**: [GitHub Issues](https://github.com/your-org/lbp-package/issues) - Bug reports and feature requests
+- **Discussions**: [GitHub Discussions](https://github.com/your-org/lbp-package/discussions) - Questions and community support

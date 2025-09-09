@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Type, Tuple, Optional, Callable
 from .evaluation import EvaluationSystem
 from .prediction import PredictionSystem
 from ..interfaces import IExternalData, IEvaluationModel, IPredictionModel, ICalibrationModel
-from ..utils import LocalDataInterface, LBPLogger
+from ..utils import LocalData, LBPLogger
 
 
 class LBPManager:
@@ -19,12 +19,12 @@ class LBPManager:
             root_folder: str,
             local_folder: str, 
             log_folder: str, 
-            external_data_interface: IExternalData,
+            external_data_interface: Optional[IExternalData] = None,
+            server_folder: Optional[str] = None,
             debug_flag: bool = False,
             recompute_flag: bool = False,
             visualize_flag: bool = True,
             round_digits: int = 3,
-            server_folder: Optional[str] = None
             ):
         """
         Initialize LBP Manager.
@@ -39,6 +39,8 @@ class LBPManager:
         self.logger = LBPLogger(self.logger_name, log_folder)
         self.logger.info("Initializing LBP Manager")
         self.external_data = external_data_interface
+        if external_data_interface is None:
+            self.logger.console_warning(f"No external data interface provided: Study and experiment records need to be available as local json files.")
 
         # System settings
         self.debug_flag = debug_flag
@@ -47,7 +49,7 @@ class LBPManager:
         self.round_digits = round_digits
 
         # Initialize local data handler
-        self.local_data = LocalDataInterface(root_folder, local_folder, server_folder)
+        self.local_data = LocalData(root_folder, local_folder, server_folder)
         
         # Study and experiment state
         self.study_records: Dict[str, Dict[str, Any]] = {}
@@ -392,7 +394,7 @@ class LBPManager:
             [study_code],
             self.study_records,
             self.local_data.load_study_records,
-            self.external_data.pull_study_records,
+            self.external_data.pull_study_records if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -405,7 +407,7 @@ class LBPManager:
             [study_code],
             self.study_records,
             self.local_data.save_study_records,
-            self.external_data.push_study_records,
+            self.external_data.push_study_records if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -423,7 +425,7 @@ class LBPManager:
             exp_codes,
             self.exp_records,
             self.local_data.load_exp_records,
-            self.external_data.pull_exp_records,
+            self.external_data.pull_exp_records if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -436,7 +438,7 @@ class LBPManager:
             exp_codes,
             self.exp_records,
             self.local_data.save_exp_records,
-            self.external_data.push_exp_records,
+            self.external_data.push_exp_records if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -463,7 +465,7 @@ class LBPManager:
             exp_codes,
             self.eval_system.aggr_metrics,
             self.local_data.load_aggr_metrics,
-            self.external_data.pull_aggr_metrics,
+            self.external_data.pull_aggr_metrics if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -475,7 +477,7 @@ class LBPManager:
                 exp_codes,
                 metric_array,
                 self.local_data.load_metrics_arrays,
-                self.external_data.pull_metrics_arrays,
+                self.external_data.pull_metrics_arrays if self.external_data else None,
                 debug_flag,
                 recompute_flag,
                 perf_code=perf_code
@@ -504,7 +506,7 @@ class LBPManager:
             exp_codes,
             self.eval_system.aggr_metrics,
             self.local_data.save_aggr_metrics,
-            self.external_data.push_aggr_metrics,
+            self.external_data.push_aggr_metrics if self.external_data else None,
             debug_flag,
             recompute_flag
         )
@@ -521,7 +523,7 @@ class LBPManager:
                 exp_codes,
                 metric_array,
                 self.local_data.save_metrics_arrays,
-                self.external_data.push_metrics_arrays,
+                self.external_data.push_metrics_arrays if self.external_data else None,
                 debug_flag,
                 recompute_flag,
                 perf_code=perf_code,
@@ -535,9 +537,9 @@ class LBPManager:
                            target_codes: List[str],
                            memory_storage: Dict[str, Any],
                            local_loader: Callable[[List[str]], Tuple[List[str], Dict[str, Any]]],
-                           external_loader: Callable[[List[str]], Tuple[List[str], Any]],
-                           debug: Optional[bool],
-                           recompute: Optional[bool],
+                           external_loader: Optional[Callable[[List[str]], Tuple[List[str], Any]]],
+                           debug_flag: Optional[bool],
+                           recompute_flag: Optional[bool],
                            **kwargs) -> List[str]:
         """
         Universal hierarchical data loading with missing-only processing.
@@ -560,7 +562,7 @@ class LBPManager:
             return []
         
         # 2. Load from local files
-        if not recompute:
+        if not recompute_flag:
             missing_local, local_data = local_loader(missing_memory, **kwargs)
             memory_storage.update(local_data)
             self._check_for_retrieved_codes(missing_memory, missing_local, dtype, "local files", console_output=True)
@@ -573,13 +575,16 @@ class LBPManager:
             return []
 
         # 3. Load from external sources (skip if in debug mode)
-        if not debug:
+        if not debug_flag and external_loader:
             missing_external, external_data = external_loader(missing_local)
             self._check_for_retrieved_codes(missing_local, missing_external, dtype, "external source", console_output=True)
             memory_storage.update(external_data)
-        else:
+        elif debug_flag:
             missing_external = missing_local 
             self.logger.info(f"Debug mode: Skipping loading {dtype} from external source")
+        else:
+            missing_external = missing_local
+            self.logger.warning(f"No external data interface provided: Skipping loading {dtype} from external source")
   
         return missing_external
     
@@ -596,7 +601,7 @@ class LBPManager:
                            target_codes: List[str],
                            memory_storage: Dict[str, Any],
                            local_saver: Callable[[List[str], Dict[str, Any], bool], bool],
-                           external_saver: Callable[[List[str], Dict[str, Any], bool], bool],
+                           external_saver: Optional[Callable[[List[str], Dict[str, Any], bool], bool]],
                            debug_flag: bool,
                            recompute_flag: bool,
                            **kwargs) -> None:
@@ -626,14 +631,16 @@ class LBPManager:
             self.logger.info(f"{dtype.capitalize()} {codes_to_save} already exist as local files.")
 
         # 4. Save to external source (skip if in debug mode)
-        if not debug_flag:
+        if not debug_flag and external_saver:
             pushed = external_saver(codes_to_save, data_to_save, recompute_flag, **kwargs)
             if pushed:
                 self.logger.console_info(f"Pushed {dtype} {codes_to_save} to external source.")
             else:
                 self.logger.info(f"{dtype} {codes_to_save} already exists in external source.")
-        else:
+        elif debug_flag:
             self.logger.info(f"Debug mode: Skipped pushing {dtype} {codes_to_save} to external source.")
+        else:
+            self.logger.warning(f"No external data interface provided: Skipped pushing {dtype} {codes_to_save} to external source.")
 
     def _get_default_attribute(self, key: str, value: Any) -> Any:
         """

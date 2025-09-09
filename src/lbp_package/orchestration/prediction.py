@@ -4,7 +4,7 @@ import numpy as np
 from lbp_package.interfaces.evaluation import IEvaluationModel
 
 from ..interfaces import IExternalData, IPredictionModel
-from ..utils import LocalDataInterface, LBPLogger
+from ..utils import LocalData, LBPLogger
 
 
 class PredictionSystem:
@@ -25,7 +25,7 @@ class PredictionSystem:
     """
     
     def __init__(self, 
-                 local_data: LocalDataInterface,
+                 local_data: LocalData,
                  logger: LBPLogger) -> None:
         """
         Initialize prediction system.

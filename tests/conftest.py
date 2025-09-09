@@ -8,7 +8,7 @@ from random import randint
 from pathlib import Path
 from typing import Dict, Any
 
-from src.lbp_package.utils.log_manager import LBPLogger
+from lbp_package.utils.logger import LBPLogger
 from examples.external_data import MockDataInterface
 
 

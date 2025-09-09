@@ -1,0 +1,116 @@
+@startuml UML_diagram
+' Interface-focused UML diagram for LBP Package
+' Generate PNG: plantuml -tpng "src/lbp_package/UML_diagram.puml"
+
+!define ABSTRACT_CLASS abstract class
+
+' === STYLING - ORTHOGONAL LINES & SPACING ===
+skinparam linetype ortho
+skinparam ranksep 50
+skinparam nodesep 50
+skinparam minlen 3
+skinparam packagePadding 10
+
+' === ORCHESTRATION LAYER ===
+class LBPManager {
+    + run_evaluation()
+    + run_training()
+    + run_calibration()
+}
+
+class EvaluationSystem {
+    + add_evaluation_model()
+    + run()
+}
+
+class PredictionSystem {
+    + add_prediction_model()
+    + train_models()
+    + predict()
+}
+
+' === INTERFACE LAYER ===
+ABSTRACT_CLASS IFeatureModel #90EE9055 {
+    + {abstract} _load_data()
+    + {abstract} _compute_features()
+}
+
+ABSTRACT_CLASS IEvaluationModel #ADD8E655 {
+    + {abstract} dimensions
+    + {abstract} target_value
+    + {abstract} scaling_factor
+}
+
+ABSTRACT_CLASS IPredictionModel #FFFFE055 {
+    + {abstract} input
+    + {abstract} train()
+    + {abstract} predict()
+}
+
+ABSTRACT_CLASS IExternalData #eeb6ff55 {
+    + {abstract} pull_study_record()
+    + {abstract} pull_exp_record()
+}
+
+ABSTRACT_CLASS ICalibrationModel #FFB6C155 {
+    + {abstract} optimize()
+}
+
+' === UTILITY PACKAGE ===
+note as utils #F8F8F820
+  **utils**
+  class ParameterHandling
+  class LocalData
+  class LBPLogger
+end note
+
+' === LAYOUT CONTROL - ENFORCE LEVELS ===
+!define LEVEL0 LBPManager
+!define LEVEL1 EvaluationSystem, PredictionSystem, utils
+!define LEVEL2 IExternalData, IEvaluationModel, IPredictionModel, ICalibrationModel  
+!define LEVEL3 IFeatureModel
+
+' Level 0 -> Level 1 vertical separation
+LBPManager -[hidden]down- EvaluationSystem  
+LBPManager -[hidden]down- PredictionSystem
+LBPManager -[hidden]down- utils
+
+' Level 1 horizontal grouping
+EvaluationSystem -[hidden]right- PredictionSystem
+PredictionSystem -[hidden]right- utils
+
+' Level 1 -> Level 2 vertical separation  
+EvaluationSystem -[hidden]down- IEvaluationModel
+PredictionSystem -[hidden]down- IPredictionModel
+utils -[hidden]down- IExternalData
+EvaluationSystem -[hidden]down- ICalibrationModel
+
+' Level 2 horizontal grouping
+IExternalData -[hidden]right- IEvaluationModel
+IEvaluationModel -[hidden]right- IPredictionModel
+IPredictionModel -[hidden]right- ICalibrationModel
+
+' Level 2 -> Level 3 vertical separation
+IEvaluationModel -[hidden]down- IFeatureModel
+IPredictionModel -[hidden]down- IFeatureModel
+
+' === RELATIONSHIPS ===
+
+' Core Architecture
+LBPManager *-- EvaluationSystem
+LBPManager *-- PredictionSystem
+
+' Services & Support  
+LBPManager *-- IExternalData
+LBPManager o-- ICalibrationModel
+LBPManager *-- utils
+
+' Container Relationships
+EvaluationSystem o-- IEvaluationModel
+PredictionSystem o-- IPredictionModel
+
+' Interface Dependencies
+IEvaluationModel ||-- IFeatureModel
+IPredictionModel o-- IFeatureModel
+
+@enduml

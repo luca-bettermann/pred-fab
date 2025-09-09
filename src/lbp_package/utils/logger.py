@@ -86,7 +86,7 @@ class LBPLogger:
     
     def console_warning(self, message: str) -> None:
         """Print warning to console and log."""
-        print(f"\n⚠️ {message}")
+        print(f"\n⚠️  {message}")
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
 
     def console_summary(self, message: str) -> None:

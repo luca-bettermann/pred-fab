@@ -1,4 +1,4 @@
-from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, ICalibrationModel
 from .orchestration import LBPManager
 
 __all__ = [
@@ -6,5 +6,6 @@ __all__ = [
     "IFeatureModel", 
     "IEvaluationModel",
     "IPredictionModel",
+    "ICalibrationModel",
     "LBPManager"
 ]
