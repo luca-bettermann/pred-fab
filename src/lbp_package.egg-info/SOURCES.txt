@@ -18,5 +18,5 @@ src/lbp_package/orchestration/management.py
 src/lbp_package/orchestration/prediction.py
 src/lbp_package/utils/__init__.py
 src/lbp_package/utils/local_data.py
-src/lbp_package/utils/log_manager.py
+src/lbp_package/utils/logger.py
 src/lbp_package/utils/parameter_handler.py

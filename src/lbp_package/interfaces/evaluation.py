@@ -1,6 +1,6 @@
 import numpy as np
 import itertools
-from typing import Any, Dict, List, Type, Tuple, Optional
+from typing import Any, Dict, List, Type, Tuple, Optional, final
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
@@ -62,7 +62,7 @@ class IEvaluationModel(ParameterHandling, ABC):
         # Store kwargs so that they can be passed on to the feature models
         self.kwargs = kwargs
 
-    # === ABSTRACT PROPERTIES (Must be implemented by subclasses) ===
+    # === ABSTRACT PROPERTIES ===
     @property
     @abstractmethod
     def feature_model_type(self) -> Type[IFeatureModel]:
@@ -177,32 +177,16 @@ class IEvaluationModel(ParameterHandling, ABC):
         """Optional cleanup after performance computation."""
         pass
 
-    # === PUBLIC API METHODS (Called externally) ===
+    # === PUBLIC API METHODS ===
+    @final
     def add_feature_model(self, feature_model: IFeatureModel, **kwargs) -> None:
-        """
-        Predefined logic of how feature models are added to evaluation models.
-        
-        Args:
-            feature_model: FeatureModel instance to use for feature extraction
-        """
+        """Add feature model to evaluation model."""
         # Directly set the feature model instance (one-to-one relationship)
         self.feature_model = feature_model
 
+    @final
     def run(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> Tuple[Dict[str, Optional[np.floating]], np.ndarray, np.ndarray]:
-        """
-        Execute the evaluation pipeline.
-        
-        Args:
-            exp_code: Experiment code
-            exp_folder: Folder path of the experiment
-            visualize_flag: Whether to show visualizations
-            debug_flag: Whether to run in debug mode (no saving)
-
-        Returns:
-            aggr_metrics: Dictionary of aggregated performance metrics
-            metrics_array: Numpy array of all computed metrics
-            dim_array: Numpy array of dimension combinations
-        """
+        """Execute the evaluation pipeline."""
         self.logger.info(f"Starting evaluation for experiment {exp_code}")
 
         # Initialize performance array
@@ -267,17 +251,10 @@ class IEvaluationModel(ParameterHandling, ABC):
         self.logger.info(f"Evaluation completed: {aggr_metrics}")
         return aggr_metrics, metrics_array, dim_array
 
-    # === PRIVATE API METHODS (Called internally) ===
+    # === PRIVATE METHODS ===
+    @final
     def _compute_performance(self, feature_value: np.ndarray, target_value: float, scaling_factor: Optional[float]) -> Optional[NDArray[np.floating]]:
-        """
-        Compute performance for current dimensions.
-        
-        Args:
-            feature_value: Feature value for performance evaluation
-            target_value: Target value for performance comparison
-            scaling_factor: Scaling factor for performance normalization
-            dims: Tuple of current dimension indices
-        """
+        """Compute performance value for current dimensions."""
 
         # Evaluate performance based on feature and target values
         if (feature_value is None or np.isnan(feature_value)) or target_value is None:
@@ -312,22 +289,14 @@ class IEvaluationModel(ParameterHandling, ABC):
         )
         return performance_value
 
+    @final
     def _compute_default_aggr_metrics(
             self, 
             key_feature_avg: str,
             feature_array: NDArray[np.float64], 
             key_performance_avg: str,
             performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
-        """
-        Computes the default aggregation metrics.
-        
-        Args:
-            feature_array: Array of feature values to aggregate
-            performance_array: Array of performance values to aggregate
-
-        Returns:
-            Dictionary of default aggregated metrics.
-        """
+        """Computes the default aggregation metrics. """
         default_metrics: Dict[str, Optional[np.floating]] = {}
 
         # Default: compute mean feature and performance values
@@ -337,15 +306,18 @@ class IEvaluationModel(ParameterHandling, ABC):
         # return the aggregated performance metrics
         return default_metrics
 
+    @final
     def _get_dim_sizes(self) -> List[int]:
         """Get sizes of all dimensions from parameter values."""
         return [getattr(self, attr_name) for attr_name in self.dim_param_names]
 
+    @final
     def _compute_dim_ranges(self) -> List[range]:
         """Create range objects for all dimensions."""
         dim_sizes = self._get_dim_sizes()
         return [range(size) for size in dim_sizes]
 
+    @final
     def _validate_dim_properties(self) -> None:
         """Validate that dimension properties are correctly set."""
 

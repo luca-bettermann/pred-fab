@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Callable, Optional
-from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Callable, Optional, final
 
 from ..utils import ParameterHandling, LBPLogger
 
@@ -11,10 +10,11 @@ class ICalibrationModel(ParameterHandling, ABC):
     Interface handles evaluation orchestration, you handle optimization logic.
     """
 
-    def __init__(self, logger: LBPLogger, **kwargs):
+    def __init__(self, logger: LBPLogger, **kwargs) -> None:
         self.logger = logger
         self.performance_weights: Dict[str, float] = {}
 
+    # === ABSTRACT METHODS ===
     @abstractmethod
     def optimize(self, param_ranges: Dict[str, Tuple[float, float]], 
                  objective_fn: Callable[[Dict[str, float]], float]) -> Dict[str, float]:
@@ -38,6 +38,8 @@ class ICalibrationModel(ParameterHandling, ABC):
         """
         ...
 
+    # === PUBLIC API METHODS ===
+    @final
     def calibrate(self, exp_code: str, predict_fn: Callable, evaluate_fn: Callable, 
                   param_keys: List[str], param_ranges: Dict[str, Tuple[float, float]]) -> Dict[str, float]:
         """
@@ -55,35 +57,16 @@ class ICalibrationModel(ParameterHandling, ABC):
         # Let user optimize however they want!
         best_params = self.optimize(param_ranges, self._objective_function)
         
+        
         self.logger.info(f"Calibration complete: {self._eval_count} evaluations, best: {best_params}")
         return best_params
-    
-    def _objective_function(self, params: Dict[str, float]) -> float:
-        """
-        Objective function that handles predict→evaluate→objective pipeline.
-        Called by user's optimization algorithm.
-        """
-        try:
-            self._eval_count += 1
-            obj_val = self._evaluate_objective(params, self._exp_code, self._predict_fn, self._evaluate_fn)
-            self.logger.debug(f"Eval {self._eval_count}: {params} -> {obj_val:.6f}")
-            return obj_val
-        except Exception as e:
-            self.logger.warning(f"Evaluation failed for {params}: {e}")
-            return float('-inf')  # Return very bad objective for failed evaluations
 
+    @final
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set performance weights for objective function."""
         self.performance_weights = weights
 
-    def _evaluate_objective(self, params: Dict[str, float], exp_code: str, 
-                           predict_fn: Callable, evaluate_fn: Callable) -> float:
-        """Evaluate objective: predict → evaluate → weighted sum."""
-        features = predict_fn(params)
-        performances = evaluate_fn(exp_code, features)
-        return sum(self.performance_weights.get(k, 1.0) * v for k, v in performances.items())
-
-
+    @final
     def calibration_step_summary(self, exp_code: str, param_ranges: Dict[str, Tuple[float, float]], 
                                   optimal_params: Dict[str, float], evaluation_count: int,
                                   predicted_features: Optional[Dict[str, float]],
@@ -124,3 +107,27 @@ class ICalibrationModel(ParameterHandling, ABC):
             summary += f"\n{code:<20} {weight:<15.3f} {feature_str:<15} {perf_str:<15}"
             
         return summary
+    
+    # === PRIVATE METHODS ===
+    @final
+    def _objective_function(self, params: Dict[str, float]) -> float:
+        """
+        Objective function that handles predict→evaluate→objective pipeline.
+        Called by user's optimization algorithm.
+        """
+        try:
+            self._eval_count += 1
+            obj_val = self._evaluate_objective(params, self._exp_code, self._predict_fn, self._evaluate_fn)
+            self.logger.debug(f"Eval {self._eval_count}: {params} -> {obj_val:.6f}")
+            return obj_val
+        except Exception as e:
+            self.logger.warning(f"Evaluation failed for {params}: {e}")
+            return float('-inf')  # Return very bad objective for failed evaluations
+
+    @final
+    def _evaluate_objective(self, params: Dict[str, float], exp_code: str, 
+                           predict_fn: Callable, evaluate_fn: Callable) -> float:
+        """Evaluate objective: predict → evaluate → weighted sum."""
+        features = predict_fn(params)
+        performances = evaluate_fn(exp_code, features)
+        return sum(self.performance_weights.get(k, 1.0) * v for k, v in performances.items())

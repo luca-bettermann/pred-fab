@@ -1,4 +1,4 @@
-from typing import Any, Dict, Type, Optional, List
+from typing import Any, Dict, Type, Optional, List, final
 import numpy as np
 
 from ..utils import LBPLogger
@@ -27,15 +27,14 @@ class EvaluationSystem:
             metrics_arrays: {exp_code: {performance_code: np.ndarray}}
         """
         self.logger: LBPLogger = logger
-
         self.evaluation_models: Dict[str, IEvaluationModel] = {}
 
         # Storage of metrics in memory 
-        self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {} # dict_keys: exp_code, perf_code
-        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}   # dict_keys: perf_code, exp_code
-        self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}        # dict_keys: perf_code, exp_code
+        self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {}  # dict_keys: exp_code, perf_code
+        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}                       # dict_keys: perf_code, exp_code
+        self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}                            # dict_keys: perf_code, exp_code
 
-    # === PUBLIC API METHODS (Called externally) ===
+    # === PUBLIC API METHODS ===
     def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: int, weight: Optional[float] = None, **kwargs) -> None:
         """
         Add an evaluation model to the system.

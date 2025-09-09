@@ -76,17 +76,9 @@ class LBPManager:
 
         self.logger.console_info("\n------- Welcome to Learning by Printing -------\n")
 
-    # === PUBLIC API METHODS (Called externally) ===
+    # === PUBLIC API METHODS ===
     def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: Optional[int] = None, weight: Optional[float] = None, **kwargs) -> None:
-        """
-        Add an evaluation model to the system.
-        Args:
-            performance_code: Code identifying the performance metric
-            evaluation_class: Class of evaluation model to instantiate
-            round_digits: Number of decimal places to round evaluations (optional)
-            calibration_weight: Optional weight for calibration objective function
-            **kwargs: Additional parameters for model initialization
-        """
+        """Add an evaluation model to the system."""
         round_digits = self._get_default_attribute('round_digits', round_digits)
         if not isinstance(round_digits, int):
             raise ValueError("Round digits must be an integer.")
@@ -96,15 +88,7 @@ class LBPManager:
         self.logger.console_info(f"Added evaluation model '{evaluation_class.__name__}' for performance '{performance_code}'{weight_msg}.")
 
     def add_prediction_model(self, performance_codes: List[str], prediction_class: Type[IPredictionModel], round_digits: Optional[int] = None, **kwargs) -> None:
-        """
-        Add a prediction model to the system.
-        
-        Args:
-            performance_codes: List[str]: List of codes identifying the performance metrics
-            prediction_class: Class of prediction model to instantiate
-            round_digits: Number of decimal places to round predictions (optional)
-            **kwargs: Additional parameters for model initialization
-        """
+        """Add a prediction model to the system."""
         round_digits = self._get_default_attribute('round_digits', round_digits)
         if not isinstance(round_digits, int):
             raise ValueError("Round digits must be an integer.")
@@ -112,24 +96,12 @@ class LBPManager:
         self.logger.console_info(f"Added prediction model '{prediction_class.__name__}' for performance codes: {performance_codes}.")
 
     def set_calibration_model(self, calibration_class: Type[ICalibrationModel], **kwargs) -> None:
-        """
-        Add a calibration model to the system.
-        
-        Args:
-            calibration_class: Class of calibration model to instantiate
-            **kwargs: Additional parameters for model initialization
-        """
+        """Add a calibration model to the system."""
         self.calibration_model = calibration_class(logger=self.logger, **kwargs)
         self.logger.console_info(f"\nSet calibration model to '{calibration_class.__name__}'.")
 
     def initialize_for_study(self, study_code: str, debug_flag: Optional[bool] = None, recompute_flag: Optional[bool] = None) -> None:
-        """
-        Initialize the system for a specific study.
-        
-        Args:
-            study_code: Unique identifier for the study
-            debug_flag: Whether to run in debug mode
-        """
+        """Initialize the system for a specific study."""
         self.logger.console_info(f"\n------- Study Initialization: '{study_code}' -------\n")
 
         # Use system defaults if not explicitly provided
@@ -173,16 +145,7 @@ class LBPManager:
             visualize_flag: Optional[bool] = None, 
             debug_flag: Optional[bool] = None, 
             recompute_flag: Optional[bool] = None) -> None:
-        """
-        Execute evaluation for one or multiple experiments.
-        
-        Args:
-            exp_nrs: List of experiment numbers to process (use this OR exp_nr)
-            exp_nr: Single experiment number to process (use this OR exp_nrs)
-            visualize_flag: Whether to show visualizations (uses system default if None)
-            debug_flag: Whether to run in debug mode (uses system default if None)
-            recompute_flag: Force a recompute of the evaluation (uses system default if None)
-        """
+        """Execute evaluation for one or multiple experiments."""
         # Check if study has been initialized
         self.local_data.check_availability(study_code, self.study_records)
 
@@ -191,10 +154,6 @@ class LBPManager:
 
         # Set flags with system defaults if not explicitly provided
         visualize_flag, debug_flag, recompute_flag = self._validate_system_flags(visualize_flag, debug_flag, recompute_flag)
-
-        # Configure debug mode if needed
-        if debug_flag and not self.logger.debug_mode:
-            self.logger.switch_to_debug_mode()
 
         # Start the evaluation
         self.logger.console_info(f"\n------- Evaluation of {len(exp_codes)} Experiment{'s' if len(exp_codes) > 1 else ''} -------\n")
@@ -239,12 +198,7 @@ class LBPManager:
             visualize_flag: Optional[bool] = None,
             debug_flag: Optional[bool] = None,
             recompute_flag: Optional[bool] = None) -> None:
-        """
-        Run training for all prediction models.
-        
-        This method orchestrates the training process for all active prediction models
-        using the evaluation history and feature models.
-        """
+        """Run training for all prediction models."""
         # Check if study has been initialized
         self.local_data.check_availability(study_code, self.study_records)
 
@@ -275,18 +229,7 @@ class LBPManager:
 
     def run_calibration(self, exp_nr: int, param_ranges: Dict[str, Tuple[float, float]], 
                        visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None) -> Dict[str, float]:
-        """
-        Run calibration to find optimal parameters for upcoming experiment.
-        
-        Args:
-            exp_nr: Experiment number for the upcoming experiment
-            param_ranges: Parameter bounds {param_name: (min_val, max_val)}
-            visualize_flag: Whether to show visualizations during optimization
-            debug_flag: Whether to run in debug mode
-            
-        Returns:
-            Dictionary of optimal parameters {param_name: optimal_value}
-        """
+        """Run calibration to find optimal parameters for upcoming experiment."""
         # Validate calibration model exists
         if self.calibration_model is None:
             raise ValueError("No calibration model added. Use add_calibration_model() first.")
@@ -373,7 +316,7 @@ class LBPManager:
         self.logger.console_success(f"Calibration completed. Optimal parameters: {formatted_params}")
         return optimal_params
 
-    # === PRIVATE/INTERNAL METHODS (Internal use only) ===
+    # === PRIVATE METHODS ===
     def _convert_exp_nrs(self, exp_nr: Optional[int], exp_nrs: Optional[List[int]]) -> List[str]:
         if exp_nr is not None and exp_nrs is not None:
             raise ValueError("Provide either exp_nr OR exp_nrs, not both")
@@ -541,18 +484,7 @@ class LBPManager:
                            debug_flag: Optional[bool],
                            recompute_flag: Optional[bool],
                            **kwargs) -> List[str]:
-        """
-        Universal hierarchical data loading with missing-only processing.
-        
-        Args:
-            target_codes: List of codes to load (study_codes, exp_codes, etc.)
-            memory_storage: Dictionary where loaded data will be stored/retrieved
-            local_loader: Function to load from local files
-            external_loader: Function to load from external source
-            
-        Returns:
-            List of codes that couldn't be loaded from any source
-        """
+        """Universal hierarchical data loading: Memory → Local Files → External Source"""
         # 1. Check memory - filter out already loaded codes
         missing_memory = [code for code in target_codes if code not in memory_storage]
         self._check_for_retrieved_codes(target_codes, missing_memory, dtype, "memory")
@@ -605,15 +537,7 @@ class LBPManager:
                            debug_flag: bool,
                            recompute_flag: bool,
                            **kwargs) -> None:
-        """
-        Universal hierarchical data saving: Memory → Local Files → External Source
-        
-        Args:
-            target_codes: List of codes to save (exp_codes, study_codes, etc.)
-            memory_storage: Dictionary containing data to save
-            local_saver: Function to save to local files
-            external_saver: Function to save to external source
-        """
+        """Universal hierarchical data saving: Memory → Local Files → External Source"""
         # 1. Filter to codes that exist in memory
         codes_to_save = [code for code in target_codes if code in memory_storage]
         if not codes_to_save:
@@ -643,15 +567,7 @@ class LBPManager:
             self.logger.warning(f"No external data interface provided: Skipped pushing {dtype} {codes_to_save} to external source.")
 
     def _get_default_attribute(self, key: str, value: Any) -> Any:
-        """
-        Retrieve a default attribute value from the LBP manager configuration.
-
-        Args:
-            key: The key of the default attribute to retrieve
-        
-        Returns:
-            The value of the default attribute
-        """
+        """Retrieve a default attribute value from the LBP manager configuration."""
         if value is None:
             if not hasattr(self, key):
                 raise ValueError(f"Default attribute '{key}' not found in LBP manager configuration.")
@@ -663,11 +579,7 @@ class LBPManager:
             return value
 
     def _add_feature_model_instances(self, study_params: Dict[str, Any]) -> None:
-        """
-        Create feature model instances for evaluation and prediction models.
-
-        Optimizes by sharing feature model instances where possible.
-        """
+        """Create feature model instances for evaluation and prediction models."""
         assert self.eval_system is not None, "Evaluation system is not initialized."
         assert self.pred_system is not None, "Prediction system is not initialized."
 
@@ -720,6 +632,7 @@ class LBPManager:
 
     def _get_train_inputs(self, exp_records: Dict[str, Dict[str, Any]]
                           ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """Prepare training inputs from experiment records and evaluation results."""
         # Initialize input dicts
         parameters = {}
         avg_features = {}
@@ -773,6 +686,7 @@ class LBPManager:
         return summary
 
     def _validate_system_flags(self, visualize_flag: Optional[bool] = None, debug_flag: Optional[bool] = None, recompute_flag: Optional[bool] = None) -> Tuple[bool, bool, bool]:
+        """Validate system flags and return their values."""
         visualize_flag = self._get_default_attribute('visualize_flag', visualize_flag)
         debug_flag = self._get_default_attribute('debug_flag', debug_flag)
         recompute_flag = self._get_default_attribute('recompute_flag', recompute_flag)

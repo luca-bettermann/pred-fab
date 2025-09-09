@@ -11,17 +11,11 @@ class PredictionSystem:
     """
     Orchestrates prediction models with consistent data preprocessing.
     
-    Handles the complete prediction workflow:
-    1. Data collection from structured (ExternalDataInterface) and unstructured (FeatureModel) sources
-    2. Global preprocessing for consistency across models
-    3. Model-specific preprocessing and training
-    4. Prediction with denormalization
-    
     Data Responsibility Boundary:
     - ExternalDataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
     - PredictionSystem: Coordinates parameter collection and delegates to models
-    - FeatureModel: Loads domain-specific unstructured data via _load_data() and computes features
     - PredictionModel: Manages FeatureModel instances and implements ML prediction logic
+    - FeatureModel: Loads domain-specific unstructured data via _load_data() and computes features
     """
     
     def __init__(self, 
@@ -48,16 +42,9 @@ class PredictionSystem:
         
         self.logger.info("Initialized PredictionSystem")
 
+    # === PUBLIC API METHODS ===
     def add_prediction_model(self, performance_codes: List[str], prediction_model: Type[IPredictionModel], round_digits: int, **kwargs) -> None:
-        """
-        Add an prediction model to the system.
-        
-        Args:
-            performance_codes: List of codes identifying the performance metrics
-            prediction_model: Class of prediction model to instantiate
-            round_digits: Number of digits to round results to
-            **kwargs: Additional parameters for model initialization
-        """
+        """Add an prediction model to the system."""
         # Validate if prediction_model is the correct type
         if not issubclass(prediction_model, IPredictionModel):
             raise TypeError(f"Expected a subclass of PredictionModel, got {type(prediction_model).__name__}")
@@ -79,6 +66,7 @@ class PredictionSystem:
         return list(all_codes)
 
     def activate_prediction_model(self, code: str, study_params: Dict[str, Any], recompute: bool = False) -> None:
+        """Activate a prediction model for a specific performance code."""
         if len(self.prediction_models) == 0:
             self.logger.warning("No prediction models available to activate.")
             return
@@ -101,12 +89,7 @@ class PredictionSystem:
             self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
 
     def train(self, parameters: Dict[str, Dict], avg_features: Dict[str, Any], dim_arrays: Dict[str, Any], feature_arrays: Dict[str, Any], visualize_flag: bool, debug_flag: bool) -> None:
-        """
-        Train all models with unified data processing.
-
-        Args:
-            study_dataset: Dictionary of experiments {exp_code: {param_name/perf_name: value, ...}}
-        """
+        """Train all models with unified data processing."""
 
         # High-level approach:
         # For now, we are ignorring dim_arrays and feature_arrays.
@@ -173,18 +156,7 @@ class PredictionSystem:
         self.logger.info(f"PredictionSystem training completed")
 
     def predict(self, exp_params: Dict[str, Any], exp_code: str, visualize_flag: bool, debug_flag: bool) -> Dict[str, float]:
-        """
-        Get predictions for all performance metrics for a single upcoming experiment.
-        
-        Args:
-            exp_params: Parameter values {param_name: value} - from DataInterface
-            exp_code: Experiment code for loading domain-specific data
-            visualize_flag: Whether to show visualizations during feature computation
-            debug_flag: Whether to run in debug mode
-            
-        Returns:
-            Dictionary {performance_code: predicted_value} for all performance codes
-        """
+        """Get predictions for all performance metrics for a single upcoming experiment."""
         self.logger.debug(f"Predicting performance for experiment {exp_code}")
 
         # 1. Filter dataset to required columns (same as train)
@@ -220,12 +192,7 @@ class PredictionSystem:
         return all_predictions
 
     def get_active_pred_models(self) -> List[IPredictionModel]:
-        """
-        Get all active prediction models.
-        
-        Returns:
-            List of active prediction models
-        """
+        """Get all active prediction models."""
         return [model for model in self.prediction_models if model.active]
     
     def training_step_summary(self) -> str:
@@ -248,7 +215,9 @@ class PredictionSystem:
             
         return summary
     
+    # === PRIVATE METHODS ===
     def _get_pred_model_by_code(self) -> Dict[str, IPredictionModel]:
+        """Generate mapping of performance codes to prediction models."""
         # Prep prediction system output dict
         pred_model_by_code = {}
         for pred_model in self.prediction_models:

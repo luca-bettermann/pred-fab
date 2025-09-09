@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, final
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
@@ -49,7 +49,7 @@ class IFeatureModel(ParameterHandling, ABC):
         # Apply dataclass-based parameter handling
         self.set_study_parameters(**study_params)
 
-    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    # === ABSTRACT METHODS ===
     @abstractmethod
     def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any:
         """
@@ -63,6 +63,7 @@ class IFeatureModel(ParameterHandling, ABC):
         Args:
             exp_code: Experiment code
             exp_folder: Experiment folder path
+            debug_flag: Whether debugging is active
 
         Returns:
             Loaded data object (format depends on domain requirements)
@@ -83,27 +84,27 @@ class IFeatureModel(ParameterHandling, ABC):
         """
         ...
 
-    # === PUBLIC API METHODS (Called externally) ===
+    # === OPTIONAL METHODS ===
+    def _initialization_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
+        """Optional initialization logic before feature extraction.
+        """
+        pass
+
+    def _cleanup_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
+        """Optional cleanup logic after feature extraction.
+        """
+        pass
+
+    # === PUBLIC API METHODS ===
+    @final
     def initialize_for_code(self, associated_code: str) -> None:
-        """
-        Initialize feature storage for a new performance code.
-        
-        Args:
-            performance_code: Code identifying the performance metric
-        """
+        """Initialize feature storage for a new performance code."""
         self.associated_codes.append(associated_code)
         self.features[associated_code] = np.empty([])
 
+    @final
     def run(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool, **dims_dict) -> np.ndarray:
-        """
-        Execute the feature extraction pipeline.
-
-        Args:
-            performance_code: Code identifying the performance metric
-            exp_nr: Experiment number
-            visualize_flag: Whether to show visualizations
-            **dims_dict: Runtime parameters for dimensional indexing
-        """
+        """Execute the feature extraction pipeline."""
         # Set runtime parameters for current extraction
         self.set_dim_parameters(**dims_dict)
 
@@ -142,46 +143,15 @@ class IFeatureModel(ParameterHandling, ABC):
         # Return extracted feature values for the given performance code and dimension
         return self.features[performance_code][indices]
 
+    @final
     def reset_for_new_experiment(self, performance_code: str, dim_sizes: List[int]) -> None:
-        """
-        Reset feature storage for a new experiment.
-        
-        Args:
-            performance_code: Code identifying the performance metric
-            dim_sizes: Dimensions of the feature array to create
-        """
+        """Reset feature storage for a new experiment."""
         self.logger.info(f"Resetting '{type(self).__name__}' feature model for new experiment")
         self.features[performance_code] = np.empty(dim_sizes)
         self.processed_dims = []
-        
-    # === OPTIONAL METHODS ===
-    def _initialization_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
-        """
-        Optional initialization logic before feature extraction.
-        
-        Args:
-            performance_code: Code identifying the associated metric
-            exp_code: Experiment code
-            exp_folder: Experiment folder
-            visualize_flag: Whether to show visualizations
-            debug_flag: Whether to enable debugging
-        """
-        pass
-
-    def _cleanup_step(self, performance_code: str, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
-        """
-        Optional cleanup logic after feature extraction.
-        
-        Args:
-            performance_code: Code identifying the associated metric
-            exp_code: Experiment code
-            exp_folder: Experiment folder
-            visualize_flag: Whether to show visualizations
-            debug_flag: Whether to enable debugging
-        """
-        pass
     
-    # === PRIVATE API METHODS (Called internally) ===
+    # === PRIVATE METHODS ===
+    @final
     def _set_processed_state(self, **dims_indices) -> None:
         """Check if current dimensions have been processed."""
         if dims_indices in self.processed_dims:

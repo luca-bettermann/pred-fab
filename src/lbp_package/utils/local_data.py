@@ -39,42 +39,22 @@ class LocalData:
         if study_code is not None:
             self.set_study_code(study_code)
 
+    # === PUBLIC API METHODS ===
     def set_study_code(self, study_code: str) -> None:
-        """
-        Set or change the study code.
-
-        Args:
-            study_code: Unique identifier for the study
-        """
+        """Set or change the study code."""
         if not isinstance(study_code, str) or not study_code:
             raise ValueError("Study code must be a non-empty string")
         self.study_code = study_code
         self.study_folder = os.path.join(self.local_folder, self.study_code)
 
     def get_experiment_code(self, exp_nr: int) -> str:
-        """
-        Generate experiment code from experiment number.
-
-        Args:
-            exp_nr: Experiment number
-
-        Returns:
-            Formatted experiment code (e.g., "STUDY_001")
-        """
+        """Generate experiment code from experiment number."""
         if not isinstance(exp_nr, int) or exp_nr < 0:
             raise ValueError("Experiment number must be a non-negative integer")
         return f"{self.study_code}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
-        """
-        Get full path to local experiment folder.
-
-        Args:
-            exp_nr: Experiment number
-
-        Returns:
-            Full path to experiment folder
-        """
+        """Get full path to local experiment folder."""
         if not isinstance(exp_code, str) or not exp_code:
             raise ValueError("Experiment code must be a non-empty string")
         if self.study_folder is None:
@@ -82,15 +62,7 @@ class LocalData:
         return os.path.join(self.study_folder, exp_code)
 
     def get_server_experiment_folder(self, exp_code: str) -> str:
-        """
-        Get full path to server experiment folder.
-
-        Args:
-            exp_code: Experiment code
-
-        Returns:
-            Full path to server experiment folder
-        """
+        """Get full path to server experiment folder."""
         if self.server_folder is None:
             raise ValueError("Server folder must be set before getting server experiment folder")
         if self.study_code is None:
@@ -99,16 +71,7 @@ class LocalData:
         return os.path.join(self.server_folder, self.study_code, exp_code)
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
-        """
-        Get full path to a file within an experiment folder.
-
-        Args:
-            exp_code: Experiment code
-            filename: Name of the file (can include subdirectory, e.g., "arrays/performance.json")
-
-        Returns:
-            Full path to the file
-        """
+        """Get full path to a file within an experiment folder."""
         assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         assert isinstance(filename, str) and filename, "Filename must be a non-empty string"
         if self.study_folder is None:
@@ -116,12 +79,7 @@ class LocalData:
         return os.path.join(self.study_folder, exp_code, filename)
 
     def list_experiments(self) -> List[str]:
-        """
-        List all experiment folder names within the study folder.
-
-        Returns:
-            List of experiment folder names
-        """
+        """List all experiment folder names within the study folder."""
         if self.study_folder is None:
             raise ValueError("Study code must be set before listing experiments")
         
@@ -132,21 +90,7 @@ class LocalData:
         ]
 
     def copy_to_folder(self, src_path: str, target_folder: str) -> str:
-        """
-        Copy file or folder to target directory.
-
-        Args:
-            src_path: Source file or folder path
-            target_folder: Target directory path
-
-        Returns:
-            Path to copied file or folder
-
-        Raises:
-            FileNotFoundError: If source path doesn't exist
-            NotADirectoryError: If target is not a directory
-            RuntimeError: If copy operation fails
-        """
+        """Copy file or folder to target directory."""
         if not os.path.exists(src_path):
             raise FileNotFoundError(f"Source path {src_path} does not exist.")
 
@@ -167,24 +111,14 @@ class LocalData:
         except Exception as e:
             raise RuntimeError(f"Failed to copy {src_path}: {str(e)}")
 
-    def check_folder_access(self, folder_path: str) -> bool:
-        """
-        Verify folder accessibility.
-
-        Returns:
-            True if folder is accessible
-
-        Raises:
-            ConnectionError: If folder is not accessible
-        """
+    def check_folder_access(self, folder_path: str):
+        """Verify folder accessibility."""
         if folder_path is None:
             raise ValueError("Folder path must be set to check access.")
 
         is_connected = os.path.exists(folder_path)
         if not is_connected:
             raise ConnectionError(f"Folder access {folder_path}: FAILED")
-
-        return is_connected
 
     def check_availability(self, code: str, memory: Dict[str, Any]) -> None:
         if code not in memory:
@@ -269,7 +203,7 @@ class LocalData:
             column_names=kwargs.get('column_names')
         )
     
-    # === INTERNAL METHODS ===
+    # === PRIVATE METHODS ===
     def _load_files_generic(self, 
                             codes: List[str], 
                             subdirs: List[str],

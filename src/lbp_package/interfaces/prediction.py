@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any, Dict, List, Tuple, Type, final
 from dataclasses import dataclass
 import numpy as np
 from enum import Enum
@@ -32,7 +32,7 @@ class IPredictionModel(ParameterHandling, ABC):
                  performance_codes: List[str],
                  logger: LBPLogger,
                  round_digits: int = 3,
-                 **kwargs):
+                 **kwargs) -> None:
         """
         Initialize prediction model.
         
@@ -66,8 +66,6 @@ class IPredictionModel(ParameterHandling, ABC):
         self.kwargs = kwargs
 
     # === ABSTRACT PROPERTIES ===
-        ...
-
     @property
     @abstractmethod
     def input(self) -> List[str]:
@@ -154,32 +152,19 @@ class IPredictionModel(ParameterHandling, ABC):
         """
         Model-specific preprocessing after global preprocessing.
         
-        Override this method to:
-        - Denormalize specific features back to original scale
-        - Apply custom normalization (robust scaling, log transforms, etc.)
-        - Handle categorical encoding or feature engineering
-        
         Args:
-            global_preprocessed_X: Globally preprocessed input features
-            global_preprocessed_y: Globally preprocessed target variables
+            preprocessed_X: Globally preprocessed input features
+            preprocessed_y: Globally preprocessed target variables
         
         Returns:
             Tuple of (model_specific_X, model_specific_y)
-            
-        Note:
-            Default implementation does no additional preprocessing.
-            Override this method for model-specific transformations.
         """
         return preprocessed_X, preprocessed_y
     
     # === PUBLIC API METHODS ===
+    @final
     def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
-        """
-        Predefined logic of how feature models are added to prediction models.
-        
-        Args:
-            feature_model: FeatureModel instance to use for feature extraction
-        """
+        """Add feature model to prediction model."""
         # Append the feature model instance (one-to-many relationship)
         self.feature_models[code] = feature_model
     

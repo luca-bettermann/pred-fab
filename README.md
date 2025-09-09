@@ -2,6 +2,42 @@
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 
+Current package version = 1.0.0
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Framework Structure](#framework-structure)
+- [Architecture Overview](#architecture-overview)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Install from Source](#install-from-source)
+  - [Dependencies](#dependencies)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+  - [Parameter Management System](#parameter-management-system)
+  - [Dynamic Dimensionality System](#dynamic-dimensionality-system)
+  - [Hierarchical Data Flow](#hierarchical-data-flow)
+  - [Data Separation of Concerns](#data-separation-of-concerns)
+- [API Reference](#api-reference)
+  - [Interface APIs](#interface-apis)
+    - [IExternalData](#iexternaldata-optional---databaseapi-integration)
+    - [IFeatureModel](#ifeaturemodel-core---domain-specific-data-loading)
+    - [IEvaluationModel](#ievaluationmodel-core---performance-assessment)
+    - [IPredictionModel](#ipredictionmodel-optional---ml-workflows)
+    - [ICalibrationModel](#icalibrationmodel-optional---process-optimization)
+  - [Orchestration APIs](#orchestration-apis)
+    - [LBPManager](#lbpmanager-orchestration)
+  - [Utility APIs](#utility-apis)
+    - [Parameter Decorators](#parameter-decorators)
+    - [Logging System](#logging-system)
+    - [Local Data Operations](#local-data-operations)
+- [Configuration](#configuration)
+  - [Data Structure (Standalone Operation)](#data-structure-standalone-operation)
+- [Key Features](#key-features)
+- [License](#license)
+- [Support](#support)
+
 ## Overview
 
 Learning by Printing is an iterative manufacturing optimization approach that systematically improves printing processes through automated performance evaluation and parameter adjustment. The framework enables closed-loop learning where each experiment provides feedback for process refinement.
@@ -161,17 +197,20 @@ Clear boundary between structured and unstructured data handling:
 
 ## API Reference
 
-The framework uses **interface-based design** with five core interfaces:
+The framework uses **interface-based design** with five core interfaces and supporting orchestration/utility classes.
 
-### IExternalData (Optional - Database/API Integration)
+### Interface APIs
+
+#### IExternalData (Optional - Database/API Integration)
 
 **Purpose**: Interface structured metadata access when integrating with databases/APIs. Framework works completely standalone without this interface.
 
 **Required Methods:**
-```python
-def pull_study_record(self, study_code: str) -> Dict[str, Any]
-def pull_exp_record(self, exp_code: str) -> Dict[str, Any]
-```
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `pull_study_record(study_code)` | Fetch study metadata from external source | Dict with id, Code, Parameters, Performance |
+| `pull_exp_record(exp_code)` | Fetch experiment metadata from external source | Dict with id, Code, Parameters |
 
 **Required Record Structure:**
 
@@ -195,24 +234,26 @@ Experiment records must contain these fields:
 ```
 
 **Optional Methods** (default implementations provided):
-```python
-def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
-def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
-def pull_aggr_metrics(self, exp_codes: List[str]) -> Tuple[List[str], Dict[str, Dict[str, Any]]]
-def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool) -> bool
-```
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `push_study_records(study_codes, data, recompute)` | Save study records to external source | bool |
+| `push_exp_records(exp_codes, data, recompute)` | Save experiment records to external source | bool |
+| `pull_aggr_metrics(exp_codes)` | Fetch aggregated metrics from external source | Tuple[missing_codes, data_dict] |
+| `push_aggr_metrics(exp_codes, data, recompute)` | Save aggregated metrics to external source | bool |
 
 **Import**: `from lbp_package import IExternalData`
 
-### IFeatureModel (Core - Domain-Specific Data Loading)
+#### IFeatureModel (Core - Domain-Specific Feature Extraction)
 
-**Purpose**: Extract numerical features from domain-specific raw data. YOU have complete control over data format and loading mechanism.
+**Purpose**: Extract numerical features from domain-specific raw data. You have complete control over data format and loading mechanism.
 
 **Required Methods:**
-```python
-def _load_data(self, exp_code: str, exp_folder: str, debug_flag: bool) -> Any
-def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]
-```
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `_load_data(exp_code, exp_folder, debug_flag)` | Load raw data from experiment folder | Any (your custom data format) |
+| `_compute_features(data, visualize_flag)` | Extract numerical features from loaded data | Dict[str, float] |
 
 **Return Structure Requirements**:
 - `_compute_features()` must return `Dict[str, float]` with string keys and numerical values
@@ -225,23 +266,19 @@ def _compute_features(self, data: Any, visualize_flag: bool) -> Dict[str, float]
 
 **Import**: `from lbp_package import IFeatureModel`
 
-### IEvaluationModel (Core - Performance Assessment)
+#### IEvaluationModel (Core - Performance Assessment)
 
 **Purpose**: Evaluate feature values against target values with automatic dimensionality handling.
 
 **Required Properties:**
-```python
-@property
-def dim_names(self) -> List[str]                    # ['layers', 'segments']
-@property  
-def dim_param_names(self) -> List[str]              # ['n_layers', 'n_segments'] 
-@property
-def dim_iterator_names(self) -> List[str]           # ['layer_id', 'segment_id']
-@property
-def feature_model_type(self) -> Type[IFeatureModel] # Associated feature model class
-@property
-def target_value(self) -> float                     # Performance target (NOT Optional!)
-```
+
+| Property | Description | Example |
+|----------|-------------|---------|
+| `dim_names` | Dimension names for arrays | `['layers', 'segments']` |
+| `dim_param_names` | Parameter names in exp records | `['n_layers', 'n_segments']` |
+| `dim_iterator_names` | Your @dim_parameter attribute names | `['layer_id', 'segment_id']` |
+| `feature_model_type` | Associated feature model class | `ThermalFeatureModel` |
+| `target_value` | Performance target for evaluation | `100.0` |
 
 **Critical Naming Requirements**:
 - `dim_param_names` must **exactly match** field names in experiment record `"Parameters"` section
@@ -252,23 +289,23 @@ def target_value(self) -> float                     # Performance target (NOT Op
 
 **Import**: `from lbp_package import IEvaluationModel`
 
-### IPredictionModel (Optional - ML Workflows)
+#### IPredictionModel (Optional - ML Workflows)
 
 **Purpose**: Train ML models on evaluation results and predict performance for new parameter combinations.
 
 **Required Properties:**
-```python
-@property
-def input(self) -> List[str]                                # Input feature names
-@property  
-def dataset_type(self) -> IPredictionModel.DatasetType     # AGGR_METRICS or METRIC_ARRAYS
-```
+
+| Property | Description | Example |
+|----------|-------------|---------|
+| `input` | Input feature/parameter names | `['temp', 'speed', 'thickness']` |
+| `dataset_type` | Data format for training | `AGGR_METRICS` or `METRIC_ARRAYS` |
 
 **Required Methods:**
-```python
-def train(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]
-def predict(self, X: np.ndarray) -> np.ndarray
-```
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `train(X, y)` | Train ML model on provided data | Dict with training_score, training_samples |
+| `predict(X)` | Predict performance for new parameters | np.ndarray |
 
 **Input Field Requirements**:
 - `input` field names must match available parameter names or feature keys
@@ -289,21 +326,23 @@ def predict(self, X: np.ndarray) -> np.ndarray
 
 **Import**: `from lbp_package import IPredictionModel`
 
-### ICalibrationModel (Optional - Process Optimization)
+#### ICalibrationModel (Optional - Process Optimization)
 
 **Purpose**: Optimize process parameters using any optimization algorithm of your choice.
 
 **Required Method:**
-```python
-def optimize(self, param_ranges: Dict[str, Tuple[float, float]], 
-             objective_fn: Callable[[Dict[str, float]], float]) -> Dict[str, float]
-```
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `optimize(param_ranges, objective_fn)` | Find optimal parameters using your chosen algorithm | Dict[str, float] |
 
 **Key Responsibility**: Implement optimization logic. Framework provides objective function based on evaluation model weights. You choose the optimization algorithm (scipy, scikit-optimize, genetic algorithms, etc.).
 
 **Import**: `from lbp_package import ICalibrationModel`
 
-### LBPManager (Orchestration)
+### Orchestration APIs
+
+#### LBPManager (Orchestration)
 
 **Purpose**: Main orchestration class coordinating the complete learning workflow.
 
@@ -319,10 +358,23 @@ manager = LBPManager(
 ```
 
 **Model Registration:**
+
+| Method | Description |
+|--------|-------------|
+| `add_evaluation_model(performance_code, model_class, weight=None, **kwargs)` | Register evaluation model for specific performance metric |
+| `add_prediction_model(performance_codes, model_class, **kwargs)` | Register ML model for multiple performance metrics |
+| `set_calibration_model(model_class, **kwargs)` | Register optimization model for parameter tuning |
+
+**Custom Model Arguments:**
+All registration methods accept `**kwargs` to pass additional arguments to your model constructors:
 ```python
-manager.add_evaluation_model(performance_code: str, model_class: Type, weight: float = None)
-manager.add_prediction_model(performance_codes: List[str], model_class: Type) 
-manager.set_calibration_model(model_class: Type)
+# Pass custom arguments to your model instances
+manager.add_evaluation_model("temperature", MyTempModel, weight=1.0, 
+                           custom_param=42, tolerance=0.1)
+manager.add_prediction_model(["temp", "pressure"], MyMLModel, 
+                           learning_rate=0.01, n_estimators=100)
+manager.set_calibration_model(MyOptimizerModel, algorithm="genetic", 
+                            population_size=50)
 ```
 
 **Registration Requirements**:
@@ -332,12 +384,13 @@ manager.set_calibration_model(model_class: Type)
 - **Calibration dependency**: Requires at least one evaluation model with `weight > 0`
 
 **Workflow Execution:**
-```python
-manager.initialize_for_study(study_code: str)
-manager.run_evaluation(study_code: str, exp_nrs: List[int], **flag_overrides)
-manager.run_training(study_code: str, exp_nrs: List[int], **flag_overrides)
-manager.run_calibration(exp_nr: int, param_ranges: Dict[str, Tuple[float, float]])
-```
+
+| Method | Description |
+|--------|-------------|
+| `initialize_for_study(study_code)` | Set up framework for specific study |
+| `run_evaluation(study_code, exp_nrs, **flag_overrides)` | Execute evaluation workflow for experiments |
+| `run_training(study_code, exp_nrs, **flag_overrides)` | Execute ML training workflow |
+| `run_calibration(exp_nr, param_ranges)` | Execute optimization workflow |
 
 **Flag System Requirements**:
 - **`debug_flag`**: `True` = skip external data operations, `False` = use external data interface if available  
@@ -349,6 +402,52 @@ manager.run_calibration(exp_nr: int, param_ranges: Dict[str, Tuple[float, float]
 - Keys must match parameter names in experiment records
 - Values must be `(min_value, max_value)` tuples with `min_value < max_value`
 - Only numerical parameters supported - framework validates against `@exp_parameter` types
+
+### Utility APIs
+
+The framework provides utility classes for advanced users who need direct access to internal operations.
+
+#### Parameter Decorators
+
+**Access**: `from lbp_package.utils import study_parameter, exp_parameter, dim_parameter`
+
+Use these decorators in your `@dataclass` interface implementations to mark parameter types. Parameter management is handled automatically by the framework.
+
+#### Logging System
+
+**Access**: `manager.logger` (LBPLogger instance)
+
+Provides dual logging to file and console with automatic session files and ANSI code handling.
+
+| Method | Description |
+|--------|-------------|
+| `debug(message)` | Log debug message to file only |
+| `info(message)` | Log info message to file only |
+| `warning(message)` | Log warning message to file only |
+| `error(message)` | Log error message to file only |
+| `console_info(message)` | Print to console and log as info |
+| `console_success(message)` | Print success message with ✅ formatting |
+| `console_warning(message)` | Print warning message with ⚠️ formatting |
+| `console_summary(message)` | Print formatted summary (strips ANSI codes in log) |
+
+#### Local Data Operations
+
+**Access**: `manager.local_data` (LocalData instance)
+
+Direct file system operations for custom data management workflows.
+
+| Method | Description |
+|--------|-------------|
+| `set_study_code(study_code)` | Set study context (required for most operations) |
+| `get_experiment_code(exp_nr)` | Generate experiment code from number |
+| `get_experiment_folder(exp_code)` | Get full path to experiment folder |
+| `get_server_experiment_folder(exp_code)` | Get server experiment folder path |
+| `get_experiment_file_path(exp_code, filename)` | Get full path to file in experiment |
+| `list_experiments()` | List all experiment folders in study |
+| `copy_to_folder(src_path, target_folder)` | Copy file/folder to target directory |
+| `check_folder_access(folder_path)` | Verify folder accessibility |
+| `check_availability(code, memory)` | Check if code exists in memory dict |
+
 
 ## Configuration
 
@@ -415,6 +514,5 @@ If you use this framework in your research, please cite:
 
 ## Support
 
-- **Examples Repository**: [LBP Examples](https://github.com/your-org/lbp-examples) - Complete working implementations
-- **Issues**: [GitHub Issues](https://github.com/your-org/lbp-package/issues) - Bug reports and feature requests
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/lbp-package/discussions) - Questions and community support
+- **Examples Repository**: [LBP Examples](https://gitlab.lrz.de/cms/dev/robotlab/learning-by-printing/lbp_package_examples) - Complete working implementations
+

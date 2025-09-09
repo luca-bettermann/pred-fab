@@ -1,72 +1,38 @@
-"""
-Data Interface for LBP Framework
-
-Standardized interface for accessing structured study and experiment metadata from various data sources.
-
-DATA RESPONSIBILITY:
-====================
-- **Handles:** Structured metadata, study/experiment parameters, performance configurations
-- **Does NOT handle:** Unstructured data (geometry files, sensor streams, raw experimental data)
-- **Boundary:** FeatureModel._load_data() handles domain-specific unstructured data
-
-DATA LOADING PRINCIPLES:
-========================
-- Hierarchical approach to loading and storing structured data.
-- First, check if data is available in memory (current session cache).
-- Second, load data from local JSON/CSV files if available.
-- Third, query external source for any missing data. Return error if not available.
-- Once retrieved from external source, automatically store as local files.
-- Data is always stored locally - there is no "database-only" mode.
-- recompute_flag=True forces loading from external source, bypassing local cache.
-
-CORE METHODS:
-=============
-- get_study_record/parameters(): Study-level data (constant across experiments)
-- get_exp_record/variables(): Experiment-level data (varies between experiments)  
-- get_performance_records(): Performance metric configurations
-- push_to_database(): Store results
-
-PARAMETER INTEGRATION:
-======================
-- get_study_parameters() → @study_parameter fields
-- get_exp_variables() → @exp_parameter fields
-"""
-
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, final
 import numpy as np
 
 class IExternalData(ABC):
-    """Abstract base class for accessing structured study and experiment metadata."""
+    """Abstract class for accessing and writing structured study and experiment metadata to an external source."""
 
-    def __init__(self, client: Any = None):
+    def __init__(self, client: Any = None) -> None:
         """Initialize with optional client for data access."""
         self.client = client
 
-    # === ABSTRACT METHODS (Must be implemented by subclasses) ===
+    # === ABSTRACT METHODS ===
     @abstractmethod
     def pull_study_record(self, study_code: str) -> Dict[str, Any]:
         """
-        Retrieve study metadata by study code.
+        Retrieve study record by study code.
         
         Args:
             study_code: Unique study identifier
 
         Returns:
-            Study record with "id", "Code" and "Parameters" and "Performance" keys
+            Dict of study record with "id", "Code" and "Parameters" and "Performance" keys.
         """
         ...
 
     @abstractmethod
     def pull_exp_record(self, exp_code: str) -> Dict[str, Any]:
         """
-        Retrieve experiment metadata by experiment code.
+        Retrieve experiment record by experiment code.
         
         Args:
             exp_code: Unique experiment identifier
 
         Returns:
-            Experiment record with "id", "Code" and "Parameters" keys
+            Dict of exp_record with "id", "Code" and "Parameters" keys
         """
         ...
 
@@ -79,10 +45,14 @@ class IExternalData(ABC):
             exp_codes: List of experiment codes to load
             
         Returns:
-            Tuple of (missing_exp_codes, aggr_metrics_dict)
+            missing_exp_codes: List of experiment codes that were not found
+            aggr_metrics_dict: Dict mapping experiment codes to their aggregated metrics
         """
+        missing_exp_codes = exp_codes
+        aggr_metrics_dict = {}
+
         # Default implementation returns all as missing
-        return exp_codes, {}
+        return missing_exp_codes, aggr_metrics_dict
 
     def pull_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, np.ndarray]]:
         """
@@ -92,11 +62,15 @@ class IExternalData(ABC):
             exp_codes: List of experiment codes to load
             
         Returns:
-            Tuple of (missing_exp_codes, metrics_arrays_dict)
+            missing_exp_codes: List of experiment codes that were not found
+            metrics_arrays_dict: Dict mapping experiment codes to their metrics arrays
         """
+        missing_exp_codes = exp_codes
+        metrics_arrays_dict = {}
+
         # Default implementation returns all as missing
-        return exp_codes, {}
-            
+        return missing_exp_codes, metrics_arrays_dict
+
     def push_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """
         Save study records to external source.
@@ -161,17 +135,10 @@ class IExternalData(ABC):
         # Default implementation - override in subclasses
         return False
     
-    # === PUBLIC API METHODS (Called externally) ===
+    # === PUBLIC API METHODS ===
+    @final
     def pull_study_records(self, study_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """
-        Load study records from external source.
-        
-        Args:
-            study_codes: List of study codes to load
-            
-        Returns:
-            Tuple of (missing_study_codes, study_records_dict)
-        """
+        """Load study records in batch from external source."""
         study_records_dict = {}
         missing_study_codes = []
         
@@ -180,40 +147,23 @@ class IExternalData(ABC):
                 study_records_dict[study_code] = self.pull_study_record(study_code)
             except:
                 missing_study_codes.append(study_code)
-                
         return missing_study_codes, study_records_dict
 
+    @final
     def pull_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """
-        Load experiment records from external source.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            
-        Returns:
-            Tuple of (missing_exp_codes, exp_records_dict)
-        """
+        """Load experiment records in batch from external source."""
         exp_records_dict = {}
         missing_exp_codes = []
-        
+
         for exp_code in exp_codes:
             try:
                 exp_records_dict[exp_code] = self.pull_exp_record(exp_code)
             except:
                 missing_exp_codes.append(exp_code)
-                
         return missing_exp_codes, exp_records_dict
 
-    # === OPTIONAL METHODS ===
-    def update_system_performance(self, study_record: Dict[str, Any]) -> None:
-        """
-        Update aggregated system performance metrics.
-        
-        Args:
-            study_record: Study record for performance update
-        """
-        pass
-
+    # === PRIVATE METHODS ===
+    @final
     def _client_check(self) -> None:
         """Validate that client is properly initialized."""
         if not self.client:
