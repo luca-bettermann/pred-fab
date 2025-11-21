@@ -20,73 +20,106 @@ class LocalData:
             root_folder: str,
             local_folder: str, 
             server_folder: Optional[str] = None, 
-            study_code: Optional[str] = None
+            schema_id: Optional[str] = None,
+            study_code: Optional[str] = None  # Deprecated: use schema_id
             ) -> None:
         """
         Initialize folder navigator with base paths.
 
         Args:
+            root_folder: Project root folder
             local_folder: Path to local data storage
             server_folder: Path to server data storage
-            study_code: Optional study code for immediate initialization
+            schema_id: Optional schema ID for immediate initialization
+            study_code: (Deprecated) Use schema_id instead
         """
         self.root_folder: str = root_folder
         self.local_folder: str = local_folder
         self.server_folder: Optional[str] = server_folder
-        self.study_code: Optional[str] = study_code
+        
+        # Use schema_id if provided, otherwise fall back to study_code for compatibility
+        initial_id = schema_id if schema_id is not None else study_code
+        
+        # Primary attributes (AIXD terminology)
+        self.schema_id: Optional[str] = initial_id
+        self.schema_folder: Optional[str] = None
+        
+        # Legacy aliases for backward compatibility
+        self.study_code: Optional[str] = initial_id
         self.study_folder: Optional[str] = None
 
-        if study_code is not None:
-            self.set_study_code(study_code)
+        if initial_id is not None:
+            self.set_schema_id(initial_id)
 
     # === PUBLIC API METHODS ===
+    def set_schema_id(self, schema_id: str) -> None:
+        """
+        Set or change the schema ID.
+        
+        Args:
+            schema_id: Schema identifier (e.g., 'schema_001')
+        """
+        if not isinstance(schema_id, str) or not schema_id:
+            raise ValueError("Schema ID must be a non-empty string")
+        
+        self.schema_id = schema_id
+        self.schema_folder = os.path.join(self.local_folder, self.schema_id)
+        
+        # Update legacy aliases
+        self.study_code = schema_id
+        self.study_folder = self.schema_folder
+    
     def set_study_code(self, study_code: str) -> None:
-        """Set or change the study code."""
-        if not isinstance(study_code, str) or not study_code:
-            raise ValueError("Study code must be a non-empty string")
-        self.study_code = study_code
-        self.study_folder = os.path.join(self.local_folder, self.study_code)
+        """
+        (Deprecated) Set or change the study code.
+        
+        Use set_schema_id() instead for AIXD architecture.
+        
+        Args:
+            study_code: Study code (will be used as schema_id)
+        """
+        self.set_schema_id(study_code)
 
     def get_experiment_code(self, exp_nr: int) -> str:
         """Generate experiment code from experiment number."""
         if not isinstance(exp_nr, int) or exp_nr < 0:
             raise ValueError("Experiment number must be a non-negative integer")
-        return f"{self.study_code}_{str(exp_nr).zfill(3)}"
+        return f"{self.schema_id}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
         """Get full path to local experiment folder."""
         if not isinstance(exp_code, str) or not exp_code:
             raise ValueError("Experiment code must be a non-empty string")
-        if self.study_folder is None:
-            raise ValueError("Study code must be set before getting experiment folder")
-        return os.path.join(self.study_folder, exp_code)
+        if self.schema_folder is None:
+            raise ValueError("Schema ID must be set before getting experiment folder")
+        return os.path.join(self.schema_folder, exp_code)
 
     def get_server_experiment_folder(self, exp_code: str) -> str:
         """Get full path to server experiment folder."""
         if self.server_folder is None:
             raise ValueError("Server folder must be set before getting server experiment folder")
-        if self.study_code is None:
-            raise ValueError("Study code must be set before getting experiment folder")
+        if self.schema_id is None:
+            raise ValueError("Schema ID must be set before getting experiment folder")
         assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
-        return os.path.join(self.server_folder, self.study_code, exp_code)
+        return os.path.join(self.server_folder, self.schema_id, exp_code)
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
         """Get full path to a file within an experiment folder."""
         assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         assert isinstance(filename, str) and filename, "Filename must be a non-empty string"
-        if self.study_folder is None:
-            raise ValueError("Study code must be set before getting experiment file path")
-        return os.path.join(self.study_folder, exp_code, filename)
+        if self.schema_folder is None:
+            raise ValueError("Schema ID must be set before getting experiment file path")
+        return os.path.join(self.schema_folder, exp_code, filename)
 
     def list_experiments(self) -> List[str]:
-        """List all experiment folder names within the study folder."""
-        if self.study_folder is None:
-            raise ValueError("Study code must be set before listing experiments")
+        """List all experiment folder names within the schema folder."""
+        if self.schema_folder is None:
+            raise ValueError("Schema ID must be set before listing experiments")
         
         return [
             d
-            for d in os.listdir(self.study_folder)
-            if os.path.isdir(os.path.join(self.study_folder, d))
+            for d in os.listdir(self.schema_folder)
+            if os.path.isdir(os.path.join(self.schema_folder, d))
         ]
 
     def copy_to_folder(self, src_path: str, target_folder: str) -> str:

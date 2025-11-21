@@ -44,11 +44,11 @@ Learning by Printing is an iterative manufacturing optimization approach that sy
 
 For detailed methodology, see: [An Introduction to Learning by Printing](https://mediatum.ub.tum.de/doc/1781543/1781543.pdf)
 
-## Framework Structure
+## Repository Structure
 
 ```
 lbp_package/
-├── interfaces/               # Abstract base classes defining contracts
+├── interfaces/              # Abstract base classes defining contracts
 │   ├── external_data.py     # Data source interface
 │   ├── features.py          # Feature extraction interface  
 │   ├── evaluation.py        # Performance evaluation interface
@@ -66,7 +66,7 @@ lbp_package/
 
 ## Architecture Overview
 
-![LBP Framework Architecture](src/lbp_package/UML_diagram.png)
+![LBP Framework Architecture](UML_diagram.png)
 
 This diagram illustrates the interface-based architecture of the LBP framework, showing the relationships between core interfaces and orchestration components.
 

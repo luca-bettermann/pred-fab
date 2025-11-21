@@ -1,6 +1,1 @@
 .venv/
-build
-
-# Ignore all local data
-examples/logs/
-examples/local/
