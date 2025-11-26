@@ -1,350 +1,321 @@
-from typing import Any, Dict, List, Tuple, Optional, Type, Set
+"""
+Prediction System for managing prediction models.
+
+Coordinates prediction model training and inference within the AIXD architecture.
+Prediction models predict features, which can then be evaluated for performance.
+Integrates with DataModule for normalization and batching.
+"""
+
+from typing import Dict, List, Optional, Type
+import pandas as pd
 import numpy as np
 
-from lbp_package.interfaces.evaluation import IEvaluationModel
-
-from ..interfaces import IExternalData, IPredictionModel
-from ..utils import LocalData, LBPLogger
+from ..core.dataset import Dataset
+from ..core.datamodule import DataModule
+from ..interfaces.prediction import IPredictionModel
+from ..utils.logger import LBPLogger
 
 
 class PredictionSystem:
     """
-    Orchestrates prediction models with consistent data preprocessing.
+    Orchestrates prediction model operations with DataModule integration.
     
-    Data Responsibility Boundary:
-    - ExternalDataInterface: Provides structured study/experiment parameters via get_study_parameters(), get_exp_variables()
-    - PredictionSystem: Coordinates parameter collection and delegates to models
-    - PredictionModel: Manages FeatureModel instances and implements ML prediction logic
-    - FeatureModel: Loads domain-specific unstructured data via _load_data() and computes features
+    Manages:
+    - Prediction model registry (models declare what they predict)
+    - Feature-to-model mapping (automatically generated from model declarations)
+    - DataModule lifecycle (normalization, batching)
+    - Training coordination with preprocessing
+    - Feature prediction with automatic denormalization
     """
     
-    def __init__(self, 
-                 local_data: LocalData,
-                 logger: LBPLogger) -> None:
+    def __init__(self, dataset: Dataset, logger: LBPLogger):
         """
         Initialize prediction system.
         
         Args:
-            local_data: Local file system navigation utility  
+            dataset: Dataset instance (for training data extraction)
             logger: Logger instance
         """
-        self.local_data = local_data
+        self.dataset = dataset
         self.logger = logger
-
-        self.prediction_models: List[IPredictionModel] = []
-        self.pred_model_by_code: Dict[str, IPredictionModel] = {}
-
-        # Store normalization parameters for consistent denormalization
-        self.normalization_params: Dict[str, Dict[str, float]] = {}
+        self.prediction_models: List[IPredictionModel] = []  # All registered models
+        self.feature_to_model: Dict[str, IPredictionModel] = {}  # feature_name -> model
+        self.datamodule: Optional[DataModule] = None  # Stored after training
+    
+    def add_prediction_model(self, model: IPredictionModel) -> None:
+        """
+        Register a prediction model.
         
-        # Store training metrics for summary display
-        self.training_metrics: Dict[str, Dict[str, Any]] = {}
+        Model declares what features it predicts via feature_names property.
+        The system automatically creates feature-to-model mappings.
         
-        self.logger.info("Initialized PredictionSystem")
-
-    # === PUBLIC API METHODS ===
-    def add_prediction_model(self, performance_codes: List[str], prediction_model: Type[IPredictionModel], round_digits: int, **kwargs) -> None:
-        """Add an prediction model to the system."""
-        # Validate if prediction_model is the correct type
-        if not issubclass(prediction_model, IPredictionModel):
-            raise TypeError(f"Expected a subclass of PredictionModel, got {type(prediction_model).__name__}")
-
-        model_instance = prediction_model(
-            performance_codes=performance_codes,
-            logger=self.logger,
-            round_digits=round_digits,
-            **kwargs
-        )
-        self.prediction_models.append(model_instance)
-        self.logger.info(f"Added model: {type(model_instance).__name__} for performance codes: {model_instance.output}")
-
-    def get_required_performance_codes(self) -> List[str]:
-        """Get all unique performance codes that need to be predicted across all models."""
-        all_codes = set()
+        Args:
+            model: Initialized IPredictionModel instance
+        """
+        # Add to model list
+        self.prediction_models.append(model)
+        
+        # Create feature-to-model mappings
+        for feature_name in model.feature_names:
+            if feature_name in self.feature_to_model:
+                self.logger.warning(
+                    f"Feature '{feature_name}' already registered to another model. "
+                    f"Overwriting with new model."
+                )
+            self.feature_to_model[feature_name] = model
+        
+        primary_feature = model.feature_names[0] if model.feature_names else "unknown"
+        self.logger.info(f"Added prediction model for features: {model.feature_names} (primary: {primary_feature})")
+    
+    def train(self, datamodule: DataModule, **kwargs) -> None:
+        """
+        Train all prediction models using DataModule configuration.
+        
+        DataModule handles:
+        - Data extraction from dataset
+        - Normalization fitting and application
+        - Batching (if configured)
+        
+        Args:
+            datamodule: Configured DataModule with normalization settings
+            **kwargs: Additional training parameters passed to all models
+                     (e.g., learning_rate=0.001, epochs=100, verbose=True)
+        
+        Raises:
+            ValueError: If training split is empty
+        """
+        # Store a copy to prevent mutation after training
+        self.datamodule = datamodule.copy()
+        
+        # Check if training split is empty
+        split_sizes = self.datamodule.get_split_sizes()
+        if split_sizes['train'] == 0:
+            raise ValueError(
+                "Cannot train on empty training set. All data is in test/val splits. "
+                "Reduce test_size and/or val_size in DataModule configuration."
+            )
+        
+        self.logger.console_info("Starting prediction model training...")
+        
+        # Extract training split and fit normalization
+        self.logger.info("Extracting training data from dataset...")
+        X_train, y_train = self.datamodule.extract_all(split='train')
+        
+        self.logger.info(f"Fitting normalization on {len(X_train)} training experiments...")
+        self.datamodule.fit_normalize(y_train)
+        
+        # Train each registered model
+        trained_count = 0
         for model in self.prediction_models:
-            all_codes.update(model.output)
-        return list(all_codes)
-
-    def activate_prediction_model(self, code: str, study_params: Dict[str, Any], recompute: bool = False) -> None:
-        """Activate a prediction model for a specific performance code."""
-        if len(self.prediction_models) == 0:
-            self.logger.warning("No prediction models available to activate.")
-            return
-
-        # Reset the performance code to prediction model mapping if necessary
-        if len(self.pred_model_by_code) == 0 or recompute:
-            self.pred_model_by_code = self._get_pred_model_by_code()
-
-        # Log warning if no model is found for the given code
-        if code not in self.pred_model_by_code:
-            self.logger.warning(f"No prediction model for performance code '{code}' has been initialized.")
-
-        # If a model is found, activate it
-        prediction_model = self.pred_model_by_code[code]
-        if not prediction_model.active:
-            prediction_model.set_study_parameters(**study_params)
-            prediction_model.active = True
-            self.logger.info(f"Activated prediction model {type(prediction_model).__name__} for performance code '{code}' and set study parameters.")
-        else:
-            self.logger.info(f"Prediction model {type(prediction_model).__name__} for performance code '{code}' is already active.")
-
-    def train(self, parameters: Dict[str, Dict], avg_features: Dict[str, Any], dim_arrays: Dict[str, Any], feature_arrays: Dict[str, Any], visualize_flag: bool, debug_flag: bool) -> None:
-        """Train all models with unified data processing."""
-
-        # High-level approach:
-        # For now, we are ignorring dim_arrays and feature_arrays.
-        # As of yet, it is not possible to have multi-dimensional FeatureModels,
-        # hence this functionality is not relevant right now.
-        # Figure out how to deal with this once FeatureModels contain dimensions.
-
-        # 1. Filter dataset to required columns
-        required_input_keys, required_output_keys, _, _ = self._get_required_keys()
-
-        # 2. Construct input, output and array data lists
-        assert parameters.keys() == avg_features.keys() == feature_arrays.keys(), "Inconsistent data keys"
-        exp_codes = list(parameters.keys())
-
-        input_data, input_keys = self._filter_for_required_columns(parameters, required_input_keys)
-        output_data, output_keys = self._filter_for_required_columns(avg_features, required_output_keys)
-        # input_arrays, input_keys_arrays = self._filter_for_required_columns(dim_arrays, required_input_keys_arrays)
-        # output_arrays, output_keys_arrays = self._filter_for_required_columns(feature_arrays, required_output_keys_arrays)
-
-        # Check for missing keys
-        # available_input_keys = list(set(input_keys + input_keys_arrays))
-        # available_output_keys = list(set(output_keys + output_keys_arrays))
-        missing_input_keys = [key for key in required_input_keys if key not in input_keys]
-        missing_output_keys = [key for key in required_output_keys if key not in output_keys]
-        if missing_output_keys:
-            raise ValueError(f"Missing required output keys from data: {missing_output_keys}")
-                
-        # 3. Add feature input data
-        exp_codes = list(parameters.keys())
-        features = self._add_feature_data(missing_input_keys, exp_codes, visualize_flag, debug_flag)
-        input_data = [inp + feat for inp, feat in zip(input_data, features)]
-
-        # 4. Prepare and normalize inputs (training mode)
-        input_data = self._normalize_data(input_data, required_input_keys, is_training=True)
-        output_data = self._normalize_data(output_data, required_output_keys, is_training=True)
-        # input_arrays = self._normalize_data(input_arrays, required_input_keys, is_training=True)
-        # output_arrays = self._normalize_data(output_arrays, required_output_keys, is_training=True)
-        
-        # 5. Train each model
-        for pred_model in self.prediction_models:
-            if not pred_model.active:
-                self.logger.warning(f"Skipping inactive model: {type(pred_model).__name__}")
+            # Get feature column(s) for this model
+            feature_cols = model.feature_names
+            missing_cols = set(feature_cols) - set(y_train.columns)
+            if missing_cols:
+                primary_feature = feature_cols[0] if feature_cols else "unknown"
+                self.logger.warning(
+                    f"Missing features for model '{primary_feature}': {missing_cols}, skipping"
+                )
                 continue
-                
-            self.logger.info(f"Training model: {type(pred_model).__name__}")
             
-            # Extract relevant features for this model
-            model_input_indices = [required_input_keys.index(key) for key in pred_model.input if key in required_input_keys]
-            model_output_indices = [required_output_keys.index(key) for key in pred_model.output if key in required_output_keys]
+            # Extract and normalize features for this model
+            y_feature = y_train[feature_cols]
+            y_norm = self.datamodule.normalize(y_feature)
             
-            X = input_data[:, model_input_indices] if model_input_indices else np.array([[]])
-            y = output_data[:, model_output_indices] if model_output_indices else np.array([[]])
-
-            # Train the PredictionModel and collect metrics
-            training_metrics = pred_model.train(X, y)
+            # Train model with user-provided kwargs
+            primary_feature = feature_cols[0] if feature_cols else "unknown"
+            self.logger.info(f"Training model for '{primary_feature}' on {len(X_train)} experiments...")
+            model.train(X_train, y_norm, **kwargs)
+            trained_count += 1
             
-            # Store training metrics for summary
-            model_name = type(pred_model).__name__
-            self.training_metrics[model_name] = {
-                "output_targets": pred_model.output,
-                "metrics": training_metrics
-            }
-
-        self.logger.info(f"PredictionSystem training completed")
-
-    def predict(self, exp_params: Dict[str, Any], exp_code: str, visualize_flag: bool, debug_flag: bool) -> Dict[str, float]:
-        """Get predictions for all performance metrics for a single upcoming experiment."""
-        self.logger.debug(f"Predicting performance for experiment {exp_code}")
-
-        # 1. Filter dataset to required columns (same as train)
-        required_input_keys, _, _, _ = self._get_required_keys()
-
-        # 2. Create single-experiment dataset and filter
-        single_exp_data = {exp_code: dict(exp_params)}
-        input_data, input_keys = self._filter_for_required_columns(single_exp_data, required_input_keys)
-
-        # 3. Add feature input data (same as train)
-        missing_input_keys = [key for key in required_input_keys if key not in input_keys]
-        features = self._add_feature_data(missing_input_keys, [exp_code], visualize_flag, debug_flag)
-        input_data = [input_data[0] + features[0]] if features and features[0] else input_data
-
-        # 4. Normalize inputs (inference mode)
-        input_data = self._normalize_data(input_data, required_input_keys, is_training=False)
+            self.logger.console_info(f"✓ Trained model for '{primary_feature}'")
         
-        # 5. Predict with each model (same pattern as train)
-        all_predictions = {}
-        for pred_model in self.get_active_pred_models():
-            # Extract relevant features for this model (same as train)
-            model_input_indices = [required_input_keys.index(key) for key in pred_model.input if key in required_input_keys]
-            X = input_data[:, model_input_indices] if model_input_indices else np.array([[]])
-            
-            # Get predictions and denormalize
-            predictions = pred_model.predict(X)  # Shape: (1, n_targets)
-            denormalized = self._denormalize_data(predictions, pred_model.output)
-            
-            # Store results
-            for i, perf_code in enumerate(pred_model.output):
-                all_predictions[perf_code] = round(float(denormalized[0, i]), pred_model.round_digits)
-                
-        return all_predictions
-
-    def get_active_pred_models(self) -> List[IPredictionModel]:
-        """Get all active prediction models."""
-        return [model for model in self.prediction_models if model.active]
+        self.logger.console_success(
+            f"Training complete: {trained_count}/{len(self.prediction_models)} models trained"
+        )
     
-    def training_step_summary(self) -> str:
-        """Generate summary of training results."""
-        if not self.training_metrics:
-            return "No training metrics available."
+    def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
+        """
+        Validate prediction models on validation or test set.
+        
+        Computes prediction metrics for all registered models:
+        - MAE (Mean Absolute Error)
+        - RMSE (Root Mean Squared Error)
+        - R² (Coefficient of Determination)
+        
+        Args:
+            use_test: If True, use test split; if False, use validation split
             
-        summary = f"\033[1m{'Model Name':<20} {'Targets':<10} {'Training Score':<15} {'Samples':<10}\033[0m"
-        for model_name, model_data in self.training_metrics.items():
-            metrics = model_data["metrics"]
-            target_count = len(model_data["output_targets"])
+        Returns:
+            Dict mapping feature names to metric dicts:
+            {'feature_1': {'mae': 0.15, 'rmse': 0.23, 'r2': 0.89}, ...}
             
-            # Format training score
-            score = metrics.get("training_score", "N/A")
-            score_str = f"{score:.4f}" if isinstance(score, (int, float)) else str(score)
-            
-            # Format sample count
-            samples = metrics.get("training_samples", "N/A")
-            summary += f"\n{model_name:<20} {target_count:<10} {score_str:<15} {samples:<10}"
-            
-        return summary
-    
-    # === PRIVATE METHODS ===
-    def _get_pred_model_by_code(self) -> Dict[str, IPredictionModel]:
-        """Generate mapping of performance codes to prediction models."""
-        # Prep prediction system output dict
-        pred_model_by_code = {}
-        for pred_model in self.prediction_models:
-            for code in pred_model.output:
-                if code in pred_model_by_code:
-                    raise ValueError(f"Performance code '{code}' is predicted by multiple prediction models. Please check the configuration.")
-                pred_model_by_code[code] = pred_model
-        return pred_model_by_code
-
-    def _get_required_keys(self) -> Tuple[List[str], List[str], List[str], List[str]]:
-        """Filter dataset to only experiments containing all required columns."""
-        input_keys = set()
-        output_keys = set()
-        input_keys_arrays = set()
-        output_keys_arrays = set()
-
+        Raises:
+            RuntimeError: If validate() called before train()
+            ValueError: If requested split is empty (e.g., val_size=0.0)
+        """
+        if self.datamodule is None:
+            raise RuntimeError(
+                "PredictionSystem not trained yet. Call train(datamodule) first."
+            )
+        
+        split = 'test' if use_test else 'val'
+        
+        # Check if split is empty before trying to extract
+        split_sizes = self.datamodule.get_split_sizes()
+        if split_sizes[split] == 0:
+            raise ValueError(
+                f"Cannot validate on {split} set: split is empty. "
+                f"Configure DataModule with {'test_size' if use_test else 'val_size'} > 0.0"
+            )
+        
+        self.logger.console_info(f"Validating models on {split} set...")
+        
+        # Extract validation/test data
+        X_split, y_split = self.datamodule.extract_all(split=split)
+        
+        self.logger.info(f"Evaluating {len(self.prediction_models)} models on {len(X_split)} experiments...")
+        
+        # Compute metrics for each model
+        results = {}
         for model in self.prediction_models:
-
-            if model.dataset_type == model.DatasetType.AGGR_METRICS:
-                input_keys.update(model.input)
-                output_keys.update(model.output)
-
-            elif model.dataset_type == model.DatasetType.METRIC_ARRAYS:
-                input_keys_arrays.update(model.input)
-                output_keys_arrays.update(model.output)
-
-            else:
-                raise ValueError(f"Unknown dataset type for model {type(model).__name__}")
-        return list(input_keys), list(output_keys), list(input_keys_arrays), list(output_keys_arrays)
-
-    def _add_feature_data(self, input_keys: List[str], exp_codes: List[str], visualize_flag: bool, debug_flag: bool) -> List[List[Any]]:
-        """Add feature model data to experiments in-place."""
-        # Prepare mapping of performance codes to feature models
-        feature_models_by_code = {}
-        for pred_model in self.get_active_pred_models():
-            for code, feature_model in pred_model.feature_models.items():
-                if code not in feature_models_by_code:
-                    feature_models_by_code[code] = feature_model
-
-        # Run required feature models for the given exp_codes
-        features = []
-        for exp_code in exp_codes:
-            exp_features = []
-            for code in input_keys:
-                if code not in feature_models_by_code:
-                    raise ValueError(f"Input key '{code}' required by active prediction models has no associated feature model.")
-                
-                feature_model = feature_models_by_code[code]
-                self.logger.info(f"Computing feature '{code}' for experiment '{exp_code}' using {type(feature_model).__name__}")
-                feature_model.run(code, exp_code, self.local_data.get_experiment_folder(exp_code), visualize_flag, debug_flag)
-
-                # Add computed feature to experiment data
-                if code in feature_model.features:
-                    exp_features.append(feature_model.features[code])
-                else:
-                    raise ValueError(f"Feature model '{type(feature_model).__name__}' did not compute expected feature '{code}' for experiment '{exp_code}'")
-            features.append(exp_features)
-        return features
-
-    def _normalize_data(self, data: List[List[Any]], keys: List[str], is_training: bool = True) -> np.ndarray:
-        """Normalize data for model training or inference."""
-        # data array with shape (n_samples, n_features)
-        data_array = np.array(data)
-        if data_array.size == 0:
-            return data_array
-        
-        for col_idx, key in enumerate(keys):
-            values_array = data_array[:, col_idx]
+            # Get primary feature name
+            primary_feature = model.feature_names[0] if model.feature_names else "unknown"
             
-            if is_training:
-                # Training mode: compute and store normalization parameters
-                mean_val = np.mean(values_array)
-                std_val = np.std(values_array)
-                
-                data_array[:, col_idx] = (values_array - mean_val)
-                # Avoid division by zero
-                if std_val > 0:  
-                    data_array[:, col_idx] /= std_val
-                self.normalization_params[key] = {
-                    'mean': float(mean_val), 
-                    'std': float(std_val)
-                }
-            else:
-                # Inference mode: apply stored normalization parameters
-                if key in self.normalization_params:
-                    params = self.normalization_params[key]
-                    if params['std'] > 0:
-                        data_array[:, col_idx] = (values_array - params['mean'])
-                        # Avoid division by zero
-                        if params['std'] > 0:
-                            data_array[:, col_idx] /= params['std']
-                else:
-                    # Column not seen during training, use as-is
-                    self.logger.warning(f"Column '{key}' not seen during training, using raw values")
-        
-        if is_training:
-            self.logger.info(f"Normalized {data_array.shape[1]} columns using standardization")
-        return data_array
-
-    def _denormalize_data(self, data: np.ndarray, column_codes: List[str]) -> np.ndarray:
-        """Denormalize data back to original scale using stored normalization parameters."""
-        denormalized = np.copy(data)
-        
-        for col_idx, code in enumerate(column_codes):
-            if code in self.normalization_params:
-                params = self.normalization_params[code]
-                if params['std'] > 0:
-                    denormalized[:, col_idx] = (data[:, col_idx] * params['std'] + params['mean'])
-            else:
-                self.logger.warning(f"Column '{code}' not seen during training, using raw values")
-        
-        return denormalized
-
-    def _filter_for_required_columns(self, data: Dict[str, Dict[str, Any]], required_keys: List[str]) -> Tuple[List[List[Any]], List[str]]:
-        """Filter data to only include values for required keys, maintaining order of exp_codes."""
-        filtered_data = []
-        filtered_keys = []
-
-        for exp_data in data.values():
-            filtered_values = []
-            for key, value in exp_data.items():
-                if key in required_keys:
-                    filtered_values.append(value)
-                    if key not in filtered_keys:
-                        filtered_keys.append(key)
+            # Get feature columns
+            feature_cols = model.feature_names
+            missing_cols = set(feature_cols) - set(y_split.columns)
+            if missing_cols:
+                self.logger.warning(
+                    f"Missing features for model '{primary_feature}': {missing_cols}, skipping"
+                )
+                continue
             
-            filtered_data.append(filtered_values)
-        return filtered_data, filtered_keys
+            # Get ground truth
+            y_true = y_split[feature_cols]
+            
+            # Predict
+            y_pred_norm = model.forward_pass(X_split)
+            y_pred = self.datamodule.denormalize(y_pred_norm)
+            
+            # Compute metrics for primary feature
+            y_true_vals = y_true[primary_feature].values
+            y_pred_vals = y_pred[primary_feature].values
+            
+            mae = float(np.mean(np.abs(y_true_vals - y_pred_vals)))
+            rmse = float(np.sqrt(np.mean((y_true_vals - y_pred_vals) ** 2)))
+            
+            # R² score
+            ss_res = np.sum((y_true_vals - y_pred_vals) ** 2)
+            ss_tot = np.sum((y_true_vals - np.mean(y_true_vals)) ** 2)
+            r2 = float(1 - (ss_res / (ss_tot + 1e-8)))
+            
+            results[primary_feature] = {
+                'mae': mae,
+                'rmse': rmse,
+                'r2': r2,
+                'n_samples': len(y_true_vals)
+            }
+            
+            self.logger.console_info(
+                f"  {primary_feature}: MAE={mae:.4f}, RMSE={rmse:.4f}, R²={r2:.4f}"
+            )
+        
+        self.logger.console_success(
+            f"Validation complete on {split} set ({len(X_split)} experiments)"
+        )
+        
+        return results
+    
+    def predict(self, X_new: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predict all features for new parameter values.
+        
+        Automatically normalizes inputs (if needed) and denormalizes outputs.
+        
+        Args:
+            X_new: DataFrame with parameter columns
+            
+        Returns:
+            DataFrame with predicted feature values (denormalized)
+            
+        Raises:
+            RuntimeError: If predict() called before train()
+            ValueError: If X_new has invalid columns
+        """
+        if self.datamodule is None:
+            raise RuntimeError(
+                "PredictionSystem not trained yet. Call train(datamodule) first."
+            )
+        
+        # Validate X_new columns against dataset schema
+        self._validate_input_parameters(X_new)
+        
+        # Predict all features
+        predictions = {}
+        for model in self.prediction_models:
+            primary_feature = model.feature_names[0] if model.feature_names else "unknown"
+            
+            # Predict (model expects normalized features if trained with normalization)
+            # Note: X (parameters) are not normalized, only y (features)
+            y_pred_norm = model.forward_pass(X_new)
+            
+            # Validate return type
+            if not isinstance(y_pred_norm, pd.DataFrame):
+                raise TypeError(
+                    f"Model '{primary_feature}' forward_pass() must return pd.DataFrame, "
+                    f"got {type(y_pred_norm).__name__}"
+                )
+            
+            # Validate required columns are present
+            missing_cols = set(model.feature_names) - set(y_pred_norm.columns)
+            if missing_cols:
+                raise ValueError(
+                    f"Model '{primary_feature}' forward_pass() missing columns: {missing_cols}. "
+                    f"Expected columns: {model.feature_names}"
+                )
+            
+            # Denormalize predictions
+            y_pred = self.datamodule.denormalize(y_pred_norm)
+            
+            # Extract columns for this feature
+            for col in model.feature_names:
+                if col in y_pred.columns:
+                    predictions[col] = y_pred[col]
+        
+        return pd.DataFrame(predictions)
+    
+    def _validate_input_parameters(self, X: pd.DataFrame) -> None:
+        """
+        Validate that X has correct parameter columns.
+        
+        Args:
+            X: DataFrame to validate
+            
+        Raises:
+            ValueError: If columns don't match dataset schema
+        """
+        # Get expected parameters from dataset schema
+        expected_params = set(self.dataset.schema.parameters.keys())
+        provided_params = set(X.columns)
+        
+        # Check for unexpected columns
+        unexpected = provided_params - expected_params
+        if unexpected:
+            raise ValueError(
+                f"Unexpected parameter columns in X_new: {unexpected}. "
+                f"Expected parameters: {expected_params}"
+            )
+        
+        # Check for missing required columns
+        # Note: Not all parameters may be required (some might have defaults)
+        # So we only warn, not error
+        missing = expected_params - provided_params
+        if missing:
+            self.logger.warning(
+                f"Missing parameter columns in X_new: {missing}. "
+                f"Models may fail if these are required."
+            )
+
+
 
 

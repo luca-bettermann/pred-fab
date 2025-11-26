@@ -20,8 +20,7 @@ class LocalData:
             root_folder: str,
             local_folder: str, 
             server_folder: Optional[str] = None, 
-            schema_id: Optional[str] = None,
-            study_code: Optional[str] = None  # Deprecated: use schema_id
+            schema_id: Optional[str] = None
             ) -> None:
         """
         Initialize folder navigator with base paths.
@@ -31,25 +30,15 @@ class LocalData:
             local_folder: Path to local data storage
             server_folder: Path to server data storage
             schema_id: Optional schema ID for immediate initialization
-            study_code: (Deprecated) Use schema_id instead
         """
         self.root_folder: str = root_folder
         self.local_folder: str = local_folder
         self.server_folder: Optional[str] = server_folder
-        
-        # Use schema_id if provided, otherwise fall back to study_code for compatibility
-        initial_id = schema_id if schema_id is not None else study_code
-        
-        # Primary attributes (AIXD terminology)
-        self.schema_id: Optional[str] = initial_id
+        self.schema_id: Optional[str] = schema_id
         self.schema_folder: Optional[str] = None
-        
-        # Legacy aliases for backward compatibility
-        self.study_code: Optional[str] = initial_id
-        self.study_folder: Optional[str] = None
 
-        if initial_id is not None:
-            self.set_schema_id(initial_id)
+        if schema_id is not None:
+            self.set_schema_id(schema_id)
 
     # === PUBLIC API METHODS ===
     def set_schema_id(self, schema_id: str) -> None:
@@ -64,21 +53,6 @@ class LocalData:
         
         self.schema_id = schema_id
         self.schema_folder = os.path.join(self.local_folder, self.schema_id)
-        
-        # Update legacy aliases
-        self.study_code = schema_id
-        self.study_folder = self.schema_folder
-    
-    def set_study_code(self, study_code: str) -> None:
-        """
-        (Deprecated) Set or change the study code.
-        
-        Use set_schema_id() instead for AIXD architecture.
-        
-        Args:
-            study_code: Study code (will be used as schema_id)
-        """
-        self.set_schema_id(study_code)
 
     def get_experiment_code(self, exp_nr: int) -> str:
         """Generate experiment code from experiment number."""
@@ -158,20 +132,11 @@ class LocalData:
             raise ValueError(f"{code} is not available in memory.")
         
     # === DATA LOADING METHODS ===
-    def load_study_records(self, study_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load study records from local files."""
-        return self._load_files_generic(
-            codes=study_codes,
-            subdirs=["{code}"],
-            filename="study_record",
-            contains_columns=False
-        )
-
     def load_exp_records(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Load experiment records from local files."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.study_code), "{code}"],
+            subdirs=[str(self.schema_id), "{code}"],
             filename="exp_record",
             contains_columns=False
         )
@@ -180,7 +145,7 @@ class LocalData:
         """Load aggregated metrics from local files for multiple experiments."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.study_code), "{code}", "arrays"],
+            subdirs=[str(self.schema_id), "{code}", "arrays"],
             filename="performance",
             contains_columns=False
         )
@@ -189,22 +154,12 @@ class LocalData:
         """Load metrics arrays from local files for multiple experiments."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.study_code), "{code}", "arrays"],
+            subdirs=[str(self.schema_id), "{code}", "arrays"],
             filename=f"{kwargs.get('perf_code')}",
             contains_columns=True
         )
 
     # === DATA SAVING METHODS ===
-    def save_study_records(self, study_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
-        """Save study records to local files."""
-        return self._save_files_generic(
-            codes=study_codes,
-            data=data,
-            subdirs=[],
-            filename="study_record",
-            recompute=recompute,
-        )
-
     def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
         """Save experiment records to local files."""
         return self._save_files_generic(
@@ -236,6 +191,30 @@ class LocalData:
             column_names=kwargs.get('column_names')
         )
     
+    def save_schema(self, schema_dict: Dict[str, Any], recompute: bool = False) -> bool:
+        """
+        Save schema JSON to local storage.
+        
+        Args:
+            schema_dict: Schema dictionary to save
+            recompute: Overwrite if exists
+            
+        Returns:
+            True if saved, False if skipped
+        """
+        if not self.schema_folder:
+            raise ValueError("Schema folder not configured")
+        
+        schema_file = os.path.join(self.schema_folder, "schema.json")
+        os.makedirs(self.schema_folder, exist_ok=True)
+        
+        # Only save if doesn't exist or recompute is True
+        if not os.path.exists(schema_file) or recompute:
+            with open(schema_file, 'w') as f:
+                json.dump(schema_dict, f, indent=2)
+            return True
+        return False
+    
     # === PRIVATE METHODS ===
     def _load_files_generic(self, 
                             codes: List[str], 
@@ -243,8 +222,8 @@ class LocalData:
                             filename: str,
                             contains_columns: bool = False) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Simple load function for single JSON files."""
-        if not self.study_code:
-            raise ValueError("Study code must be set before loading experiments")
+        if not self.schema_id:
+            raise ValueError("Schema ID must be set before loading experiments")
             
         missing_codes = []
         result_dict = {}
@@ -286,15 +265,15 @@ class LocalData:
                             recompute: bool,
                             column_names: Optional[List[str]] = None) -> bool:
         """Simple save function for non-nested data."""
-        if not self.study_code:
-            raise ValueError("Study code must be set before saving")
+        if not self.schema_id:
+            raise ValueError("Schema ID must be set before saving")
             
         saved = False
         file_type = "csv" if column_names is not None else "json"
         for code in codes:
             if code in data:
                 # Build directory path
-                dir_parts = [self.local_folder, self.study_code] + subdirs
+                dir_parts = [self.local_folder, self.schema_id] + subdirs
                 dir_parts = [part.replace("{code}", code) for part in dir_parts]
                 dir_path = os.path.join(*dir_parts)
                 os.makedirs(dir_path, exist_ok=True)

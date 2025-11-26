@@ -1,18 +1,27 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Callable, Optional, final
+from dataclasses import dataclass
+import numpy as np
 
-from ..utils import ParameterHandling, LBPLogger
+from ..utils import LBPLogger
 
 
-class ICalibrationModel(ParameterHandling, ABC):
+@dataclass
+class ICalibrationModel(ABC):
     """
-    Simple calibration interface: just implement optimize() method.
-    Interface handles evaluation orchestration, you handle optimization logic.
+    Abstract interface for calibration models.
+    
+    Implements parameter optimization using prediction and evaluation models.
+    Models declare their parameters as dataclass fields (DataObjects).
     """
-
-    def __init__(self, logger: LBPLogger, **kwargs) -> None:
-        self.logger = logger
-        self.performance_weights: Dict[str, float] = {}
+    
+    logger: LBPLogger  # Required field for logging
+    performance_weights: Optional[Dict[str, float]] = None  # Set via set_performance_weights()
+    
+    def __post_init__(self):
+        """Initialize performance_weights if not provided."""
+        if self.performance_weights is None:
+            self.performance_weights = {}
 
     # === ABSTRACT METHODS ===
     @abstractmethod
@@ -38,96 +47,63 @@ class ICalibrationModel(ParameterHandling, ABC):
         """
         ...
 
-    # === PUBLIC API METHODS ===
+    
+    # === PUBLIC API ===
+    
     @final
-    def calibrate(self, exp_code: str, predict_fn: Callable, evaluate_fn: Callable, 
-                  param_keys: List[str], param_ranges: Dict[str, Tuple[float, float]]) -> Dict[str, float]:
+    def calibrate(
+        self, 
+        param_ranges: Dict[str, Tuple[float, float]],
+        objective_fn: Callable[[Dict[str, float]], float]
+    ) -> Dict[str, float]:
         """
-        Template method: creates objective function and calls user's optimize() method.
-        Interface handles evaluation orchestration, user has complete optimization freedom.
-        """
-        self.logger.info(f"Starting calibration for {exp_code}")
+        Run calibration optimization.
         
-        # Store context for objective function
-        self._exp_code = exp_code
-        self._predict_fn = predict_fn  
-        self._evaluate_fn = evaluate_fn
+        Args:
+            param_ranges: {param_name: (min_val, max_val)}
+            objective_fn: Function that takes parameters dict, returns objective value (higher = better)
+            
+        Returns:
+            Optimal parameters found: {param_name: optimal_value}
+        """
+        self.logger.info("Starting calibration")
         self._eval_count = 0
         
-        # Let user optimize however they want!
-        best_params = self.optimize(param_ranges, self._objective_function)
+        # Call user's optimization implementation
+        best_params = self.optimize(param_ranges, objective_fn)
         
+        # Validate return type
+        if not isinstance(best_params, dict):
+            raise TypeError(
+                f"optimize() must return dict, "
+                f"got {type(best_params).__name__}"
+            )
+        
+        # Validate all expected parameters are present
+        expected_params = set(param_ranges.keys())
+        returned_params = set(best_params.keys())
+        
+        missing = expected_params - returned_params
+        if missing:
+            raise ValueError(
+                f"optimize() missing parameters in return: {missing}. "
+                f"Expected all parameters from param_ranges: {expected_params}"
+            )
+        
+        # Validate dict values are numeric
+        for key, value in best_params.items():
+            if not isinstance(value, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"optimize() parameter values must be numeric, "
+                    f"got {type(value).__name__} for parameter '{key}'"
+                )
         
         self.logger.info(f"Calibration complete: {self._eval_count} evaluations, best: {best_params}")
         return best_params
-
+    
     @final
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set performance weights for objective function."""
         self.performance_weights = weights
+        self.logger.info(f"Performance weights set: {weights}")
 
-    @final
-    def calibration_step_summary(self, exp_code: str, param_ranges: Dict[str, Tuple[float, float]], 
-                                  optimal_params: Dict[str, float], evaluation_count: int,
-                                  predicted_features: Optional[Dict[str, float]],
-                                  performance_values: Optional[Dict[str, float]]) -> str:
-        """
-        Generate summary of calibration results.
-        
-        Args:
-            exp_code: Experiment code being calibrated
-            param_ranges: Parameter ranges used in optimization  
-            optimal_params: Optimal parameters found
-            evaluation_count: Number of objective function evaluations performed
-            predicted_features: Feature values predicted for optimal parameters (optional)
-            performance_values: Performance values for optimal parameters (optional)
-            
-        Returns:
-            Formatted summary string for console display
-        """
-        summary = f"\033[1mCalibration Model: {type(self).__name__}\033[0m\n"
-        summary += f"Total Evaluations: {evaluation_count}\n\n"
-        
-        summary += f"\033[1m{'Parameter':<20} {'Min Value':<15} {'Max Value':<15} {'Optimal Value':<15}\033[0m"
-        for param_name, optimal_value in optimal_params.items():
-            param_range = param_ranges[param_name]
-            min_str = f"{param_range[0]:.3f}"
-            max_str = f"{param_range[1]:.3f}"
-            summary += f"\n{param_name:<20} {min_str:<15} {max_str:<15} {optimal_value:<15.6f}"
-            
-        summary += f"\n\n\033[1m{'Performance Code':<20} {'Weight':<15} {'Pred. Feature':<15} {'Pred. Performance':<15}\033[0m"
-        for code, weight in self.performance_weights.items():
-            feature_val = predicted_features.get(code, 'N/A') if predicted_features else 'N/A'
-            perf_val = performance_values.get(code, 'N/A') if performance_values else 'N/A'
-            
-            # Format values for display
-            feature_str = f"{feature_val:.4f}" if isinstance(feature_val, (int, float)) else str(feature_val)
-            perf_str = f"{perf_val:.4f}" if isinstance(perf_val, (int, float)) else str(perf_val)
-            
-            summary += f"\n{code:<20} {weight:<15.3f} {feature_str:<15} {perf_str:<15}"
-            
-        return summary
-    
-    # === PRIVATE METHODS ===
-    @final
-    def _objective_function(self, params: Dict[str, float]) -> float:
-        """
-        Objective function that handles predict→evaluate→objective pipeline.
-        Called by user's optimization algorithm.
-        """
-        try:
-            self._eval_count += 1
-            obj_val = self._evaluate_objective(params, self._exp_code, self._predict_fn, self._evaluate_fn)
-            self.logger.debug(f"Eval {self._eval_count}: {params} -> {obj_val:.6f}")
-            return obj_val
-        except Exception as e:
-            self.logger.warning(f"Evaluation failed for {params}: {e}")
-            return float('-inf')  # Return very bad objective for failed evaluations
-
-    @final
-    def _evaluate_objective(self, params: Dict[str, float], exp_code: str, 
-                           predict_fn: Callable, evaluate_fn: Callable) -> float:
-        """Evaluate objective: predict → evaluate → weighted sum."""
-        features = predict_fn(params)
-        performances = evaluate_fn(exp_code, features)
-        return sum(self.performance_weights.get(k, 1.0) * v for k, v in performances.items())

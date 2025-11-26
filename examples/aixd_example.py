@@ -2,27 +2,41 @@
 Example workflow using AIXD architecture with LBPAgent.
 
 Demonstrates:
-- Dataset-centric workflow
-- Schema generation from active models
-- Two-phase initialization
-- Hierarchical load/save
+- Dataset-centric workflow (Phase 7 API)
+- User owns Dataset, Agent is stateless
+- Hierarchical load/save pattern
+- ExperimentData mutation pattern
+- Rounding configured in DataObjects
 """
 
-from lbp_package.core import LBPAgent
+from lbp_package.core import LBPAgent, Dataset
 from lbp_package.interfaces import IEvaluationModel, IFeatureModel
+from lbp_package.utils import LBPLogger
+from dataclasses import dataclass, field
+from typing import Any
 
 # Example: Define custom evaluation and feature models
 # (In practice, import your own implementations)
 
+@dataclass
 class ExampleFeatureModel(IFeatureModel):
     """Example feature model implementation."""
     
-    @property
-    def feature_name(self):
-        return "example_feature"
+    dataset: Dataset  # Required for memoization
+    logger: LBPLogger  # Required for logging
     
-    def compute(self, exp_code, exp_folder, visualize_flag, debug_flag):
-        # Placeholder: compute features
+    def _load_data(self, **param_values) -> Any:
+        """Load raw data for these parameter values."""
+        # Use param_values to locate and load unstructured data
+        # e.g., CAD files, sensor data, images, etc.
+        return {}  # Placeholder: your custom data format
+    
+    def _compute_features(self, data: Any, visualize: bool = False) -> float:
+        """Extract feature value from loaded data."""
+        # Placeholder: compute features from data
+        if visualize:
+            # User can implement custom visualization logic
+            print(f"Visualizing feature extraction...")
         return 1.0
 
 class ExampleEvaluationModel(IEvaluationModel):
@@ -54,29 +68,27 @@ class ExampleEvaluationModel(IEvaluationModel):
 
 
 def main():
-    """Main workflow demonstrating AIXD architecture."""
+    """Main workflow demonstrating AIXD architecture with Phase 7 API."""
     
     # === SETUP ===
     
-    # Initialize LBP Agent
+    # Initialize LBP Agent (no round_digits - now in schema/DataObjects)
     agent = LBPAgent(
-        root_folder="/path/to/project",
-        local_folder="/path/to/local_data",
-        log_folder="/path/to/logs",
+        root_folder="/Users/TUM/Documents/repos/lbp_package/examples",
+        local_folder="/Users/TUM/Documents/repos/lbp_package/examples/local",
+        log_folder="/Users/TUM/Documents/repos/lbp_package/examples/logs",
         debug_flag=True,  # Skip external operations
         recompute_flag=False,
-        visualize_flag=True,
-        round_digits=3
+        visualize_flag=True
     )
     
-    # Register models
-    agent.add_evaluation_model(
+    # Register models (no weight parameter - that's for calibration, not evaluation)
+    agent.register_evaluation_model(
         performance_code="energy_consumption",
-        evaluation_class=ExampleEvaluationModel,
-        weight=0.7  # Calibration weight
+        evaluation_model_class=ExampleEvaluationModel
     )
     
-    # === NEW DATASET WORKFLOW ===
+    # === CREATE NEW DATASET ===
     
     # Define static parameters (study-level)
     static_params = {
@@ -85,19 +97,14 @@ def main():
         "nozzle_diameter": 0.4,
     }
     
-    # Define which performance metrics to track
-    performance_codes = ["energy_consumption"]
-    
-    # Initialize dataset (two-phase initialization)
-    dataset = agent.initialize_for_dataset(
-        performance_codes=performance_codes,
-        static_params=static_params
-    )
+    # Agent returns Dataset - user owns it
+    dataset = agent.initialize(static_params=static_params)
     
     print(f"✓ Dataset initialized with schema: {dataset.schema_id}")
     print(f"  Static params: {len(dataset.schema.static_params.data_objects)}")
     print(f"  Dynamic params: {len(dataset.schema.dynamic_params.data_objects)}")
     print(f"  Dimensional params: {len(dataset.schema.dimensional_params.data_objects)}")
+    print(f"  Default rounding: {dataset.schema.default_round_digits} digits")
     
     # === RUN EXPERIMENTS ===
     
@@ -109,76 +116,75 @@ def main():
         "n_layers": 100,  # Dimensional parameter
     }
     
-    exp_code = f"{dataset.schema_id}_001"
+    exp_code = "test_001"
     
-    # Initialize experiment
-    agent.initialize_for_exp(exp_code, experiment_params)
+    # Add experiment to dataset (hierarchical: tries local/external first, then creates)
+    exp_data = dataset.add_experiment(exp_code, experiment_params)
     
-    # Run evaluation
-    results = agent.evaluate_experiment(
-        exp_code=exp_code,
-        exp_params=experiment_params,
+    print(f"\n✓ Experiment {exp_code} created")
+    
+    # Run evaluation - mutates exp_data in place
+    agent.evaluate_experiment(
+        dataset=dataset,
+        exp_data=exp_data,
         visualize=True,
         recompute=False
     )
     
     print(f"\n✓ Experiment {exp_code} evaluated")
-    for perf_code, metrics in results.items():
+    
+    # Access results from exp_data
+    for perf_code in exp_data.performance_metrics:
+        metrics = exp_data.performance_metrics[perf_code].to_dict()
         print(f"  {perf_code}: {metrics}")
     
     # === SAVE DATA ===
     
-    # Hierarchical save: Memory → Local → External
-    agent.save_experiments_hierarchical([exp_code], recompute=False)
-    print(f"\n✓ Saved experiment {exp_code}")
+    # Save single experiment (hierarchical: memory → local → external)
+    dataset.save_experiment(exp_code, local=True, external=False, recompute=False)
+    print(f"\n✓ Saved experiment {exp_code} to local storage")
+    
+    # Or save all experiments at once
+    # dataset.save(local=True, external=False, recompute=False)
     
     # === LOAD EXISTING DATASET ===
     
-    # In a new session, load existing dataset by schema_id
+    # In a new session, load existing dataset from local storage
     agent2 = LBPAgent(
-        root_folder="/path/to/project",
-        local_folder="/path/to/local_data",
-        log_folder="/path/to/logs",
+        root_folder="/Users/TUM/Documents/repos/lbp_package/examples",
+        local_folder="/Users/TUM/Documents/repos/lbp_package/examples/local",
+        log_folder="/Users/TUM/Documents/repos/lbp_package/examples/logs",
         debug_flag=True
     )
     
-    # Register same models (required for compatibility check)
-    agent2.add_evaluation_model(
+    # Register same models (required for schema compatibility)
+    agent2.register_evaluation_model(
         performance_code="energy_consumption",
-        evaluation_class=ExampleEvaluationModel,
-        weight=0.7
+        evaluation_model_class=ExampleEvaluationModel
     )
     
-    # Load dataset by schema_id
-    loaded_dataset = agent2.initialize_for_dataset(
-        schema_id=dataset.schema_id  # e.g., "schema_001"
-    )
+    # Create empty dataset with same schema
+    dataset2 = agent2.initialize(static_params=static_params)
     
-    print(f"\n✓ Loaded dataset: {loaded_dataset.schema_id}")
+    # Load all experiments from local/external storage
+    dataset2.populate(source="local")
     
-    # Load experiments from hierarchical storage
-    missing = agent2.load_experiments_hierarchical(
-        exp_codes=[exp_code],
-        recompute=False
-    )
+    print(f"\n✓ Loaded dataset: {dataset2.schema_id}")
     
-    if not missing:
-        print(f"✓ All experiments loaded successfully")
-        exp_params_loaded = loaded_dataset.get_experiment_params(exp_code)
-        print(f"  Loaded params: {exp_params_loaded}")
-    else:
-        print(f"⚠ Could not load experiments: {missing}")
+    # Check what was loaded
+    all_exp_codes = dataset2.get_experiment_codes()
+    print(f"✓ Found {len(all_exp_codes)} experiments")
     
-    # === ACCESS DATASET CONTENTS ===
-    
-    # Get all experiments
-    all_exp_codes = dataset.get_experiment_codes()
-    print(f"\nDataset contains {len(all_exp_codes)} experiments")
-    
-    # Access specific experiment data
     for code in all_exp_codes:
-        params = dataset.get_experiment_params(code)
-        print(f"  {code}: {params}")
+        params = dataset2.get_experiment_params(code)
+        print(f"  {code}: print_speed={params.get('print_speed')}, layer_height={params.get('layer_height')}")
+    
+    # === ALTERNATIVE: LOAD SPECIFIC EXPERIMENTS ===
+    
+    # Or load specific experiments (hierarchical: memory → local → external → create)
+    exp_data2 = dataset2.add_experiment("test_002")  # Will load from local/external if exists
+    
+    print(f"\n✓ Loaded or created experiment test_002")
     
     print("\n✓ AIXD workflow complete!")
 

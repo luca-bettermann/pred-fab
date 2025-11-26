@@ -6,329 +6,256 @@ from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
 from .features import IFeatureModel
-from ..utils import ParameterHandling, LBPLogger
+from ..core.dataset import ExperimentData
+from ..core.data_blocks import MetricArrays, PerformanceAttributes
+from ..utils import LBPLogger
 
 
 @dataclass
-class IEvaluationModel(ParameterHandling, ABC):
+class IEvaluationModel(ABC):
     """
     Abstract base class for evaluation models.
     
     Evaluates feature values against target values to compute performance metrics.
-    Supports multi-dimensional evaluation with configurable aggregation strategies.
+    Stores results directly in ExperimentData.
+    Models declare their parameters as dataclass fields (DataObjects).
     """
     
-    def __init__(
-            self, 
-            performance_code: str,
-            logger: LBPLogger,
-            round_digits: int = 3,
-            weight: Optional[float] = None,
-            **kwargs) -> None:
-        """
-        Initialize evaluation model.
-
-        Args:
-            performance_code: Code identifying the performance metric
-            logger: Logger instance for debugging and monitoring
-            round_digits: Number of decimal places for rounding results
-            calibration_weight: Optional weight for calibration objective function.
-                              If None, this model cannot be used in calibration.
-            **kwargs: Additional parameters for configuration
-        """
-        self.logger = logger
-
-        # By default, the evaluation model is deactivated from the system
-        self.active: bool = False
-
-        # Feature model validation
-        if not isinstance(self.feature_model_type, type) or not issubclass(self.feature_model_type, IFeatureModel):
-            raise ValueError("Feature model type must be a subclass of FeatureModel.")
-        self.feature_model: Optional[IFeatureModel] = None
-
-        # Dimensional configuration
-        self._validate_dim_properties()
-
-        # Performance configuration
-        self.round_digits: int = round_digits
-        self.performance_code = performance_code
-        self.metric_names = ["feature_value", "target_value", "scaling_factor", "performance_value"]
-
-        # Calibration configuration
-        self.weight = weight
-        if weight is not None:
-            self.logger.info(f"EvaluationModel '{performance_code}' set with calibration weight: {weight}")
-
-        # Store kwargs so that they can be passed on to the feature models
-        self.kwargs = kwargs
-
-    # === ABSTRACT PROPERTIES ===
-    @property
+    logger: LBPLogger  # Required field for logging
+    feature_model: Optional[IFeatureModel] = None  # Set via add_feature_model()
+    
+    # === ABSTRACT METHODS ===
+    
     @abstractmethod
-    def feature_model_type(self) -> Type[IFeatureModel]:
+    def _compute_target_value(self, **param_values) -> float:
         """
-        Property to access the feature model class.
-
-        Returns:
-            Class of the feature model used for feature extraction
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def dim_names(self) -> List[str]:
-        """
-        Property to access dimension names.
-
-        Returns:
-            List of dimension names (e.g. ['layers', 'segments'])
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def dim_param_names(self) -> List[str]:
-        """
-        Property to access dimension parameters. 
-        Must align with naming convention in the study and experiment records.
-
-        Returns:
-            List of dimension parameter names (e.g. ['n_layers', 'n_segments'])
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def dim_iterator_names(self) -> List[str]:
-        """
-        Property to access dimension iterator names.
-
-        Returns:
-            List of dimension iterator names (e.g. ['layer_id', 'segment_id'])
-        """
-        ...
-
-    @property
-    @abstractmethod
-    def target_value(self) -> float:
-        """
-        Compute the target value for performance evaluation.
-
-        Returns:
-            Target value for the current evaluation context
-        """
-        ...
-
-    # === OPTIONAL PROPERTIES ===
-    @property
-    def scaling_factor(self) -> Optional[float]:
-        """
-        Optionally define scaling factor for performance normalization.
+        Compute target value for performance evaluation at specific parameters.
         
+        Args:
+            **param_values: Parameter name-value pairs
+            
+        Returns:
+            Target value for these parameters
+        """
+        ...
+    
+    @abstractmethod
+    def _compute_scaling_factor(self, **param_values) -> Optional[float]:
+        """
+        Optionally compute scaling factor for performance normalization.
+        
+        Args:
+            **param_values: Parameter name-value pairs
+            
         Returns:
             Scaling factor or None for default scaling
         """
-        return None
+        ...
     
-    @property
-    def custom_aggr_metrics(self) -> List[str]:
-        """
-        Declare custom performance metrics for the evaluation. 
-        Subclasses can override this function to add their own metrics.
-
-        Returns:
-            List of custom performance metric names
-        """
-        return []
-
     # === OPTIONAL METHODS ===
-    def _compute_custom_aggr_metrics(
-        self, 
-        feature_array: NDArray[np.float64], 
-        performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
+    def _compute_aggregation(self, exp_data: ExperimentData) -> Dict[str, float]:
         """
-        This function computes the custom metrics defined in custom_aggr_metrics.
-
+        Optionally compute aggregated metrics from performance/metric arrays.
+        
+        Default implementation returns empty dict. Override to add custom aggregations.
+        
         Args:
-            feature_array: Array of feature values to aggregate
-            performance_array: Array of performance values to aggregate
-
+            exp_data: ExperimentData with populated performance and metric_arrays
+            
         Returns:
-            Dict: custom_metrics
-
-        custom_metrics needs to contain the declared metrics as keys in its dictionary.
-        By default, this function returns None as values.
-
-        Subclasses can override for custom aggregation strategies.
+            Dictionary of aggregated metric name-value pairs
         """
-        custom_metrics: Dict[str, Optional[np.floating]] = {}
-
-        # Initialize metrics as None
-        for metric in self.custom_aggr_metrics:
-            custom_metrics[metric] = None
-
-        return custom_metrics
-
-    def _initialization_step(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
-        """Optional initialization before performance computation."""
-        pass
-
-    def _cleanup_step(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> None:
-        """Optional cleanup after performance computation."""
-        pass
-
-    # === PUBLIC API METHODS ===
+        return {}
+    
+    # === PUBLIC API ===
     @final
-    def add_feature_model(self, feature_model: IFeatureModel, **kwargs) -> None:
-        """Add feature model to evaluation model."""
-        # Directly set the feature model instance (one-to-one relationship)
+    def add_feature_model(self, feature_model: IFeatureModel) -> None:
+        """Connect feature model for evaluation."""
         self.feature_model = feature_model
-
+        self.logger.info(f"Added feature model: {type(feature_model).__name__}")
+    
     @final
-    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool, debug_flag: bool) -> Tuple[Dict[str, Optional[np.floating]], np.ndarray, np.ndarray]:
-        """Execute the evaluation pipeline."""
-        self.logger.info(f"Starting evaluation for experiment {exp_code}")
-
-        # Initialize performance array
-        num_dims = len(self.dim_names)
-        metrics_array = np.empty(self._get_dim_sizes() + [num_dims + len(self.metric_names),])
-
-        # Process all dimensional combinations
-        dim_combinations = list(itertools.product(*self._compute_dim_ranges()))
-        total_dims = len(dim_combinations)
-        self.logger.info(f"Processing {total_dims} dimensional combinations")
-
+    def run(self, feature_name: str, performance_attr_name: str, exp_data: ExperimentData, 
+            visualize: bool = False) -> None:
+        """
+        Evaluate feature against target values and store results in ExperimentData.
+        
+        Args:
+            feature_name: Name of feature to evaluate
+            performance_attr_name: Name for performance attribute
+            exp_data: ExperimentData to populate with results
+            visualize: Enable visualizations if True
+        """
+        if self.feature_model is None:
+            raise ValueError("Feature model not set. Call add_feature_model() first.")
+        
+        if exp_data.dimensions is None:
+            raise ValueError("ExperimentData must have dimensions defined")
+        
+        self.logger.info(f"Starting evaluation for feature '{feature_name}'")
+        
+        # Get dimension info from exp_data.parameters (DataDimension objects)
+        from ..core.data_objects import DataDimension
+        dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
+                      if isinstance(obj, DataDimension)]
+        dim_names = [obj.name for obj in dim_objects]
+        dim_sizes = tuple(exp_data.parameters.get_value(obj.name) for obj in dim_objects)
+        
+        # Initialize arrays
+        num_dims = len(dim_names)
+        total_metrics = num_dims + 4  # dims + feature + target + scaling + performance
+        metric_array = np.empty(dim_sizes + (total_metrics,))
+        performance_array = np.empty(dim_sizes)
+        
+        # Generate all dimensional combinations
+        dim_ranges = [range(size) for size in dim_sizes]
+        dim_combinations = list(itertools.product(*dim_ranges))
+        total_combos = len(dim_combinations)
+        
+        self.logger.info(f"Processing {total_combos} dimensional combinations")
+        
+        # Combine static parameters with dimensional parameters
+        static_params = {}
+        if exp_data.parameters:
+            static_params = dict(exp_data.parameters.values)
+        
         for i, dims in enumerate(dim_combinations):
-
-            # Create runtime parameters for current dimensions
-            dims_dict = dict(zip(self.dim_iterator_names, dims))
-            self.logger.debug(f"Processing dimension {i+1}/{total_dims}: {dims_dict}...")
-            self.set_dim_parameters(**dims_dict)
-
-            # Extract features
-            assert self.feature_model is not None, "Feature model not initialized."
-            feature_value = self.feature_model.run(self.performance_code, exp_code, exp_folder, visualize_flag, debug_flag, **dims_dict)
-
-            # Compute performance for current dimensions
-            self._initialization_step(exp_code, exp_folder, visualize_flag, debug_flag)
-
-            # Compute evaluation components
-            target_value = self.target_value
-            scaling_factor = self.scaling_factor
-
-            # Compute performance value
-            self.logger.debug(f"Computing performance for dimensions: {dims}...")
-            performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
-
-            self._cleanup_step(exp_code, exp_folder, visualize_flag, debug_flag)
-
-            # Store results in performance array
-            metrics_array[dims][:num_dims] = dims
-            metrics_array[dims][num_dims] = feature_value
-            metrics_array[dims][num_dims + 1] = target_value
-            metrics_array[dims][num_dims + 2] = scaling_factor
-            metrics_array[dims][num_dims + 3] = performance_value
-
-        # Unpack metrics_array
-        feature_array = metrics_array[..., num_dims]
-        performance_array = metrics_array[..., -1]
-
-        # Aggregate targets, diffs, signs and performance
-        aggr_metrics = self._compute_default_aggr_metrics("Feature_Avg", feature_array, "Performance_Avg", performance_array)
-
-        # Prepare dim_arrays
-        dim_array = np.array(dim_combinations)
-
-        # Compute custom aggregated performance metrics
-        custom_aggr_metrics = self._compute_custom_aggr_metrics(feature_array, performance_array)
-        assert isinstance(custom_aggr_metrics, dict), "Aggregation must return a dictionary"
-        assert all(key in custom_aggr_metrics for key in self.custom_aggr_metrics), "Aggregation must include all required metrics"
-
-        # Update custom aggregation metrics
-        aggr_metrics.update(custom_aggr_metrics)
-
-        # Log and return aggr_metrics
-        self.logger.info(f"Evaluation completed: {aggr_metrics}")
-        return aggr_metrics, metrics_array, dim_array
-
+            # Build complete parameter dict
+            dim_params = dict(zip(dim_names, dims))
+            all_params = {**static_params, **dim_params}
+            
+            self.logger.debug(f"Processing {i+1}/{total_combos}: {dim_params}")
+            
+            # Extract feature
+            feature_value = self.feature_model.run(feature_name, visualize=visualize, **all_params)
+            
+            # Compute target and scaling for these parameters
+            target_value = self._compute_target_value(**all_params)
+            
+            # Validate return type
+            if not isinstance(target_value, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_target_value() must return numeric value, "
+                    f"got {type(target_value).__name__}"
+                )
+            
+            scaling_factor = self._compute_scaling_factor(**all_params)
+            
+            # Validate return type
+            if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_scaling_factor() must return numeric value or None, "
+                    f"got {type(scaling_factor).__name__}"
+                )
+            
+            # Compute performance
+            performance_value = self._compute_performance(
+                feature_value, target_value, scaling_factor
+            )
+            
+            # Store in arrays
+            metric_array[dims][:num_dims] = dims
+            metric_array[dims][num_dims] = feature_value
+            metric_array[dims][num_dims + 1] = target_value
+            metric_array[dims][num_dims + 2] = scaling_factor if scaling_factor is not None else np.nan
+            metric_array[dims][num_dims + 3] = performance_value if performance_value is not None else np.nan
+            performance_array[dims] = performance_value if performance_value is not None else np.nan
+        
+        # Store results in ExperimentData
+        from ..core.data_objects import DataArray, Performance, DataReal
+        
+        # Store aggregated feature value in features block
+        if exp_data.features is None:
+            from ..core.data_blocks import DataBlock
+            exp_data.features = DataBlock()
+        
+        feature_obj = DataReal(feature_name)
+        exp_data.features.add(feature_name, feature_obj)
+        # Extract feature values from metric_array (at index num_dims)
+        feature_values = metric_array[..., num_dims]
+        exp_data.features.set_value(feature_name, float(np.nanmean(feature_values)))
+        
+        # Create performance attribute DataObject
+        perf_attr = Performance.real(min_val=0.0, max_val=1.0)
+        perf_attr.name = performance_attr_name
+        
+        # Add to PerformanceAttributes block
+        if exp_data.performance is None:
+            exp_data.performance = PerformanceAttributes()
+        exp_data.performance.add(performance_attr_name, perf_attr)
+        exp_data.performance.set_value(performance_attr_name, float(np.nanmean(performance_array)))
+        
+        # Create metric array names
+        metric_names = dim_names + [feature_name, "target", "scaling", performance_attr_name]
+        
+        # Store metric array DataObject
+        metric_data_array = DataArray(name=feature_name, shape=metric_array.shape, dtype=np.dtype(np.float64))
+        # Store metric names in constraints for reference
+        metric_data_array.constraints["metric_names"] = metric_names
+        
+        # Add to MetricArrays block
+        if exp_data.metric_arrays is None:
+            exp_data.metric_arrays = MetricArrays()
+        exp_data.metric_arrays.add(feature_name, metric_data_array)
+        exp_data.metric_arrays.set_value(feature_name, metric_array)
+        
+        # Compute aggregations if overridden
+        aggr_metrics = self._compute_aggregation(exp_data)
+        
+        # Validate return type
+        if not isinstance(aggr_metrics, dict):
+            raise TypeError(
+                f"_compute_aggregation() must return dict, "
+                f"got {type(aggr_metrics).__name__}"
+            )
+        
+        # Validate dict values are numeric
+        for key, value in aggr_metrics.items():
+            if not isinstance(value, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_aggregation() dict values must be numeric, "
+                    f"got {type(value).__name__} for key '{key}'"
+                )
+        
+        self.logger.info(
+            f"Evaluation complete. Avg performance: {np.nanmean(performance_array):.3f}. "
+            f"Aggregations: {aggr_metrics}"
+        )
+    
     # === PRIVATE METHODS ===
     @final
-    def _compute_performance(self, feature_value: np.ndarray, target_value: float, scaling_factor: Optional[float]) -> Optional[NDArray[np.floating]]:
-        """Compute performance value for current dimensions."""
-
-        # Evaluate performance based on feature and target values
-        if (feature_value is None or np.isnan(feature_value)) or target_value is None:
-            performance_value = None
-            diff = None
-            self.logger.warning(f"Feature or target value is None, skipping performance computation.")
-        else:
-            # Compute difference from target
-            diff = feature_value - target_value
-
-            # Apply scaling for performance normalization
-            if scaling_factor is not None and scaling_factor > 0:
-                performance_value = 1.0 - np.abs(diff) / scaling_factor
-            elif target_value > 0:
-                performance_value = 1.0 - np.abs(diff) / target_value
-            else:
-                performance_value = np.abs(diff)
-                self.logger.warning(f"Performance value has not been scaled.")
-
-        # Ensure performance value is within [0, 1] range
-        if performance_value and not 0 <= performance_value <= 1:
-            self.logger.warning(f"Performance value {performance_value} out of bounds, clamping to [0, 1].")
-            performance_value = np.clip(performance_value, 0, 1)
-
-        self.logger.debug(
-            f"Performance computed: "
-            f"feature={np.round(feature_value, self.round_digits) if feature_value is not None else None}, "
-            f"target={np.round(target_value, self.round_digits) if target_value is not None else None}, "
-            f"diff={np.round(diff, self.round_digits) if diff is not None else None}, "
-            f"scaling={np.round(scaling_factor, self.round_digits) if scaling_factor is not None else None}, "
-            f"performance={np.round(performance_value, self.round_digits) if performance_value is not None else None}"
-        )
-        return performance_value
-
-    @final
-    def _compute_default_aggr_metrics(
-            self, 
-            key_feature_avg: str,
-            feature_array: NDArray[np.float64], 
-            key_performance_avg: str,
-            performance_array: NDArray[np.float64]) -> Dict[str, Optional[np.floating]]:
-        """Computes the default aggregation metrics. """
-        default_metrics: Dict[str, Optional[np.floating]] = {}
-
-        # Default: compute mean feature and performance values
-        default_metrics[key_feature_avg] = np.round(np.average(feature_array), self.round_digits)
-        default_metrics[key_performance_avg] = np.round(np.average(performance_array), self.round_digits)
-
-        # return the aggregated performance metrics
-        return default_metrics
-
-    @final
-    def _get_dim_sizes(self) -> List[int]:
-        """Get sizes of all dimensions from parameter values."""
-        return [getattr(self, attr_name) for attr_name in self.dim_param_names]
-
-    @final
-    def _compute_dim_ranges(self) -> List[range]:
-        """Create range objects for all dimensions."""
-        dim_sizes = self._get_dim_sizes()
-        return [range(size) for size in dim_sizes]
-
-    @final
-    def _validate_dim_properties(self) -> None:
-        """Validate that dimension properties are correctly set."""
-
-        # Validate dtype and content of dimension properties
-        if not isinstance(self.dim_names, list) or not all(isinstance(name, str) for name in self.dim_names):
-            raise ValueError("dim_names property must be a list of strings.")
-        if not isinstance(self.dim_iterator_names, list) or not all(isinstance(name, str) for name in self.dim_iterator_names):
-            raise ValueError("dim_iterator_names property must be a list of strings.")
-        if not isinstance(self.dim_param_names, list) or not all(isinstance(name, str) for name in self.dim_param_names):
-            raise ValueError("dim_param_names property must be a list of strings.")
+    def _compute_performance(
+        self, 
+        feature_value: float, 
+        target_value: float, 
+        scaling_factor: Optional[float]
+    ) -> Optional[float]:
+        """Compute performance value from feature, target, and scaling."""
         
-        # Validate that all dimension lists have the same length
-        if not (len(self.dim_names) == len(self.dim_iterator_names) == len(self.dim_param_names)):
-            raise ValueError("dim_names, dim_iterator_names, and dim_param_names must have the same length.")
+        if feature_value is None or np.isnan(feature_value) or target_value is None:
+            self.logger.warning("Feature or target is None/NaN, returning None")
+            return None
+        
+        # Compute difference from target
+        diff = feature_value - target_value
+        
+        # Apply scaling for normalization
+        if scaling_factor is not None and scaling_factor > 0:
+            performance_value = 1.0 - np.abs(diff) / scaling_factor
+        elif target_value > 0:
+            performance_value = 1.0 - np.abs(diff) / target_value
+        else:
+            performance_value = np.abs(diff)
+            self.logger.warning("Performance not scaled (target_value <= 0)")
+        
+        # Clamp to [0, 1]
+        if not 0 <= performance_value <= 1:
+            self.logger.warning(f"Performance {performance_value:.3f} out of bounds, clamping")
+            performance_value = np.clip(performance_value, 0, 1)
+        
+        self.logger.debug(
+            f"Performance: feature={feature_value:.3f}, target={target_value:.3f}, "
+            f"diff={diff:.3f}, scaling={scaling_factor}, perf={performance_value:.3f}"
+        )
+        
+        return float(performance_value)

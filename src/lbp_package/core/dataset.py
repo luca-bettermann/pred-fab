@@ -6,8 +6,41 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 """
 
 import numpy as np
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
+from dataclasses import dataclass
 from .schema import DatasetSchema
+from .data_blocks import DataBlock, Parameters, MetricArrays, PerformanceAttributes
+
+if TYPE_CHECKING:
+    from ..interfaces.external_data import IExternalData
+    from ..utils.local_data import LocalData
+    from ..utils.logger import LBPLogger
+
+
+@dataclass
+class ExperimentData:
+    """
+    Complete data for a single experiment.
+    
+    Stores all parameters, performance metrics, and metric arrays using DataBlocks.
+    This is the single source of truth for experiment data.
+    """
+    exp_code: str
+    parameters: DataBlock                          # All parameter values (static + dynamic + dimensional)
+    features: Optional[DataBlock] = None           # Raw feature values (measurements from sensors/models)
+    performance: Optional[DataBlock] = None        # Aggregated performance values
+    metric_arrays: Optional[DataBlock] = None      # Multi-dimensional arrays (DataArray objects)
+    
+    @property
+    def dimensions(self) -> Dict[str, Any]:
+        """View into parameters for only dimensional parameters (those with '.' in name)."""
+        from .data_objects import DataDimension
+        dims = {}
+        for name, data_obj in self.parameters.items():
+            if isinstance(data_obj, DataDimension):
+                if self.parameters.has_value(name):
+                    dims[name] = self.parameters.get_value(name)
+        return dims
 
 
 class Dataset:
@@ -23,7 +56,11 @@ class Dataset:
     LocalData through the hierarchical load/save pattern in LBPAgent.
     """
     
-    def __init__(self, name: str, schema: DatasetSchema, schema_id: str):
+    def __init__(self, name: str, schema: DatasetSchema, schema_id: str,
+                 local_data: Optional['LocalData'] = None, 
+                 external_data: Optional['IExternalData'] = None,
+                 logger: Optional['LBPLogger'] = None,
+                 debug_mode: bool = False):
         """
         Initialize Dataset.
         
@@ -31,22 +68,46 @@ class Dataset:
             name: Dataset name
             schema: DatasetSchema defining structure
             schema_id: Schema ID from SchemaRegistry
+            local_data: Optional LocalData instance for file operations
+            external_data: Optional IExternalData instance for external storage
+            logger: Optional LBPLogger for progress tracking
+            debug_mode: Skip external operations if True (local-only mode)
         """
         self.name = name
         self.schema = schema
         self.schema_id = schema_id
+        self.local_data = local_data
+        self.external_data = external_data
+        self.debug_mode = debug_mode
         
-        # Master storage - Systems get references to these via attach_dataset()
-        self._aggr_metrics: Dict[str, Dict[str, Dict]] = {}  # exp_code → perf_code → metrics
-        self._metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}  # perf_code → exp_code → array
-        self._exp_records: Dict[str, Dict[str, Any]] = {}  # exp_code → record
+        # Initialize logger (auto-create if not provided and local_data available)
+        if logger is None and local_data is not None:
+            from ..utils.logger import LBPLogger
+            log_folder = getattr(local_data, 'log_folder', None)
+            if log_folder:
+                self.logger = LBPLogger(
+                    name=f"dataset_{schema_id}",
+                    log_folder=log_folder
+                )
+            else:
+                self.logger = None
+        else:
+            self.logger = logger
         
-        # Static values set once from study_params
-        self._static_values: Dict[str, Any] = {}
+        # Master storage using ExperimentData
+        self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
+        
+        # Static values stored in DataBlock matching schema
+        self._static_values = DataBlock()
+        for name, data_obj in self.schema.parameters.items():
+            self._static_values.add(name, data_obj)
+        
+        # Feature memoization for IFeatureModel efficiency
+        self._feature_cache: Dict[Tuple[str, ...], Dict[str, Any]] = {}  # param_tuple → feature_dict
     
     def set_static_values(self, values: Dict[str, Any]) -> None:
         """
-        Set static parameter values (from study_params).
+        Set static parameter values (shared across all experiments).
         
         Args:
             values: Dictionary of static parameter values
@@ -54,144 +115,179 @@ class Dataset:
         Raises:
             ValueError: If validation fails
         """
-        # Validate all static params
-        for name in self.schema.static_params.keys():
-            if name not in values:
-                raise ValueError(f"Missing static parameter: {name}")
-            self.schema.static_params.validate_value(name, values[name])
-        
-        self._static_values = values.copy()
+        # Validate and set each static value
+        for name, value in values.items():
+            if not self._static_values.has(name):
+                raise ValueError(f"Unknown parameter: {name}")
+            self._static_values.set_value(name, value)
     
     def add_experiment(
         self,
         exp_code: str,
-        exp_params: Dict[str, Any],
-        aggr_metrics: Optional[Dict[str, Dict]] = None,
+        exp_params: Optional[Dict[str, Any]] = None,
+        performance: Optional[Dict[str, Any]] = None,
         metric_arrays: Optional[Dict[str, np.ndarray]] = None
-    ) -> None:
+    ) -> ExperimentData:
         """
-        Add experiment with validation.
+        Add experiment using hierarchical pattern OR manual creation.
         
-        Validates that exp_params contains all required parameters
-        and that dimensional parameters are positive integers.
+        If exp_params is None, uses hierarchical load (Memory → Local → External → Create).
+        If exp_params is provided, creates experiment manually with those parameters.
         
         Args:
             exp_code: Experiment code
-            exp_params: Experiment parameters
-            aggr_metrics: Optional aggregated metrics by performance code
-            metric_arrays: Optional metric arrays by performance code
+            exp_params: Optional parameter values (if None, attempts hierarchical load)
+            performance: Optional performance metric values
+            metric_arrays: Optional numpy arrays for metrics
+            
+        Returns:
+            ExperimentData (loaded or created)
             
         Raises:
-            ValueError: If required parameters missing
-            TypeError: If parameter has wrong type
+            ValueError: If validation fails
         """
-        # Check required dynamic params present
-        required = set(self.schema.dynamic_params.keys())
-        provided = set(exp_params.keys())
-        missing = required - provided
-        
-        if missing:
-            raise ValueError(
-                f"Experiment {exp_code} missing required parameters: {missing}"
-            )
-        
-        # Validate dimensional params are positive integers
-        for dim_param_name in self.schema.dimensional_params.keys():
-            if dim_param_name not in exp_params:
-                raise ValueError(
-                    f"Experiment {exp_code} missing dimensional parameter: {dim_param_name}"
-                )
+        if exp_params is None:
+            # Hierarchical load: Memory → Local → External → Create
+            # 1. Check memory
+            if exp_code in self._experiments:
+                return self._experiments[exp_code]
             
-            value = exp_params[dim_param_name]
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise TypeError(
-                    f"Dimensional parameter {dim_param_name} must be int, "
-                    f"got {type(value).__name__} for experiment {exp_code}"
-                )
+            # 2. Try local load
+            missing = self._load_from_local_batch([exp_code])
+            if exp_code not in missing:
+                return self._experiments[exp_code]
             
-            if value < 1:
-                raise ValueError(
-                    f"Dimensional parameter {dim_param_name}={value} must be positive "
-                    f"for experiment {exp_code}"
-                )
-        
-        # Type validation for all dynamic params
-        for name, value in exp_params.items():
-            if name in self.schema.dynamic_params.data_objects:
-                try:
-                    self.schema.dynamic_params.validate_value(name, value)
-                except (ValueError, TypeError) as e:
-                    raise type(e)(
-                        f"Validation failed for parameter '{name}' in experiment {exp_code}: {str(e)}"
-                    ) from e
-        
-        # Store experiment record
-        self._exp_records[exp_code] = {
-            "Code": exp_code,
-            "Parameters": exp_params
-        }
-        
-        # Store metrics if provided (with validation)
-        if aggr_metrics is not None:
-            self._validate_performance_metrics(exp_code, aggr_metrics)
-            self._aggr_metrics[exp_code] = aggr_metrics
-        
-        if metric_arrays is not None:
-            for perf_code, array in metric_arrays.items():
-                if perf_code not in self._metric_arrays:
-                    self._metric_arrays[perf_code] = {}
-                self._metric_arrays[perf_code][exp_code] = array
-    
-    def _validate_performance_metrics(
-        self,
-        exp_code: str,
-        aggr_metrics: Dict[str, Dict]
-    ) -> None:
-        """
-        Validate performance metrics against schema.
-        
-        Args:
-            exp_code: Experiment code
-            aggr_metrics: Aggregated metrics by performance code
+            # 3. Try external load (unless debug mode)
+            if not self.debug_mode and self.external_data:
+                missing = self._load_from_external_batch([exp_code])
+                if exp_code not in missing:
+                    return self._experiments[exp_code]
             
-        Raises:
-            ValueError: If unexpected performance codes found
-        """
-        provided_perf = set(aggr_metrics.keys())
-        expected_perf = set(self.schema.performance_attrs.keys())
-        
-        unexpected = provided_perf - expected_perf
-        if unexpected:
-            raise ValueError(
-                f"Experiment {exp_code} has unexpected performance codes: {unexpected}. "
-                f"Expected: {expected_perf}"
-            )
+            # 4. Create new (empty shell with just exp_code)
+            exp_data = self._create_new_experiment(exp_code)
+            self._experiments[exp_code] = exp_data
+            return exp_data
+        else:
+            # Manual creation
+            exp_data = self._build_experiment_data(exp_code, exp_params, performance, metric_arrays)
+            self._experiments[exp_code] = exp_data
+            return exp_data
     
-    def get_experiment_codes(self) -> List[str]:
-        """Get list of all experiment codes in dataset."""
-        return list(self._exp_records.keys())
-    
-    def get_experiment_params(self, exp_code: str) -> Dict[str, Any]:
+    def get_experiment(self, exp_code: str) -> ExperimentData:
         """
-        Get experiment parameters.
+        Get complete ExperimentData for an experiment.
         
         Args:
             exp_code: Experiment code
             
         Returns:
-            Parameter dictionary
+            ExperimentData instance
             
         Raises:
             KeyError: If experiment not found
         """
-        if exp_code not in self._exp_records:
-            raise KeyError(f"Experiment {exp_code} not found in dataset")
+        if exp_code not in self._experiments:
+            raise KeyError(f"Experiment {exp_code} not found")
+        return self._experiments[exp_code]
+    
+    # === Feature Memoization for IFeatureModel ===
+    
+    def has_features_at(self, **param_values) -> bool:
+        """
+        Check if features are cached for specific parameter values.
         
-        return self._exp_records[exp_code]["Parameters"]
+        Args:
+            **param_values: Parameter name-value pairs
+            
+        Returns:
+            True if features cached for these parameters
+        """
+        param_tuple = self._make_param_tuple(param_values)
+        return param_tuple in self._feature_cache
+    
+    def get_feature_value(self, feature_name: str, **param_values) -> Any:
+        """
+        Get cached feature value for specific parameters.
+        
+        Args:
+            feature_name: Name of feature to retrieve
+            **param_values: Parameter name-value pairs
+            
+        Returns:
+            Cached feature value
+            
+        Raises:
+            KeyError: If no features cached for these parameters or feature not found
+        """
+        param_tuple = self._make_param_tuple(param_values)
+        if param_tuple not in self._feature_cache:
+            raise KeyError(f"No features cached for parameters: {param_values}")
+        
+        if feature_name not in self._feature_cache[param_tuple]:
+            raise KeyError(f"Feature '{feature_name}' not found in cache")
+        
+        return self._feature_cache[param_tuple][feature_name]
+    
+    def set_feature_value(self, feature_name: str, value: Any, **param_values) -> None:
+        """
+        Cache feature value for specific parameters.
+        
+        Args:
+            feature_name: Name of feature to cache
+            value: Feature value
+            **param_values: Parameter name-value pairs
+        """
+        param_tuple = self._make_param_tuple(param_values)
+        if param_tuple not in self._feature_cache:
+            self._feature_cache[param_tuple] = {}
+        self._feature_cache[param_tuple][feature_name] = value
+    
+    def clear_feature_cache(self) -> None:
+        """Clear all cached feature values. Used for recomputation."""
+        self._feature_cache.clear()
+    
+    def _make_param_tuple(self, param_dict: Dict[str, Any]) -> Tuple[str, ...]:
+        """
+        Create hashable tuple from parameter dict for cache keys.
+        
+        Sorts parameters by name for consistent keys.
+        
+        Args:
+            param_dict: Parameter name-value pairs
+            
+        Returns:
+            Sorted tuple of (name, value) pairs as strings
+        """
+        items = sorted(param_dict.items())
+        return tuple(f"{name}={value}" for name, value in items)
+    
+    def get_experiment_codes(self) -> List[str]:
+        """Get list of all experiment codes in dataset."""
+        return list(self._experiments.keys())
+    
+    def get_experiment_params(self, exp_code: str) -> Dict[str, Any]:
+        """
+        Get experiment parameters as dictionary.
+        
+        Args:
+            exp_code: Experiment code
+            
+        Returns:
+            Parameter dictionary with all values
+            
+        Raises:
+            KeyError: If experiment not found
+        """
+        exp_data = self.get_experiment(exp_code)
+        params = {}
+        for name in exp_data.parameters.keys():
+            if exp_data.parameters.has_value(name):
+                params[name] = exp_data.parameters.get_value(name)
+        return params
     
     def has_experiment(self, exp_code: str) -> bool:
         """Check if experiment exists in dataset."""
-        return exp_code in self._exp_records
+        return exp_code in self._experiments
     
     def get_static_value(self, param_name: str) -> Any:
         """
@@ -206,14 +302,439 @@ class Dataset:
         Raises:
             KeyError: If parameter not found
         """
-        if param_name not in self._static_values:
+        if not self._static_values.has(param_name):
             raise KeyError(f"Static parameter {param_name} not found")
+        return self._static_values.get_value(param_name)
+    
+    # === Hierarchical Load/Save Methods ===
+    
+    def populate(self, source: str = "local") -> int:
+        """
+        Load all experiments from storage hierarchically.
         
-        return self._static_values[param_name]
+        Scans the dataset folder for experiment subdirectories and loads
+        all experiments using hierarchical pattern (Memory → Local → External → Create).
+        
+        Args:
+            source: "local" to scan local filesystem (external scanning not yet implemented)
+            
+        Returns:
+            Number of experiments loaded
+            
+        Raises:
+            ValueError: If local_data not configured or schema_id not set
+        """
+        if source != "local":
+            raise NotImplementedError("Only 'local' source is currently supported")
+        
+        if not self.local_data:
+            raise ValueError("LocalData instance required for populate()")
+        
+        # Scan local folders for experiment codes
+        exp_codes = self.local_data.list_experiments()
+        
+        # Use batch loading
+        missing = self.load_experiments(exp_codes)
+        loaded_count = len(exp_codes) - len(missing)
+        
+        return loaded_count
+    
+    def load_experiments(self, exp_codes: List[str], recompute: bool = False) -> List[str]:
+        """
+        Load multiple experiments using hierarchical pattern with progress tracking.
+        
+        Hierarchical pattern: Memory → Local → External → Create
+        
+        Args:
+            exp_codes: List of experiment codes to load
+            recompute: Skip loading from local/external if True (force fresh data)
+            
+        Returns:
+            List of experiment codes that could not be loaded
+        """
+        # 1. Check memory - filter already loaded experiments
+        missing_memory = [
+            code for code in exp_codes
+            if not self.has_experiment(code)
+        ]
+        
+        if not missing_memory:
+            if self.logger:
+                self.logger.info(f"All {len(exp_codes)} experiments already in memory")
+            return []
+        
+        # 2. Load from local files (unless recompute)
+        missing_local = missing_memory
+        if not recompute:
+            missing_local = self._load_from_local_batch(missing_memory)
+            loaded_count = len(missing_memory) - len(missing_local)
+            if loaded_count > 0 and self.logger:
+                self.logger.console_info(f"Loaded {loaded_count} experiments from local files")
+        else:
+            if self.logger:
+                self.logger.info("Recompute mode: Skipping local file loading")
+        
+        if not missing_local:
+            return []
+        
+        # 3. Load from external source (unless debug)
+        missing_external = missing_local
+        if not self.debug_mode and self.external_data is not None:
+            missing_external = self._load_from_external_batch(missing_local)
+            loaded_count = len(missing_local) - len(missing_external)
+            if loaded_count > 0 and self.logger:
+                self.logger.console_info(f"Loaded {loaded_count} experiments from external source")
+        elif self.debug_mode and self.logger:
+            self.logger.info("Debug mode: Skipping external data loading")
+        elif self.external_data is None and self.logger:
+            self.logger.warning("No external interface: Skipping external loading")
+        
+        # 4. Create empty shells for any remaining
+        for exp_code in missing_external:
+            exp_data = self._create_new_experiment(exp_code)
+            self._experiments[exp_code] = exp_data
+        
+        return missing_external
+    
+    def _load_from_local_batch(self, exp_codes: List[str]) -> List[str]:
+        """Load multiple experiments from local storage."""
+        if not self.local_data:
+            return exp_codes
+        
+        missing = []
+        
+        for exp_code in exp_codes:
+            try:
+                # Load exp_record
+                missing_exp, exp_records = self.local_data.load_exp_records([exp_code])
+                if exp_code in missing_exp:
+                    missing.append(exp_code)
+                    continue
+                
+                exp_params = exp_records[exp_code].get("Parameters", {})
+                
+                # Load performance (returns None if missing)
+                missing_perf, perf_data = self.local_data.load_aggr_metrics([exp_code])
+                performance = perf_data.get(exp_code) if exp_code not in missing_perf else None
+                
+                # Load metric arrays for each metric in schema
+                metric_arrays = {}
+                for perf_code in self.schema.metric_arrays.keys():
+                    missing_arrays, arrays_data = self.local_data.load_metrics_arrays(
+                        [exp_code], perf_code=perf_code
+                    )
+                    if exp_code not in missing_arrays:
+                        metric_arrays[perf_code] = arrays_data[exp_code]
+                
+                # Build and store experiment data
+                exp_data = self._build_experiment_data(exp_code, exp_params, performance, metric_arrays)
+                self._experiments[exp_code] = exp_data
+                
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Failed to load {exp_code} from local: {e}")
+                else:
+                    print(f"Warning: Failed to load {exp_code} from local: {e}")
+                missing.append(exp_code)
+        
+        return missing
+    
+    def _load_from_external_batch(self, exp_codes: List[str]) -> List[str]:
+        """Load multiple experiments from external storage."""
+        if not self.external_data:
+            return exp_codes
+        
+        missing = []
+        
+        for exp_code in exp_codes:
+            try:
+                # Load exp_record
+                missing_exp, exp_records = self.external_data.pull_exp_records([exp_code])
+                if exp_code in missing_exp:
+                    missing.append(exp_code)
+                    continue
+                
+                exp_params = exp_records[exp_code].get("Parameters", {})
+                
+                # Load performance
+                missing_perf, perf_data = self.external_data.pull_aggr_metrics([exp_code])
+                performance = None if exp_code in missing_perf else perf_data[exp_code]
+                
+                # Load metric arrays
+                missing_arrays, arrays_data = self.external_data.pull_metrics_arrays([exp_code])
+                metric_arrays = None if exp_code in missing_arrays else arrays_data
+                
+                # Build and store experiment data
+                exp_data = self._build_experiment_data(exp_code, exp_params, performance, metric_arrays)
+                self._experiments[exp_code] = exp_data
+                
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"Failed to load {exp_code} from external: {e}")
+                else:
+                    print(f"Warning: Failed to load {exp_code} from external: {e}")
+                missing.append(exp_code)
+        
+        return missing
+    
+    def _build_experiment_data(
+        self,
+        exp_code: str,
+        exp_params: Dict[str, Any],
+        performance: Optional[Dict[str, Any]],
+        metric_arrays: Optional[Dict[str, np.ndarray]]
+    ) -> ExperimentData:
+        """Build ExperimentData from loaded components."""
+        # Create parameter block
+        params_block = DataBlock()
+        for name, data_obj in self.schema.parameters.items():
+            params_block.add(name, data_obj)
+        
+        # Copy static values
+        for name in self._static_values.keys():
+            if self._static_values.has_value(name):
+                params_block.set_value(name, self._static_values.get_value(name))
+        
+        # Add dynamic values
+        for name, value in exp_params.items():
+            if not params_block.has(name):
+                raise ValueError(f"Unknown parameter: {name}")
+            
+            if name in self._static_values.keys() and self.logger:
+                self.logger.warning(f"Parameter '{name}' is static but also provided in exp_params for '{exp_code}'")
+                self.logger.warning(f"Parameter '{name}' is overwritting {self._static_values.get_value(name)} with {value} for '{exp_code}'")
+            params_block.set_value(name, value)
+        
+        # Create performance block
+        perf_block = None
+        if performance:
+            perf_block = PerformanceAttributes()
+            for name, data_obj in self.schema.performance_attrs.items():
+                perf_block.add(name, data_obj)
+            for name, value in performance.items():
+                if perf_block.has(name):
+                    perf_block.set_value(name, value)
+        
+        # Create metric arrays block
+        arrays_block = None
+        if metric_arrays:
+            arrays_block = MetricArrays()
+            for name, data_obj in self.schema.metric_arrays.items():
+                arrays_block.add(name, data_obj)
+            for name, array in metric_arrays.items():
+                if arrays_block.has(name):
+                    arrays_block.set_value(name, array)
+        
+        return ExperimentData(
+            exp_code=exp_code,
+            parameters=params_block,
+            performance=perf_block,
+            metric_arrays=arrays_block
+        )
+    
+    def _create_new_experiment(self, exp_code: str) -> ExperimentData:
+        """Create new empty experiment shell."""
+        params_block = DataBlock()
+        for name, data_obj in self.schema.parameters.items():
+            params_block.add(name, data_obj)
+        
+        # Copy static values
+        for name in self._static_values.keys():
+            if self._static_values.has_value(name):
+                params_block.set_value(name, self._static_values.get_value(name))
+        
+        return ExperimentData(
+            exp_code=exp_code,
+            parameters=params_block,
+            performance=None,
+            metric_arrays=None
+        )
+    
+    def save(
+        self,
+        local: bool = True,
+        external: bool = False,
+        recompute: bool = False
+    ) -> Dict[str, int]:
+        """
+        Save all experiments hierarchically.
+        
+        Also saves schema to both local and external if configured.
+        Respects debug_mode (skips external if debug_mode=True).
+        
+        Args:
+            local: Save to local files
+            external: Push to external source (ignored if debug_mode=True)
+            recompute: Overwrite existing data
+            
+        Returns:
+            {"local": count, "external": count} - number of experiments saved
+        """
+        # Override external flag if in debug mode
+        if self.debug_mode:
+            external = False
+        
+        exp_codes = list(self._experiments.keys())
+        return self.save_experiments(exp_codes, local, external, recompute)
+    
+    def save_experiments(
+        self,
+        exp_codes: List[str],
+        local: bool = True,
+        external: bool = False,
+        recompute: bool = False
+    ) -> Dict[str, int]:
+        """
+        Save multiple experiments hierarchically with progress tracking.
+        
+        Args:
+            exp_codes: List of experiment codes to save
+            local: Save to local files
+            external: Push to external source (ignored if debug_mode=True)
+            recompute: Overwrite existing data
+            
+        Returns:
+            {"local": count, "external": count} - number of experiments saved
+        """
+        # Override external flag if in debug mode
+        if self.debug_mode:
+            external = False
+        
+        # Filter to experiments that exist in dataset
+        codes_to_save = [code for code in exp_codes if self.has_experiment(code)]
+        
+        if not codes_to_save:
+            if self.logger:
+                self.logger.warning(f"No experiments to save from {exp_codes}")
+            return {"local": 0, "external": 0}
+        
+        results = {"local": 0, "external": 0}
+        
+        # 1. Save schema first
+        if local:
+            self._save_schema_local()
+        if external and self.external_data:
+            self._save_schema_external()
+        
+        # 2. Save all experiments
+        for exp_code in codes_to_save:
+            saved = self.save_experiment(exp_code, local, external, recompute)
+            if saved["local"]:
+                results["local"] += 1
+            if saved["external"]:
+                results["external"] += 1
+        
+        # 3. Log progress
+        if results["local"] > 0 and self.logger:
+            self.logger.console_info(f"Saved {results['local']} experiments to local files")
+        if results["external"] > 0 and self.logger:
+            self.logger.console_info(f"Saved {results['external']} experiments to external source")
+        elif external and self.debug_mode and self.logger:
+            self.logger.info("Debug mode: Skipping external save")
+        
+        return results
+    
+    def save_experiment(
+        self,
+        exp_code: str,
+        local: bool = True,
+        external: bool = False,
+        recompute: bool = False
+    ) -> Dict[str, bool]:
+        """
+        Save single experiment hierarchically.
+        
+        Args:
+            exp_code: Experiment to save
+            local: Save locally
+            external: Push externally
+            recompute: Overwrite if exists
+            
+        Returns:
+            {"local": success, "external": success}
+        """
+        if exp_code not in self._experiments:
+            raise KeyError(f"Experiment {exp_code} not found")
+        
+        exp_data = self._experiments[exp_code]
+        results = {"local": False, "external": False}
+        
+        # Prepare data structures
+        exp_record = {
+            "id": exp_code,
+            "Code": exp_code,
+            "Parameters": self.get_experiment_params(exp_code)
+        }
+        
+        # Save to local
+        if local and self.local_data:
+            # Save exp_record
+            self.local_data.save_exp_records([exp_code], {exp_code: exp_record}, recompute)
+            
+            # Save performance if available (use helper method)
+            if exp_data.performance:
+                perf_dict = exp_data.performance.get_values_dict()
+                self.local_data.save_aggr_metrics([exp_code], {exp_code: perf_dict}, recompute)
+            
+            # Save metric arrays if available
+            if exp_data.metric_arrays:
+                for name in exp_data.metric_arrays.keys():
+                    if exp_data.metric_arrays.has_value(name):
+                        array = exp_data.metric_arrays.get_value(name)
+                        column_names = self._infer_column_names(name)
+                        self.local_data.save_metrics_arrays(
+                            [exp_code],
+                            {exp_code: array},
+                            recompute,
+                            perf_code=name,
+                            column_names=column_names
+                        )
+            
+            results["local"] = True
+        
+        # Save to external
+        if external and self.external_data:
+            # Save exp_record
+            self.external_data.push_exp_records([exp_code], {exp_code: exp_record}, recompute)
+            
+            # Save performance if available (use helper method)
+            if exp_data.performance:
+                perf_dict = exp_data.performance.get_values_dict()
+                self.external_data.push_aggr_metrics([exp_code], {exp_code: perf_dict}, recompute)
+            
+            # Save metric arrays if available (use helper method)
+            if exp_data.metric_arrays:
+                arrays_dict = exp_data.metric_arrays.get_values_dict()
+                self.external_data.push_metrics_arrays([exp_code], arrays_dict, recompute)
+            
+            results["external"] = True
+        
+        return results
+    
+    def _save_schema_local(self) -> bool:
+        """Save schema to local storage using LocalData."""
+        if not self.local_data:
+            return False
+        
+        return self.local_data.save_schema(self.schema.to_dict(), recompute=True)
+    
+    def _save_schema_external(self) -> bool:
+        """Push schema to external storage."""
+        if not self.external_data:
+            return False
+        
+        schema_data = self.schema.to_dict()
+        return self.external_data.push_schema(self.schema_id, schema_data)
+    
+    def _infer_column_names(self, array_name: str) -> Optional[List[str]]:
+        """Infer column names for metric array based on dimensions."""
+        # For now, return None (no columns)
+        # In the future, could use dimension info to generate column names
+        return None
     
     def __repr__(self) -> str:
         """String representation."""
         return (
             f"Dataset(name='{self.name}', schema_id='{self.schema_id}', "
-            f"experiments={len(self._exp_records)})"
+            f"experiments={len(self._experiments)})"
         )

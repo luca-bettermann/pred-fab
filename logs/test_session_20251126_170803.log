@@ -1,0 +1,29 @@
+2025-11-26 17:08:03,285 - INFO - info:49 - Added prediction model for feature 'feat'
+2025-11-26 17:08:03,286 - INFO - console_info:62 - CONSOLE: 
+
+Starting prediction model training...
+
+2025-11-26 17:08:03,286 - INFO - info:49 - Extracting training data from dataset...
+2025-11-26 17:08:03,286 - INFO - info:49 - Fitting normalization on 8 training experiments...
+2025-11-26 17:08:03,287 - INFO - info:49 - Training model for 'feat' on 8 experiments...
+2025-11-26 17:08:03,287 - INFO - console_info:62 - CONSOLE: 
+
+✓ Trained model for 'feat'
+
+2025-11-26 17:08:03,287 - INFO - console_success:67 - CONSOLE SUCCESS: 
+
+Training complete: 1/1 models trained
+
+2025-11-26 17:08:03,287 - INFO - console_info:62 - CONSOLE: 
+
+Validating models on test set...
+
+2025-11-26 17:08:03,287 - INFO - info:49 - Evaluating 1 models on 2 experiments...
+2025-11-26 17:08:03,287 - INFO - console_info:62 - CONSOLE: 
+
+  feat: MAE=7.0000, RMSE=7.0000, R²=0.0000
+
+2025-11-26 17:08:03,287 - INFO - console_success:67 - CONSOLE SUCCESS: 
+
+Validation complete on test set (2 experiments)
+

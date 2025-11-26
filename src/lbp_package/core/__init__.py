@@ -7,21 +7,25 @@ from .data_objects import (
     DataBool,
     DataCategorical,
     DataString,
-    DataDimension
+    DataDimension,
+    DataArray,
+    Parameter,
+    Performance,
+    Dimension
 )
 
 from .data_blocks import (
     DataBlock,
-    ParametersStatic,
-    ParametersDynamic,
-    ParametersDimensional,
-    PerformanceAttributes
+    Parameters,
+    Dimensions,
+    PerformanceAttributes,
+    MetricArrays
 )
 
 from .schema import DatasetSchema
 from .schema_registry import SchemaRegistry
-from .dataset import Dataset
-from .agent import LBPAgent
+from .dataset import Dataset, ExperimentData
+from .datamodule import DataModule
 
 __all__ = [
     'DataObject',
@@ -31,13 +35,18 @@ __all__ = [
     'DataCategorical',
     'DataString',
     'DataDimension',
+    'DataArray',
+    'Parameter',
+    'Performance',
+    'Dimension',
     'DataBlock',
-    'ParametersStatic',
-    'ParametersDynamic',
-    'ParametersDimensional',
+    'Parameters',
+    'Dimensions',
     'PerformanceAttributes',
+    'MetricArrays',
     'DatasetSchema',
     'SchemaRegistry',
     'Dataset',
-    'LBPAgent',
+    'ExperimentData',
+    'DataModule',
 ]

@@ -1,24 +1,26 @@
 """
 DataBlock collections for organizing related parameters.
 
-DataBlocks group DataObjects into logical collections representing
-different parameter categories in a dataset schema.
+DataBlocks group DataObjects into logical collections and store their values.
+They provide both schema structure and data storage.
 """
 
 from typing import Dict, Any, Optional
+import numpy as np
 from .data_objects import DataObject
 
 
 class DataBlock:
     """
-    Base container for organizing related DataObjects.
+    Container for DataObjects with value storage.
     
-    Provides validation and access methods for typed parameter collections.
+    Provides validation, access methods, and value management for typed parameter collections.
     """
     
     def __init__(self):
         """Initialize empty DataBlock."""
-        self.data_objects: Dict[str, DataObject] = {}
+        self.data_objects: Dict[str, DataObject] = {}  # Schema structure
+        self.values: Dict[str, Any] = {}  # Actual values
     
     def add(self, name: str, data_obj: DataObject) -> None:
         """
@@ -87,17 +89,77 @@ class DataBlock:
             self.validate_value(name, value)
         return True
     
+    def set_value(self, name: str, value: Any) -> None:
+        """
+        Set value for a parameter after validation.
+        
+        Args:
+            name: Parameter name
+            value: Value to set
+            
+        Raises:
+            KeyError: If name not in block
+            TypeError/ValueError: If validation fails
+        """
+        self.validate_value(name, value)  # Raises if invalid
+        
+        # Apply rounding for numeric types if configured
+        data_obj = self.data_objects[name]
+        if data_obj.round_digits is not None and isinstance(value, (int, float)):
+            value = round(float(value), data_obj.round_digits)
+        
+        self.values[name] = value
+    
+    def get_value(self, name: str) -> Any:
+        """
+        Get value for a parameter.
+        
+        Args:
+            name: Parameter name
+            
+        Returns:
+            Parameter value
+            
+        Raises:
+            KeyError: If name not in values
+        """
+        if name not in self.values:
+            raise KeyError(f"No value set for parameter '{name}'")
+        return self.values[name]
+    
+    def has_value(self, name: str) -> bool:
+        """Check if value is set for parameter."""
+        return name in self.values
+    
+    def to_numpy(self) -> np.ndarray:
+        """
+        Convert all values to numpy array for ML.
+        
+        Returns:
+            1D numpy array of values in same order as keys()
+        """
+        return np.array([self.values[name] for name in self.data_objects.keys() if name in self.values])
+    
     def keys(self):
         """Return iterator over parameter names."""
         return self.data_objects.keys()
     
-    def values(self):
-        """Return iterator over DataObjects."""
+    def values_iter(self):
+        """Return iterator over DataObjects (renamed from values to avoid conflict)."""
         return self.data_objects.values()
     
     def items(self):
         """Return iterator over (name, DataObject) pairs."""
         return self.data_objects.items()
+    
+    def get_values_dict(self) -> Dict[str, Any]:
+        """
+        Extract all set values as a simple dictionary.
+        
+        Returns:
+            Dictionary mapping parameter names to values (only includes set values)
+        """
+        return dict(self.values)
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for schema storage."""
@@ -106,7 +168,8 @@ class DataBlock:
             "data_objects": {
                 name: obj.to_dict() 
                 for name, obj in self.data_objects.items()
-            }
+            },
+            "values": self.values  # Include current values
         }
     
     @classmethod
@@ -116,45 +179,38 @@ class DataBlock:
         for name, obj_data in data.get("data_objects", {}).items():
             data_obj = DataObject.from_dict(obj_data)
             block.add(name, data_obj)
+        # Restore values if present
+        for name, value in data.get("values", {}).items():
+            if name in block.data_objects:
+                block.set_value(name, value)
         return block
 
 
-class ParametersStatic(DataBlock):
+class Parameters(DataBlock):
     """
-    Fixed parameters shared across all experiments in a dataset.
+    Unified parameter block for ALL parameters (replaces Static/Dynamic split).
     
-    Sourced from study_params during dataset initialization.
-    Examples: target values, physical constants, study-level configuration.
+    Parameters may be:
+    - Static: Same value across all experiments in dataset (set via Dataset.set_static_values)
+    - Dynamic: Vary per experiment (provided in Dataset.add_experiment)
+    - Dimensional: Subset of parameters used for iteration (referenced by Dimensions block)
     """
     
     def __init__(self):
-        """Initialize ParametersStatic block."""
+        """Initialize Parameters block."""
         super().__init__()
 
 
-class ParametersDynamic(DataBlock):
+class Dimensions(DataBlock):
     """
-    Parameters that vary per experiment.
+    Dimensional metadata block using DataDimension objects.
     
-    Sourced from exp_params in experiment records.
-    Examples: process parameters, design variables (excluding dimensional params).
-    """
-    
-    def __init__(self):
-        """Initialize ParametersDynamic block."""
-        super().__init__()
-
-
-class ParametersDimensional(DataBlock):
-    """
-    Runtime iteration variables using DataDimension.
-    
-    Defines dimensional structure for multi-dimensional evaluation.
-    Examples: layer_id, segment_id with three-aspect mapping.
+    References parameters from Parameters block that define iteration structure.
+    Each DataDimension contains: param_name, dim_name, iterator_name.
     """
     
     def __init__(self):
-        """Initialize ParametersDimensional block."""
+        """Initialize Dimensions block."""
         super().__init__()
 
 
@@ -217,4 +273,21 @@ class PerformanceAttributes(DataBlock):
             data_obj = DataObject.from_dict(obj_data)
             block.add(name, data_obj)
         block.calibration_weights = data.get("calibration_weights", {})
+        # Restore values if present
+        for name, value in data.get("values", {}).items():
+            if name in block.data_objects:
+                block.set_value(name, value)
         return block
+
+
+class MetricArrays(DataBlock):
+    """
+    Multi-dimensional metric arrays using DataArray objects.
+    
+    Stores numpy arrays with validation for feature extraction and evaluation results.
+    Each DataArray wraps a numpy array with shape/dtype constraints.
+    """
+    
+    def __init__(self):
+        """Initialize MetricArrays block."""
+        super().__init__()

@@ -9,10 +9,10 @@ import json
 import hashlib
 from typing import Dict, Any, Set
 from .data_blocks import (
-    ParametersStatic,
-    ParametersDynamic,
-    ParametersDimensional,
-    PerformanceAttributes
+    Parameters,
+    Dimensions,
+    PerformanceAttributes,
+    MetricArrays
 )
 
 
@@ -21,20 +21,26 @@ class DatasetSchema:
     Defines the structure and types of a dataset.
     
     Schema specifies:
-    - Static parameters (study-level, shared across experiments)
-    - Dynamic parameters (vary per experiment)
-    - Dimensional parameters (iteration structure)
+    - Parameters (unified - no static/dynamic split)
+    - Dimensions (dimensional metadata)
     - Performance attributes (evaluation outputs)
+    - Metric arrays (multi-dimensional data storage)
     
     Schema hash provides deterministic ID generation via SchemaRegistry.
     """
     
-    def __init__(self):
-        """Initialize empty schema with four DataBlocks."""
-        self.static_params = ParametersStatic()
-        self.dynamic_params = ParametersDynamic()
-        self.dimensional_params = ParametersDimensional()
+    def __init__(self, default_round_digits: int = 3):
+        """
+        Initialize empty schema with four DataBlocks.
+        
+        Args:
+            default_round_digits: Default rounding precision for numeric DataObjects
+        """
+        self.parameters = Parameters()
+        self.dimensions = Dimensions()
         self.performance_attrs = PerformanceAttributes()
+        self.metric_arrays = MetricArrays()
+        self.default_round_digits = default_round_digits
     
     def _compute_schema_hash(self) -> str:
         """
@@ -48,10 +54,10 @@ class DatasetSchema:
             SHA256 hex digest (64 characters)
         """
         structure = {
-            "static": self._block_to_hash_structure(self.static_params),
-            "dynamic": self._block_to_hash_structure(self.dynamic_params),
-            "dimensional": self._block_to_hash_structure(self.dimensional_params),
-            "performance": self._block_to_hash_structure(self.performance_attrs)
+            "parameters": self._block_to_hash_structure(self.parameters),
+            "dimensions": self._block_to_hash_structure(self.dimensions),
+            "performance": self._block_to_hash_structure(self.performance_attrs),
+            "metric_arrays": self._block_to_hash_structure(self.metric_arrays)
         }
         
         # Sort keys for determinism
@@ -76,10 +82,11 @@ class DatasetSchema:
             Dictionary with all blocks and metadata
         """
         return {
-            "static_params": self.static_params.to_dict(),
-            "dynamic_params": self.dynamic_params.to_dict(),
-            "dimensional_params": self.dimensional_params.to_dict(),
+            "parameters": self.parameters.to_dict(),
+            "dimensions": self.dimensions.to_dict(),
             "performance_attrs": self.performance_attrs.to_dict(),
+            "metric_arrays": self.metric_arrays.to_dict(),
+            "default_round_digits": self.default_round_digits,
             "schema_hash": self._compute_schema_hash()
         }
     
@@ -94,11 +101,12 @@ class DatasetSchema:
         Returns:
             DatasetSchema instance
         """
-        schema = cls()
-        schema.static_params = ParametersStatic.from_dict(data["static_params"])
-        schema.dynamic_params = ParametersDynamic.from_dict(data["dynamic_params"])
-        schema.dimensional_params = ParametersDimensional.from_dict(data["dimensional_params"])
+        default_round_digits = data.get("default_round_digits", 3)
+        schema = cls(default_round_digits=default_round_digits)
+        schema.parameters = Parameters.from_dict(data["parameters"])
+        schema.dimensions = Dimensions.from_dict(data["dimensions"])
         schema.performance_attrs = PerformanceAttributes.from_dict(data["performance_attrs"])
+        schema.metric_arrays = MetricArrays.from_dict(data.get("metric_arrays", {"type": "MetricArrays", "data_objects": {}}))
         return schema
     
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
@@ -119,38 +127,26 @@ class DatasetSchema:
         """
         errors = []
         
-        # Check static parameters
-        self_static = set(self.static_params.keys())
-        other_static = set(other.static_params.keys())
-        if self_static != other_static:
-            missing = other_static - self_static
-            extra = self_static - other_static
+        # Check parameters
+        self_params = set(self.parameters.keys())
+        other_params = set(other.parameters.keys())
+        if self_params != other_params:
+            missing = other_params - self_params
+            extra = self_params - other_params
             errors.append(
-                f"Static params mismatch: "
+                f"Parameters mismatch: "
                 f"missing {missing if missing else 'none'}, "
                 f"unexpected {extra if extra else 'none'}"
             )
         
-        # Check dynamic parameters
-        self_dynamic = set(self.dynamic_params.keys())
-        other_dynamic = set(other.dynamic_params.keys())
-        if self_dynamic != other_dynamic:
-            missing = other_dynamic - self_dynamic
-            extra = self_dynamic - other_dynamic
-            errors.append(
-                f"Dynamic params mismatch: "
-                f"missing {missing if missing else 'none'}, "
-                f"unexpected {extra if extra else 'none'}"
-            )
-        
-        # Check dimensional parameters
-        self_dim = set(self.dimensional_params.keys())
-        other_dim = set(other.dimensional_params.keys())
+        # Check dimensions
+        self_dim = set(self.dimensions.keys())
+        other_dim = set(other.dimensions.keys())
         if self_dim != other_dim:
             missing = other_dim - self_dim
             extra = self_dim - other_dim
             errors.append(
-                f"Dimensional params mismatch: "
+                f"Dimensions mismatch: "
                 f"missing {missing if missing else 'none'}, "
                 f"unexpected {extra if extra else 'none'}"
             )
@@ -167,21 +163,25 @@ class DatasetSchema:
                 f"unexpected {extra if extra else 'none'}"
             )
         
-        # Check types match for common parameters
-        for name in self_static & other_static:
-            if type(self.static_params.get(name)) != type(other.static_params.get(name)):
-                errors.append(
-                    f"Type mismatch for static param '{name}': "
-                    f"{type(self.static_params.get(name)).__name__} vs "
-                    f"{type(other.static_params.get(name)).__name__}"
-                )
+        # Check metric arrays
+        self_arrays = set(self.metric_arrays.keys())
+        other_arrays = set(other.metric_arrays.keys())
+        if self_arrays != other_arrays:
+            missing = other_arrays - self_arrays
+            extra = self_arrays - other_arrays
+            errors.append(
+                f"Metric arrays mismatch: "
+                f"missing {missing if missing else 'none'}, "
+                f"unexpected {extra if extra else 'none'}"
+            )
         
-        for name in self_dynamic & other_dynamic:
-            if type(self.dynamic_params.get(name)) != type(other.dynamic_params.get(name)):
+        # Check types match for common parameters
+        for name in self_params & other_params:
+            if type(self.parameters.get(name)) != type(other.parameters.get(name)):
                 errors.append(
-                    f"Type mismatch for dynamic param '{name}': "
-                    f"{type(self.dynamic_params.get(name)).__name__} vs "
-                    f"{type(other.dynamic_params.get(name)).__name__}"
+                    f"Type mismatch for parameter '{name}': "
+                    f"{type(self.parameters.get(name)).__name__} vs "
+                    f"{type(other.parameters.get(name)).__name__}"
                 )
         
         if errors:
@@ -193,12 +193,12 @@ class DatasetSchema:
         return True
     
     def get_all_param_names(self) -> Set[str]:
-        """Get all parameter names across all blocks."""
-        return (
-            set(self.static_params.keys()) |
-            set(self.dynamic_params.keys()) |
-            set(self.dimensional_params.keys())
-        )
+        """Get all parameter names."""
+        return set(self.parameters.keys())
+    
+    def get_dimension_names(self) -> Set[str]:
+        """Get all dimension parameter names."""
+        return set(self.dimensions.keys())
     
     def get_all_performance_codes(self) -> Set[str]:
         """Get all performance codes."""

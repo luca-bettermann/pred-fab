@@ -291,38 +291,44 @@ Experiment records must contain these fields:
 
 #### IPredictionModel (Optional - ML Workflows)
 
-**Purpose**: Train ML models on evaluation results and predict performance for new parameter combinations.
+**Purpose**: Train ML models to predict features from parameters, enabling performance forecasting.
 
 **Required Properties:**
 
 | Property | Description | Example |
 |----------|-------------|---------|
-| `input` | Input feature/parameter names | `['temp', 'speed', 'thickness']` |
-| `dataset_type` | Data format for training | `AGGR_METRICS` or `METRIC_ARRAYS` |
+| `feature_names` | List of feature names to predict | `['filament_width', 'layer_height']` |
 
 **Required Methods:**
 
 | Method | Description | Returns |
 |--------|-------------|---------|
-| `train(X, y)` | Train ML model on provided data | Dict with training_score, training_samples |
-| `predict(X)` | Predict performance for new parameters | np.ndarray |
+| `train(X, y, **kwargs)` | Train ML model on parameters (X) and features (y) | None |
+| `predict(X)` | Predict features for new parameters | pd.DataFrame |
 
-**Input Field Requirements**:
-- `input` field names must match available parameter names or feature keys
-- Framework automatically extracts these fields from experiment records and feature results
-- Use parameter names from `@study_parameter`, `@exp_parameter`, or feature keys from `_compute_features()`
-
-**Required Return Structure for `train()`**:
+**Training with Hyperparameters**:
+The `**kwargs` parameter allows passing custom hyperparameters to your model:
 ```python
-{
-    "training_score": float,      # Primary metric (R² for regression, accuracy for classification)  
-    "training_samples": int       # Number of training samples used
-}
+# User code
+agent.train(
+    datamodule,
+    learning_rate=0.001,
+    epochs=100,
+    batch_size=32,
+    verbose=True
+)
+
+# Your model implementation
+def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs):
+    lr = kwargs.get('learning_rate', 0.01)
+    epochs = kwargs.get('epochs', 50)
+    # Implement training logic
 ```
 
-**DatasetType Options**:
-- `AGGR_METRICS`: Uses aggregated performance metrics for training
-- `METRIC_ARRAYS`: Uses granular metric arrays for training
+**DataModule Integration**:
+- Features (y) are automatically normalized by DataModule before training
+- Predictions are automatically denormalized before returning to user
+- User specifies normalization method: `'standard'`, `'minmax'`, `'robust'`, or `'none'`
 
 **Import**: `from lbp_package import IPredictionModel`
 
@@ -488,11 +494,16 @@ The framework automatically creates the folder structure and manages all result 
 ## Key Features
 
 - **Interface-Based Design**: Clean contracts for feature extraction, evaluation, prediction, and calibration
+- **Type-Safe Data Model**: DataObject instances define schema/validation rules, DataBlock instances store actual values with clean separation to prevent data corruption
 - **Database Independence**: Works standalone with JSON files or integrates with existing databases  
 - **Hierarchical Data Flow**: Automatic caching (memory → local → external) with recompute control
+- **Train/Val/Test Splits**: Built-in data splitting for proper ML evaluation with reproducible random seeds
+- **Model Validation**: Automatic computation of MAE, RMSE, and R² metrics on validation/test sets
 - **Dynamic Dimensionality**: Automatic multi-dimensional array management for complex analysis
+- **Normalization**: Configurable feature normalization (standard, minmax, robust) fitted on training data
+- **Declarative Rounding**: Configure rounding at the data definition level (e.g., `Parameter.real(round_digits=3)`)
 - **Flag-Based Configuration**: Runtime control without configuration files - pure programmatic setup
-- **Parameter Management**: Elegant decorator-based system for study, experiment, and dimensional parameters
+- **Parameter Management**: Type-safe parameter system with validation and automatic rounding
 
 ## License
 

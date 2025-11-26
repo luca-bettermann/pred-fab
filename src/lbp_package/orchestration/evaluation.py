@@ -1,194 +1,181 @@
-from typing import Any, Dict, Type, Optional, List, final
+from typing import Any, Dict, Type, Optional, List
 import numpy as np
 
 from ..utils import LBPLogger
 from ..interfaces.evaluation import IEvaluationModel
+from ..interfaces.features import IFeatureModel
+from ..core.dataset import Dataset, ExperimentData
 
 
 class EvaluationSystem:
     """
-    Orchestrates multiple evaluation models for a complete performance assessment.
+    Orchestrates multiple evaluation models using Dataset.
     
-    Manages the execution of evaluation models, handles database interactions,
-    and coordinates the overall evaluation workflow.
+    Manages evaluation model execution and stores results in ExperimentData.
     """
     
-    def __init__(
-        self,
-        logger: LBPLogger):
+    def __init__(self, dataset: Dataset, logger: LBPLogger):
         """
         Initialize evaluation system.
         
         Args:
+            dataset: Dataset for feature memoization and data storage
             logger: Logger instance for debugging and monitoring
-
-        Structure of memory storage dicts:
-            aggr_metrics: {exp_code: {performance_code: {metric_name: value}}}
-            metrics_arrays: {exp_code: {performance_code: np.ndarray}}
         """
-        self.logger: LBPLogger = logger
+        self.dataset = dataset
+        self.logger = logger
         self.evaluation_models: Dict[str, IEvaluationModel] = {}
 
-        # Storage of metrics in memory 
-        self.aggr_metrics: Dict[str, Dict[str, Dict[str, Optional[np.floating]]]] = {}  # dict_keys: exp_code, perf_code
-        self.metric_arrays: Dict[str, Dict[str, np.ndarray]] = {}                       # dict_keys: perf_code, exp_code
-        self.dim_sizes: Dict[str, Dict[str, List[int]]] = {}                            # dict_keys: perf_code, exp_code
-
-    # === PUBLIC API METHODS ===
-    def add_evaluation_model(self, performance_code: str, evaluation_class: Type[IEvaluationModel], round_digits: int, weight: Optional[float] = None, **kwargs) -> None:
+    # === PUBLIC API ===
+    
+    def add_evaluation_model(
+        self, 
+        performance_code: str, 
+        evaluation_model: IEvaluationModel,
+        feature_model_class: Type[IFeatureModel],
+        **feature_model_params
+    ) -> None:
         """
-        Add an evaluation model to the system.
+        Add an evaluation model with its feature model.
         
         Args:
             performance_code: Code identifying the performance metric
-            evaluation_class: Class of evaluation model to instantiate
-            round_digits: Number of digits to round results to
-            calibration_weight: Optional weight for calibration objective function
-            **kwargs: Additional parameters for model initialization
+            evaluation_model: Instantiated evaluation model (dataclass)
+            feature_model_class: Feature model class to instantiate
+            **feature_model_params: Additional parameters for feature model
         """
-        # Validate if evaluation_model is the correct type
-        if not issubclass(evaluation_class, IEvaluationModel):
-            raise TypeError(f"Expected a subclass of EvaluationModel, got {type(evaluation_class).__name__}")
-
-        self.logger.info(f"Adding '{evaluation_class.__name__}' model to evaluate performance '{performance_code}'")
-        eval_model = evaluation_class(
-            performance_code=performance_code,
+        if not isinstance(evaluation_model, IEvaluationModel):
+            raise TypeError(f"Expected IEvaluationModel instance, got {type(evaluation_model).__name__}")
+        
+        self.logger.info(f"Adding '{type(evaluation_model).__name__}' model for '{performance_code}'")
+        
+        # Create feature model with dataset reference
+        feature_model = feature_model_class(
+            dataset=self.dataset,
             logger=self.logger,
-            round_digits=round_digits,
-            weight=weight,
-            **kwargs
+            **feature_model_params
         )
-        self.evaluation_models[performance_code] = eval_model
+        
+        # Connect feature model to evaluation model
+        evaluation_model.add_feature_model(feature_model)
+        
+        self.evaluation_models[performance_code] = evaluation_model
 
-    def activate_evaluation_model(self, code: str, study_params: Dict[str, Any]) -> None:
-        # Activate evaluation model and apply dataclass-based parameter handling
-        if code not in self.evaluation_models:
-            raise ValueError(f"No evaluation model for performance code '{code}' has been initialized.")
-        self.evaluation_models[code].active = True
-        self.evaluation_models[code].set_study_parameters(**study_params)
-
-        # Initialize metrics array, dim array and dim size storage for this performance code
-        if code not in self.metric_arrays:
-            self.metric_arrays[code] = {}
-        if code not in self.dim_sizes:
-            self.dim_sizes[code] = {}
-
-        self.logger.info(f"Activated evaluation model for performance code '{code}' and set study parameters.")
-
-    def initialize_for_exp(self, exp_code, **exp_params) -> None:
+    def run(self, exp_code: str, feature_name: str, performance_attr_name: str,
+            visualize: bool = False, recompute: bool = False) -> ExperimentData:
         """
-        Set experiment parameters for all evaluation models and their feature models.
+        Execute evaluation for an experiment.
         
         Args:
             exp_code: Experiment code
-            exp_params: Experiment parameters
+            feature_name: Name of feature to evaluate
+            performance_attr_name: Name for performance attribute
+            visualize: Enable visualizations if True
+            recompute: Force recomputation if True
+            
+        Returns:
+            ExperimentData with populated performance and metric_arrays
         """
-        # Initialize arrays dictionaries for exp_code, if they have not been loaded yet
-        if exp_code not in self.aggr_metrics:
-            self.aggr_metrics[exp_code] = {}
+        # Get experiment from dataset
+        exp_data = self.dataset.get_experiment(exp_code)
+        
+        # Find evaluation model for this performance attribute
+        if performance_attr_name not in self.evaluation_models:
+            raise ValueError(f"No evaluation model for '{performance_attr_name}'")
+        
+        eval_model = self.evaluation_models[performance_attr_name]
+        
+        self.logger.info(f"Running evaluation for '{performance_attr_name}' on experiment {exp_code}")
+        
+        # Handle recompute logic
+        if recompute:
+            self.logger.info("Recompute flag set - clearing cached features")
+            self.dataset.clear_feature_cache()
+        
+        # Run evaluation - stores results directly in exp_data
+        eval_model.run(feature_name, performance_attr_name, exp_data, visualize=visualize)
+        
+        self.logger.info("Evaluation completed successfully")
+        return exp_data
 
-        for eval_model in self.evaluation_models.values():
-            assert eval_model.feature_model is not None, f"Feature model for evaluation '{eval_model.performance_code}' is not set."
-            self.logger.info(f"Set exp parameters for '{eval_model.performance_code}' and '{type(eval_model.feature_model).__name__}'")
-
-            # Configure models with experiment parameters
-            eval_model.set_exp_parameters(**exp_params)
-            eval_model.feature_model.set_exp_parameters(**exp_params)
-
-            # Initialize feature model arrays with correct dimensions
-            dim_sizes = eval_model._get_dim_sizes()
-            eval_model.feature_model.reset_for_new_experiment(eval_model.performance_code, dim_sizes)
-
-            # Store dimension sizes for performance code and experiment
-            self.dim_sizes[eval_model.performance_code][exp_code] = dim_sizes
-
-    def run(self, exp_code: str, exp_folder: str, visualize_flag: bool = False, debug_flag: bool = True) -> None:
+    def evaluate_experiment(
+        self,
+        exp_data: ExperimentData,
+        visualize: bool = False,
+        recompute: bool = False
+    ) -> None:
         """
-        Execute evaluation for all models.
+        Execute all evaluations for an experiment and mutate exp_data with results.
+        
+        Runs evaluation for each registered performance code and merges results
+        into exp_data.performance and exp_data.metric_arrays.
         
         Args:
-            exp_code: Experiment code
-            exp_folder: Experiment folder path
-            visualize_flag: Whether to show visualizations
-            debug_flag: Whether to run in debug mode (no writing/saving)
-            **exp_params: Experiment parameters
-        """
-        # Make sure at least one evaluation model has been activated
-        active_models = self.get_active_eval_models()
-        if len(active_models) == 0:
-            raise ValueError("No evaluation models have been activated.")
-        self.logger.info(f"Running evaluation system for experiment {exp_code}")
-
-        # Execute each evaluation model
-        for performance_code, eval_model in active_models.items():
-            self.logger.info(f"Running evaluation for '{performance_code}' performance with '{type(eval_model).__name__}'...")
-
-            # Run evaluation and return dict with "Value", "Performance", "Robustness" and "Resilience" as keys
-            aggr_metrics, metrics_array, dim_array = eval_model.run(exp_code, exp_folder, visualize_flag, debug_flag)
+            exp_data: ExperimentData with parameters populated
+            visualize: Enable visualizations if True
+            recompute: Force recomputation if True
             
-            # Store the computed features and performances in memory
-            self.aggr_metrics[exp_code][performance_code] = aggr_metrics
-            self.metric_arrays[performance_code][exp_code] = metrics_array
-
-        self.logger.console_info("All evaluations completed successfully.")
-
-    def evaluation_step_summary(self, exp_code: str) -> str:
-        """Generate summary of evaluation results."""
-        active_eval_models = {code: model for code, model in self.evaluation_models.items() if model.active}
-        
-        summary = f"\n\033[1m{'Performance Code':<20} {'Evaluation Model':<20} {'Dimensions':<30} {'Performance Value':<20}\033[0m"
-
-        for code, eval_model in active_eval_models.items():
-            dimensions = ', '.join([f"{name}: {size}" for name, size in zip(eval_model.dim_names, self.dim_sizes[code][exp_code])])
-            dimensions = "(" + dimensions + ")"
-            summary += f"\n{code:<20} {type(eval_model).__name__:<20} {dimensions:<30} {self.aggr_metrics[exp_code][code].get('Performance_Avg', None):<20}"
-        return summary
-    
-    def invert_dict_structure(self, dict_to_invert: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        Side effects:
+            Mutates exp_data.performance and exp_data.metric_arrays
         """
-        Invert a nested dictionary structure from {outer_key: {inner_key: value}} to {inner_key: {outer_key: value}}.
+        from ..core.data_blocks import PerformanceAttributes, MetricArrays
         
-        Args:
-            dict_to_invert: Dictionary to invert
-
-        Returns:
-            Inverted dictionary
-        """
-        inverted_dict: Dict[str, Dict[str, Any]] = {}
-        for outer_key, inner_dict in dict_to_invert.items():
-            for inner_key, value in inner_dict.items():
-                if inner_key not in inverted_dict:
-                    inverted_dict[inner_key] = {}
-                inverted_dict[inner_key][outer_key] = value
-        return inverted_dict
-    
-    def get_calibration_weights(self) -> Dict[str, float]:
-        """
-        Get calibration weights from all evaluation models.
+        exp_code = exp_data.exp_code
         
-        Returns:
-            Dictionary mapping performance codes to their calibration weights
+        # Check if already computed (unless recompute=True)
+        if not recompute and self.dataset.has_experiment(exp_code):
+            existing_exp = self.dataset.get_experiment(exp_code)
+            if existing_exp.performance is not None:
+                self.logger.info(f"Experiment '{exp_code}' already evaluated (use recompute=True to override)")
+                # Copy existing results to exp_data
+                exp_data.performance = existing_exp.performance
+                exp_data.metric_arrays = existing_exp.metric_arrays
+                return
+        
+        # Initialize performance and metric_arrays blocks if needed
+        if exp_data.performance is None:
+            exp_data.performance = PerformanceAttributes()
+            for name, data_obj in self.dataset.schema.performance_attrs.items():
+                exp_data.performance.add(name, data_obj)
+        
+        if exp_data.metric_arrays is None:
+            exp_data.metric_arrays = MetricArrays()
+            for name, data_obj in self.dataset.schema.metric_arrays.items():
+                exp_data.metric_arrays.add(name, data_obj)
+        
+        # Run evaluation for each performance code
+        for perf_code in self.evaluation_models.keys():
+            feature_name = f"{perf_code}_feature"
             
-        Raises:
-            ValueError: If any active evaluation model lacks calibration weight
-        """
-        weights = {}
-        for code, eval_model in self.get_active_eval_models().items():
-            if eval_model.weight is None:
-                raise ValueError(f"Evaluation model '{code}' is active but has no calibration weight defined. "
-                               f"Set calibration_weight when adding the model to enable calibration.")
-            weights[code] = eval_model.weight
-        
-        if not weights:
-            raise ValueError("No active evaluation models with calibration weights found.")
+            self.logger.info(f"Evaluating '{perf_code}' for experiment '{exp_code}'")
             
-        return weights
-    
-    def get_active_eval_models(self) -> Dict[str, IEvaluationModel]:
+            # Run single performance evaluation
+            result_exp_data = self.run(
+                exp_code=exp_code,
+                feature_name=feature_name,
+                performance_attr_name=perf_code,
+                visualize=visualize,
+                recompute=recompute
+            )
+            
+            # Merge results into exp_data
+            if result_exp_data.performance is not None:
+                perf_value = result_exp_data.performance.get_value(perf_code)
+                exp_data.performance.set_value(perf_code, perf_value)
+            
+            if result_exp_data.metric_arrays is not None:
+                for array_name in result_exp_data.metric_arrays.keys():
+                    if result_exp_data.metric_arrays.has_value(array_name):
+                        array_value = result_exp_data.metric_arrays.get_value(array_name)
+                        exp_data.metric_arrays.set_value(array_name, array_value)
+        
+        self.logger.info(f"Completed evaluation for experiment '{exp_code}'")
+
+    def get_evaluation_models(self) -> Dict[str, IEvaluationModel]:
         """
-        Get all active evaluation models.
+        Get all evaluation models.
         
         Returns:
-            Dictionary of active evaluation models {performance_code: model}
+            Dictionary mapping performance codes to evaluation models
         """
-        return {code: model for code, model in self.evaluation_models.items() if model.active}
+        return self.evaluation_models
