@@ -55,43 +55,28 @@ class IFeatureModel(ABC):
     
     @final
     def run(self, feature_name: str, visualize: bool = False, **param_values) -> float:
-        """
-        Extract feature with memoization via Dataset.
-        
-        Checks Dataset cache first. If not cached, loads data and computes feature.
-        
-        Args:
-            feature_name: Name of feature to extract
-            visualize: Enable visualizations if True
-            **param_values: Parameter name-value pairs
-            
-        Returns:
-            Feature value
-        """
-        # Check if already computed
+        """Extract feature with memoization via Dataset."""
+        # Check cache
         if self.dataset.has_features_at(**param_values):
             try:
                 cached_value = self.dataset.get_feature_value(feature_name, **param_values)
                 self.logger.debug(f"Using cached feature '{feature_name}' for {param_values}")
                 return cached_value
             except KeyError:
-                pass  # Feature name not in cache, compute it
+                pass
         
-        # Load data for these parameters
+        # Load and compute
         self.logger.debug(f"Computing feature '{feature_name}' for {param_values}")
         data = self._load_data(**param_values)
-        
-        # Compute feature
         feature_value = self._compute_features(data, visualize=visualize)
         
-        # Validate return type
+        # Validate output from user implementation
         if not isinstance(feature_value, (int, float, np.integer, np.floating)):
             raise TypeError(
-                f"_compute_features() must return numeric value, "
-                f"got {type(feature_value).__name__}"
+                f"_compute_features() must return numeric value, got {type(feature_value).__name__}"
             )
         
-        # Cache result
+        # Cache and return
         self.dataset.set_feature_value(feature_name, feature_value, **param_values)
         
         return feature_value

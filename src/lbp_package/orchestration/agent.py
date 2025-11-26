@@ -27,7 +27,6 @@ class LBPAgent:
     """
     Main orchestration class for AIXD-based LBP framework.
     
-    Manages:
     - Model registration and activation
     - Schema generation from active models
     - Dataset initialization and loading
@@ -99,17 +98,7 @@ class LBPAgent:
         evaluation_class: Type[IEvaluationModel],
         **kwargs
     ) -> None:
-        """
-        Register an evaluation model.
-        
-        Args:
-            performance_code: Code identifying the performance metric
-            evaluation_class: IEvaluationModel subclass (dataclass)
-            **kwargs: Additional parameters for model instantiation
-            
-        Raises:
-            RuntimeError: If called after initialize()
-        """
+        """Register an evaluation model."""
         if self._initialized:
             raise RuntimeError(
                 "Cannot register models after initialize() has been called. "
@@ -127,17 +116,7 @@ class LBPAgent:
         prediction_class: Type[IPredictionModel],
         **kwargs
     ) -> None:
-        """
-        Register a prediction model.
-        
-        Args:
-            performance_codes: List of performance codes this model predicts
-            prediction_class: IPredictionModel subclass (dataclass)
-            **kwargs: Additional model parameters
-            
-        Raises:
-            RuntimeError: If called after initialize()
-        """
+        """Register a prediction model."""
         if self._initialized:
             raise RuntimeError(
                 "Cannot register models after initialize() has been called. "
@@ -158,16 +137,7 @@ class LBPAgent:
         calibration_class: Type[ICalibrationModel],
         **kwargs
     ) -> None:
-        """
-        Register a calibration model.
-        
-        Args:
-            calibration_class: ICalibrationModel subclass
-            **kwargs: Additional model configuration
-            
-        Raises:
-            RuntimeError: If called after initialize()
-        """
+        """Register a calibration model."""
         if self._initialized:
             raise RuntimeError(
                 "Cannot register models after initialize() has been called. "
@@ -180,20 +150,7 @@ class LBPAgent:
     # === SCHEMA GENERATION ===
     
     def generate_schema_from_active_models(self) -> DatasetSchema:
-        """
-        Generate DatasetSchema from registered evaluation/prediction model CLASSES.
-        
-        Uses dataclass introspection (fields()) to extract:
-        - Parameters from model class fields
-        - Dimensions (if models have dimensional properties)
-        - Performance attributes (from evaluation model codes)
-        
-        Returns:
-            DatasetSchema instance
-            
-        Raises:
-            ValueError: If no models are registered
-        """
+        """Generate DatasetSchema from registered evaluation/prediction model classes."""
         if not self._evaluation_model_specs:
             raise ValueError("No evaluation models registered. Call register_evaluation_model() first.")
         
@@ -241,14 +198,7 @@ class LBPAgent:
         schema: DatasetSchema,
         seen_params: set
     ) -> None:
-        """
-        Extract DataObject parameters from a model CLASS's dataclass fields.
-        
-        Args:
-            model_class: Model class (evaluation, feature, or prediction)
-            schema: Schema to populate
-            seen_params: Set of already-seen parameter names (for deduplication)
-        """
+        """Extract DataObject parameters from model class dataclass fields."""
         from ..core.data_objects import DataReal, DataInt, DataBool, DataCategorical, DataString, DataDimension
         
         # Get dataclass fields from class
@@ -280,16 +230,7 @@ class LBPAgent:
                         seen_params.add(param_name)
     
     def _infer_data_object(self, param_name: str, field) -> Any:
-        """
-        Infer DataObject type from field annotation or default.
-        
-        Args:
-            param_name: Parameter name
-            field: Dataclass field
-            
-        Returns:
-            DataObject instance
-        """
+        """Infer DataObject type from field annotation or default."""
         # Try to infer from type annotation
         if hasattr(field, 'type'):
             field_type = field.type
@@ -317,39 +258,17 @@ class LBPAgent:
     
     def initialize(
         self,
-        schema_id: Optional[str] = None,
-        static_params: Optional[Dict[str, Any]] = None,
+        static_params: Dict[str, Any],
     ) -> Dataset:
         """
         Initialize dataset and orchestration systems from registered models.
         
-        Supports two modes:
-        1. New dataset: Provide performance_codes + static_params
-           - Generates schema from registered models
-           - Creates new dataset with schema registry
-        2. Load existing: Provide schema_id only
-           - Loads existing dataset from registry
-        
         Args:
-            schema_id: Optional schema ID to load existing dataset
-            static_params: Static parameter values (for new dataset)
+            static_params: Static parameter values for dataset
         
         Returns:
             Initialized Dataset instance
-            
-        Raises:
-            ValueError: If parameters are invalid
         """
-        if schema_id is not None:
-            raise NotImplementedError(
-                "Loading existing datasets is now handled by Dataset.populate(). "
-                "Create dataset, then call dataset.populate() to load experiments."
-            )
-        
-        # Mode 1: New dataset
-        if static_params is None:
-            raise ValueError("For new dataset, 'static_params' required.")
-        
         self.logger.console_info("\n===== Initializing Dataset =====")
         
         # Step 1: Generate schema from registered models
@@ -421,15 +340,7 @@ class LBPAgent:
         return dataset
     
     def _add_feature_model_instances(self, dataset: Dataset) -> None:
-        """
-        Create shared feature model instances and attach to prediction models.
-        
-        Feature model instances are shared across all models that need the same type.
-        This prevents duplication and ensures consistency.
-        
-        Args:
-            dataset: Dataset instance to pass to feature model constructors
-        """
+        """Create shared feature model instances and attach to prediction models."""
         from ..interfaces.features import IFeatureModel
         from typing import Type, Dict
         
@@ -484,19 +395,7 @@ class LBPAgent:
         visualize: bool = False,
         recompute: bool = False
     ) -> None:
-        """
-        Evaluate experiment and mutate exp_data with results.
-        
-        Delegates to EvaluationSystem for execution.
-        
-        Args:
-            exp_data: ExperimentData with parameters populated
-            visualize: Show visualizations if True
-            recompute: Force recomputation if True
-            
-        Side effects:
-            Mutates exp_data.performance and exp_data.metric_arrays
-        """
+        """Evaluate experiment and mutate exp_data with results."""
         # Delegate to evaluation system
         self.eval_system.evaluate_experiment(  # type: ignore[attr-defined]
             exp_data=exp_data,
@@ -509,26 +408,7 @@ class LBPAgent:
     # === PREDICTION OPERATIONS ===
     
     def train(self, datamodule: DataModule, **kwargs) -> None:
-        """
-        Train all prediction models using DataModule configuration.
-        
-        Delegates to PredictionSystem for execution.
-        
-        Args:
-            datamodule: Configured DataModule with normalization/batching settings
-            **kwargs: Additional training parameters passed to all prediction models
-                     Examples:
-                     - learning_rate: float (e.g., 0.001)
-                     - epochs: int (e.g., 100)
-                     - verbose: bool (enable training logs)
-                     - early_stopping: bool
-            
-        Raises:
-            RuntimeError: If prediction system not initialized
-        
-        Example:
-            agent.train(datamodule, learning_rate=0.001, epochs=50, verbose=True)
-        """
+        """Train all prediction models using DataModule configuration."""
         if self.pred_system is None:
             raise RuntimeError(
                 "PredictionSystem not initialized. Call initialize() first."
@@ -537,21 +417,7 @@ class LBPAgent:
         self.pred_system.train(datamodule, **kwargs)
     
     def predict(self, X_new: pd.DataFrame) -> pd.DataFrame:
-        """
-        Predict all features for new parameter values.
-        
-        Delegates to PredictionSystem for execution with automatic
-        normalization/denormalization.
-        
-        Args:
-            X_new: DataFrame with parameter columns
-            
-        Returns:
-            DataFrame with predicted feature values (denormalized)
-            
-        Raises:
-            RuntimeError: If prediction system not initialized or trained
-        """
+        """Predict all features for new parameter values."""
         if self.pred_system is None:
             raise RuntimeError(
                 "PredictionSystem not initialized. Call initialize() first."

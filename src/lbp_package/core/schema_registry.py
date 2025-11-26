@@ -26,8 +26,7 @@ class SchemaRegistry:
         }
     }
     
-    Note: No file locking implemented - assumes single-user access.
-    TODO: Add file locking for multi-process scenarios if needed.
+    Note: Assumes single-user access for simplicity.
     """
     
     def __init__(self, local_folder: str):

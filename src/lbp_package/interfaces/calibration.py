@@ -56,16 +56,7 @@ class ICalibrationModel(ABC):
         param_ranges: Dict[str, Tuple[float, float]],
         objective_fn: Callable[[Dict[str, float]], float]
     ) -> Dict[str, float]:
-        """
-        Run calibration optimization.
-        
-        Args:
-            param_ranges: {param_name: (min_val, max_val)}
-            objective_fn: Function that takes parameters dict, returns objective value (higher = better)
-            
-        Returns:
-            Optimal parameters found: {param_name: optimal_value}
-        """
+        """Run calibration optimization and validate results."""
         self.logger.info("Starting calibration")
         self._eval_count = 0
         

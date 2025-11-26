@@ -6,21 +6,15 @@ from datetime import datetime
 
 class LBPLogger:
     """
-    Enhanced logger with integrated console output and error handling.
+    Enhanced logger with integrated console output.
     
-    Provides dual logging to file and console with different formatting
-    for each output channel. Supports debug mode switching and ANSI
-    code stripping for clean log files.
+    - Dual logging to file and console with different formatting
+    - Debug mode switching
+    - ANSI code stripping for clean log files
     """
     
     def __init__(self, name: str, log_folder: str) -> None:
-        """
-        Initialize logger with file and console handlers.
-        
-        Args:
-            name: Logger name identifier
-            log_folder: Directory for log file storage
-        """
+        """Initialize logger with file and console handlers."""
         self.name = name
         self.log_folder = log_folder
         self.debug_mode = False

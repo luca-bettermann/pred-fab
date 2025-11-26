@@ -205,7 +205,7 @@ class DataModule:
             indices = self._split_indices[split]
             if len(indices) == 0:
                 raise ValueError(f"Split '{split}' is empty (configured sizes: test={self.test_size}, val={self.val_size})")
-            return X.iloc[indices].reset_index(drop=True), y.iloc[indices].reset_index(drop=True)
+            return X.iloc[indices].reset_index(drop=True), y.iloc[indices].reset_index(drop=True)  # type: ignore[return-value]
         else:
             raise ValueError(f"Invalid split '{split}'. Must be 'train', 'val', 'test', or None.")
     

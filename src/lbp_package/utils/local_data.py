@@ -9,10 +9,11 @@ import numpy as np
 
 class LocalData:
     """
-    Manages local file system navigation and operations for LBP framework.
+    Manages local file system operations for LBP framework.
     
-    Handles all local data operations including JSON/CSV file reading/writing,
-    path management, and local caching of experiment data.
+    - JSON/CSV file reading/writing
+    - Path management and folder navigation
+    - Local caching of experiment data
     """
 
     def __init__(
@@ -42,12 +43,7 @@ class LocalData:
 
     # === PUBLIC API METHODS ===
     def set_schema_id(self, schema_id: str) -> None:
-        """
-        Set or change the schema ID.
-        
-        Args:
-            schema_id: Schema identifier (e.g., 'schema_001')
-        """
+        """Set or change the schema ID."""
         if not isinstance(schema_id, str) or not schema_id:
             raise ValueError("Schema ID must be a non-empty string")
         
@@ -118,7 +114,7 @@ class LocalData:
         except Exception as e:
             raise RuntimeError(f"Failed to copy {src_path}: {str(e)}")
 
-    def check_folder_access(self, folder_path: str):
+    def check_folder_access(self, folder_path: str) -> None:
         """Verify folder accessibility."""
         if folder_path is None:
             raise ValueError("Folder path must be set to check access.")
@@ -128,8 +124,9 @@ class LocalData:
             raise ConnectionError(f"Folder access {folder_path}: FAILED")
 
     def check_availability(self, code: str, memory: Dict[str, Any]) -> None:
+        """Check if code exists in memory."""
         if code not in memory:
-            raise ValueError(f"{code} is not available in memory.")
+            raise ValueError(f"Code not available in memory: {code}")
         
     # === DATA LOADING METHODS ===
     def load_exp_records(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
@@ -142,7 +139,7 @@ class LocalData:
         )
         
     def load_aggr_metrics(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load aggregated metrics from local files for multiple experiments."""
+        """Load aggregated metrics from local files."""
         return self._load_files_generic(
             codes=exp_codes,
             subdirs=[str(self.schema_id), "{code}", "arrays"],
@@ -151,64 +148,57 @@ class LocalData:
         )
 
     def load_metrics_arrays(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load metrics arrays from local files for multiple experiments."""
+        """Load metrics arrays from local files."""
+        perf_code = kwargs.get('perf_code')
+        if not perf_code:
+            raise ValueError("perf_code required in kwargs for load_metrics_arrays")
         return self._load_files_generic(
             codes=exp_codes,
             subdirs=[str(self.schema_id), "{code}", "arrays"],
-            filename=f"{kwargs.get('perf_code')}",
+            filename=perf_code,
             contains_columns=True
         )
 
     # === DATA SAVING METHODS ===
-    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+                        recompute: bool, **kwargs) -> bool:
         """Save experiment records to local files."""
         return self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}"],
-            filename="exp_record",
-            recompute=recompute,
+            codes=exp_codes, data=data,
+            subdirs=["{code}"], filename="exp_record", recompute=recompute
         )
 
-    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
-        """Save aggregated metrics to local files (single summary file per experiment)."""
+    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+                         recompute: bool, **kwargs) -> bool:
+        """Save aggregated metrics to local files."""
         return self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}", "arrays"],
-            filename="performance",
-            recompute=recompute
+            codes=exp_codes, data=data,
+            subdirs=["{code}", "arrays"], filename="performance", recompute=recompute
         )
 
-    def save_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
-        """Save aggregated metrics to local files (single summary file per experiment)."""
+    def save_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+                           recompute: bool, **kwargs) -> bool:
+        """Save metrics arrays to local files."""
+        perf_code = kwargs.get('perf_code')
+        column_names = kwargs.get('column_names')
+        if not perf_code:
+            raise ValueError("perf_code required in kwargs for save_metrics_arrays")
         return self._save_files_generic(
-            codes=exp_codes,
-            data=data,
-            subdirs=["{code}", "arrays"],
-            filename=f"{kwargs.get('perf_code')}",
-            recompute=recompute,
-            column_names=kwargs.get('column_names')
+            codes=exp_codes, data=data,
+            subdirs=["{code}", "arrays"], filename=perf_code, 
+            recompute=recompute, column_names=column_names
         )
     
     def save_schema(self, schema_dict: Dict[str, Any], recompute: bool = False) -> bool:
-        """
-        Save schema JSON to local storage.
-        
-        Args:
-            schema_dict: Schema dictionary to save
-            recompute: Overwrite if exists
-            
-        Returns:
-            True if saved, False if skipped
-        """
+        """Save schema JSON to local storage."""
         if not self.schema_folder:
             raise ValueError("Schema folder not configured")
         
+        # Build path and ensure directory exists
         schema_file = os.path.join(self.schema_folder, "schema.json")
         os.makedirs(self.schema_folder, exist_ok=True)
         
-        # Only save if doesn't exist or recompute is True
+        # Save if doesn't exist or recompute is True
         if not os.path.exists(schema_file) or recompute:
             with open(schema_file, 'w') as f:
                 json.dump(schema_dict, f, indent=2)
@@ -216,14 +206,12 @@ class LocalData:
         return False
     
     # === PRIVATE METHODS ===
-    def _load_files_generic(self, 
-                            codes: List[str], 
-                            subdirs: List[str],
-                            filename: str,
-                            contains_columns: bool = False) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Simple load function for single JSON files."""
+    def _load_files_generic(
+        self, codes: List[str], subdirs: List[str], filename: str, contains_columns: bool = False
+    ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Generic file loader for JSON/CSV files."""
         if not self.schema_id:
-            raise ValueError("Schema ID must be set before loading experiments")
+            raise ValueError("Schema ID must be set")
             
         missing_codes = []
         result_dict = {}
@@ -237,70 +225,63 @@ class LocalData:
                 file_name = filename.replace("{code}", code)
                 file_path = os.path.join(*path_parts, f"{file_name}.{file_type}")
                 
-                # Check if file exists
+                # Check existence and load
                 if not os.path.exists(file_path):
                     missing_codes.append(code)
                     continue
 
-                # Load file
                 if file_type == "csv":
                     df = pd.read_csv(file_path)
                     result_dict[code] = df.values
                 else:
                     with open(file_path, 'r') as f:
-                        data = json.load(f)
-                        result_dict[code] = data
-
+                        result_dict[code] = json.load(f)
             except Exception as e:
-                print(f"Failed to load data for {code}: {e}")
+                print(f"Failed to load {code}: {e}")
                 missing_codes.append(code)
                 
         return missing_codes, result_dict
 
-    def _save_files_generic(self, 
-                            codes: List[str], 
-                            data: Dict[str, Any], 
-                            subdirs: List[str],
-                            filename: str,
-                            recompute: bool,
-                            column_names: Optional[List[str]] = None) -> bool:
-        """Simple save function for non-nested data."""
+    def _save_files_generic(
+        self, codes: List[str], data: Dict[str, Any], subdirs: List[str], 
+        filename: str, recompute: bool, column_names: Optional[List[str]] = None
+    ) -> bool:
+        """Generic file saver for JSON/CSV files."""
         if not self.schema_id:
-            raise ValueError("Schema ID must be set before saving")
+            raise ValueError("Schema ID must be set")
             
         saved = False
         file_type = "csv" if column_names is not None else "json"
+        
         for code in codes:
-            if code in data:
-                # Build directory path
-                dir_parts = [self.local_folder, self.schema_id] + subdirs
-                dir_parts = [part.replace("{code}", code) for part in dir_parts]
-                dir_path = os.path.join(*dir_parts)
-                os.makedirs(dir_path, exist_ok=True)
+            if code not in data:
+                raise ValueError(f"No data found for code: {code}")
+            
+            # Build directory path
+            dir_parts = [self.local_folder, self.schema_id] + subdirs
+            dir_parts = [part.replace("{code}", code) for part in dir_parts]
+            dir_path = os.path.join(*dir_parts)
+            os.makedirs(dir_path, exist_ok=True)
+            
+            # Build file path
+            file_name = filename.replace("{code}", code)
+            file_path = os.path.join(dir_path, f"{file_name}.{file_type}")
+
+            # Save if doesn't exist or recompute is True
+            if not os.path.exists(file_path) or recompute:
+                code_data = data[code]
+
+                if file_type == "csv" and column_names is not None:
+                    # Reshape and save as CSV
+                    if len(code_data) > 1:
+                        code_data = code_data.reshape(-1, len(column_names))
+                    df = pd.DataFrame(code_data, columns=column_names)
+                    df.to_csv(file_path, index=False)
+                else:
+                    # Save as JSON
+                    with open(file_path, 'w') as f:
+                        json.dump(code_data, f, indent=2)
+
+                saved = True
                 
-                file_name = filename.replace("{code}", code)
-                file_path = os.path.join(dir_path, f"{file_name}.{file_type}")
-
-                # Only save if file doesn't exist or recompute is True
-                if not os.path.exists(file_path) or recompute:
-                    # Handle simple data
-                    code_data = data[code]
-
-                    # csv file if it has column names
-                    if file_type == "csv" and column_names is not None:
-                        # reshape if we actually have dimensions
-                        if len(code_data) > 1:
-                            code_data = code_data.reshape(-1, len(column_names))
-                        df = pd.DataFrame(code_data, columns=column_names)
-                        df.to_csv(file_path, index=False)
-                    else:
-                        with open(file_path, 'w') as f:
-                            json.dump(code_data, f, indent=2)
-
-                    # flag that at least one file was saved
-                    if not saved:
-                        saved = True
-            else:
-                raise ValueError(f"No data found for code {code} to save.")
-        # return whether or not files actually were saved
         return saved

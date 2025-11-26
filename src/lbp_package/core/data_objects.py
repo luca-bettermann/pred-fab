@@ -19,15 +19,7 @@ class DataObject(ABC):
     
     def __init__(self, name: str, dtype: type, constraints: Optional[Dict[str, Any]] = None, 
                  round_digits: Optional[int] = None):
-        """
-        Initialize DataObject.
-        
-        Args:
-            name: Variable name
-            dtype: Python type (int, float, bool, str)
-            constraints: Type-specific constraints (min, max, categories, etc.)
-            round_digits: Number of decimal places to round to (for numeric types)
-        """
+        """Initialize DataObject with name, dtype, constraints, and optional rounding."""
         self.name = name
         self.dtype = dtype
         self.constraints = constraints or {}
@@ -98,15 +90,7 @@ class DataReal(DataObject):
     
     def __init__(self, name: str, min_val: Optional[float] = None, max_val: Optional[float] = None,
                  round_digits: Optional[int] = None):
-        """
-        Initialize DataReal.
-        
-        Args:
-            name: Variable name
-            min_val: Minimum allowed value (inclusive)
-            max_val: Maximum allowed value (inclusive)
-            round_digits: Number of decimal places to round to
-        """
+        """Initialize DataReal with optional min/max bounds and rounding."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
@@ -140,15 +124,7 @@ class DataInt(DataObject):
     
     def __init__(self, name: str, min_val: Optional[int] = None, max_val: Optional[int] = None,
                  round_digits: Optional[int] = None):
-        """
-        Initialize DataInt.
-        
-        Args:
-            name: Variable name
-            min_val: Minimum allowed value (inclusive)
-            max_val: Maximum allowed value (inclusive)
-            round_digits: Ignored for integers (kept for consistency)
-        """
+        """Initialize DataInt with optional min/max bounds."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
@@ -179,12 +155,7 @@ class DataBool(DataObject):
     """Boolean parameter."""
     
     def __init__(self, name: str):
-        """
-        Initialize DataBool.
-        
-        Args:
-            name: Variable name
-        """
+        """Initialize DataBool."""
         super().__init__(name, bool, {})
     
     def validate(self, value: Any) -> bool:
@@ -203,13 +174,7 @@ class DataCategorical(DataObject):
     """Categorical parameter with fixed set of allowed values."""
     
     def __init__(self, name: str, categories: List[str]):
-        """
-        Initialize DataCategorical.
-        
-        Args:
-            name: Variable name
-            categories: List of allowed string values
-        """
+        """Initialize DataCategorical with allowed categories."""
         if not categories:
             raise ValueError("Categories list cannot be empty")
         super().__init__(name, str, {"categories": categories})
@@ -236,12 +201,7 @@ class DataString(DataObject):
     """Arbitrary string parameter."""
     
     def __init__(self, name: str):
-        """
-        Initialize DataString.
-        
-        Args:
-            name: Variable name
-        """
+        """Initialize DataString."""
         super().__init__(name, str, {})
     
     def validate(self, value: Any) -> bool:
@@ -267,14 +227,7 @@ class DataDimension(DataObject):
     """
     
     def __init__(self, dim_name: str, dim_param_name: str, dim_iterator_name: str):
-        """
-        Initialize DataDimension.
-        
-        Args:
-            dim_name: Human-readable dimension name (e.g., "layers", "segments")
-            dim_param_name: Parameter name defining size (e.g., "n_layers", "n_segments")
-            dim_iterator_name: Iterator variable name (e.g., "layer_id", "segment_id")
-        """
+        """Initialize DataDimension with three naming aspects."""
         self.dim_name = dim_name
         self.dim_param_name = dim_param_name
         self.dim_iterator_name = dim_iterator_name
@@ -327,14 +280,7 @@ class DataArray(DataObject):
     """
     
     def __init__(self, name: str, shape: Optional[Tuple[int, ...]] = None, dtype: Optional[np.dtype] = None):
-        """
-        Initialize DataArray.
-        
-        Args:
-            name: Array name
-            shape: Expected shape (use -1 for dynamic dimensions)
-            dtype: Expected numpy dtype
-        """
+        """Initialize DataArray with optional shape and dtype constraints."""
         self.shape_constraint = shape
         self.dtype_constraint = dtype or np.float64
         super().__init__(name, np.ndarray, {

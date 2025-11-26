@@ -77,83 +77,63 @@ class IEvaluationModel(ABC):
     @final
     def run(self, feature_name: str, performance_attr_name: str, exp_data: ExperimentData, 
             visualize: bool = False) -> None:
-        """
-        Evaluate feature against target values and store results in ExperimentData.
-        
-        Args:
-            feature_name: Name of feature to evaluate
-            performance_attr_name: Name for performance attribute
-            exp_data: ExperimentData to populate with results
-            visualize: Enable visualizations if True
-        """
+        """Evaluate feature against target values and store results in ExperimentData."""
+        # Validate preconditions
         if self.feature_model is None:
-            raise ValueError("Feature model not set. Call add_feature_model() first.")
-        
+            raise ValueError("Feature model not set. Call add_feature_model() first")
         if exp_data.dimensions is None:
             raise ValueError("ExperimentData must have dimensions defined")
         
         self.logger.info(f"Starting evaluation for feature '{feature_name}'")
         
-        # Get dimension info from exp_data.parameters (DataDimension objects)
+        # Extract dimension info
         from ..core.data_objects import DataDimension
         dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
                       if isinstance(obj, DataDimension)]
         dim_names = [obj.name for obj in dim_objects]
         dim_sizes = tuple(exp_data.parameters.get_value(obj.name) for obj in dim_objects)
         
-        # Initialize arrays
+        # Initialize metric arrays
         num_dims = len(dim_names)
-        total_metrics = num_dims + 4  # dims + feature + target + scaling + performance
+        total_metrics = num_dims + 4
         metric_array = np.empty(dim_sizes + (total_metrics,))
         performance_array = np.empty(dim_sizes)
         
-        # Generate all dimensional combinations
+        # Generate dimensional combinations
         dim_ranges = [range(size) for size in dim_sizes]
         dim_combinations = list(itertools.product(*dim_ranges))
         total_combos = len(dim_combinations)
-        
         self.logger.info(f"Processing {total_combos} dimensional combinations")
         
-        # Combine static parameters with dimensional parameters
-        static_params = {}
-        if exp_data.parameters:
-            static_params = dict(exp_data.parameters.values)
+        # Build static parameters
+        static_params = dict(exp_data.parameters.values) if exp_data.parameters else {}
         
+        # Process each combination
         for i, dims in enumerate(dim_combinations):
-            # Build complete parameter dict
             dim_params = dict(zip(dim_names, dims))
             all_params = {**static_params, **dim_params}
-            
             self.logger.debug(f"Processing {i+1}/{total_combos}: {dim_params}")
             
-            # Extract feature
+            # Compute feature, target, and performance
             feature_value = self.feature_model.run(feature_name, visualize=visualize, **all_params)
-            
-            # Compute target and scaling for these parameters
             target_value = self._compute_target_value(**all_params)
-            
-            # Validate return type
-            if not isinstance(target_value, (int, float, np.integer, np.floating)):
-                raise TypeError(
-                    f"_compute_target_value() must return numeric value, "
-                    f"got {type(target_value).__name__}"
-                )
-            
             scaling_factor = self._compute_scaling_factor(**all_params)
             
-            # Validate return type
+            # Validate outputs from user implementation
+            if not isinstance(target_value, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_target_value() must return numeric. "
+                    f"Expected int/float, got {type(target_value).__name__}"
+                )
             if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
                 raise TypeError(
-                    f"_compute_scaling_factor() must return numeric value or None, "
-                    f"got {type(scaling_factor).__name__}"
+                    f"_compute_scaling_factor() must return numeric or None. "
+                    f"Expected int/float/None, got {type(scaling_factor).__name__}"
                 )
             
-            # Compute performance
-            performance_value = self._compute_performance(
-                feature_value, target_value, scaling_factor
-            )
+            performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
             
-            # Store in arrays
+            # Store results in arrays
             metric_array[dims][:num_dims] = dims
             metric_array[dims][num_dims] = feature_value
             metric_array[dims][num_dims + 1] = target_value
@@ -162,59 +142,23 @@ class IEvaluationModel(ABC):
             performance_array[dims] = performance_value if performance_value is not None else np.nan
         
         # Store results in ExperimentData
-        from ..core.data_objects import DataArray, Performance, DataReal
+        self._store_results(exp_data, feature_name, performance_attr_name, 
+                          metric_array, performance_array, dim_names, num_dims)
         
-        # Store aggregated feature value in features block
-        if exp_data.features is None:
-            from ..core.data_blocks import DataBlock
-            exp_data.features = DataBlock()
-        
-        feature_obj = DataReal(feature_name)
-        exp_data.features.add(feature_name, feature_obj)
-        # Extract feature values from metric_array (at index num_dims)
-        feature_values = metric_array[..., num_dims]
-        exp_data.features.set_value(feature_name, float(np.nanmean(feature_values)))
-        
-        # Create performance attribute DataObject
-        perf_attr = Performance.real(min_val=0.0, max_val=1.0)
-        perf_attr.name = performance_attr_name
-        
-        # Add to PerformanceAttributes block
-        if exp_data.performance is None:
-            exp_data.performance = PerformanceAttributes()
-        exp_data.performance.add(performance_attr_name, perf_attr)
-        exp_data.performance.set_value(performance_attr_name, float(np.nanmean(performance_array)))
-        
-        # Create metric array names
-        metric_names = dim_names + [feature_name, "target", "scaling", performance_attr_name]
-        
-        # Store metric array DataObject
-        metric_data_array = DataArray(name=feature_name, shape=metric_array.shape, dtype=np.dtype(np.float64))
-        # Store metric names in constraints for reference
-        metric_data_array.constraints["metric_names"] = metric_names
-        
-        # Add to MetricArrays block
-        if exp_data.metric_arrays is None:
-            exp_data.metric_arrays = MetricArrays()
-        exp_data.metric_arrays.add(feature_name, metric_data_array)
-        exp_data.metric_arrays.set_value(feature_name, metric_array)
-        
-        # Compute aggregations if overridden
+        # Compute aggregations
         aggr_metrics = self._compute_aggregation(exp_data)
-        
-        # Validate return type
         if not isinstance(aggr_metrics, dict):
             raise TypeError(
-                f"_compute_aggregation() must return dict, "
-                f"got {type(aggr_metrics).__name__}"
+                f"_compute_aggregation() must return dict. "
+                f"Expected dict, got {type(aggr_metrics).__name__}"
             )
         
-        # Validate dict values are numeric
+        # Validate aggregation values
         for key, value in aggr_metrics.items():
             if not isinstance(value, (int, float, np.integer, np.floating)):
                 raise TypeError(
-                    f"_compute_aggregation() dict values must be numeric, "
-                    f"got {type(value).__name__} for key '{key}'"
+                    f"_compute_aggregation() values must be numeric. "
+                    f"Expected int/float for '{key}', got {type(value).__name__}"
                 )
         
         self.logger.info(
@@ -225,21 +169,16 @@ class IEvaluationModel(ABC):
     # === PRIVATE METHODS ===
     @final
     def _compute_performance(
-        self, 
-        feature_value: float, 
-        target_value: float, 
-        scaling_factor: Optional[float]
+        self, feature_value: float, target_value: float, scaling_factor: Optional[float]
     ) -> Optional[float]:
         """Compute performance value from feature, target, and scaling."""
-        
+        # Handle missing values
         if feature_value is None or np.isnan(feature_value) or target_value is None:
             self.logger.warning("Feature or target is None/NaN, returning None")
             return None
         
-        # Compute difference from target
+        # Compute difference and normalize
         diff = feature_value - target_value
-        
-        # Apply scaling for normalization
         if scaling_factor is not None and scaling_factor > 0:
             performance_value = 1.0 - np.abs(diff) / scaling_factor
         elif target_value > 0:
@@ -248,7 +187,7 @@ class IEvaluationModel(ABC):
             performance_value = np.abs(diff)
             self.logger.warning("Performance not scaled (target_value <= 0)")
         
-        # Clamp to [0, 1]
+        # Clamp to valid range
         if not 0 <= performance_value <= 1:
             self.logger.warning(f"Performance {performance_value:.3f} out of bounds, clamping")
             performance_value = np.clip(performance_value, 0, 1)
@@ -257,5 +196,39 @@ class IEvaluationModel(ABC):
             f"Performance: feature={feature_value:.3f}, target={target_value:.3f}, "
             f"diff={diff:.3f}, scaling={scaling_factor}, perf={performance_value:.3f}"
         )
-        
         return float(performance_value)
+    
+    @final
+    def _store_results(
+        self, exp_data: ExperimentData, feature_name: str, performance_attr_name: str,
+        metric_array: np.ndarray, performance_array: np.ndarray, 
+        dim_names: List[str], num_dims: int
+    ) -> None:
+        """Store evaluation results in ExperimentData blocks."""
+        from ..core.data_objects import DataArray, Performance, DataReal
+        from ..core.data_blocks import DataBlock
+        
+        # Store aggregated feature value
+        if exp_data.features is None:
+            exp_data.features = DataBlock()
+        feature_obj = DataReal(feature_name)
+        exp_data.features.add(feature_name, feature_obj)
+        feature_values = metric_array[..., num_dims]
+        exp_data.features.set_value(feature_name, float(np.nanmean(feature_values)))
+        
+        # Store performance attribute
+        perf_attr = Performance.real(min_val=0.0, max_val=1.0)
+        perf_attr.name = performance_attr_name
+        if exp_data.performance is None:
+            exp_data.performance = PerformanceAttributes()
+        exp_data.performance.add(performance_attr_name, perf_attr)
+        exp_data.performance.set_value(performance_attr_name, float(np.nanmean(performance_array)))
+        
+        # Store metric array
+        metric_names = dim_names + [feature_name, "target", "scaling", performance_attr_name]
+        metric_data_array = DataArray(name=feature_name, shape=metric_array.shape, dtype=np.dtype(np.float64))
+        metric_data_array.constraints["metric_names"] = metric_names
+        if exp_data.metric_arrays is None:
+            exp_data.metric_arrays = MetricArrays()
+        exp_data.metric_arrays.add(feature_name, metric_data_array)
+        exp_data.metric_arrays.set_value(feature_name, metric_array)

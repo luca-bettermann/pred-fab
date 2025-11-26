@@ -60,13 +60,7 @@ class IPredictionModel(ABC):
     """
     
     def __init__(self, logger: LBPLogger, **kwargs):
-        """
-        Initialize prediction model.
-        
-        Args:
-            logger: Logger instance
-            **kwargs: Additional model-specific parameters
-        """
+        """Initialize prediction model."""
         self.logger = logger
         self._feature_models: Dict[str, IFeatureModel] = {}
     
@@ -97,16 +91,7 @@ class IPredictionModel(ABC):
         return {}
     
     def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
-        """
-        Attach a feature model instance to this prediction model.
-        
-        Called by the system to provide feature model dependencies declared
-        in feature_model_types. Models can then use these during training/prediction.
-        
-        Args:
-            code: Feature code (as declared in feature_model_types)
-            feature_model: IFeatureModel instance to attach
-        """
+        """Attach feature model instance for use during training/prediction."""
         self._feature_models[code] = feature_model
         if self.logger:
             self.logger.debug(f"Attached feature model '{code}' to prediction model")

@@ -30,12 +30,7 @@ class DatasetSchema:
     """
     
     def __init__(self, default_round_digits: int = 3):
-        """
-        Initialize empty schema with four DataBlocks.
-        
-        Args:
-            default_round_digits: Default rounding precision for numeric DataObjects
-        """
+        """Initialize empty schema with four DataBlocks."""
         self.parameters = Parameters()
         self.dimensions = Dimensions()
         self.performance_attrs = PerformanceAttributes()
@@ -43,16 +38,7 @@ class DatasetSchema:
         self.default_round_digits = default_round_digits
     
     def _compute_schema_hash(self) -> str:
-        """
-        Compute deterministic hash from schema structure.
-        
-        Hash includes parameter names, DataObject types, and constraints
-        (min/max/categories). This ensures same structure → same hash,
-        even if parameter values differ.
-        
-        Returns:
-            SHA256 hex digest (64 characters)
-        """
+        """Compute deterministic hash from schema structure."""
         structure = {
             "parameters": self._block_to_hash_structure(self.parameters),
             "dimensions": self._block_to_hash_structure(self.dimensions),
@@ -75,12 +61,7 @@ class DatasetSchema:
         }
     
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Serialize schema to dictionary for storage.
-        
-        Returns:
-            Dictionary with all blocks and metadata
-        """
+        """Serialize schema to dictionary for storage."""
         return {
             "parameters": self.parameters.to_dict(),
             "dimensions": self.dimensions.to_dict(),
@@ -92,15 +73,7 @@ class DatasetSchema:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DatasetSchema':
-        """
-        Reconstruct schema from dictionary.
-        
-        Args:
-            data: Dictionary from to_dict()
-            
-        Returns:
-            DatasetSchema instance
-        """
+        """Reconstruct schema from dictionary."""
         default_round_digits = data.get("default_round_digits", 3)
         schema = cls(default_round_digits=default_round_digits)
         schema.parameters = Parameters.from_dict(data["parameters"])
@@ -110,21 +83,7 @@ class DatasetSchema:
         return schema
     
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
-        """
-        Check structural compatibility with another schema.
-        
-        Uses detailed comparison (not hash) to provide informative
-        error messages about specific differences.
-        
-        Args:
-            other: Schema to compare against
-            
-        Returns:
-            True if compatible
-            
-        Raises:
-            ValueError: If incompatible, with detailed message
-        """
+        """Check structural compatibility with another schema."""
         errors = []
         
         # Check parameters

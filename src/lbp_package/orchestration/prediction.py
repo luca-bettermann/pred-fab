@@ -20,38 +20,25 @@ class PredictionSystem:
     """
     Orchestrates prediction model operations with DataModule integration.
     
-    Manages:
-    - Prediction model registry (models declare what they predict)
-    - Feature-to-model mapping (automatically generated from model declarations)
-    - DataModule lifecycle (normalization, batching)
-    - Training coordination with preprocessing
-    - Feature prediction with automatic denormalization
+    - Manages prediction model registry and feature-to-model mapping
+    - Coordinates training with normalization and batching via DataModule
+    - Handles feature prediction with automatic denormalization
     """
     
     def __init__(self, dataset: Dataset, logger: LBPLogger):
-        """
-        Initialize prediction system.
-        
-        Args:
-            dataset: Dataset instance (for training data extraction)
-            logger: Logger instance
-        """
+        """Initialize prediction system."""
         self.dataset = dataset
         self.logger = logger
         self.prediction_models: List[IPredictionModel] = []  # All registered models
         self.feature_to_model: Dict[str, IPredictionModel] = {}  # feature_name -> model
         self.datamodule: Optional[DataModule] = None  # Stored after training
     
+    def _get_model_name(self, model: IPredictionModel) -> str:
+        """Get primary feature name from model for logging."""
+        return model.feature_names[0] if model.feature_names else "unknown"
+    
     def add_prediction_model(self, model: IPredictionModel) -> None:
-        """
-        Register a prediction model.
-        
-        Model declares what features it predicts via feature_names property.
-        The system automatically creates feature-to-model mappings.
-        
-        Args:
-            model: Initialized IPredictionModel instance
-        """
+        """Register a prediction model and create feature-to-model mappings."""
         # Add to model list
         self.prediction_models.append(model)
         
@@ -64,26 +51,11 @@ class PredictionSystem:
                 )
             self.feature_to_model[feature_name] = model
         
-        primary_feature = model.feature_names[0] if model.feature_names else "unknown"
+        primary_feature = self._get_model_name(model)
         self.logger.info(f"Added prediction model for features: {model.feature_names} (primary: {primary_feature})")
     
     def train(self, datamodule: DataModule, **kwargs) -> None:
-        """
-        Train all prediction models using DataModule configuration.
-        
-        DataModule handles:
-        - Data extraction from dataset
-        - Normalization fitting and application
-        - Batching (if configured)
-        
-        Args:
-            datamodule: Configured DataModule with normalization settings
-            **kwargs: Additional training parameters passed to all models
-                     (e.g., learning_rate=0.001, epochs=100, verbose=True)
-        
-        Raises:
-            ValueError: If training split is empty
-        """
+        """Train all prediction models using DataModule configuration."""
         # Store a copy to prevent mutation after training
         self.datamodule = datamodule.copy()
         
@@ -111,7 +83,7 @@ class PredictionSystem:
             feature_cols = model.feature_names
             missing_cols = set(feature_cols) - set(y_train.columns)
             if missing_cols:
-                primary_feature = feature_cols[0] if feature_cols else "unknown"
+                primary_feature = self._get_model_name(model)
                 self.logger.warning(
                     f"Missing features for model '{primary_feature}': {missing_cols}, skipping"
                 )
@@ -119,7 +91,7 @@ class PredictionSystem:
             
             # Extract and normalize features for this model
             y_feature = y_train[feature_cols]
-            y_norm = self.datamodule.normalize(y_feature)
+            y_norm = self.datamodule.normalize(y_feature)  # type: ignore
             
             # Train model with user-provided kwargs
             primary_feature = feature_cols[0] if feature_cols else "unknown"
@@ -134,25 +106,7 @@ class PredictionSystem:
         )
     
     def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
-        """
-        Validate prediction models on validation or test set.
-        
-        Computes prediction metrics for all registered models:
-        - MAE (Mean Absolute Error)
-        - RMSE (Root Mean Squared Error)
-        - R² (Coefficient of Determination)
-        
-        Args:
-            use_test: If True, use test split; if False, use validation split
-            
-        Returns:
-            Dict mapping feature names to metric dicts:
-            {'feature_1': {'mae': 0.15, 'rmse': 0.23, 'r2': 0.89}, ...}
-            
-        Raises:
-            RuntimeError: If validate() called before train()
-            ValueError: If requested split is empty (e.g., val_size=0.0)
-        """
+        """Validate prediction models on validation or test set."""
         if self.datamodule is None:
             raise RuntimeError(
                 "PredictionSystem not trained yet. Call train(datamodule) first."
@@ -227,21 +181,7 @@ class PredictionSystem:
         return results
     
     def predict(self, X_new: pd.DataFrame) -> pd.DataFrame:
-        """
-        Predict all features for new parameter values.
-        
-        Automatically normalizes inputs (if needed) and denormalizes outputs.
-        
-        Args:
-            X_new: DataFrame with parameter columns
-            
-        Returns:
-            DataFrame with predicted feature values (denormalized)
-            
-        Raises:
-            RuntimeError: If predict() called before train()
-            ValueError: If X_new has invalid columns
-        """
+        """Predict all features for new parameter values."""
         if self.datamodule is None:
             raise RuntimeError(
                 "PredictionSystem not trained yet. Call train(datamodule) first."
@@ -253,7 +193,7 @@ class PredictionSystem:
         # Predict all features
         predictions = {}
         for model in self.prediction_models:
-            primary_feature = model.feature_names[0] if model.feature_names else "unknown"
+            primary_feature = self._get_model_name(model)
             
             # Predict (model expects normalized features if trained with normalization)
             # Note: X (parameters) are not normalized, only y (features)
@@ -285,15 +225,7 @@ class PredictionSystem:
         return pd.DataFrame(predictions)
     
     def _validate_input_parameters(self, X: pd.DataFrame) -> None:
-        """
-        Validate that X has correct parameter columns.
-        
-        Args:
-            X: DataFrame to validate
-            
-        Raises:
-            ValueError: If columns don't match dataset schema
-        """
+        """Validate that X has correct parameter columns."""
         # Get expected parameters from dataset schema
         expected_params = set(self.dataset.schema.parameters.keys())
         provided_params = set(X.columns)

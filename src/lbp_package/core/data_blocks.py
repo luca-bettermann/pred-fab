@@ -23,28 +23,11 @@ class DataBlock:
         self.values: Dict[str, Any] = {}  # Actual values
     
     def add(self, name: str, data_obj: DataObject) -> None:
-        """
-        Add a DataObject to the block.
-        
-        Args:
-            name: Parameter name (key)
-            data_obj: DataObject instance defining type and constraints
-        """
+        """Add a DataObject to the block."""
         self.data_objects[name] = data_obj
     
     def get(self, name: str) -> DataObject:
-        """
-        Get a DataObject by name.
-        
-        Args:
-            name: Parameter name
-            
-        Returns:
-            DataObject instance
-            
-        Raises:
-            KeyError: If name not found
-        """
+        """Get a DataObject by name."""
         return self.data_objects[name]
     
     def has(self, name: str) -> bool:
@@ -52,55 +35,20 @@ class DataBlock:
         return name in self.data_objects
     
     def validate_value(self, name: str, value: Any) -> bool:
-        """
-        Validate a value against the corresponding DataObject.
-        
-        Args:
-            name: Parameter name
-            value: Value to validate
-            
-        Returns:
-            True if valid
-            
-        Raises:
-            KeyError: If name not in block
-            TypeError: If value has wrong type
-            ValueError: If value violates constraints
-        """
+        """Validate a value against the corresponding DataObject."""
         if name not in self.data_objects:
             raise KeyError(f"Parameter '{name}' not defined in {self.__class__.__name__}")
         
         return self.data_objects[name].validate(value)
     
     def validate_all(self, values: Dict[str, Any]) -> bool:
-        """
-        Validate multiple values at once.
-        
-        Args:
-            values: Dictionary mapping parameter names to values
-            
-        Returns:
-            True if all valid
-            
-        Raises:
-            TypeError/ValueError: If any validation fails
-        """
+        """Validate multiple values at once."""
         for name, value in values.items():
             self.validate_value(name, value)
         return True
     
     def set_value(self, name: str, value: Any) -> None:
-        """
-        Set value for a parameter after validation.
-        
-        Args:
-            name: Parameter name
-            value: Value to set
-            
-        Raises:
-            KeyError: If name not in block
-            TypeError/ValueError: If validation fails
-        """
+        """Set value for a parameter after validation."""
         self.validate_value(name, value)  # Raises if invalid
         
         # Apply rounding for numeric types if configured
@@ -111,18 +59,7 @@ class DataBlock:
         self.values[name] = value
     
     def get_value(self, name: str) -> Any:
-        """
-        Get value for a parameter.
-        
-        Args:
-            name: Parameter name
-            
-        Returns:
-            Parameter value
-            
-        Raises:
-            KeyError: If name not in values
-        """
+        """Get value for a parameter."""
         if name not in self.values:
             raise KeyError(f"No value set for parameter '{name}'")
         return self.values[name]
@@ -132,33 +69,23 @@ class DataBlock:
         return name in self.values
     
     def to_numpy(self) -> np.ndarray:
-        """
-        Convert all values to numpy array for ML.
-        
-        Returns:
-            1D numpy array of values in same order as keys()
-        """
+        """Convert all values to numpy array for ML."""
         return np.array([self.values[name] for name in self.data_objects.keys() if name in self.values])
     
-    def keys(self):
+    def keys(self) -> Any:
         """Return iterator over parameter names."""
         return self.data_objects.keys()
     
-    def values_iter(self):
+    def values_iter(self) -> Any:
         """Return iterator over DataObjects (renamed from values to avoid conflict)."""
         return self.data_objects.values()
     
-    def items(self):
+    def items(self) -> Any:
         """Return iterator over (name, DataObject) pairs."""
         return self.data_objects.items()
     
     def get_values_dict(self) -> Dict[str, Any]:
-        """
-        Extract all set values as a simple dictionary.
-        
-        Returns:
-            Dictionary mapping parameter names to values (only includes set values)
-        """
+        """Extract all set values as a simple dictionary."""
         return dict(self.values)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -228,17 +155,7 @@ class PerformanceAttributes(DataBlock):
         self.calibration_weights: Dict[str, float] = {}
     
     def set_weight(self, perf_code: str, weight: float) -> None:
-        """
-        Set calibration weight for a performance attribute.
-        
-        Args:
-            perf_code: Performance code (must exist in data_objects)
-            weight: Calibration weight (typically 0.0 to 1.0)
-            
-        Raises:
-            KeyError: If perf_code not defined
-            ValueError: If weight is negative
-        """
+        """Set calibration weight for a performance attribute."""
         if perf_code not in self.data_objects:
             raise KeyError(f"Performance code '{perf_code}' not defined")
         
@@ -248,15 +165,7 @@ class PerformanceAttributes(DataBlock):
         self.calibration_weights[perf_code] = weight
     
     def get_weight(self, perf_code: str) -> Optional[float]:
-        """
-        Get calibration weight for a performance attribute.
-        
-        Args:
-            perf_code: Performance code
-            
-        Returns:
-            Weight value or None if not set
-        """
+        """Get calibration weight for a performance attribute."""
         return self.calibration_weights.get(perf_code)
     
     def to_dict(self) -> Dict[str, Any]:

@@ -15,13 +15,7 @@ class EvaluationSystem:
     """
     
     def __init__(self, dataset: Dataset, logger: LBPLogger):
-        """
-        Initialize evaluation system.
-        
-        Args:
-            dataset: Dataset for feature memoization and data storage
-            logger: Logger instance for debugging and monitoring
-        """
+        """Initialize evaluation system."""
         self.dataset = dataset
         self.logger = logger
         self.evaluation_models: Dict[str, IEvaluationModel] = {}
@@ -35,15 +29,7 @@ class EvaluationSystem:
         feature_model_class: Type[IFeatureModel],
         **feature_model_params
     ) -> None:
-        """
-        Add an evaluation model with its feature model.
-        
-        Args:
-            performance_code: Code identifying the performance metric
-            evaluation_model: Instantiated evaluation model (dataclass)
-            feature_model_class: Feature model class to instantiate
-            **feature_model_params: Additional parameters for feature model
-        """
+        """Add an evaluation model with its feature model."""
         if not isinstance(evaluation_model, IEvaluationModel):
             raise TypeError(f"Expected IEvaluationModel instance, got {type(evaluation_model).__name__}")
         
@@ -63,19 +49,7 @@ class EvaluationSystem:
 
     def run(self, exp_code: str, feature_name: str, performance_attr_name: str,
             visualize: bool = False, recompute: bool = False) -> ExperimentData:
-        """
-        Execute evaluation for an experiment.
-        
-        Args:
-            exp_code: Experiment code
-            feature_name: Name of feature to evaluate
-            performance_attr_name: Name for performance attribute
-            visualize: Enable visualizations if True
-            recompute: Force recomputation if True
-            
-        Returns:
-            ExperimentData with populated performance and metric_arrays
-        """
+        """Execute evaluation for an experiment."""
         # Get experiment from dataset
         exp_data = self.dataset.get_experiment(exp_code)
         
@@ -104,20 +78,7 @@ class EvaluationSystem:
         visualize: bool = False,
         recompute: bool = False
     ) -> None:
-        """
-        Execute all evaluations for an experiment and mutate exp_data with results.
-        
-        Runs evaluation for each registered performance code and merges results
-        into exp_data.performance and exp_data.metric_arrays.
-        
-        Args:
-            exp_data: ExperimentData with parameters populated
-            visualize: Enable visualizations if True
-            recompute: Force recomputation if True
-            
-        Side effects:
-            Mutates exp_data.performance and exp_data.metric_arrays
-        """
+        """Execute all evaluations for an experiment and mutate exp_data with results."""
         from ..core.data_blocks import PerformanceAttributes, MetricArrays
         
         exp_code = exp_data.exp_code
@@ -172,10 +133,5 @@ class EvaluationSystem:
         self.logger.info(f"Completed evaluation for experiment '{exp_code}'")
 
     def get_evaluation_models(self) -> Dict[str, IEvaluationModel]:
-        """
-        Get all evaluation models.
-        
-        Returns:
-            Dictionary mapping performance codes to evaluation models
-        """
+        """Get all evaluation models."""
         return self.evaluation_models
