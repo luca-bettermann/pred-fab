@@ -22,8 +22,8 @@ class ExperimentData:
     """
     Complete data for a single experiment.
     
-    Stores all parameters, performance metrics, and metric arrays using DataBlocks.
-    This is the single source of truth for experiment data.
+    - Parameters (static + dynamic + dimensional)
+    - Features, performance, and metric arrays (optional)
     """
     exp_code: str
     parameters: DataBlock                          # All parameter values (static + dynamic + dimensional)
@@ -47,13 +47,9 @@ class Dataset:
     """
     Data container with schema validation.
     
-    Dataset holds:
-    - Reference to DatasetSchema (structure definition)
-    - Static parameter values (shared across experiments)
-    - Experiment records and performance data
-    
-    Dataset is a data container only - persistence is handled by
-    LocalData through the hierarchical load/save pattern in LBPAgent.
+    - Schema reference and static parameter values
+    - Experiment records with hierarchical load/save
+    - Feature memoization cache for IFeatureModel efficiency
     """
     
     def __init__(self, name: str, schema: DatasetSchema, schema_id: str,
@@ -106,15 +102,7 @@ class Dataset:
         self._feature_cache: Dict[Tuple[str, ...], Dict[str, Any]] = {}  # param_tuple → feature_dict
     
     def set_static_values(self, values: Dict[str, Any]) -> None:
-        """
-        Set static parameter values (shared across all experiments).
-        
-        Args:
-            values: Dictionary of static parameter values
-            
-        Raises:
-            ValueError: If validation fails
-        """
+        """Set static parameter values shared across all experiments."""
         # Validate and set each static value
         for name, value in values.items():
             if not self._static_values.has(name):
@@ -128,24 +116,7 @@ class Dataset:
         performance: Optional[Dict[str, Any]] = None,
         metric_arrays: Optional[Dict[str, np.ndarray]] = None
     ) -> ExperimentData:
-        """
-        Add experiment using hierarchical pattern OR manual creation.
-        
-        If exp_params is None, uses hierarchical load (Memory → Local → External → Create).
-        If exp_params is provided, creates experiment manually with those parameters.
-        
-        Args:
-            exp_code: Experiment code
-            exp_params: Optional parameter values (if None, attempts hierarchical load)
-            performance: Optional performance metric values
-            metric_arrays: Optional numpy arrays for metrics
-            
-        Returns:
-            ExperimentData (loaded or created)
-            
-        Raises:
-            ValueError: If validation fails
-        """
+        """Add experiment using hierarchical load (if exp_params=None) or manual creation."""
         if exp_params is None:
             # Hierarchical load: Memory → Local → External → Create
             # 1. Check memory
@@ -174,18 +145,7 @@ class Dataset:
             return exp_data
     
     def get_experiment(self, exp_code: str) -> ExperimentData:
-        """
-        Get complete ExperimentData for an experiment.
-        
-        Args:
-            exp_code: Experiment code
-            
-        Returns:
-            ExperimentData instance
-            
-        Raises:
-            KeyError: If experiment not found
-        """
+        """Get complete ExperimentData for an experiment."""
         if exp_code not in self._experiments:
             raise KeyError(f"Experiment {exp_code} not found")
         return self._experiments[exp_code]
@@ -193,32 +153,12 @@ class Dataset:
     # === Feature Memoization for IFeatureModel ===
     
     def has_features_at(self, **param_values) -> bool:
-        """
-        Check if features are cached for specific parameter values.
-        
-        Args:
-            **param_values: Parameter name-value pairs
-            
-        Returns:
-            True if features cached for these parameters
-        """
+        """Check if features are cached for specific parameter values."""
         param_tuple = self._make_param_tuple(param_values)
         return param_tuple in self._feature_cache
     
     def get_feature_value(self, feature_name: str, **param_values) -> Any:
-        """
-        Get cached feature value for specific parameters.
-        
-        Args:
-            feature_name: Name of feature to retrieve
-            **param_values: Parameter name-value pairs
-            
-        Returns:
-            Cached feature value
-            
-        Raises:
-            KeyError: If no features cached for these parameters or feature not found
-        """
+        """Get cached feature value for specific parameters."""
         param_tuple = self._make_param_tuple(param_values)
         if param_tuple not in self._feature_cache:
             raise KeyError(f"No features cached for parameters: {param_values}")
@@ -229,14 +169,7 @@ class Dataset:
         return self._feature_cache[param_tuple][feature_name]
     
     def set_feature_value(self, feature_name: str, value: Any, **param_values) -> None:
-        """
-        Cache feature value for specific parameters.
-        
-        Args:
-            feature_name: Name of feature to cache
-            value: Feature value
-            **param_values: Parameter name-value pairs
-        """
+        """Cache feature value for specific parameters."""
         param_tuple = self._make_param_tuple(param_values)
         if param_tuple not in self._feature_cache:
             self._feature_cache[param_tuple] = {}
@@ -247,17 +180,7 @@ class Dataset:
         self._feature_cache.clear()
     
     def _make_param_tuple(self, param_dict: Dict[str, Any]) -> Tuple[str, ...]:
-        """
-        Create hashable tuple from parameter dict for cache keys.
-        
-        Sorts parameters by name for consistent keys.
-        
-        Args:
-            param_dict: Parameter name-value pairs
-            
-        Returns:
-            Sorted tuple of (name, value) pairs as strings
-        """
+        """Create hashable tuple from parameter dict for cache keys."""
         items = sorted(param_dict.items())
         return tuple(f"{name}={value}" for name, value in items)
     
@@ -266,18 +189,7 @@ class Dataset:
         return list(self._experiments.keys())
     
     def get_experiment_params(self, exp_code: str) -> Dict[str, Any]:
-        """
-        Get experiment parameters as dictionary.
-        
-        Args:
-            exp_code: Experiment code
-            
-        Returns:
-            Parameter dictionary with all values
-            
-        Raises:
-            KeyError: If experiment not found
-        """
+        """Get experiment parameters as dictionary."""
         exp_data = self.get_experiment(exp_code)
         params = {}
         for name in exp_data.parameters.keys():
@@ -290,18 +202,7 @@ class Dataset:
         return exp_code in self._experiments
     
     def get_static_value(self, param_name: str) -> Any:
-        """
-        Get static parameter value.
-        
-        Args:
-            param_name: Static parameter name
-            
-        Returns:
-            Parameter value
-            
-        Raises:
-            KeyError: If parameter not found
-        """
+        """Get static parameter value."""
         if not self._static_values.has(param_name):
             raise KeyError(f"Static parameter {param_name} not found")
         return self._static_values.get_value(param_name)
@@ -309,21 +210,7 @@ class Dataset:
     # === Hierarchical Load/Save Methods ===
     
     def populate(self, source: str = "local") -> int:
-        """
-        Load all experiments from storage hierarchically.
-        
-        Scans the dataset folder for experiment subdirectories and loads
-        all experiments using hierarchical pattern (Memory → Local → External → Create).
-        
-        Args:
-            source: "local" to scan local filesystem (external scanning not yet implemented)
-            
-        Returns:
-            Number of experiments loaded
-            
-        Raises:
-            ValueError: If local_data not configured or schema_id not set
-        """
+        """Load all experiments from storage hierarchically by scanning dataset folder."""
         if source != "local":
             raise NotImplementedError("Only 'local' source is currently supported")
         
@@ -340,18 +227,7 @@ class Dataset:
         return loaded_count
     
     def load_experiments(self, exp_codes: List[str], recompute: bool = False) -> List[str]:
-        """
-        Load multiple experiments using hierarchical pattern with progress tracking.
-        
-        Hierarchical pattern: Memory → Local → External → Create
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            recompute: Skip loading from local/external if True (force fresh data)
-            
-        Returns:
-            List of experiment codes that could not be loaded
-        """
+        """Load multiple experiments using hierarchical pattern with progress tracking."""
         # 1. Check memory - filter already loaded experiments
         missing_memory = [
             code for code in exp_codes
@@ -556,20 +432,7 @@ class Dataset:
         external: bool = False,
         recompute: bool = False
     ) -> Dict[str, int]:
-        """
-        Save all experiments hierarchically.
-        
-        Also saves schema to both local and external if configured.
-        Respects debug_mode (skips external if debug_mode=True).
-        
-        Args:
-            local: Save to local files
-            external: Push to external source (ignored if debug_mode=True)
-            recompute: Overwrite existing data
-            
-        Returns:
-            {"local": count, "external": count} - number of experiments saved
-        """
+        """Save all experiments hierarchically to local and/or external storage."""
         # Override external flag if in debug mode
         if self.debug_mode:
             external = False
@@ -584,18 +447,7 @@ class Dataset:
         external: bool = False,
         recompute: bool = False
     ) -> Dict[str, int]:
-        """
-        Save multiple experiments hierarchically with progress tracking.
-        
-        Args:
-            exp_codes: List of experiment codes to save
-            local: Save to local files
-            external: Push to external source (ignored if debug_mode=True)
-            recompute: Overwrite existing data
-            
-        Returns:
-            {"local": count, "external": count} - number of experiments saved
-        """
+        """Save multiple experiments hierarchically with progress tracking."""
         # Override external flag if in debug mode
         if self.debug_mode:
             external = False
@@ -641,18 +493,7 @@ class Dataset:
         external: bool = False,
         recompute: bool = False
     ) -> Dict[str, bool]:
-        """
-        Save single experiment hierarchically.
-        
-        Args:
-            exp_code: Experiment to save
-            local: Save locally
-            external: Push externally
-            recompute: Overwrite if exists
-            
-        Returns:
-            {"local": success, "external": success}
-        """
+        """Save single experiment hierarchically."""
         if exp_code not in self._experiments:
             raise KeyError(f"Experiment {exp_code} not found")
         

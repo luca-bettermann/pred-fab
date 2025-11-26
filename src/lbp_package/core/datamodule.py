@@ -21,30 +21,10 @@ class DataModule:
     """
     Preprocessing configuration for ML workflows.
     
-    Responsibilities:
-    - Extract features from Dataset experiments
-    - Batch data for training (optional)
-    - Fit and apply normalization to features (y)
-    - Store normalization parameters for inference
-    - Denormalize predictions
-    
-    Design:
-    - Dataset remains untouched
-    - Only normalizes features (y), not parameters (X)
-    - On-the-fly transforms (no persistent normalized data)
+    - Extract and batch features from Dataset experiments
+    - Fit/apply normalization to features (y not X)
+    - On-the-fly transforms with stored parameters
     - Per-feature normalization overrides supported
-    - PredictionSystem stores a copy to prevent mutation
-    
-    Example:
-        # Create and configure
-        datamodule = DataModule(dataset, batch_size=32, normalize='standard')
-        datamodule.set_feature_normalize('feature_1', 'minmax')  # Override
-        
-        # Train (PredictionSystem orchestrates)
-        system.train(datamodule)
-        
-        # Predict (auto denormalized)
-        predictions = system.predict(X_new)
     """
     
     def __init__(
@@ -85,34 +65,15 @@ class DataModule:
         self._split_indices: Optional[Dict[str, List[int]]] = None
     
     def set_feature_normalize(self, feature_name: str, method: NormalizeMethod) -> None:
-        """
-        Override normalization method for a specific feature.
-        
-        Args:
-            feature_name: Feature to override
-            method: Normalization method ('standard', 'minmax', 'robust', 'none')
-        """
+        """Override normalization method for a specific feature."""
         self._feature_overrides[feature_name] = method
     
     def get_normalize_method(self, feature_name: str) -> NormalizeMethod:
-        """
-        Get normalization method for a feature (override or default).
-        
-        Args:
-            feature_name: Feature name
-            
-        Returns:
-            Normalization method
-        """
+        """Get normalization method for a feature (override or default)."""
         return cast(NormalizeMethod, self._feature_overrides.get(feature_name, self._default_normalize))
     
     def _create_splits(self, n_samples: int) -> None:
-        """
-        Create train/val/test split indices.
-        
-        Args:
-            n_samples: Total number of samples
-        """
+        """Create train/val/test split indices."""
         indices = np.arange(n_samples)
         
         if self.test_size == 0.0 and self.val_size == 0.0:
@@ -154,18 +115,7 @@ class DataModule:
         }
     
     def extract_all(self, split: Optional[Literal['train', 'val', 'test']] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Extract parameters and features from dataset experiments.
-        
-        Args:
-            split: Which split to extract ('train', 'val', 'test', or None for all data)
-        
-        Returns:
-            Tuple of (X_params, y_features) DataFrames
-            
-        Raises:
-            ValueError: If no experiments with features found or invalid split
-        """
+        """Extract parameters and features from dataset experiments as DataFrames."""
         # Get experiments with features
         exp_codes = [
             code for code in self.dataset.get_experiment_codes()
@@ -210,12 +160,7 @@ class DataModule:
             raise ValueError(f"Invalid split '{split}'. Must be 'train', 'val', 'test', or None.")
     
     def get_batches(self) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
-        """
-        Get data as list of batches.
-        
-        Returns:
-            List of (X_batch, y_batch) tuples
-        """
+        """Get data as list of (X_batch, y_batch) tuples."""
         X, y = self.extract_all()
         
         # No batching - return single batch
@@ -238,12 +183,7 @@ class DataModule:
         return batches
     
     def fit_normalize(self, y: pd.DataFrame) -> None:
-        """
-        Fit normalization parameters on feature data.
-        
-        Args:
-            y: DataFrame with feature columns
-        """
+        """Fit normalization parameters on feature data."""
         self._feature_stats = {}
         
         for col in y.columns:
@@ -277,18 +217,7 @@ class DataModule:
         self._is_fitted = True
     
     def normalize(self, y: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply normalization to features using fitted parameters.
-        
-        Args:
-            y: DataFrame with feature columns
-            
-        Returns:
-            Normalized DataFrame
-            
-        Raises:
-            RuntimeError: If normalization not fitted yet
-        """
+        """Apply normalization to features using fitted parameters."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted. Call fit_normalize() first.")
         
@@ -314,15 +243,7 @@ class DataModule:
         return y_norm
     
     def denormalize(self, y_norm: pd.DataFrame) -> pd.DataFrame:
-        """
-        Reverse normalization to get original scale.
-        
-        Args:
-            y_norm: Normalized DataFrame
-            
-        Returns:
-            Denormalized DataFrame
-        """
+        """Reverse normalization to get original scale."""
         if not self._is_fitted:
             # Not fitted, return as-is
             return y_norm.copy()
@@ -349,21 +270,11 @@ class DataModule:
         return y
     
     def copy(self) -> 'DataModule':
-        """
-        Create a deep copy of this DataModule.
-        
-        Returns:
-            Independent copy with same configuration and fitted parameters
-        """
+        """Create a deep copy of this DataModule."""
         return copy.deepcopy(self)
     
     def get_feature_names(self) -> List[str]:
-        """
-        Get list of features in dataset.
-        
-        Returns:
-            List of feature names from first experiment with features
-        """
+        """Get list of features from first experiment with features."""
         for code in self.dataset.get_experiment_codes():
             exp_data = self.dataset.get_experiment(code)
             if exp_data.features is not None:
@@ -371,12 +282,7 @@ class DataModule:
         return []
     
     def get_split_sizes(self) -> Dict[str, int]:
-        """
-        Get the sizes of each split.
-        
-        Returns:
-            Dict with keys 'train', 'val', 'test' and their sizes
-        """
+        """Get the sizes of each split as dict with train/val/test keys."""
         if self._split_indices is None:
             # Force split creation
             _ = self.extract_all()

@@ -15,18 +15,9 @@ class SchemaRegistry:
     """
     Registry mapping schema hashes to human-readable schema IDs.
     
-    Stored as JSON file in {local_folder}/.lbp/schema_registry.json
-    
-    Format:
-    {
-        "hash_abc123...": {
-            "schema_id": "schema_001",
-            "created": "2025-11-21T10:30:00",
-            "structure": {...}  # Full schema dict for debugging
-        }
-    }
-    
-    Note: Assumes single-user access for simplicity.
+    - Deterministic schema_id generation from structural hash
+    - Stored as JSON in {local_folder}/.lbp/schema_registry.json
+    - Single-user access model
     """
     
     def __init__(self, local_folder: str):
@@ -66,19 +57,7 @@ class SchemaRegistry:
         schema_struct: Dict[str, Any],
         preferred_name: Optional[str] = None
     ) -> str:
-        """
-        Get existing schema_id or create new one.
-        
-        Deterministic: same hash always returns same ID.
-        
-        Args:
-            schema_hash: Hash from DatasetSchema._compute_schema_hash()
-            schema_struct: Full schema dictionary from to_dict()
-            preferred_name: Optional preferred schema_id (if available)
-            
-        Returns:
-            schema_id (e.g., "schema_001" or user's preferred name)
-        """
+        """Get existing schema_id or create new one deterministically based on schema hash."""
         # Check if hash already registered
         if schema_hash in self.registry:
             return self.registry[schema_hash]["schema_id"]
@@ -125,62 +104,31 @@ class SchemaRegistry:
         return f"schema_{(max_num + 1):03d}"
     
     def get_schema_by_id(self, schema_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get schema structure by schema_id.
-        
-        Args:
-            schema_id: Schema ID to look up
-            
-        Returns:
-            Schema structure dict or None if not found
-        """
+        """Get schema structure by schema_id."""
         for entry in self.registry.values():
             if entry["schema_id"] == schema_id:
                 return entry["structure"]
         return None
     
     def get_hash_by_id(self, schema_id: str) -> Optional[str]:
-        """
-        Get schema hash by schema_id.
-        
-        Args:
-            schema_id: Schema ID to look up
-            
-        Returns:
-            Schema hash or None if not found
-        """
+        """Get schema hash by schema_id."""
         for schema_hash, entry in self.registry.items():
             if entry["schema_id"] == schema_id:
                 return schema_hash
         return None
     
     def list_schemas(self) -> Dict[str, str]:
-        """
-        List all registered schemas.
-        
-        Returns:
-            Dict mapping schema_id to creation timestamp
-        """
+        """List all registered schemas as dict mapping schema_id to creation timestamp."""
         return {
             entry["schema_id"]: entry["created"]
             for entry in self.registry.values()
         }
     
     def export(self) -> Dict[str, Any]:
-        """
-        Export registry for portability.
-        
-        Returns:
-            Complete registry dictionary
-        """
+        """Export complete registry dictionary for portability."""
         return self.registry.copy()
     
     def import_registry(self, data: Dict[str, Any]) -> None:
-        """
-        Import registry data (merge with existing).
-        
-        Args:
-            data: Registry dictionary to merge
-        """
+        """Import and merge registry data with existing entries."""
         self.registry.update(data)
         self._save_registry()
