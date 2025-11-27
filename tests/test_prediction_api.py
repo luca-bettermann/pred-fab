@@ -10,7 +10,7 @@ Ensures that the prediction system correctly handles:
 
 import pytest
 import pandas as pd
-from typing import List, Dict, Type
+from typing import List, Dict, Type, Any
 from dataclasses import dataclass
 
 from lbp_package.core.schema import DatasetSchema
@@ -81,6 +81,12 @@ class SingleFeaturePredictionModel(IPredictionModel):
     
     def forward_pass(self, X):
         return pd.DataFrame({"energy": [1.0] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"is_trained": self.is_trained}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
 
 
 @dataclass
@@ -109,6 +115,12 @@ class MultiFeaturePredictionModel(IPredictionModel):
             "feature_b": [2.0] * len(X),
             "feature_c": [3.0] * len(X),
         })
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"is_trained": self.is_trained}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
 
 
 @dataclass
@@ -139,6 +151,12 @@ class ModelWithFeatureModelDependency(IPredictionModel):
     def forward_pass(self, X):
         # Could use self._feature_models["feat1"] here
         return pd.DataFrame({"predicted_output": [4.0] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"is_trained": self.is_trained}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
 
 
 @dataclass
@@ -167,6 +185,12 @@ class AnotherModelWithSameFeatureModel(IPredictionModel):
     
     def forward_pass(self, X):
         return pd.DataFrame({"other_output": [5.0] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"is_trained": self.is_trained}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
 
 
 @pytest.fixture

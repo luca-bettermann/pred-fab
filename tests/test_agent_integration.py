@@ -2,7 +2,7 @@
 
 import pytest
 from dataclasses import dataclass
-from typing import Dict, Type, Optional
+from typing import Dict, Type, Optional, Any
 
 from lbp_package.core.dataset import Dataset
 from lbp_package.core.schema import DatasetSchema
@@ -73,6 +73,12 @@ class SimplePredictionModel(IPredictionModel):
         import pandas as pd
         # Return mock predictions
         return pd.DataFrame({"predicted_feature": [1.0] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"is_trained": self.is_trained}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
 
 
 @pytest.fixture

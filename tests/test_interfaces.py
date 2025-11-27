@@ -1,11 +1,11 @@
-"""
+"""  
 Tests for updated interface classes (IFeatureModel, IEvaluationModel, IPredictionModel, ICalibrationModel).
 """
 import pytest
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 import tempfile
 
 from lbp_package.interfaces.features import IFeatureModel
@@ -97,6 +97,17 @@ class ConcretePredictionModel(IPredictionModel):
             raise RuntimeError("Model not trained")
         mean_val = self.y_train["feature_1"].mean()
         return pd.DataFrame({"feature_1": [mean_val] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {
+            "is_trained": self.is_trained,
+            "mean_value": self.y_train["feature_1"].mean() if self.y_train is not None else None
+        }
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
+        if artifacts.get("mean_value") is not None:
+            self.y_train = pd.DataFrame({"feature_1": [artifacts["mean_value"]]})
 
 
 @dataclass

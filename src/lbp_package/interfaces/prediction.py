@@ -7,7 +7,7 @@ to compute performance metrics.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Type, Optional, final
+from typing import List, Dict, Type, Optional, Any, final
 import pandas as pd
 
 from ..utils.logger import LBPLogger
@@ -18,45 +18,11 @@ class IPredictionModel(ABC):
     """
     Abstract base class for prediction models.
     
-    Prediction models learn relationships between input parameters and output
-    features (physical measurements). They enable virtual experimentation by
-    predicting feature values for untested parameter combinations.
-    
-    Features can then be passed to evaluation models to compute performance.
-    This separation enables:
-    - Interpretable predictions (actual measurements, not just performance scores)
-    - Flexible optimization (same predictions, different objectives)
-    - Visualization of predicted feature values
-    
-    IMPORTANT: Models must be dataclasses with:
-    - Input parameters declared as DataObject fields (e.g., param_x: DataReal)
-    - Output features declared via feature_names property (List[str])
-    - Optional feature model dependencies via feature_model_types property
-    
-    The agent uses dataclass introspection to generate the dataset schema from
-    model field declarations. This ensures type safety and automatic validation.
-    
-    Example:
-        @dataclass
-        class MyPredictionModel(IPredictionModel):
-            # Inputs: declared as DataObject fields
-            temperature: DataReal = DataReal("temperature", min_val=0, max_val=100)
-            pressure: DataReal = DataReal("pressure", min_val=0, max_val=10)
-            
-            # Outputs: declared via property
-            @property
-            def feature_names(self) -> List[str]:
-                return ["viscosity", "density"]
-            
-            def train(self, X, y, **kwargs):
-                # Training logic...
-                pass
-            
-            def forward_pass(self, X):
-                # Prediction logic...
-                return pd.DataFrame({"viscosity": [...], "density": [...]})
-    
-    Subclasses implement train() and forward_pass() methods to learn parameter→feature mappings.
+    - Learn parameter→feature relationships from experiment data
+    - Predict feature values for new parameter combinations (virtual experiments)
+    - Enable feature-based evaluation and multi-objective optimization
+    - Support export/import for production inference via InferenceBundle
+    - Must be dataclasses with DataObject fields for parameters (schema generation)
     """
     
     def __init__(self, logger: LBPLogger, **kwargs):
@@ -90,13 +56,6 @@ class IPredictionModel(ABC):
         """
         return {}
     
-    def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
-        """Attach feature model instance for use during training/prediction."""
-        self._feature_models[code] = feature_model
-        if self.logger:
-            self.logger.debug(f"Attached feature model '{code}' to prediction model")
-
-    
     @abstractmethod
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
         """
@@ -122,6 +81,43 @@ class IPredictionModel(ABC):
             DataFrame with feature columns (all floats)
         """
         pass
+
+    @final
+    def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
+        """Attach feature model instance for use during training/prediction."""
+        self._feature_models[code] = feature_model
+        if self.logger:
+            self.logger.debug(f"Attached feature model '{code}' to prediction model")
     
+    # === EXPORT/IMPORT SUPPORT ===
+    
+    @abstractmethod
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        """
+        Serialize trained model state for production export.
+        
+        Return all artifacts needed to restore model: weights, configuration,
+        trained objects (sklearn models, neural networks, etc.). All values
+        must be picklable. Raise RuntimeError if model not trained.
+        
+        Returns:
+            Dict containing complete model state for reconstruction
+            (e.g., {'model': sklearn_model, 'scaler': fitted_scaler})
+        """
+        pass
+    
+    @abstractmethod
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+        """
+        Restore trained model state from exported artifacts.
+        
+        Reconstruct model to its trained state from the dict returned by
+        _get_model_artifacts(). Must perfectly reverse _get_model_artifacts()
+        so that round-trip export→import preserves model behavior.
+        
+        Args:
+            artifacts: Dict containing model state (from _get_model_artifacts())
+        """
+        pass
 
 

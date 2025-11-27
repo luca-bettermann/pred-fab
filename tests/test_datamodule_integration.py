@@ -12,6 +12,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
+from typing import Dict, Any
 
 from lbp_package.core import Dataset, DatasetSchema, DataModule
 from lbp_package.core.data_objects import DataReal, DataInt
@@ -54,6 +55,19 @@ class SimplePredictionModel(IPredictionModel):
             'feature_1': [self.y_train['feature_1'].mean()] * len(X)
         })
         return predictions
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {
+            "is_trained": self.is_trained,
+            "mean_value": self.y_train['feature_1'].mean() if self.y_train is not None else None
+        }
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
+        # For this simple model, we can restore the mean for predictions
+        if artifacts.get("mean_value") is not None:
+            self.y_train = pd.DataFrame({'feature_1': [artifacts["mean_value"]]})
+
 
 
 @pytest.fixture

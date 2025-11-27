@@ -6,9 +6,10 @@ Prediction models predict features, which can then be evaluated for performance.
 Integrates with DataModule for normalization and batching.
 """
 
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 import pandas as pd
 import numpy as np
+import pickle
 
 from ..core.dataset import Dataset
 from ..core.datamodule import DataModule
@@ -247,6 +248,107 @@ class PredictionSystem:
                 f"Missing parameter columns in X_new: {missing}. "
                 f"Models may fail if these are required."
             )
+    
+    # === EXPORT FOR PRODUCTION INFERENCE ===
+    
+    def export_inference_bundle(
+        self, 
+        filepath: str, 
+        include_evaluation: bool = False
+    ) -> str:
+        """Export validated inference bundle with models, normalization, and schema."""
+        if self.datamodule is None:
+            raise RuntimeError("Cannot export before training. Call train() first.")
+        
+        self.logger.console_info("Validating models for export...")
+        
+        # Validate prediction models
+        for model in self.prediction_models:
+            self._validate_model_export(model)
+        
+        self.logger.console_info("✓ All models validated successfully")
+        
+        # Build bundle dict
+        bundle = self._create_bundle_dict(include_evaluation)
+        
+        # Save bundle
+        with open(filepath, 'wb') as f:
+            pickle.dump(bundle, f)
+        
+        self.logger.console_success(f"✓ Exported inference bundle to: {filepath}")
+        return filepath
+    
+    def _validate_model_export(self, model: IPredictionModel) -> None:
+        """Round-trip test: export artifacts and restore to verify export support."""
+        try:
+            # Get artifacts
+            artifacts = model._get_model_artifacts()
+            
+            if not isinstance(artifacts, dict):
+                raise TypeError(
+                    f"_get_model_artifacts() must return dict, got {type(artifacts).__name__}"
+                )
+            
+            # Verify artifacts are picklable
+            try:
+                pickle.dumps(artifacts)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Artifacts not picklable: {e}. Ensure all objects in artifacts dict are picklable."
+                ) from e
+            
+            # Create fresh instance and restore
+            ModelClass = model.__class__
+            fresh_model = ModelClass(logger=None)  # type: ignore[arg-type]
+            fresh_model._set_model_artifacts(artifacts)
+            
+            # Verify feature_names match
+            if fresh_model.feature_names != model.feature_names:
+                raise ValueError(
+                    f"Round-trip validation failed: feature_names mismatch. "
+                    f"Original: {model.feature_names}, Restored: {fresh_model.feature_names}"
+                )
+            
+            self.logger.info(f"✓ Validated {ModelClass.__name__}")
+            
+        except NotImplementedError as e:
+            raise RuntimeError(
+                f"{model.__class__.__name__} does not implement "
+                f"_get_model_artifacts()/_set_model_artifacts(). "
+                f"These methods are required for export."
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"Export validation failed for {model.__class__.__name__}: {e}"
+            ) from e
+    
+    def _create_bundle_dict(self, include_evaluation: bool) -> Dict[str, Any]:
+        """Assemble bundle with models, artifacts, normalization, and schema."""
+        if self.datamodule is None:
+            raise RuntimeError("DataModule not initialized")
+        
+        bundle: Dict[str, Any] = {
+            'prediction_models': [
+                {
+                    'class_path': f"{model.__class__.__module__}.{model.__class__.__name__}",
+                    'feature_names': model.feature_names,
+                    'artifacts': model._get_model_artifacts()
+                }
+                for model in self.prediction_models
+            ],
+            'normalization': self.datamodule.get_normalization_state(),
+            'schema': self.dataset.schema.to_dict()
+        }
+        
+        # NOTE: Evaluation models optional - only included if requested and available
+        # InferenceBundle can work with predictions only (evaluation happens externally)
+        if include_evaluation:
+            self.logger.warning(
+                "Evaluation model export requested but not yet implemented. "
+                "Bundle will only contain prediction models."
+            )
+        
+        return bundle
 
 
 

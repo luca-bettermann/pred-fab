@@ -7,7 +7,7 @@ user implementations and provides helpful error messages.
 import pytest
 import pandas as pd
 import numpy as np
-from typing import List
+from typing import List, Dict, Any
 
 from lbp_package.core import Dataset, DatasetSchema, DataModule
 from lbp_package.core.dataset import ExperimentData
@@ -46,6 +46,12 @@ class BadPredictionModel(IPredictionModel):
             return pd.DataFrame({"wrong_col": [1.0, 2.0]})
         else:
             return pd.DataFrame({"test_feature": [1.0, 2.0]})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {"return_type": self.return_type}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.return_type = artifacts.get("return_type", "dict")
 
 
 class BadFeatureModel(IFeatureModel):

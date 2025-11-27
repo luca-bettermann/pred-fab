@@ -290,6 +290,7 @@ evaluate_experiment() →
 - Validate input parameters for prediction
 - Auto-denormalize predictions
 - Return prediction results (DataFrames)
+- Export models to InferenceBundle with validation
 
 **Does NOT:**
 - Own dataset (uses it for training data extraction)
@@ -344,6 +345,63 @@ predict(X_new) →
 ```
 predict(feature_name, X: DataFrame) →
   model.predict(X) → returns DataFrame with feature columns
+```
+
+**Export Flow:**
+```
+export_inference_bundle(filepath) →
+  validate each model via round-trip test:
+    artifacts = model._get_model_artifacts()
+    fresh_model._set_model_artifacts(artifacts)
+    verify fresh_model.feature_names matches
+  create bundle dict:
+    - prediction model specs + artifacts
+    - normalization state from datamodule
+    - schema for validation
+  pickle.dump(bundle, file)
+```
+
+---
+
+#### 2.4 InferenceBundle (`orchestration/inference_bundle.py`)
+
+**Responsibility:** Lightweight production inference without Dataset/training dependencies.
+
+**Does:**
+- Load exported models from pickle file
+- Reconstruct models from class paths and artifacts
+- Validate input parameters against schema
+- Run predictions through all models
+- Auto-denormalize predictions using saved stats
+- Return prediction DataFrames
+
+**Does NOT:**
+- Require Dataset, DataModule, or training code
+- Support training or evaluation
+- Store or manage experiment data
+- Modify or update models
+
+**Load Flow:**
+```
+InferenceBundle.load(filepath) →
+  unpickle bundle dict
+  for each model spec:
+    import model class from class_path
+    instantiate model
+    model._set_model_artifacts(spec['artifacts'])
+  store normalization state
+  store schema for validation
+```
+
+**Predict Flow:**
+```
+bundle.predict(X) →
+  validate X columns against schema.parameters
+  for each model:
+    y_pred_norm = model.forward_pass(X)
+    y_pred = _denormalize(y_pred_norm, feature_names)
+    collect predictions
+  return DataFrame(predictions)
 ```
 
 ---

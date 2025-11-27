@@ -18,7 +18,9 @@ class IEvaluationModel(ABC):
     
     Evaluates feature values against target values to compute performance metrics.
     Stores results directly in ExperimentData.
+    
     Models declare their parameters as dataclass fields (DataObjects).
+    Optionally implement _get_model_artifacts() and _set_model_artifacts() for export support.
     """
     
     logger: LBPLogger  # Required field for logging
@@ -232,3 +234,44 @@ class IEvaluationModel(ABC):
             exp_data.metric_arrays = MetricArrays()
         exp_data.metric_arrays.add(feature_name, metric_data_array)
         exp_data.metric_arrays.set_value(feature_name, metric_array)
+    
+    # === EXPORT/IMPORT SUPPORT (OPTIONAL) ===
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        """
+        Optionally serialize model state for export.
+        
+        Override only if evaluation model has state to preserve (lookup tables,
+        configuration, precomputed data). Default returns empty dict.
+        
+        Most evaluation models don't need this - they just compute targets/scaling
+        via pure functions using parameters.
+        
+        Returns:
+            Dict containing model state (default: empty)
+            
+        Example:
+            def _get_model_artifacts(self):
+                return {
+                    'target_lookup': self.target_lookup_table,
+                    'scaling_config': {'max_deviation': 10.0}
+                }
+        """
+        return {}
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+        """
+        Optionally restore model state from export.
+        
+        Override only if you override _get_model_artifacts(). Must perfectly
+        reverse _get_model_artifacts(). Default does nothing.
+        
+        Args:
+            artifacts: Dict containing model state (from _get_model_artifacts())
+            
+        Example:
+            def _set_model_artifacts(self, artifacts):
+                self.target_lookup_table = artifacts['target_lookup']
+                self.scaling_config = artifacts['scaling_config']
+        """
+        pass

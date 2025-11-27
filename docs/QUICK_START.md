@@ -1,7 +1,7 @@
 # Quick Start Guide
 
-**Last Updated**: November 25, 2025  
-**Status**: Phase 7 API (Dataset-Centric Architecture)
+**Last Updated**: November 27, 2025  
+**Status**: Phase 7 API with Production Inference Support
 
 ---
 
@@ -477,6 +477,82 @@ for exp_code in dataset.get_experiment_codes():
 
 ---
 
+## Production Deployment
+
+### Export Trained Models for Production
+
+After training prediction models, export them for production inference:
+
+```python
+from lbp_package.orchestration import PredictionSystem, InferenceBundle
+from lbp_package.core import DataModule
+
+# Train models (research environment)
+system = PredictionSystem(dataset=dataset, logger=logger)
+system.add_prediction_model(MyPredictionModel())
+
+datamodule = DataModule(dataset, normalize="standard")
+system.train(datamodule)
+
+# Export bundle with validation
+system.export_inference_bundle("models/production_v1.pkl")
+```
+
+### Load and Use in Production
+
+In production environment (no Dataset/training dependencies needed):
+
+```python
+from lbp_package import InferenceBundle
+import pandas as pd
+
+# Load trained bundle
+bundle = InferenceBundle.load("models/production_v1.pkl")
+
+# Predict for new parameters
+X_new = pd.DataFrame({
+    "temperature": [25.0, 30.0, 35.0],
+    "pressure": [1.0, 1.2, 1.4]
+})
+
+predictions = bundle.predict(X_new)  # Automatic validation + denormalization
+print(predictions)  # DataFrame with predicted features
+```
+
+### Implement Model Export Support
+
+Prediction models must implement export methods:
+
+```python
+from typing import Dict, Any
+
+@dataclass
+class MyPredictionModel(IPredictionModel):
+    # ... model definition ...
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        """Serialize trained model state."""
+        if not self.is_trained:
+            raise RuntimeError("Cannot export untrained model")
+        return {
+            "sklearn_model": self.model,  # Must be picklable
+            "config": self.config
+        }
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+        """Restore trained model state."""
+        self.model = artifacts["sklearn_model"]
+        self.config = artifacts["config"]
+```
+
+**Key Features**:
+- Round-trip validation ensures export correctness
+- Automatic denormalization of predictions
+- Input validation against schema
+- No Dataset/training dependencies in production
+
+---
+
 ## Next Steps
 
 1. **Define your models**: Implement `IEvaluationModel` and `IFeatureModel`
@@ -486,6 +562,7 @@ for exp_code in dataset.get_experiment_codes():
 5. **Run experiments**: Add experiments and evaluate them
 6. **Save results**: Use `dataset.save()` for persistence
 7. **Load data**: Use `dataset.populate()` to reload
+8. **Deploy models**: Export with `export_inference_bundle()` for production
 
 For detailed architecture information, see:
 - `docs/SEPARATION_OF_CONCERNS.md` - Component responsibilities

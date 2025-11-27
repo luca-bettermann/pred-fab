@@ -6,7 +6,7 @@ import tempfile
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type, Any
 
 from lbp_package.orchestration.evaluation import EvaluationSystem
 from lbp_package.orchestration.prediction import PredictionSystem
@@ -95,6 +95,18 @@ class MockPredictionModel(IPredictionModel):
             raise RuntimeError("Model not trained")
         mean_val = self.y_train["test_feature"].mean()
         return pd.DataFrame({"test_feature": [mean_val] * len(X)})
+    
+    def _get_model_artifacts(self) -> Dict[str, Any]:
+        return {
+            "is_trained": self.is_trained,
+            "mean_value": self.y_train["test_feature"].mean() if self.y_train is not None else None
+        }
+    
+    def _set_model_artifacts(self, artifacts: Dict[str, Any]):
+        self.is_trained = artifacts.get("is_trained", False)
+        if artifacts.get("mean_value") is not None:
+            import pandas as pd
+            self.y_train = pd.DataFrame({"test_feature": [artifacts["mean_value"]]})
 
 
 class TestEvaluationSystem:

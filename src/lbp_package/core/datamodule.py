@@ -296,6 +296,41 @@ class DataModule:
             'test': len(self._split_indices['test'])
         }
     
+    def get_normalization_state(self) -> Dict[str, Any]:
+        """
+        Export normalization state for inference bundle.
+        
+        Returns dict containing all normalization parameters needed to
+        denormalize predictions in production environments.
+        
+        Returns:
+            Dict with normalization method and feature statistics
+        """
+        if not self._is_fitted:
+            # Return unfitted state
+            return {
+                'method': self._default_normalize,
+                'is_fitted': False,
+                'feature_stats': {}
+            }
+        
+        return {
+            'method': self._default_normalize,
+            'is_fitted': True,
+            'feature_stats': copy.deepcopy(self._feature_stats)
+        }
+    
+    def set_normalization_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restore normalization state from exported bundle.
+        
+        Args:
+            state: Dict from get_normalization_state()
+        """
+        self._default_normalize = state['method']
+        self._is_fitted = state['is_fitted']
+        self._feature_stats = copy.deepcopy(state['feature_stats'])
+    
     def __repr__(self) -> str:
         """String representation."""
         fitted_str = "fitted" if self._is_fitted else "not fitted"
