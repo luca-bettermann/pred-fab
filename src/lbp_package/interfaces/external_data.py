@@ -11,15 +11,16 @@ class IExternalData(ABC):
 
     # === ABSTRACT METHODS ===
     @abstractmethod
-    def pull_exp_record(self, exp_code: str) -> Dict[str, Any]:
+    def pull_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
-        Retrieve experiment record by experiment code.
+        Load experiment records in batch from external source.
         
         Args:
-            exp_code: Unique experiment identifier
-
+            exp_codes: List of experiment codes to load
+            
         Returns:
-            Dict of exp_record with "id", "Code" and "Parameters" keys
+            missing_exp_codes: List of experiment codes that were not found
+            exp_records_dict: Dict mapping experiment codes to their records
         """
         ...
 
@@ -135,17 +136,20 @@ class IExternalData(ABC):
     
     # === PUBLIC API METHODS ===
     @final
-    def pull_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load experiment records in batch from external source."""
-        exp_records_dict = {}
-        missing_exp_codes = []
+    def pull_exp_record(self, exp_code: str) -> Dict[str, Any]:
+        """
+        Retrieve experiment record by experiment code.
+        
+        Args:
+            exp_code: Unique experiment identifier
 
-        for exp_code in exp_codes:
-            try:
-                exp_records_dict[exp_code] = self.pull_exp_record(exp_code)
-            except:
-                missing_exp_codes.append(exp_code)
-        return missing_exp_codes, exp_records_dict
+        Returns:
+            Dict of exp_record with "id", "Code" and "Parameters" keys
+        """
+        missing, records = self.pull_exp_records([exp_code])
+        if exp_code in missing or exp_code not in records:
+            raise KeyError(f"Experiment record not found: {exp_code}")
+        return records[exp_code]
 
     # === PRIVATE METHODS ===
     @final

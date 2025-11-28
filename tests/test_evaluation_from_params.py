@@ -42,6 +42,10 @@ class DummyFeatureModel(IFeatureModel):
 class DummyEvaluationModel(IEvaluationModel):
     """Minimal evaluation model for testing."""
     
+    @property
+    def feature_model_type(self):
+        return DummyFeatureModel
+    
     def _compute_target_value(self, **params) -> float:
         """Target is always 5.0."""
         return 5.0

@@ -17,6 +17,7 @@ from ..core.data_blocks import MetricArrays
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..utils.logger import LBPLogger
+from ..utils.metrics import Metrics
 from .base import BaseOrchestrationSystem
 
 
@@ -73,6 +74,26 @@ class PredictionSystem(BaseOrchestrationSystem):
         primary_feature = self._get_model_name(model)
         self.logger.info(f"Added prediction model for features: {model.predicted_features} (primary: {primary_feature})")
     
+    def _prepare_model_data(self, model: IPredictionModel, y_norm: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
+        """Prepare normalized feature data for a specific model."""
+        feature_cols = model.predicted_features
+        primary_feature = self._get_model_name(model)
+        
+        missing_cols = set(feature_cols) - set(y_norm.columns)
+        if missing_cols:
+            raise ValueError(
+                f"Model requires features {missing_cols} not found in data. "
+                f"Available features: {list(y_norm.columns)}. "
+                f"Ensure data includes all required features for '{primary_feature}'."
+            )
+        
+        # Extract normalized features for this model
+        y_model_norm = y_norm[feature_cols]
+        if isinstance(y_model_norm, pd.Series):
+            y_model_norm = y_model_norm.to_frame()
+            
+        return y_model_norm, primary_feature
+
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration."""
         # Store a copy to prevent mutation after training
@@ -102,24 +123,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Train each registered model
         trained_count = 0
         for model in self.prediction_models:
-            # Get feature column(s) for this model
-            feature_cols = model.predicted_features
-            missing_cols = set(feature_cols) - set(y_train.columns)
-            if missing_cols:
-                primary_feature = self._get_model_name(model)
-                raise ValueError(
-                    f"Model requires features {missing_cols} not found in data. "
-                    f"Available features: {list(y_train.columns)}. "
-                    f"Ensure training data includes all required features for '{primary_feature}'."
-                )
-            
-            # Extract normalized features for this model
-            y_model_norm = y_train_norm[feature_cols]
-            if isinstance(y_model_norm, pd.Series):
-                y_model_norm = y_model_norm.to_frame()
+            y_model_norm, primary_feature = self._prepare_model_data(model, y_train_norm)
             
             # Train model with user-provided kwargs
-            primary_feature = feature_cols[0] if feature_cols else "unknown"
             self.logger.info(f"Training model for '{primary_feature}' on {len(X_train)} experiments...")
             model.train(X_train_norm, y_model_norm, **kwargs)
             trained_count += 1
@@ -165,24 +171,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         tuned_count = 0
         skipped_count = 0
         for model in self.prediction_models:
-            # Get feature column(s) for this model
-            feature_cols = model.predicted_features
-            missing_cols = set(feature_cols) - set(y_tune.columns)
-            if missing_cols:
-                primary_feature = self._get_model_name(model)
-                raise ValueError(
-                    f"Model requires features {missing_cols} not found in tuning data. "
-                    f"Available features: {list(y_tune.columns)}. "
-                    f"Ensure tuning data includes all required features for '{primary_feature}'."
-                )
-            
-            # Extract normalized features for this model
-            y_model_norm = y_tune_norm[feature_cols]
-            if isinstance(y_model_norm, pd.Series):
-                y_model_norm = y_model_norm.to_frame()
+            y_model_norm, primary_feature = self._prepare_model_data(model, y_tune_norm)
             
             # Try to tune model
-            primary_feature = feature_cols[0] if feature_cols else "unknown"
             try:
                 self.logger.info(f"Tuning model for '{primary_feature}' with {len(X_tune)} samples...")
                 model.tuning(X_tune_norm, y_model_norm, **kwargs)
@@ -254,23 +245,13 @@ class PredictionSystem(BaseOrchestrationSystem):
             y_true_vals = y_true[primary_feature].values
             y_pred_vals = y_pred[primary_feature].values
             
-            mae = float(np.mean(np.abs(y_true_vals - y_pred_vals)))
-            rmse = float(np.sqrt(np.mean((y_true_vals - y_pred_vals) ** 2)))
+            model_metrics = Metrics.calculate_regression_metrics(y_true_vals, y_pred_vals)
             
-            # R² score
-            ss_res = np.sum((y_true_vals - y_pred_vals) ** 2)
-            ss_tot = np.sum((y_true_vals - np.mean(y_true_vals)) ** 2)
-            r2 = float(1 - (ss_res / (ss_tot + 1e-8)))
-            
-            results[primary_feature] = {
-                'mae': mae,
-                'rmse': rmse,
-                'r2': r2,
-                'n_samples': len(y_true_vals)
-            }
+            results[primary_feature] = model_metrics
             
             self.logger.console_info(
-                f"  {primary_feature}: MAE={mae:.4f}, RMSE={rmse:.4f}, R²={r2:.4f}"
+                f"  {primary_feature}: MAE={model_metrics['mae']:.4f}, "
+                f"RMSE={model_metrics['rmse']:.4f}, R²={model_metrics['r2']:.4f}"
             )
         
         self.logger.console_success(

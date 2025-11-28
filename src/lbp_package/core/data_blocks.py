@@ -68,9 +68,27 @@ class DataBlock:
         """Check if value is set for parameter."""
         return name in self.values
     
-    def to_numpy(self) -> np.ndarray:
-        """Convert all values to numpy array for ML."""
-        return np.array([self.values[name] for name in self.data_objects.keys() if name in self.values])
+    def to_numpy(self, dtype: type = np.float64) -> np.ndarray:
+        """
+        Convert all values to numpy array for ML.
+        
+        Args:
+            dtype: Target numpy dtype (default: float64)
+            
+        Returns:
+            Numpy array of values
+            
+        Raises:
+            ValueError: If non-numeric values are present
+        """
+        values = []
+        for name in self.data_objects.keys():
+            if name in self.values:
+                val = self.values[name]
+                if not isinstance(val, (int, float, np.integer, np.floating, bool)):
+                     raise ValueError(f"Parameter '{name}' has non-numeric value: {val} (type: {type(val)})")
+                values.append(val)
+        return np.array(values, dtype=dtype)
     
     def keys(self) -> Any:
         """Return iterator over parameter names."""

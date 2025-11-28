@@ -276,42 +276,51 @@ class Dataset:
         if not self.local_data:
             return exp_codes
         
+        # Batch load experiment records
+        missing_exp, exp_records = self.local_data.load_exp_records(exp_codes)
+        
+        # Batch load performance metrics
+        missing_perf, perf_data = self.local_data.load_aggr_metrics(exp_codes)
+        
+        # Batch load metric arrays (per metric type)
+        # metric_arrays_data: {metric_name: {exp_code: array}}
+        metric_arrays_data = {}
+        for metric_name in self.schema.metric_arrays.keys():
+            _, arrays = self.local_data.load_metrics_arrays(exp_codes, perf_code=metric_name)
+            metric_arrays_data[metric_name] = arrays
+            
         missing = []
         
+        # Process loaded data
         for exp_code in exp_codes:
-            try:
-                # Load exp_record
-                missing_exp, exp_records = self.local_data.load_exp_records([exp_code])
-                if exp_code in missing_exp:
-                    missing.append(exp_code)
-                    continue
+            if exp_code in missing_exp:
+                missing.append(exp_code)
+                continue
                 
+            try:
+                # Get params
                 exp_params = exp_records[exp_code].get("Parameters", {})
                 
-                # Load performance (returns None if missing)
-                missing_perf, perf_data = self.local_data.load_aggr_metrics([exp_code])
-                performance = perf_data.get(exp_code) if exp_code not in missing_perf else None
+                # Get performance
+                performance = perf_data.get(exp_code)
                 
-                # Load metric arrays for each metric in schema
+                # Get metric arrays for this experiment
                 metric_arrays = {}
-                for perf_code in self.schema.metric_arrays.keys():
-                    missing_arrays, arrays_data = self.local_data.load_metrics_arrays(
-                        [exp_code], perf_code=perf_code
-                    )
-                    if exp_code not in missing_arrays:
-                        metric_arrays[perf_code] = arrays_data[exp_code]
+                for metric_name, arrays_dict in metric_arrays_data.items():
+                    if exp_code in arrays_dict:
+                        metric_arrays[metric_name] = arrays_dict[exp_code]
                 
-                # Build and store experiment data
-                exp_data = self._build_experiment_data(exp_code, exp_params, performance, metric_arrays)
+                # Build experiment data
+                exp_data = self._build_experiment_data(
+                    exp_code, exp_params, performance, metric_arrays
+                )
                 self._experiments[exp_code] = exp_data
                 
             except Exception as e:
                 if self.logger:
-                    self.logger.warning(f"Failed to load {exp_code} from local: {e}")
-                else:
-                    print(f"Warning: Failed to load {exp_code} from local: {e}")
+                    self.logger.warning(f"Failed to build experiment {exp_code}: {e}")
                 missing.append(exp_code)
-        
+                
         return missing
     
     def _load_from_external_batch(self, exp_codes: List[str]) -> List[str]:

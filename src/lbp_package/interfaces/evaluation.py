@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from .features import IFeatureModel
 from ..core.dataset import ExperimentData
 from ..core.data_blocks import MetricArrays, PerformanceAttributes
-from ..core.data_objects import DataDimension
+from ..core.data_objects import DataDimension, DataArray, Performance
 from ..utils import LBPLogger
 
 
@@ -29,6 +29,19 @@ class IEvaluationModel(ABC):
     
     # === ABSTRACT METHODS ===
     
+    @property
+    @abstractmethod
+    def feature_model_type(self) -> Type[IFeatureModel]:
+        """
+        Return the class of the feature model used by this evaluation model.
+        
+        Used by the orchestration system to instantiate the correct feature model.
+        
+        Returns:
+            Class type of the feature model (e.g. MyFeatureModel)
+        """
+        ...
+
     @abstractmethod
     def _compute_target_value(self, **param_values) -> float:
         """
@@ -121,28 +134,11 @@ class IEvaluationModel(ABC):
         
         # Process each combination
         for i, dims in enumerate(dim_combinations):
-            dim_params = dict(zip(dim_names, dims))
-            all_params = {**static_params, **dim_params}
-            self.logger.debug(f"Processing {i+1}/{total_combos}: {dim_params}")
+            self.logger.debug(f"Processing {i+1}/{total_combos}: {dims}")
             
-            # Compute feature, target, and performance
-            feature_value = self.feature_model.run(feature_name, visualize=visualize, **all_params)
-            target_value = self._compute_target_value(**all_params)
-            scaling_factor = self._compute_scaling_factor(**all_params)
-            
-            # Validate outputs from user implementation
-            if not isinstance(target_value, (int, float, np.integer, np.floating)):
-                raise TypeError(
-                    f"_compute_target_value() must return numeric. "
-                    f"Expected int/float, got {type(target_value).__name__}"
-                )
-            if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
-                raise TypeError(
-                    f"_compute_scaling_factor() must return numeric or None. "
-                    f"Expected int/float/None, got {type(scaling_factor).__name__}"
-                )
-            
-            performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
+            feature_value, target_value, scaling_factor, performance_value = self._process_single_combination(
+                dims, dim_names, static_params, feature_name, visualize
+            )
             
             # Store results in arrays
             metric_array[dims][:num_dims] = dims
@@ -179,6 +175,43 @@ class IEvaluationModel(ABC):
         )
     
     # === PRIVATE METHODS ===
+    @final
+    def _process_single_combination(
+        self, 
+        dims: Tuple[int, ...], 
+        dim_names: List[str], 
+        static_params: Dict[str, Any], 
+        feature_name: str, 
+        visualize: bool
+    ) -> Tuple[float, float, Optional[float], Optional[float]]:
+        """Process a single dimensional combination."""
+        # Ensure feature model is available (checked in run(), but needed for type safety)
+        assert self.feature_model is not None
+        
+        dim_params = dict(zip(dim_names, dims))
+        all_params = {**static_params, **dim_params}
+        
+        # Compute feature, target, and performance
+        feature_value = self.feature_model.run(feature_name, visualize=visualize, **all_params)
+        target_value = self._compute_target_value(**all_params)
+        scaling_factor = self._compute_scaling_factor(**all_params)
+        
+        # Validate outputs from user implementation
+        if not isinstance(target_value, (int, float, np.integer, np.floating)):
+            raise TypeError(
+                f"_compute_target_value() must return numeric. "
+                f"Expected int/float, got {type(target_value).__name__}"
+            )
+        if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
+            raise TypeError(
+                f"_compute_scaling_factor() must return numeric or None. "
+                f"Expected int/float/None, got {type(scaling_factor).__name__}"
+            )
+        
+        performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
+        
+        return feature_value, target_value, scaling_factor, performance_value
+
     @final
     def _compute_performance(
         self, feature_value: float, target_value: float, scaling_factor: Optional[float]
@@ -218,8 +251,6 @@ class IEvaluationModel(ABC):
         evaluate_from: int = 0, evaluate_to: Optional[int] = None
     ) -> None:
         """Store evaluation results in ExperimentData blocks."""
-        from ..core.data_objects import DataArray, Performance
-        from ..core.data_blocks import MetricArrays, PerformanceAttributes
         
         # Phase 10: Store only feature values (dimensions implicit in indices)
         # Extract feature values from metric_array

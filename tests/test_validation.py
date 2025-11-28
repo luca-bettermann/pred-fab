@@ -85,6 +85,10 @@ class BadEvaluationModel(IEvaluationModel):
         self.bad_method = bad_method
         self.feature_model = None
     
+    @property
+    def feature_model_type(self):
+        return BadFeatureModel
+    
     def _compute_target_value(self, **param_values):
         if self.bad_method == "target":
             return "not a number"
