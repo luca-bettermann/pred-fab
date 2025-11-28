@@ -6,12 +6,14 @@ existing workflow patterns. Wraps EvaluationSystem, PredictionSystem, and
 manages schema generation and dataset initialization.
 """
 
-from typing import Any, Dict, List, Type, Optional
+from typing import Any, Dict, List, Type, Optional, Tuple
+import numpy as np
 from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset
 from ..core.datamodule import DataModule
 from ..orchestration.evaluation import EvaluationSystem
 from ..orchestration.prediction import PredictionSystem
+from ..orchestration.calibration import BayesianCalibration
 from ..interfaces import IEvaluationModel, IPredictionModel, ICalibrationModel, IExternalData
 from ..utils import LocalData, LBPLogger
 
@@ -387,4 +389,128 @@ class LBPAgent:
         )
         
         self.logger.console_info(f"Experiment '{exp_data.exp_code}' evaluated successfully")
+
+    # === CALIBRATION ===
+    
+    def configure_calibration(
+        self,
+        calibration_model: Optional[ICalibrationModel] = None,
+        **kwargs
+    ) -> None:
+        """
+        Configure the calibration model.
+        
+        Args:
+            calibration_model: Custom ICalibrationModel instance. If None, uses BayesianCalibration.
+            **kwargs: Arguments passed to BayesianCalibration if calibration_model is None.
+                      (n_iterations, n_initial_points, exploration_weight, random_seed)
+        """
+        if calibration_model is not None:
+            self.calibration_model = calibration_model
+            self.logger.info(f"Configured custom calibration model: {type(calibration_model).__name__}")
+        else:
+            # Default to BayesianCalibration
+            self.calibration_model = BayesianCalibration(
+                logger=self.logger,
+                **kwargs
+            )
+            self.logger.info("Configured default BayesianCalibration model")
+
+    def calibrate(
+        self,
+        param_ranges: Dict[str, Tuple[float, float]],
+        objectives: Dict[str, Dict[str, Any]],
+        fixed_params: Optional[Dict[str, Any]] = None,
+        direct_mode: bool = False
+    ) -> Dict[str, float]:
+        """
+        Run calibration to find optimal parameters using the configured calibration model.
+        
+        Args:
+            param_ranges: Ranges for parameters to optimize.
+            objectives: Dict of {perf_code: {'weight': float, 'feature': str}}.
+            fixed_params: Parameters to keep fixed.
+            direct_mode: If True, uses prediction model's uncertainty directly (skips GP surrogate).
+        """
+        if not self._initialized:
+             raise RuntimeError("Agent not initialized.")
+        
+        # Auto-configure if not set
+        if self.calibration_model is None:
+            self.logger.info("No calibration model configured. Using default BayesianCalibration.")
+            self.configure_calibration()
+             
+        # 2. Define Objective Function
+        def objective_fn(params: Dict[str, float]) -> float:
+            # Predict all features
+            predictions = self.pred_system._predict_from_params(params) # type: ignore
+            
+            total_score = 0.0
+            
+            for perf_code, config in objectives.items():
+                weight = config.get('weight', 1.0)
+                feature_name = config['feature']
+                
+                if feature_name not in predictions:
+                    raise ValueError(f"Feature '{feature_name}' not predicted.")
+                
+                feature_val = predictions[feature_name]
+                
+                if perf_code not in self.eval_system.evaluation_models: # type: ignore
+                    raise ValueError(f"Unknown performance code: {perf_code}")
+                    
+                eval_model = self.eval_system.evaluation_models[perf_code] # type: ignore
+                
+                # Compute target & scaling
+                target = eval_model._compute_target_value(**params)
+                scaling = eval_model._compute_scaling_factor(**params)
+                
+                # Compute performance
+                # feature_val might be a 0-d array or scalar, ensure float
+                if hasattr(feature_val, 'item'):
+                    feature_val = feature_val.item()
+                perf = eval_model._compute_performance(float(feature_val), target, scaling)
+                
+                total_score += perf * weight
+                
+            return total_score
+
+        # 3. Define Uncertainty Function (if direct_mode)
+        uncertainty_fn = None
+        if direct_mode:
+            # Identify required features for uncertainty
+            required_features = [config['feature'] for config in objectives.values()]
+            
+            def u_fn(params: Dict[str, float]) -> float:
+                # Only request uncertainty for relevant features
+                uncertainties = self.pred_system.predict_uncertainty(params, required_features=required_features) # type: ignore
+                
+                total_sigma = 0.0
+                for perf_code, config in objectives.items():
+                    weight = config.get('weight', 1.0)
+                    feature_name = config['feature']
+                    
+                    if feature_name not in uncertainties:
+                        raise ValueError(f"Direct mode requested but feature '{feature_name}' has no uncertainty prediction.")
+                    
+                    sigma = uncertainties[feature_name]
+                    if hasattr(sigma, 'mean'):
+                        sigma = float(np.mean(sigma))
+                    else:
+                        sigma = float(sigma)
+                        
+                    total_sigma += sigma * weight
+                return total_sigma
+            uncertainty_fn = u_fn
+
+        # 4. Run Calibration
+        # We know self.calibration_model is not None here
+        best_params = self.calibration_model.calibrate( # type: ignore
+            param_ranges=param_ranges,
+            objective_fn=objective_fn,
+            fixed_params=fixed_params,
+            uncertainty_fn=uncertainty_fn
+        )
+        
+        return best_params
 

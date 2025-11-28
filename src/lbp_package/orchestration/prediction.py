@@ -502,6 +502,62 @@ class PredictionSystem(BaseOrchestrationSystem):
                 for i, idx in enumerate(batch_indices):
                     predictions[feature_name][idx] = float(y_pred[feature_name].iloc[i])
     
+    def predict_uncertainty(self, params: Dict[str, Any], required_features: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Predict uncertainty (sigma) for parameters.
+        Only works for models that implement predict_uncertainty().
+        Returns dictionary of {feature_name: sigma_array_or_scalar}.
+        
+        Args:
+            params: Parameter dictionary.
+            required_features: Optional list of features to predict uncertainty for.
+                               If None, predicts for all available features.
+        """
+        if self.datamodule is None:
+            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+            
+        dim_info = self._extract_dimensional_structure_from_params(params)
+        X_batch, _ = self._build_batch_features(0, dim_info['total_positions'], dim_info)
+        
+        uncertainties = {}
+        
+        for model in self.prediction_models:
+            # Optimization: Skip model if none of its features are required
+            if required_features is not None:
+                if not any(f in required_features for f in model.predicted_features):
+                    continue
+
+            if not hasattr(model, 'predict_uncertainty'):
+                continue
+                
+            try:
+                # Expecting model.predict_uncertainty(X) -> pd.DataFrame/dict
+                sigma_norm = model.predict_uncertainty(X_batch) # type: ignore
+            except Exception as e:
+                self.logger.warning(f"Model {type(model).__name__} failed to predict uncertainty: {e}")
+                continue
+            
+            # Denormalize uncertainty (scale only, no shift)
+            for feature in model.predicted_features:
+                # Skip if not required
+                if required_features is not None and feature not in required_features:
+                    continue
+
+                if feature in sigma_norm:
+                    val = sigma_norm[feature]
+                    if hasattr(val, 'values'): val = val.values # Handle Series/DF
+                    
+                    stats = self.datamodule.normalization_state.get(feature)
+                    if stats:
+                        if stats['method'] == 'zscore':
+                            val = val * stats['std']
+                        elif stats['method'] == 'minmax':
+                            val = val * (stats['max'] - stats['min'])
+                    
+                    uncertainties[feature] = val
+                    
+        return uncertainties
+
     # === EXPORT FOR PRODUCTION INFERENCE ===
     
     def export_inference_bundle(
