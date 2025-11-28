@@ -1,6 +1,7 @@
 """Test LBPAgent integration with new AIXD architecture."""
 
 import pytest
+import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, Type, Optional, Any
 
@@ -61,7 +62,7 @@ class SimplePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_names(self):
+    def predicted_features(self):
         return ["predicted_feature"]
     
     def train(self, X, y, **kwargs):
@@ -70,7 +71,6 @@ class SimplePredictionModel(IPredictionModel):
     
     def forward_pass(self, X):
         """Mock prediction."""
-        import pandas as pd
         # Return mock predictions
         return pd.DataFrame({"predicted_feature": [1.0] * len(X)})
     
@@ -152,7 +152,7 @@ def test_schema_generation(agent):
     )
     
     # Generate schema
-    schema = agent.generate_schema_from_active_models()
+    schema = agent.generate_schema_from_registered_models()
     
     assert isinstance(schema, DatasetSchema)
     assert len(schema.performance_attrs.data_objects) == 1

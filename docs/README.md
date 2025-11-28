@@ -12,7 +12,7 @@ This folder contains the complete documentation for the LBP package AIXD archite
 - 5-minute workflow guide
 - Complete code examples
 - Common operations
-- Phase 7 API patterns
+- Phase 10 dimensional prediction architecture
 
 **Start here** if you're new to the package.
 
@@ -103,4 +103,4 @@ Developer Flow:
 
 ---
 
-All documents are up-to-date as of **November 25, 2025** and reflect the **Phase 7 API**.
+All documents are up-to-date as of **November 28, 2025** and reflect the **Phase 10 API** (dimensional prediction architecture).

@@ -46,7 +46,7 @@ class InferenceBundle:
         # Build feature-to-model mapping
         self.feature_to_model: Dict[str, IPredictionModel] = {}
         for model in prediction_models:
-            for feat in model.feature_names:
+            for feat in model.predicted_features:
                 self.feature_to_model[feat] = model
     
     @classmethod
@@ -97,10 +97,10 @@ class InferenceBundle:
             y_pred_norm = model.forward_pass(X)
             
             # Denormalize
-            y_pred = self._denormalize(y_pred_norm, model.feature_names)
+            y_pred = self._denormalize(y_pred_norm, model.predicted_features)
             
             # Add to results
-            for col in model.feature_names:
+            for col in model.predicted_features:
                 if col in y_pred.columns:
                     predictions[col] = y_pred[col].tolist()
         

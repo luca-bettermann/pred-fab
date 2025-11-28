@@ -6,15 +6,13 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 """
 
 import numpy as np
-from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from .schema import DatasetSchema
 from .data_blocks import DataBlock, Parameters, MetricArrays, PerformanceAttributes
-
-if TYPE_CHECKING:
-    from ..interfaces.external_data import IExternalData
-    from ..utils.local_data import LocalData
-    from ..utils.logger import LBPLogger
+from ..interfaces.external_data import IExternalData
+from ..utils.local_data import LocalData
+from ..utils.logger import LBPLogger
 
 
 @dataclass
@@ -23,13 +21,27 @@ class ExperimentData:
     Complete data for a single experiment.
     
     - Parameters (static + dynamic + dimensional)
-    - Features, performance, and metric arrays (optional)
+    - Performance, metric arrays, and predicted metric arrays (always initialized to empty blocks)
+    - Features (optional, deprecated)
     """
     exp_code: str
-    parameters: DataBlock                          # All parameter values (static + dynamic + dimensional)
-    features: Optional[DataBlock] = None           # Raw feature values (measurements from sensors/models)
-    performance: Optional[DataBlock] = None        # Aggregated performance values
-    metric_arrays: Optional[DataBlock] = None      # Multi-dimensional arrays (DataArray objects)
+    parameters: DataBlock
+    performance: DataBlock = None  # type: ignore[assignment]  # Auto-initialized in __post_init__
+    metric_arrays: DataBlock = None  # type: ignore[assignment]  # Auto-initialized in __post_init__
+    predicted_metric_arrays: DataBlock = None  # type: ignore[assignment]  # Auto-initialized in __post_init__
+    features: Optional[DataBlock] = None
+    
+    def __post_init__(self):
+        """Auto-initialize data blocks if not provided."""
+        from .data_blocks import PerformanceAttributes, MetricArrays
+        
+        if self.performance is None:
+            self.performance = PerformanceAttributes()
+        if self.metric_arrays is None:
+            self.metric_arrays = MetricArrays()
+        if self.predicted_metric_arrays is None:
+            self.predicted_metric_arrays = MetricArrays()
+
     
     @property
     def dimensions(self) -> Dict[str, Any]:
@@ -53,9 +65,9 @@ class Dataset:
     """
     
     def __init__(self, name: str, schema: DatasetSchema, schema_id: str,
-                 local_data: Optional['LocalData'] = None, 
-                 external_data: Optional['IExternalData'] = None,
-                 logger: Optional['LBPLogger'] = None,
+                 local_data: Optional[LocalData] = None, 
+                 external_data: Optional[IExternalData] = None,
+                 logger: Optional[LBPLogger] = None,
                  debug_mode: bool = False):
         """
         Initialize Dataset.
@@ -75,20 +87,7 @@ class Dataset:
         self.local_data = local_data
         self.external_data = external_data
         self.debug_mode = debug_mode
-        
-        # Initialize logger (auto-create if not provided and local_data available)
-        if logger is None and local_data is not None:
-            from ..utils.logger import LBPLogger
-            log_folder = getattr(local_data, 'log_folder', None)
-            if log_folder:
-                self.logger = LBPLogger(
-                    name=f"dataset_{schema_id}",
-                    log_folder=log_folder
-                )
-            else:
-                self.logger = None
-        else:
-            self.logger = logger
+        self.logger = logger
         
         # Master storage using ExperimentData
         self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
@@ -381,22 +380,20 @@ class Dataset:
                 self.logger.warning(f"Parameter '{name}' is overwritting {self._static_values.get_value(name)} with {value} for '{exp_code}'")
             params_block.set_value(name, value)
         
-        # Create performance block
-        perf_block = None
+        # Create performance block (always initialized)
+        perf_block = PerformanceAttributes()
+        for name, data_obj in self.schema.performance_attrs.items():
+            perf_block.add(name, data_obj)
         if performance:
-            perf_block = PerformanceAttributes()
-            for name, data_obj in self.schema.performance_attrs.items():
-                perf_block.add(name, data_obj)
             for name, value in performance.items():
                 if perf_block.has(name):
                     perf_block.set_value(name, value)
         
-        # Create metric arrays block
-        arrays_block = None
+        # Create metric arrays block (always initialized)
+        arrays_block = MetricArrays()
+        for name, data_obj in self.schema.metric_arrays.items():
+            arrays_block.add(name, data_obj)
         if metric_arrays:
-            arrays_block = MetricArrays()
-            for name, data_obj in self.schema.metric_arrays.items():
-                arrays_block.add(name, data_obj)
             for name, array in metric_arrays.items():
                 if arrays_block.has(name):
                     arrays_block.set_value(name, array)
@@ -405,7 +402,8 @@ class Dataset:
             exp_code=exp_code,
             parameters=params_block,
             performance=perf_block,
-            metric_arrays=arrays_block
+            metric_arrays=arrays_block,
+            predicted_metric_arrays=MetricArrays()  # Always initialized
         )
     
     def _create_new_experiment(self, exp_code: str) -> ExperimentData:
@@ -419,11 +417,21 @@ class Dataset:
             if self._static_values.has_value(name):
                 params_block.set_value(name, self._static_values.get_value(name))
         
+        # Initialize all data blocks eagerly
+        perf_block = PerformanceAttributes()
+        for name, data_obj in self.schema.performance_attrs.items():
+            perf_block.add(name, data_obj)
+        
+        arrays_block = MetricArrays()
+        for name, data_obj in self.schema.metric_arrays.items():
+            arrays_block.add(name, data_obj)
+        
         return ExperimentData(
             exp_code=exp_code,
             parameters=params_block,
-            performance=None,
-            metric_arrays=None
+            performance=perf_block,
+            metric_arrays=arrays_block,
+            predicted_metric_arrays=MetricArrays()
         )
     
     def save(
@@ -512,24 +520,23 @@ class Dataset:
             # Save exp_record
             self.local_data.save_exp_records([exp_code], {exp_code: exp_record}, recompute)
             
-            # Save performance if available (use helper method)
-            if exp_data.performance:
-                perf_dict = exp_data.performance.get_values_dict()
+            # Save performance if has values
+            perf_dict = exp_data.performance.get_values_dict()
+            if perf_dict:
                 self.local_data.save_aggr_metrics([exp_code], {exp_code: perf_dict}, recompute)
             
-            # Save metric arrays if available
-            if exp_data.metric_arrays:
-                for name in exp_data.metric_arrays.keys():
-                    if exp_data.metric_arrays.has_value(name):
-                        array = exp_data.metric_arrays.get_value(name)
-                        column_names = self._infer_column_names(name)
-                        self.local_data.save_metrics_arrays(
-                            [exp_code],
-                            {exp_code: array},
-                            recompute,
-                            perf_code=name,
-                            column_names=column_names
-                        )
+            # Save metric arrays if has values
+            for name in exp_data.metric_arrays.keys():
+                if exp_data.metric_arrays.has_value(name):
+                    array = exp_data.metric_arrays.get_value(name)
+                    column_names = self._infer_column_names(name)
+                    self.local_data.save_metrics_arrays(
+                        [exp_code],
+                        {exp_code: array},
+                        recompute,
+                        perf_code=name,
+                        column_names=column_names
+                    )
             
             results["local"] = True
         
@@ -538,14 +545,14 @@ class Dataset:
             # Save exp_record
             self.external_data.push_exp_records([exp_code], {exp_code: exp_record}, recompute)
             
-            # Save performance if available (use helper method)
-            if exp_data.performance:
-                perf_dict = exp_data.performance.get_values_dict()
+            # Save performance if has values
+            perf_dict = exp_data.performance.get_values_dict()
+            if perf_dict:
                 self.external_data.push_aggr_metrics([exp_code], {exp_code: perf_dict}, recompute)
             
-            # Save metric arrays if available (use helper method)
-            if exp_data.metric_arrays:
-                arrays_dict = exp_data.metric_arrays.get_values_dict()
+            # Save metric arrays if has values
+            arrays_dict = exp_data.metric_arrays.get_values_dict()
+            if arrays_dict:
                 self.external_data.push_metrics_arrays([exp_code], arrays_dict, recompute)
             
             results["external"] = True

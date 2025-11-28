@@ -6,7 +6,6 @@ from .data_objects import (
     DataInt,
     DataBool,
     DataCategorical,
-    DataString,
     DataDimension,
     DataArray,
     Parameter,
@@ -22,8 +21,7 @@ from .data_blocks import (
     MetricArrays
 )
 
-from .schema import DatasetSchema
-from .schema_registry import SchemaRegistry
+from .schema import DatasetSchema, SchemaRegistry
 from .dataset import Dataset, ExperimentData
 from .datamodule import DataModule
 
@@ -33,7 +31,6 @@ __all__ = [
     'DataInt',
     'DataBool',
     'DataCategorical',
-    'DataString',
     'DataDimension',
     'DataArray',
     'Parameter',

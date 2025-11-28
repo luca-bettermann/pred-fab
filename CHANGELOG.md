@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **BaseOrchestrationSystem** (2025-11-28)
+  - Shared base class for `EvaluationSystem` and `PredictionSystem`
+  - Common initialization (`dataset`, `logger`)
+  - Shared `get_model_specs()` implementation for DataObject extraction
+  - Shared `_extract_params_from_exp_data()` helper method
+  - Abstract `get_models()` method for implementation-specific model storage
+  - ~90 lines of duplicate code eliminated across systems
+  - Enables consistent patterns for future orchestration systems
+
+### Changed
+- **Schema Generation Optimization** (2025-11-28)
+  - Moved spec extraction from agent to orchestration systems
+  - `EvaluationSystem.get_model_specs()` and `PredictionSystem.get_model_specs()` extract DataObjects from model fields
+  - `DatasetSchema.from_model_specs()` builds schema from system specs
+  - Agent no longer instantiates models twice (removed temporary systems)
+  - `_instantiate_models()` creates systems and model instances once, reused during initialization
+  - Agent code reduced by 66 lines (450 → 384 lines, -14.7%)
+  - Clearer separation: systems understand models, agent orchestrates workflow
+
+### Breaking Changes
+- **Phase 10: Dimensional Prediction Architecture** (2025-11-28)
+  - Prediction models now predict at dimensional level (not aggregated scalars)
+  - All training data extracted as dimensional positions (params + dimensional indices)
+  - Removed `extract_all()` and `get_batches()` methods (use `get_split()` instead)
+  - Simplified metric array storage: only feature values (not redundant dimensions/targets/scaling)
+  - `PredictionSystem.predict()` replaced with `predict_experiment(exp_data)`
+  - InferenceBundle removed (Phase 9 scalar inference not compatible with dimensional architecture)
+  - 23 Phase 9 tests removed, 31 tests migrated to Phase 10 API
+  - **Migration**: No backward compatibility - retrain models on dimensional data
+
+### Added
+- **Phase 10: Dimensional Prediction** (2025-11-27 to 2025-11-28)
+  - `predicted_metric_arrays` in `ExperimentData` for dimensional predictions
+  - `DataModule.get_split(split_name)` for dimensional data extraction
+  - `PredictionSystem.predict_experiment(exp_data, predict_from, predict_to, batch_size, overlap)`
+  - Vectorized batched prediction for memory efficiency (default: 1000 positions/batch)
+  - Batch overlap parameter for context-aware models (transformers, RNNs)
+  - NaN validation for training data
+  - Model compatibility validation (dimensional requirements)
+  - `required_features` property in `IPredictionModel` for explicit external dependencies
+  - 32 comprehensive tests for dimensional prediction (including overlap validation)
+  - Full documentation in IMPLEMENTATION_SUMMARY.md
+
 ### Fixed
 - **Architecture Fix: DataObject Value Storage** (2025-11-26)
   - Removed `value` attribute and `set_value()` methods from DataObject classes
@@ -15,17 +59,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Updated 9 tests and `interfaces/evaluation.py`
   - **Migration**: Use `data_block.get_value(name)` and `data_block.set_value(name, value)`
 
-### Added
-- **Train/Val/Test Splits** (2025-11-25)
-  - `DataModule` with configurable `test_size`, `val_size`, `random_seed` parameters
-  - `extract_all(split='train'|'val'|'test')` for split-specific extraction
-  - `get_split_sizes()` method and empty split validation
-  - Reproducible splits with fixed random seed (default: 42)
-
-- **Model Validation Metrics** (2025-11-25)
-  - `PredictionSystem.validate(use_test=False)` computes MAE, RMSE, R² metrics
-  - Returns per-feature metrics with sample counts
-  - Error handling for empty splits and untrained models
+### Deprecated
+- **Phase 9 Scalar Prediction API** (2025-11-28)
+  - `DataModule.extract_all()` → use `get_split('all')` or `get_split('train')`
+  - `DataModule.get_batches()` → not needed with vectorized dimensional prediction
+  - `PredictionSystem.predict(X)` → use `predict_experiment(exp_data)`
+  - `InferenceBundle` → dimensional inference patterns to be designed in future
 
 ## [1.0.0] - 2025-11-25
 

@@ -10,6 +10,7 @@
 - **Modularity** + **Type Safety** (Pylance): Small modules, explicit type hints everywhere
 - **Encapsulation**: Private `_methods`, public API via `@final`
 - **Self-Documenting**: Code structure explains intent, not comments
+- **Imports at Top**: All imports at file start (no inline imports except TYPE_CHECKING)
 
 ### Code Blocks
 
@@ -37,13 +38,13 @@ optimal_params = self.calibration_model.calibrate(...)
 **Abstract methods** (no code): Comprehensive with context
 ```python
 @property
-def feature_model_types(self) -> Dict[str, Type[IFeatureModel]]:
+def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
     """
-    Feature models this prediction model depends on.
+    Additional feature models needed as inputs during prediction.
     
     Returns:
         Dict mapping feature codes to IFeatureModel types
-        (e.g., {'path_dev': PathDeviationFeature})
+        (e.g., {'temp_sensor': TemperatureSensorFeature})
     """
 ```
 

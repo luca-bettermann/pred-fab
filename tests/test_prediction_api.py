@@ -73,7 +73,7 @@ class SingleFeaturePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["energy"]
     
     def train(self, X, y, **kwargs):
@@ -103,7 +103,7 @@ class MultiFeaturePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["feature_a", "feature_b", "feature_c"]  # Multiple features
     
     def train(self, X, y, **kwargs):
@@ -135,11 +135,11 @@ class ModelWithFeatureModelDependency(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["predicted_output"]
     
     @property
-    def feature_model_types(self) -> Dict[str, Type[IFeatureModel]]:
+    def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
         return {
             "feat1": MockFeatureModel1,
             "feat2": MockFeatureModel2,
@@ -171,11 +171,11 @@ class AnotherModelWithSameFeatureModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["other_output"]
     
     @property
-    def feature_model_types(self) -> Dict[str, Type[IFeatureModel]]:
+    def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
         return {
             "shared_feat": MockFeatureModel1,  # Same type as first model
         }
@@ -286,21 +286,21 @@ class TestPredictionSystemAPI:
         model2 = MultiFeaturePredictionModel()
         
         # Single feature model
-        assert model1.feature_names == ["energy"]
+        assert model1.predicted_features == ["energy"]
         
         # Multi-feature model
-        assert model2.feature_names == ["feature_a", "feature_b", "feature_c"]
+        assert model2.predicted_features == ["feature_a", "feature_b", "feature_c"]
 
 
 class TestFeatureModelDependencies:
     """Test feature model type declarations and instance sharing."""
     
-    def test_model_declares_feature_model_types(self):
+    def test_model_declares_feature_models_as_input(self):
         """Test that models can declare feature model dependencies."""
         model = ModelWithFeatureModelDependency()
         
         # Should declare feature model types
-        feature_types = model.feature_model_types
+        feature_types = model.feature_models_as_input
         assert "feat1" in feature_types
         assert "feat2" in feature_types
         assert feature_types["feat1"] == MockFeatureModel1
@@ -311,7 +311,7 @@ class TestFeatureModelDependencies:
         model = SingleFeaturePredictionModel()
         
         # Default should be empty dict
-        assert model.feature_model_types == {}
+        assert model.feature_models_as_input == {}
     
     def test_add_feature_model_method_attaches_instance(self, dataset, logger):
         """Test that add_feature_model() attaches IFeatureModel instance."""
@@ -378,12 +378,12 @@ class TestBackwardCompatibility:
         assert "energy" in system.feature_to_model
     
     def test_models_without_feature_dependencies_still_work(self, dataset, logger):
-        """Test that models without feature_model_types work fine."""
+        """Test that models without feature_models_as_input work fine."""
         system = PredictionSystem(dataset, logger)
         model = SingleFeaturePredictionModel()
         
-        # Should not fail even though feature_model_types returns {}
+        # Should not fail even though feature_models_as_input returns {}
         system.add_prediction_model(model)
         
-        assert model.feature_model_types == {}
+        assert model.feature_models_as_input == {}
         assert len(model._feature_models) == 0

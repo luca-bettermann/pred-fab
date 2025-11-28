@@ -6,8 +6,11 @@ They provide validation, type information, and value storage.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional, Dict, Tuple
+from typing import Any, List, Optional, Dict, Tuple, Literal
 import numpy as np
+
+
+NormalizeStrategy = Literal['default', 'standard', 'minmax', 'robust', 'none', 'categorical']
 
 
 class DataObject(ABC):
@@ -24,6 +27,21 @@ class DataObject(ABC):
         self.dtype = dtype
         self.constraints = constraints or {}
         self.round_digits = round_digits
+    
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """
+        Get normalization strategy for this data type.
+        
+        Returns:
+            - 'default': Use DataModule's default normalization
+            - 'standard': Standard scaling (mean=0, std=1)
+            - 'minmax': Min-max scaling to [0, 1]
+            - 'robust': Robust scaling using median and IQR
+            - 'none': No normalization
+            - 'categorical': One-hot encoding (for categorical data)
+        """
+        return 'default'
     
     @abstractmethod
     def validate(self, value: Any) -> bool:
@@ -68,7 +86,6 @@ class DataObject(ABC):
             "DataInt": DataInt,
             "DataBool": DataBool,
             "DataCategorical": DataCategorical,
-            "DataString": DataString,
             "DataDimension": DataDimension,
             "DataArray": DataArray
         }
@@ -97,6 +114,11 @@ class DataReal(DataObject):
         if max_val is not None:
             constraints["max"] = max_val
         super().__init__(name, float, constraints, round_digits)
+    
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """Use DataModule default normalization (typically 'standard')."""
+        return 'default'
     
     def validate(self, value: Any) -> bool:
         """Validate float value against constraints."""
@@ -132,6 +154,11 @@ class DataInt(DataObject):
             constraints["max"] = max_val
         super().__init__(name, int, constraints, round_digits)
     
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """Use DataModule default normalization (typically 'standard')."""
+        return 'default'
+    
     def validate(self, value: Any) -> bool:
         """Validate integer value against constraints."""
         if not isinstance(value, int) or isinstance(value, bool):
@@ -158,6 +185,11 @@ class DataBool(DataObject):
         """Initialize DataBool."""
         super().__init__(name, bool, {})
     
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """No normalization needed - already 0/1."""
+        return 'none'
+    
     def validate(self, value: Any) -> bool:
         """Validate boolean value."""
         if not isinstance(value, bool):
@@ -179,6 +211,11 @@ class DataCategorical(DataObject):
             raise ValueError("Categories list cannot be empty")
         super().__init__(name, str, {"categories": categories})
     
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """Categorical data requires one-hot encoding."""
+        return 'categorical'
+    
     def validate(self, value: Any) -> bool:
         """Validate value is in allowed categories."""
         if not isinstance(value, str):
@@ -195,25 +232,6 @@ class DataCategorical(DataObject):
     def _from_dict_impl(cls, name: str, constraints: Dict[str, Any],
                        round_digits: Optional[int] = None) -> 'DataCategorical':
         return cls(name, constraints["categories"])
-
-
-class DataString(DataObject):
-    """Arbitrary string parameter."""
-    
-    def __init__(self, name: str):
-        """Initialize DataString."""
-        super().__init__(name, str, {})
-    
-    def validate(self, value: Any) -> bool:
-        """Validate string value."""
-        if not isinstance(value, str):
-            raise TypeError(f"{self.name} must be str, got {type(value).__name__}")
-        return True
-    
-    @classmethod
-    def _from_dict_impl(cls, name: str, constraints: Dict[str, Any],
-                       round_digits: Optional[int] = None) -> 'DataString':
-        return cls(name)
 
 
 class DataDimension(DataObject):
@@ -239,6 +257,11 @@ class DataDimension(DataObject):
         
         # dim_param_name is the actual parameter (must be positive integer)
         super().__init__(dim_param_name, int, constraints)
+    
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """Dimensional indices use minmax to preserve ordinal structure."""
+        return 'minmax'
     
     def validate(self, value: Any) -> bool:
         """Validate dimensional parameter is positive integer."""
@@ -287,6 +310,11 @@ class DataArray(DataObject):
             "shape": shape,
             "dtype": str(dtype) if dtype else "float64"
         })
+    
+    @property
+    def normalize_strategy(self) -> NormalizeStrategy:
+        """Use DataModule default normalization (typically 'standard')."""
+        return 'default'
     
     def validate(self, value: Any) -> bool:
         """Validate numpy array against shape and dtype constraints."""
@@ -347,11 +375,6 @@ class Parameter:
     def boolean() -> DataBool:
         """Create a boolean parameter."""
         return DataBool(name="")
-    
-    @staticmethod
-    def string() -> DataString:
-        """Create a string parameter."""
-        return DataString(name="")
 
 
 class Performance:

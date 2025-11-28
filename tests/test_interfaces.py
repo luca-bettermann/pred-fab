@@ -82,7 +82,7 @@ class ConcretePredictionModel(IPredictionModel):
     
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["feature_1"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -211,7 +211,7 @@ class TestIPredictionModel:
         """Test abstract properties."""
         model = ConcretePredictionModel(logger=logger)
         
-        assert model.feature_names == ["feature_1"]
+        assert model.predicted_features == ["feature_1"]
     
     def test_prediction_model_train(self, logger):
         """Test training method."""

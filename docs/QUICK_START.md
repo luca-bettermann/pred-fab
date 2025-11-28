@@ -1,7 +1,7 @@
 # Quick Start Guide
 
-**Last Updated**: November 27, 2025  
-**Status**: Phase 7 API with Production Inference Support
+**Last Updated**: November 28, 2025  
+**Status**: Phase 10 - Dimensional Prediction Architecture
 
 ---
 
@@ -318,6 +318,46 @@ print(predictions)  # DataFrame with predicted features (auto-denormalized)
 ```
 
 **Split Configuration:**
+- `test_size`: Fraction for test set (default: 0.2)
+- `val_size`: Fraction of remaining for validation (default: 0.1)
+- `random_seed`: Reproducibility (default: 42)
+- `normalize`: Normalization method - `'standard'` (z-score), `'minmax'`, `'robust'`, or `None`
+
+**Normalization Methods:**
+DataModule automatically normalizes both parameters (X) and features (y) based on schema metadata:
+
+```python
+# Normalization is auto-detected from DataObject types:
+# - DataReal/DataInt: Uses DataModule default (e.g., 'standard')
+# - DataDimension: Always uses 'minmax' (preserves ordinal structure)
+# - DataBool: No normalization (already 0/1)
+# - DataCategorical: One-hot encoding
+
+# Manual normalization (advanced)
+X, y = datamodule.get_split('train')
+datamodule.fit_normalize(X, y)  # Fit on training data
+
+# Normalize parameters and features separately
+X_norm = datamodule.normalize_parameters(X)
+y_norm = datamodule.normalize_features(y)
+
+# Denormalize
+X_orig = datamodule.denormalize_parameters(X_norm)
+y_orig = datamodule.denormalize_features(y_norm)
+
+# Override normalization for specific columns
+datamodule.set_parameter_normalize('temp', 'minmax')  # Force minmax for temp
+datamodule.set_feature_normalize('loss', 'robust')    # Force robust for loss
+```
+
+**One-Hot Encoding:**
+Categorical parameters are automatically one-hot encoded during normalization:
+
+```python
+# Original: ['optimizer'] → ['adam', 'sgd', 'rmsprop']
+# Normalized: ['optimizer_adam', 'optimizer_sgd', 'optimizer_rmsprop'] → [1, 0, 0]
+# Denormalized: [1, 0, 0] → 'adam'
+```**
 - `test_size=0.0, val_size=0.0` - Use all data for training (no validation)
 - `test_size=0.2, val_size=0.0` - 80/20 train/test split (no validation)
 - `test_size=0.2, val_size=0.1` - Approximately 70/10/20 train/val/test

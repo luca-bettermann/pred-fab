@@ -5,9 +5,10 @@ import pytest
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Any
+
 from lbp_package.core import Dataset, DatasetSchema, DataModule
-from lbp_package.core.data_objects import DataReal, DataInt
-from lbp_package.core.data_blocks import DataBlock
+from lbp_package.core.data_objects import DataReal, DataInt, DataArray
+from lbp_package.core.data_blocks import DataBlock, MetricArrays
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.orchestration.prediction import PredictionSystem
 from lbp_package.utils.logger import LBPLogger
@@ -18,7 +19,7 @@ class KwargsCapturingModel(IPredictionModel):
     
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ['test_feature']
     
     def __init__(self):
@@ -68,8 +69,9 @@ def simple_dataset():
         external_data=None
     )
     
-    # Add experiments with features
+    # Add experiments with features in metric_arrays
     np.random.seed(42)
+    
     for i in range(3):
         exp_code = f"exp_{i}"
         exp_data = dataset.add_experiment(
@@ -77,10 +79,11 @@ def simple_dataset():
             exp_params={"x": float(i), "y": float(i * 2)}
         )
         
-        # Add features
-        exp_data.features = DataBlock()
-        exp_data.features.add("test_feature", DataReal("test_feature"))
-        exp_data.features.set_value("test_feature", float(i + 1))
+        # Initialize metric_arrays and add features
+        exp_data.metric_arrays = MetricArrays()
+        test_feature_arr = DataArray(name="test_feature", shape=())
+        exp_data.metric_arrays.add("test_feature", test_feature_arr)
+        exp_data.metric_arrays.set_value("test_feature", np.array(float(i + 1)))
     
     return dataset
 

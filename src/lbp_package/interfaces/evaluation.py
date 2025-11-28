@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 from .features import IFeatureModel
 from ..core.dataset import ExperimentData
 from ..core.data_blocks import MetricArrays, PerformanceAttributes
+from ..core.data_objects import DataDimension
 from ..utils import LBPLogger
 
 
@@ -78,6 +79,7 @@ class IEvaluationModel(ABC):
     
     @final
     def run(self, feature_name: str, performance_attr_name: str, exp_data: ExperimentData, 
+            evaluate_from: int = 0, evaluate_to: Optional[int] = None,
             visualize: bool = False) -> None:
         """Evaluate feature against target values and store results in ExperimentData."""
         # Validate preconditions
@@ -89,7 +91,6 @@ class IEvaluationModel(ABC):
         self.logger.info(f"Starting evaluation for feature '{feature_name}'")
         
         # Extract dimension info
-        from ..core.data_objects import DataDimension
         dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
                       if isinstance(obj, DataDimension)]
         dim_names = [obj.name for obj in dim_objects]
@@ -103,9 +104,17 @@ class IEvaluationModel(ABC):
         
         # Generate dimensional combinations
         dim_ranges = [range(size) for size in dim_sizes]
-        dim_combinations = list(itertools.product(*dim_ranges))
+        all_dim_combinations = list(itertools.product(*dim_ranges))
+        
+        # Apply dimensional slice
+        if evaluate_to is None:
+            dim_combinations = all_dim_combinations[evaluate_from:]
+        else:
+            dim_combinations = all_dim_combinations[evaluate_from:evaluate_to]
+        
         total_combos = len(dim_combinations)
-        self.logger.info(f"Processing {total_combos} dimensional combinations")
+        total_all = len(all_dim_combinations)
+        self.logger.info(f"Processing {total_combos}/{total_all} dimensional combinations [{evaluate_from}:{evaluate_to}]")
         
         # Build static parameters
         static_params = dict(exp_data.parameters.values) if exp_data.parameters else {}
@@ -145,7 +154,8 @@ class IEvaluationModel(ABC):
         
         # Store results in ExperimentData
         self._store_results(exp_data, feature_name, performance_attr_name, 
-                          metric_array, performance_array, dim_names, num_dims)
+                          metric_array, performance_array, dim_names, num_dims,
+                          evaluate_from, evaluate_to)
         
         # Compute aggregations
         aggr_metrics = self._compute_aggregation(exp_data)
@@ -204,36 +214,40 @@ class IEvaluationModel(ABC):
     def _store_results(
         self, exp_data: ExperimentData, feature_name: str, performance_attr_name: str,
         metric_array: np.ndarray, performance_array: np.ndarray, 
-        dim_names: List[str], num_dims: int
+        dim_names: List[str], num_dims: int,
+        evaluate_from: int = 0, evaluate_to: Optional[int] = None
     ) -> None:
         """Store evaluation results in ExperimentData blocks."""
-        from ..core.data_objects import DataArray, Performance, DataReal
-        from ..core.data_blocks import DataBlock
+        from ..core.data_objects import DataArray, Performance
+        from ..core.data_blocks import MetricArrays, PerformanceAttributes
         
-        # Store aggregated feature value
-        if exp_data.features is None:
-            exp_data.features = DataBlock()
-        feature_obj = DataReal(feature_name)
-        exp_data.features.add(feature_name, feature_obj)
+        # Phase 10: Store only feature values (dimensions implicit in indices)
+        # Extract feature values from metric_array
         feature_values = metric_array[..., num_dims]
-        exp_data.features.set_value(feature_name, float(np.nanmean(feature_values)))
         
-        # Store performance attribute
+        # Apply dimensional slicing if requested
+        if evaluate_from > 0 or (evaluate_to is not None and evaluate_to < feature_values.size):
+            # Create slice for first dimension
+            if len(feature_values.shape) > 0:
+                sliced_values = feature_values.copy()
+                # Flatten to 1D, slice, then reshape back
+                flat = sliced_values.flatten()
+                if evaluate_to is None:
+                    evaluate_to = len(flat)
+                sliced_flat = flat[evaluate_from:evaluate_to]
+                # For now, store sliced values - full slicing support needs more work
+                feature_values = sliced_flat
+        
+        # Store feature values in metric_arrays (always initialized)
+        feature_data_array = DataArray(name=feature_name, shape=feature_values.shape, dtype=np.dtype(np.float64))
+        exp_data.metric_arrays.add(feature_name, feature_data_array)
+        exp_data.metric_arrays.set_value(feature_name, feature_values)
+        
+        # Store aggregated performance attribute (always initialized)
         perf_attr = Performance.real(min_val=0.0, max_val=1.0)
         perf_attr.name = performance_attr_name
-        if exp_data.performance is None:
-            exp_data.performance = PerformanceAttributes()
         exp_data.performance.add(performance_attr_name, perf_attr)
         exp_data.performance.set_value(performance_attr_name, float(np.nanmean(performance_array)))
-        
-        # Store metric array
-        metric_names = dim_names + [feature_name, "target", "scaling", performance_attr_name]
-        metric_data_array = DataArray(name=feature_name, shape=metric_array.shape, dtype=np.dtype(np.float64))
-        metric_data_array.constraints["metric_names"] = metric_names
-        if exp_data.metric_arrays is None:
-            exp_data.metric_arrays = MetricArrays()
-        exp_data.metric_arrays.add(feature_name, metric_data_array)
-        exp_data.metric_arrays.set_value(feature_name, metric_array)
     
     # === EXPORT/IMPORT SUPPORT (OPTIONAL) ===
     

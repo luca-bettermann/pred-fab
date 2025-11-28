@@ -7,16 +7,9 @@ manages schema generation and dataset initialization.
 """
 
 from typing import Any, Dict, List, Type, Optional
-from dataclasses import fields
-
-from typing import TYPE_CHECKING
-import pandas as pd
-
-from ..core.schema import DatasetSchema
-from ..core.schema_registry import SchemaRegistry
+from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset
 from ..core.datamodule import DataModule
-from ..core.data_objects import DataReal, DataInt, DataBool, DataCategorical, DataString, DataDimension
 from ..orchestration.evaluation import EvaluationSystem
 from ..orchestration.prediction import PredictionSystem
 from ..interfaces import IEvaluationModel, IPredictionModel, ICalibrationModel, IExternalData
@@ -147,112 +140,56 @@ class LBPAgent:
         self.calibration_model = calibration_class(logger=self.logger, **kwargs)
         self.logger.console_info(f"Set calibration model to '{calibration_class.__name__}'.")
     
-    # === SCHEMA GENERATION ===
+    # === SCHEMA GENERATION & INITIALIZATION ===
     
-    def generate_schema_from_active_models(self) -> DatasetSchema:
-        """Generate DatasetSchema from registered evaluation/prediction model classes."""
+    def _instantiate_models(self) -> None:
+        """Instantiate model instances from registered classes and populate systems."""
         if not self._evaluation_model_specs:
             raise ValueError("No evaluation models registered. Call register_evaluation_model() first.")
         
-        schema = DatasetSchema()
-        seen_params = set()
+        self.logger.info("Instantiating models from registered classes...")
+        
+        # Initialize systems (dataset will be set later)
+        self.eval_system = EvaluationSystem(dataset=None, logger=self.logger)  # type: ignore
+        self.pred_system = PredictionSystem(dataset=None, logger=self.logger)  # type: ignore
+        
+        # Instantiate evaluation model instances from registered classes
+        for perf_code, (eval_class, eval_kwargs) in self._evaluation_model_specs.items():
+            self.logger.info(f"Instantiating evaluation model for '{perf_code}': {eval_class.__name__}")
+            eval_model = eval_class(logger=self.logger, **eval_kwargs)
+            # Store instance in system (feature model attachment happens later with dataset)
+            self.eval_system.evaluation_models[perf_code] = eval_model
+        
+        # Instantiate prediction model instances from registered classes (unique classes only)
+        seen_pred_classes = set()
+        for perf_code, (pred_class, pred_kwargs) in self._prediction_model_specs.items():
+            if pred_class not in seen_pred_classes:
+                self.logger.info(f"Instantiating prediction model: {pred_class.__name__}")
+                pred_model = pred_class(logger=self.logger, **pred_kwargs)
+                # Store instance in system
+                self.pred_system.prediction_models.append(pred_model)
+                seen_pred_classes.add(pred_class)
+    
+    def generate_schema_from_registered_models(self) -> DatasetSchema:
+        """Generate DatasetSchema from registered models."""
+        # Instantiate models if not already done
+        if self.eval_system is None or self.pred_system is None:
+            self._instantiate_models()
         
         self.logger.info("Generating schema from registered model classes...")
         
-        # 1. Extract parameters from evaluation model classes and their feature model classes
-        for perf_code, (eval_class, eval_kwargs) in self._evaluation_model_specs.items():
-            self.logger.info(f"Processing evaluation model for '{perf_code}': {eval_class.__name__}")
-            
-            # Extract from evaluation model class fields
-            self._extract_parameters_from_class(eval_class, schema, seen_params)
-            
-            # Get feature model class from evaluation model (as a property)
-            # We need to inspect the class to find the feature_model_type property
-            if hasattr(eval_class, 'feature_model_type'):
-                # This is a property - we'd need an instance to call it
-                # For now, skip feature model extraction during schema generation
-                # Feature model params will be extracted when models are instantiated
-                pass
-            
-            # Add performance attribute
-            perf_obj = DataReal(perf_code)
-            schema.performance_attrs.add(perf_code, perf_obj)
-            self.logger.info(f"Added performance attribute: {perf_code}")
+        # Extract specs from systems
+        eval_specs = self.eval_system.get_model_specs()  # type: ignore
+        pred_specs = self.pred_system.get_model_specs()  # type: ignore
         
-        # 2. Extract parameters from prediction model classes
-        for perf_code, (pred_class, pred_kwargs) in self._prediction_model_specs.items():
-            self.logger.info(f"Processing prediction model for '{perf_code}': {pred_class.__name__}")
-            self._extract_parameters_from_class(pred_class, schema, seen_params)
-        
-        self.logger.info(
-            f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
-            f"{len(schema.dimensions.data_objects)} dimensions, "
-            f"{len(schema.performance_attrs.data_objects)} performance attributes"
+        # Delegate schema construction to DatasetSchema
+        schema = DatasetSchema.from_model_specs(
+            eval_specs=eval_specs,
+            pred_specs=pred_specs,
+            logger=self.logger
         )
         
         return schema
-    
-    def _extract_parameters_from_class(
-        self,
-        model_class: type,
-        schema: DatasetSchema,
-        seen_params: set
-    ) -> None:
-        """Extract DataObject parameters from model class dataclass fields."""
-        from ..core.data_objects import DataReal, DataInt, DataBool, DataCategorical, DataString, DataDimension
-        
-        # Get dataclass fields from class
-        model_fields = fields(model_class)
-        
-        for field in model_fields:
-            # Skip special fields
-            if field.name in ('logger', 'feature_model', 'dataset'):
-                continue
-            
-            # Check if field has a default value that's a DataObject
-            if field.default is not field.default_factory:  # type: ignore
-                # Field has a default value
-                default_val = field.default
-                data_object_types = (DataReal, DataInt, DataBool, DataCategorical, DataString, DataDimension)
-                
-                if isinstance(default_val, data_object_types):
-                    param_name = field.name
-                    
-                    if param_name not in seen_params:
-                        # Add to appropriate schema block
-                        if isinstance(default_val, DataDimension):
-                            schema.dimensions.add(param_name, default_val)
-                            self.logger.info(f"  Added dimension: {param_name}")
-                        else:
-                            schema.parameters.add(param_name, default_val)
-                            self.logger.info(f"  Added parameter: {param_name}")
-                        
-                        seen_params.add(param_name)
-    
-    def _infer_data_object(self, param_name: str, field) -> Any:
-        """Infer DataObject type from field annotation or default."""
-        # Try to infer from type annotation
-        if hasattr(field, 'type'):
-            field_type = field.type
-            
-            # Handle Optional types
-            if hasattr(field_type, '__origin__'):
-                if field_type.__origin__ is type(None) or str(field_type.__origin__) == 'typing.Union':
-                    # Extract actual type from Optional[T]
-                    args = getattr(field_type, '__args__', ())
-                    field_type = next((arg for arg in args if arg is not type(None)), field_type)
-            
-            if field_type == int or field_type == 'int':
-                return DataInt(param_name)
-            elif field_type == float or field_type == 'float':
-                return DataReal(param_name)
-            elif field_type == bool or field_type == 'bool':
-                return DataBool(param_name)
-            elif field_type == str or field_type == 'str':
-                return DataString(param_name)
-        
-        # Default to DataReal
-        return DataReal(param_name)
     
     # === INITIALIZATION ===
     
@@ -273,7 +210,7 @@ class LBPAgent:
         
         # Step 1: Generate schema from registered models
         self.logger.info("Generating schema from registered models")
-        schema = self.generate_schema_from_active_models()
+        schema = self.generate_schema_from_registered_models()
         
         # Step 2: Get or create schema ID via registry
         registry = SchemaRegistry(self.local_data.local_folder)
@@ -294,30 +231,31 @@ class LBPAgent:
         )
         dataset.set_static_values(static_params)
         
-        # Step 4: Initialize orchestration systems with dataset
-        self.logger.info("Initializing orchestration systems with dataset")
-        self.eval_system = EvaluationSystem(dataset, self.logger)
-        self.pred_system = PredictionSystem(dataset, self.logger)
+        # Step 4: Attach dataset to already-initialized systems
+        self.logger.info("Attaching dataset to orchestration systems")
+        self.eval_system.dataset = dataset  # type: ignore
+        self.pred_system.dataset = dataset  # type: ignore
         
-        # Step 5: Register models with systems (instantiate from specs)
-        self.logger.info("Instantiating and registering models with systems")
-        for perf_code, (eval_class, eval_kwargs) in self._evaluation_model_specs.items():
-            # Instantiate evaluation model (no dataset parameter)
-            eval_model = eval_class(logger=self.logger, **eval_kwargs)
-            
-            # Get feature model class from evaluation model property
+        # Step 5: Attach feature models to evaluation models (now that dataset exists)
+        self.logger.info("Attaching feature models to evaluation models")
+        for perf_code, eval_model in self.eval_system.evaluation_models.items():  # type: ignore
             feature_model_class = eval_model.feature_model_type  # type: ignore
-            
-            # Add to evaluation system (which will create and attach feature model with dataset)
-            self.eval_system.add_evaluation_model(perf_code, eval_model, feature_model_class)
+            feature_model = feature_model_class(dataset=dataset, logger=self.logger)
+            eval_model.add_feature_model(feature_model)
         
-        for perf_code, (pred_class, pred_kwargs) in self._prediction_model_specs.items():
-            # Instantiate prediction model (no dataset parameter)
-            pred_model = pred_class(logger=self.logger, **pred_kwargs)
-            # Register with system (model declares what it predicts via feature_names)
-            self.pred_system.add_prediction_model(pred_model)
+        # Step 6: Setup prediction model mappings (feature_name -> model)
+        self.logger.info("Setting up prediction model mappings")
+        for pred_model in self.pred_system.prediction_models:  # type: ignore
+            # Create feature-to-model mappings
+            for feature_name in pred_model.predicted_features:
+                if feature_name in self.pred_system.feature_to_model:  # type: ignore
+                    self.logger.warning(  # type: ignore
+                        f"Feature '{feature_name}' already registered to another model. "
+                        f"Overwriting with new model."
+                    )
+                self.pred_system.feature_to_model[feature_name] = pred_model  # type: ignore
         
-        # Step 6: Create and attach shared feature model instances to prediction models
+        # Step 7: Create and attach shared feature model instances to prediction models
         self._add_feature_model_instances(dataset)
         
         # Attach storage paths
@@ -351,7 +289,7 @@ class LBPAgent:
         feature_model_collection: List[tuple] = []  # [(model, code, feature_model_type), ...]
         
         for pred_model in self.pred_system.prediction_models:
-            feature_model_types = pred_model.feature_model_types
+            feature_model_types = pred_model.feature_models_as_input
             for code, feature_model_type in feature_model_types.items():
                 feature_model_collection.append((pred_model, code, feature_model_type))
         
@@ -387,28 +325,10 @@ class LBPAgent:
             f"({len(feature_model_dict)} unique types)"
         )
     
-    # === EVALUATION OPERATIONS ===
-    
-    def evaluate_experiment(
-        self,
-        exp_data: 'ExperimentData',  # type: ignore
-        visualize: bool = False,
-        recompute: bool = False
-    ) -> None:
-        """Evaluate experiment and mutate exp_data with results."""
-        # Delegate to evaluation system
-        self.eval_system.evaluate_experiment(  # type: ignore[attr-defined]
-            exp_data=exp_data,
-            visualize=visualize,
-            recompute=recompute
-        )
-        
-        self.logger.console_info(f"Experiment '{exp_data.exp_code}' evaluated successfully")
-    
     # === PREDICTION OPERATIONS ===
     
     def train(self, datamodule: DataModule, **kwargs) -> None:
-        """Train all prediction models using DataModule configuration."""
+        """Train all prediction models (offline learning)."""
         if self.pred_system is None:
             raise RuntimeError(
                 "PredictionSystem not initialized. Call initialize() first."
@@ -416,11 +336,55 @@ class LBPAgent:
         
         self.pred_system.train(datamodule, **kwargs)
     
-    def predict(self, X_new: pd.DataFrame) -> pd.DataFrame:
-        """Predict all features for new parameter values."""
+    def tune(self, datamodule: DataModule, **kwargs) -> None:
+        """Fine-tune prediction models with new data (online learning)."""
         if self.pred_system is None:
             raise RuntimeError(
                 "PredictionSystem not initialized. Call initialize() first."
             )
         
-        return self.pred_system.predict(X_new)
+        self.pred_system.tune(datamodule, **kwargs)
+        
+    def predict(
+        self,
+        exp_data: 'ExperimentData',  # type: ignore
+        predict_from: int = 0,
+        predict_to: Optional[int] = None,
+        batch_size: int = 1000
+    ) -> None:
+        """Predict dimensional features and mutate exp_data with results."""
+        if self.pred_system is None:
+            raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
+        
+        # Delegate to prediction system
+        self.pred_system.predict_experiment(
+            exp_data=exp_data,
+            predict_from=predict_from,
+            predict_to=predict_to,
+            batch_size=batch_size
+        )
+        
+        self.logger.console_info(
+            f"Predicted dimensions [{predict_from}:{predict_to}] for '{exp_data.exp_code}'"
+        )
+    
+    def evaluate(
+        self,
+        exp_data: 'ExperimentData',  # type: ignore
+        evaluate_from: int = 0,
+        evaluate_to: Optional[int] = None,
+        visualize: bool = False,
+        recompute: bool = False
+    ) -> None:
+        """Evaluate experiment and mutate exp_data with results."""
+        # Delegate to evaluation system
+        self.eval_system.evaluate_experiment(  # type: ignore[attr-defined]
+            exp_data=exp_data,
+            evaluate_from=evaluate_from,
+            evaluate_to=evaluate_to,
+            visualize=visualize,
+            recompute=recompute
+        )
+        
+        self.logger.console_info(f"Experiment '{exp_data.exp_code}' evaluated successfully")
+

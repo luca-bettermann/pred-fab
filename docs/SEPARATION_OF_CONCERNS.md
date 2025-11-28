@@ -1,7 +1,7 @@
 # Architecture: Separation of Concerns
 
-**Last Updated**: November 25, 2025  
-**Status**: Current (Phase 7 Complete)
+**Last Updated**: November 28, 2025  
+**Status**: Current (Phase 10 Complete)
 
 ---
 
@@ -22,7 +22,8 @@
                          │
 ┌─────────────────────────────────────────────────────┐
 │                   Orchestration                      │
-│        (EvaluationSystem, PredictionSystem)         │
+│     BaseOrchestrationSystem (abstract base)         │
+│   EvaluationSystem, PredictionSystem (concrete)     │
 │            Manage Model Execution                    │
 └─────────────────────────────────────────────────────┘
                          │
@@ -218,10 +219,17 @@ class ExperimentData:
 
 **Responsibility:** Stateless orchestration - register models and coordinate execution.
 
+#### 2.1 LBPAgent (`orchestration/agent.py`)
+
+**Responsibility:** High-level workflow orchestration and dataset initialization.
+
 **Does:**
-- Register evaluation and prediction models (store specs)
-- Generate schema from registered models (dataclass introspection)
-- Initialize dataset and systems
+- Register model classes (store specs for later instantiation)
+- Generate schema from registered models (via systems)
+- Initialize dataset and orchestration systems
+- Coordinate two-phase initialization:
+  1. Schema generation: instantiate models → extract specs → build schema
+  2. Dataset attachment: attach dataset → connect feature models → setup mappings
 - Coordinate experiment evaluation (delegate to EvaluationSystem)
 - Coordinate prediction training/inference (delegate to PredictionSystem)
 - Provide high-level workflow API
@@ -231,16 +239,51 @@ class ExperimentData:
 - Store experiment data
 - Execute models directly (that's Systems)
 - Manage persistence (that's Dataset)
+- Extract DataObjects from models (that's BaseOrchestrationSystem)
 
 **Key Change in Phase 7:** Agent is now stateless - returns Dataset without storing it.
 
+**Schema Generation Workflow:**
+```python
+1. User: agent.register_evaluation_model(perf_code, ModelClass, **kwargs)
+   → Stores (class, kwargs) in _evaluation_model_specs
+
+2. User: agent.initialize(static_params)
+   ↓
+3. generate_schema_from_registered_models()
+   ↓
+4. _instantiate_models() (if not already done)
+   → Creates EvaluationSystem and PredictionSystem (dataset=None)
+   → Instantiates model instances from registered classes
+   → Stores instances in systems
+   ↓
+5. systems.get_model_specs()
+   → BaseOrchestrationSystem extracts DataObjects from model fields
+   → EvaluationSystem adds performance outputs
+   → PredictionSystem adds predicted features
+   ↓
+6. DatasetSchema.from_model_specs(eval_specs, pred_specs)
+   → Merges parameter inputs from both systems
+   → Validates no conflicting definitions
+   → Separates dimensions from parameters
+   → Adds performance attributes
+   → Returns schema
+   ↓
+7. Create Dataset with schema
+   ↓
+8. Attach dataset to systems
+   ↓
+9. Connect feature models (require dataset for memoization)
+```
+
 **Methods:**
-- `register_evaluation_model()`: Register model class
-- `register_prediction_model()`: Register model class
-- `initialize()`: Create dataset + systems, return dataset
-- `evaluate_experiment(dataset, exp_data)`: Mutate exp_data with results
-- `train(datamodule, **kwargs)`: Train prediction models on training split\n- `validate(use_test)`: Validate models on val/test split with metrics
-- `predict(X_new)`: Predict features for new parameters (auto denormalized)
+- `register_evaluation_model(perf_code, class, **kwargs)`: Store model class for later instantiation
+- `register_prediction_model(perf_codes, class, **kwargs)`: Store model class for later instantiation
+- `initialize(static_params)`: Generate schema → create dataset → attach to systems → return dataset
+- `train(datamodule, **kwargs)`: Train prediction models on training split
+- `validate(use_test)`: Validate models on val/test split with metrics
+- `predict(exp_data, ...)`: Predict dimensional features and store in exp_data
+- `evaluate(exp_data, ...)`: Evaluate experiment and store results in exp_data
 
 ---
 
@@ -248,8 +291,10 @@ class ExperimentData:
 
 **Responsibility:** Execute evaluation models and store results.
 
+**Inherits:** `BaseOrchestrationSystem` (dataset, logger, get_model_specs, _extract_params_from_exp_data)
+
 **Does:**
-- Manage evaluation model instances
+- Manage evaluation model instances (dict: perf_code → IEvaluationModel)
 - Execute evaluation models in correct order
 - Compute features via feature models
 - Store feature values in `exp_data.features` DataBlock
@@ -257,9 +302,11 @@ class ExperimentData:
 - Store metric arrays in `exp_data.metric_arrays` DataBlock
 - Pass visualization flags to feature models
 - Handle recompute logic (clear feature cache)
+- Override `get_model_specs()` to add performance outputs
+- Implement `get_models()` to return evaluation_models dict
 
 **Does NOT:**
-- Own dataset (references it)
+- Own dataset (references it via base class)
 - Define models (that's user via interfaces)
 - Validate data (that's Dataset)
 
@@ -279,30 +326,35 @@ evaluate_experiment() →
 
 **Responsibility:** Train and execute prediction models with DataModule integration.
 
+**Inherits:** `BaseOrchestrationSystem` (dataset, logger, get_model_specs, _extract_params_from_exp_data)
+
 **Does:**
-- Manage prediction model instances
+- Manage prediction model instances (list: [IPredictionModel, ...])
+- Maintain feature-to-model mapping (dict: feature_name → IPredictionModel)
 - Own DataModule lifecycle (stores copy after training)
 - Coordinate training with normalization/batching
 - Extract training data from DataModule (train split only)
-- Fit normalization on features (y) from training data
+- Fit normalization on both parameters (X) and features (y) from training data
 - Train models on normalized training data
 - Validate models on val/test splits with metrics (MAE, RMSE, R²)
 - Validate input parameters for prediction
-- Auto-denormalize predictions
+- Auto-normalize inputs and denormalize predictions
 - Return prediction results (DataFrames)
 - Export models to InferenceBundle with validation
+- Override `get_model_specs()` to add predicted features
+- Implement `get_models()` to return prediction_models list
 
 **Does NOT:**
-- Own dataset (uses it for training data extraction)
+- Own dataset (uses it for training data extraction via base class)
 - Store predictions permanently
-- Normalize parameters (X) - only features (y)
+- Normalize evaluation features (only parameters and predicted features)
 - Predict performance (predicts features)
 
 **Training Flow with DataModule:**
 ```
 train(datamodule, **kwargs) →
   check train split not empty
-  datamodule.extract_all(split='train') → X_train, y_train
+  datamodule.get_split('train') → X_train, y_train
   datamodule.fit_normalize(y_train) → compute mean/std on training data
   for each feature:
     y_norm = datamodule.normalize(y_feature)
@@ -314,7 +366,7 @@ train(datamodule, **kwargs) →
 validate(use_test=False) →
   check split not empty
   split = 'test' if use_test else 'val'
-  datamodule.extract_all(split=split) → X_split, y_split
+  datamodule.get_split(split) → X_split, y_split
   for each model:
     y_pred_norm = model.forward_pass(X_split)
     y_pred = datamodule.denormalize(y_pred_norm)
@@ -455,9 +507,12 @@ bundle.predict(X) →
 **Responsibility:** Define contract for predicting features from parameters using machine learning.
 
 **Does:**
-- Declare `feature_names` property (what features to predict)
+- Declare `predicted_features` property (what features to predict)
+- Declare `features_as_input` property (evaluation features needed as inputs)
+- Declare `feature_models_as_input` property (additional feature models needed as inputs)
 - Declare `train(X: pd.DataFrame, y: pd.DataFrame, **kwargs)` method
 - Declare `forward_pass(X: pd.DataFrame) -> pd.DataFrame` method
+- Optionally implement `_get_model_artifacts()` / `_set_model_artifacts()` for export/import
 
 **Does NOT:**
 - Store dataset reference (data passed explicitly)
@@ -470,19 +525,31 @@ bundle.predict(X) →
 class MyPredictionModel(IPredictionModel):
     # Prediction models predict FEATURES, not performance
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ['filament_width', 'layer_height']
     
+    @property
+    def features_as_input(self) -> List[str]:
+        # Evaluation features required as inputs (already computed)
+        return ['surface_roughness']  # Optional, default: []
+    
+    @property
+    def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
+        # Additional feature models for inputs (e.g., sensor data)
+        return {'temp': TemperatureSensorFeature}  # Optional, default: {}
+    
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs):
-        # X: parameters, y: features (normalized by DataModule)
+        # X: parameters + features_as_input (all normalized by DataModule)
+        # y: predicted_features (normalized by DataModule)
         # **kwargs: learning_rate, epochs, batch_size, verbose, etc.
         learning_rate = kwargs.get('learning_rate', 0.01)
         epochs = kwargs.get('epochs', 100)
         # Implement ML training
         pass
     
-    def predict(self, X: pd.DataFrame) -> pd.DataFrame:
-        # Returns DataFrame with feature columns (floats)
+    def forward_pass(self, X: pd.DataFrame) -> pd.DataFrame:
+        # X: parameters + features_as_input (normalized)
+        # Returns DataFrame with predicted_features columns (normalized)
         pass
 ```
 
@@ -581,10 +648,10 @@ sizes = datamodule.get_split_sizes()
 # {'train': 72, 'val': 8, 'test': 20}
 
 # Extract specific splits
-X_train, y_train = datamodule.extract_all(split='train')
-X_val, y_val = datamodule.extract_all(split='val')
-X_test, y_test = datamodule.extract_all(split='test')
-X_all, y_all = datamodule.extract_all()  # All data (no split)
+X_train, y_train = datamodule.get_split('train')
+X_val, y_val = datamodule.get_split('val')
+X_test, y_test = datamodule.get_split('test')
+X_all, y_all = datamodule.get_split('all')  # All data
 
 # Train on training split
 system.train(datamodule)  # Uses train split automatically

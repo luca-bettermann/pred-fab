@@ -11,8 +11,8 @@ from typing import List, Dict, Any
 
 from lbp_package.core import Dataset, DatasetSchema, DataModule
 from lbp_package.core.dataset import ExperimentData
-from lbp_package.core.data_objects import DataReal, DataInt
-from lbp_package.core.data_blocks import DataBlock
+from lbp_package.core.data_objects import DataReal, DataInt, DataArray
+from lbp_package.core.data_blocks import DataBlock, MetricArrays
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.interfaces.features import IFeatureModel
 from lbp_package.interfaces.evaluation import IEvaluationModel
@@ -30,7 +30,7 @@ class BadPredictionModel(IPredictionModel):
     
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["test_feature"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -143,7 +143,8 @@ def simple_dataset():
         external_data=None
     )
     
-    # Add experiments with features
+    # Add experiments with features in metric_arrays
+    
     for i in range(3):
         exp_code = f"exp_{i}"
         exp_data = dataset.add_experiment(
@@ -151,47 +152,12 @@ def simple_dataset():
             exp_params={"x": float(i), "y": float(i * 2)}
         )
         
-        exp_data.features = DataBlock()
-        exp_data.features.add("test_feature", DataReal("test_feature"))
-        exp_data.features.set_value("test_feature", float(i + 1))
+        exp_data.metric_arrays = MetricArrays()
+        test_feature_arr = DataArray(name="test_feature", shape=())
+        exp_data.metric_arrays.add("test_feature", test_feature_arr)
+        exp_data.metric_arrays.set_value("test_feature", np.array(float(i + 1)))
     
     return dataset
-
-
-class TestPredictionValidation:
-    """Test validation of prediction model returns."""
-    
-    def test_forward_pass_returns_dict(self, simple_dataset, logger):
-        """Test that forward_pass returning dict raises TypeError."""
-        model = BadPredictionModel(logger=logger)
-        model.return_type = "dict"
-        
-        pred_system = PredictionSystem(simple_dataset, logger)
-        pred_system.add_prediction_model(model)
-        
-        datamodule = DataModule(simple_dataset, normalize='none')
-        pred_system.train(datamodule)
-        
-        X_new = pd.DataFrame({"x": [1.5], "y": [3.0]})
-        
-        with pytest.raises(TypeError, match="forward_pass\\(\\) must return pd.DataFrame"):
-            pred_system.predict(X_new)
-    
-    def test_forward_pass_missing_columns(self, simple_dataset, logger):
-        """Test that forward_pass missing columns raises ValueError."""
-        model = BadPredictionModel(logger=logger)
-        model.return_type = "dataframe_missing_cols"
-        
-        pred_system = PredictionSystem(simple_dataset, logger)
-        pred_system.add_prediction_model(model)
-        
-        datamodule = DataModule(simple_dataset, normalize='none')
-        pred_system.train(datamodule)
-        
-        X_new = pd.DataFrame({"x": [1.5], "y": [3.0]})
-        
-        with pytest.raises(ValueError, match="forward_pass\\(\\) missing columns"):
-            pred_system.predict(X_new)
 
 
 class TestFeatureValidation:

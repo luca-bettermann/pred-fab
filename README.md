@@ -2,7 +2,8 @@
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 
-Current package version = 1.0.0
+**Current package version**: 1.0.0  
+**Architecture**: Phase 10 - Dimensional Prediction (November 2025)
 
 ## Table of Contents
 
@@ -298,13 +299,14 @@ Experiment records must contain these fields:
 | Property | Description | Example |
 |----------|-------------|---------|
 | `feature_names` | List of feature names to predict | `['filament_width', 'layer_height']` |
+| `required_features` | List of external features needed for prediction | `['temperature_measured']` |
 
 **Required Methods:**
 
 | Method | Description | Returns |
 |--------|-------------|---------|
 | `train(X, y, **kwargs)` | Train ML model on parameters (X) and features (y) | None |
-| `predict(X)` | Predict features for new parameters | pd.DataFrame |
+| `forward_pass(X)` | Predict features for new parameters | pd.DataFrame |
 
 **Training with Hyperparameters**:
 The `**kwargs` parameter allows passing custom hyperparameters to your model:
@@ -500,6 +502,7 @@ The framework automatically creates the folder structure and manages all result 
 - **Train/Val/Test Splits**: Built-in data splitting for proper ML evaluation with reproducible random seeds
 - **Model Validation**: Automatic computation of MAE, RMSE, and R² metrics on validation/test sets
 - **Dynamic Dimensionality**: Automatic multi-dimensional array management for complex analysis
+- **Batched Prediction**: Memory-efficient processing with configurable batch sizes and overlap for context-aware models
 - **Normalization**: Configurable feature normalization (standard, minmax, robust) fitted on training data
 - **Declarative Rounding**: Configure rounding at the data definition level (e.g., `Parameter.real(round_digits=3)`)
 - **Flag-Based Configuration**: Runtime control without configuration files - pure programmatic setup

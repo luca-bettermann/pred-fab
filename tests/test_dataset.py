@@ -3,9 +3,10 @@ Tests for Dataset with ExperimentData migration.
 """
 import pytest
 import numpy as np
+
 from lbp_package.core.dataset import Dataset, ExperimentData
 from lbp_package.core.schema import DatasetSchema
-from lbp_package.core.data_objects import Parameter, Performance, DataArray
+from lbp_package.core.data_objects import Parameter, Performance, DataArray, DataDimension
 from lbp_package.core.data_blocks import DataBlock
 
 
@@ -22,12 +23,13 @@ class TestExperimentDataDataclass:
         
         assert exp_data.exp_code == "exp_001"
         assert exp_data.parameters is not None
-        assert exp_data.performance is None
-        assert exp_data.metric_arrays is None
+        # All data blocks are auto-initialized (not None)
+        assert exp_data.performance is not None
+        assert exp_data.metric_arrays is not None
+        assert exp_data.predicted_metric_arrays is not None
     
     def test_experiment_data_dimensions_property(self):
         """Test dimensions property extracts dimensional params."""
-        from lbp_package.core.data_objects import DataDimension
         
         params = DataBlock()
         params.add("lr", Parameter.real(min_val=0.0, max_val=1.0))

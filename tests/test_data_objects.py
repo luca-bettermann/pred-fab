@@ -3,18 +3,19 @@ Tests for core data objects including DataReal, DataInt, DataArray, and factory 
 """
 import pytest
 import numpy as np
+
 from lbp_package.core.data_objects import (
     DataReal,
     DataInt,
     DataBool,
     DataCategorical,
-    DataString,
     DataDimension,
     DataArray,
     Parameter,
     Performance,
     Dimension,
 )
+from lbp_package.core.data_blocks import DataBlock
 
 
 class TestDataReal:
@@ -124,7 +125,6 @@ class TestDataArray:
     
     def test_dataarray_set_valid_value(self):
         """Test setting valid numpy array via DataBlock."""
-        from lbp_package.core.data_blocks import DataBlock
         
         arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float32)
         data = np.random.rand(5, 2).astype(np.float32)
@@ -141,7 +141,6 @@ class TestDataArray:
     
     def test_dataarray_shape_mismatch(self):
         """Test that mismatched shape raises ValueError."""
-        from lbp_package.core.data_blocks import DataBlock
         
         arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float64)
         wrong_data = np.random.rand(3, 4)
@@ -154,7 +153,6 @@ class TestDataArray:
     
     def test_dataarray_dtype_mismatch(self):
         """Test that mismatched dtype raises ValueError."""
-        from lbp_package.core.data_blocks import DataBlock
         
         arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float32)
         wrong_dtype = np.random.rand(5, 2).astype(np.float64)
@@ -167,7 +165,6 @@ class TestDataArray:
     
     def test_dataarray_not_ndarray(self):
         """Test that non-ndarray raises TypeError."""
-        from lbp_package.core.data_blocks import DataBlock
         
         arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float64)
         
@@ -212,13 +209,6 @@ class TestParameterFactory:
         
         assert isinstance(param, DataBool)
         assert param.dtype == bool
-    
-    def test_parameter_string(self):
-        """Test creating string parameter via factory."""
-        param = Parameter.string()
-        
-        assert isinstance(param, DataString)
-        assert param.dtype == str
 
 
 class TestPerformanceFactory:
@@ -263,7 +253,6 @@ class TestRounding:
     
     def test_datareal_rounding(self):
         """Test DataReal with round_digits via DataBlock."""
-        from lbp_package.core.data_blocks import DataBlock
         
         param = DataReal(name="energy", round_digits=3)
         
@@ -275,7 +264,6 @@ class TestRounding:
     
     def test_datareal_no_rounding(self):
         """Test DataReal without round_digits preserves full precision."""
-        from lbp_package.core.data_blocks import DataBlock
         
         param = DataReal(name="energy")
         
@@ -287,7 +275,6 @@ class TestRounding:
     
     def test_datareal_rounding_zero_digits(self):
         """Test DataReal with zero decimal places."""
-        from lbp_package.core.data_blocks import DataBlock
         
         param = DataReal(name="energy", round_digits=0)
         

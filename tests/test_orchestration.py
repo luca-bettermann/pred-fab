@@ -15,8 +15,8 @@ from lbp_package.interfaces.evaluation import IEvaluationModel
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.core.dataset import Dataset, ExperimentData
 from lbp_package.core.schema import DatasetSchema
-from lbp_package.core.data_blocks import Parameters, DataBlock
-from lbp_package.core.data_objects import Parameter, DataReal
+from lbp_package.core.data_blocks import Parameters, DataBlock, MetricArrays
+from lbp_package.core.data_objects import Parameter, DataReal, DataArray
 from lbp_package.core.datamodule import DataModule
 from lbp_package.utils.logger import LBPLogger
 
@@ -81,7 +81,7 @@ class MockPredictionModel(IPredictionModel):
         self.y_train = None
     
     @property
-    def feature_names(self) -> List[str]:
+    def predicted_features(self) -> List[str]:
         return ["test_feature"]
     
     def train(self, X, y, **kwargs):
@@ -90,7 +90,6 @@ class MockPredictionModel(IPredictionModel):
         self.is_trained = True
     
     def forward_pass(self, X):
-        import pandas as pd
         if not self.is_trained or self.y_train is None:
             raise RuntimeError("Model not trained")
         mean_val = self.y_train["test_feature"].mean()
@@ -105,7 +104,6 @@ class MockPredictionModel(IPredictionModel):
     def _set_model_artifacts(self, artifacts: Dict[str, Any]):
         self.is_trained = artifacts.get("is_trained", False)
         if artifacts.get("mean_value") is not None:
-            import pandas as pd
             self.y_train = pd.DataFrame({"test_feature": [artifacts["mean_value"]]})
 
 
@@ -235,8 +233,9 @@ class TestPredictionSystemWithSplits:
             external_data=None
         )
         
-        # Add 20 experiments with features
+        # Add 20 experiments with features in metric_arrays
         np.random.seed(42)
+        
         for i in range(20):
             exp_code = f"exp_{i:03d}"
             
@@ -249,13 +248,14 @@ class TestPredictionSystemWithSplits:
                 }
             )
             
-            # Add features (simple linear function of params)
-            exp_data.features = DataBlock()
-            exp_data.features.add("test_feature", DataReal("test_feature"))
+            # Initialize metric_arrays and add features
+            exp_data.metric_arrays = MetricArrays()
+            test_feature_arr = DataArray(name="test_feature", shape=())
+            exp_data.metric_arrays.add("test_feature", test_feature_arr)
             feature_val = exp_data.parameters.get_value("param_1") * 2.0 + \
                          exp_data.parameters.get_value("param_2") * 3.0 + \
                          np.random.randn() * 0.1  # Add noise
-            exp_data.features.set_value("test_feature", feature_val)
+            exp_data.metric_arrays.set_value("test_feature", np.array(feature_val))
         
         return dataset
     
