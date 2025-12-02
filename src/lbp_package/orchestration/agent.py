@@ -420,8 +420,7 @@ class LBPAgent:
         self,
         param_ranges: Dict[str, Tuple[float, float]],
         objectives: Dict[str, Dict[str, Any]],
-        fixed_params: Optional[Dict[str, Any]] = None,
-        direct_mode: bool = False
+        fixed_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, float]:
         """
         Run calibration to find optimal parameters using the configured calibration model.
@@ -430,7 +429,6 @@ class LBPAgent:
             param_ranges: Ranges for parameters to optimize.
             objectives: Dict of {perf_code: {'weight': float, 'feature': str}}.
             fixed_params: Parameters to keep fixed.
-            direct_mode: If True, uses prediction model's uncertainty directly (skips GP surrogate).
         """
         if not self._initialized:
              raise RuntimeError("Agent not initialized.")
@@ -475,41 +473,12 @@ class LBPAgent:
                 
             return total_score
 
-        # 3. Define Uncertainty Function (if direct_mode)
-        uncertainty_fn = None
-        if direct_mode:
-            # Identify required features for uncertainty
-            required_features = [config['feature'] for config in objectives.values()]
-            
-            def u_fn(params: Dict[str, float]) -> float:
-                # Only request uncertainty for relevant features
-                uncertainties = self.pred_system.predict_uncertainty(params, required_features=required_features) # type: ignore
-                
-                total_sigma = 0.0
-                for perf_code, config in objectives.items():
-                    weight = config.get('weight', 1.0)
-                    feature_name = config['feature']
-                    
-                    if feature_name not in uncertainties:
-                        raise ValueError(f"Direct mode requested but feature '{feature_name}' has no uncertainty prediction.")
-                    
-                    sigma = uncertainties[feature_name]
-                    if hasattr(sigma, 'mean'):
-                        sigma = float(np.mean(sigma))
-                    else:
-                        sigma = float(sigma)
-                        
-                    total_sigma += sigma * weight
-                return total_sigma
-            uncertainty_fn = u_fn
-
-        # 4. Run Calibration
+        # 3. Run Calibration
         # We know self.calibration_model is not None here
         best_params = self.calibration_model.calibrate( # type: ignore
             param_ranges=param_ranges,
             objective_fn=objective_fn,
-            fixed_params=fixed_params,
-            uncertainty_fn=uncertainty_fn
+            fixed_params=fixed_params
         )
         
         return best_params

@@ -109,8 +109,7 @@ class BayesianCalibration(ICalibrationModel):
     def optimize(self, 
                  param_ranges: Dict[str, Tuple[float, float]], 
                  objective_fn: Callable[[Dict[str, float]], float],
-                 fixed_params: Optional[Dict[str, Any]] = None,
-                 uncertainty_fn: Optional[Callable[[Dict[str, float]], float]] = None) -> Dict[str, float]:
+                 fixed_params: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
         
         fixed_params = fixed_params or {}
         
@@ -120,41 +119,6 @@ class BayesianCalibration(ICalibrationModel):
         
         self.logger.info(f"Starting Bayesian Optimization with {len(param_names)} free parameters.")
         self.logger.info(f"Fixed parameters: {list(fixed_params.keys())}")
-
-        # === DIRECT OPTIMIZATION PATH (User provides uncertainty) ===
-        if uncertainty_fn is not None:
-            self.logger.info("Using direct optimization with user-provided uncertainty (skipping GP surrogate).")
-            
-            def direct_acquisition(x: np.ndarray) -> float:
-                # Convert array back to dict
-                params = {name: val for name, val in zip(param_names, x)}
-                params.update(fixed_params)
-                
-                mu = objective_fn(params)
-                sigma = uncertainty_fn(params)
-                return mu + self.exploration_weight * sigma
-
-            # Optimize direct acquisition
-            n_restarts = 10
-            best_x = np.zeros(len(param_names))
-            best_acq_value = -np.inf
-            
-            for _ in range(n_restarts):
-                x0 = self.rng.uniform(bounds[:, 0], bounds[:, 1])
-                res = minimize(
-                    lambda x: -direct_acquisition(x),
-                    x0=x0,
-                    bounds=bounds,
-                    method='L-BFGS-B'
-                )
-                if -res.fun > best_acq_value:
-                    best_acq_value = -res.fun
-                    best_x = res.x
-            
-            best_params = {name: val for name, val in zip(param_names, best_x)}
-            best_params.update(fixed_params)
-            self.logger.info(f"Direct optimization finished. Best acquisition value: {best_acq_value:.4f}")
-            return best_params
         
         # 1. Initial Random Exploration
         for i in range(self.n_initial_points):

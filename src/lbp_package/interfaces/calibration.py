@@ -19,8 +19,7 @@ class ICalibrationModel(ABC):
     @abstractmethod
     def optimize(self, param_ranges: Dict[str, Tuple[float, float]], 
                  objective_fn: Callable[[Dict[str, float]], float],
-                 fixed_params: Optional[Dict[str, Any]] = None,
-                 uncertainty_fn: Optional[Callable[[Dict[str, float]], float]] = None) -> Dict[str, float]:
+                 fixed_params: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
         """
         Find optimal parameters by minimizing objective_fn.
         
@@ -28,14 +27,12 @@ class ICalibrationModel(ABC):
             param_ranges: {param_name: (min_val, max_val)} for free parameters
             objective_fn: Function that takes parameters dict, returns objective value (higher = better)
             fixed_params: Optional dictionary of fixed parameter values
-            uncertainty_fn: Optional function that returns uncertainty (sigma) for a given parameter set.
-                            If provided, the optimizer may use this directly instead of a surrogate model.
             
         Returns:
             Best parameters found: {param_name: optimal_value} (including fixed params)
             
         Example:
-            def optimize(self, param_ranges, objective_fn, fixed_params=None, uncertainty_fn=None):
+            def optimize(self, param_ranges, objective_fn, fixed_params=None):
                 fixed = fixed_params or {}
                 # ... optimization logic ...
                 return {**best_free_params, **fixed}
@@ -49,15 +46,14 @@ class ICalibrationModel(ABC):
         self, 
         param_ranges: Dict[str, Tuple[float, float]],
         objective_fn: Callable[[Dict[str, float]], float],
-        fixed_params: Optional[Dict[str, Any]] = None,
-        uncertainty_fn: Optional[Callable[[Dict[str, float]], float]] = None
+        fixed_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, float]:
         """Run calibration optimization and validate results."""
         self.logger.info("Starting calibration")
         self._eval_count = 0
         
         # Call user's optimization implementation
-        best_params = self.optimize(param_ranges, objective_fn, fixed_params, uncertainty_fn)
+        best_params = self.optimize(param_ranges, objective_fn, fixed_params)
         
         # Validate return type
         if not isinstance(best_params, dict):
