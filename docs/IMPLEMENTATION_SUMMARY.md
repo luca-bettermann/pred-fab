@@ -201,6 +201,38 @@ predictions = bundle.predict(X_new)  # Automatic validation + denormalization
 
 ---
 
+### Phase 11: Calibration System Architecture (December 2, 2025)
+**Goal**: Implement active learning loop with strategy pattern
+
+**Problem Identified**:
+- Previous `ICalibrationModel` was too monolithic and implied a single model.
+- Need to separate the "System" (orchestration, performance definition) from the "Strategy" (optimization algorithm).
+- Need to support "Surrogate-First" approach where a GP models system performance.
+
+**Solution Implemented**:
+- ✅ Renamed `ICalibrationModel` to `ICalibrationStrategy`.
+- ✅ Implemented `CalibrationSystem` as the orchestrator.
+- ✅ Implemented `BayesianCalibrationStrategy` as the default strategy.
+- ✅ Updated `LBPAgent` to use `CalibrationSystem`.
+- ✅ Added `configure_calibration` and `propose_next_experiments` to Agent API.
+
+**Files Created/Modified**:
+- `interfaces/calibration.py`: Defined `ICalibrationStrategy`.
+- `orchestration/calibration.py`: Implemented `CalibrationSystem` and `BayesianCalibrationStrategy`.
+- `orchestration/agent.py`: Integrated new system.
+
+**Key Achievement**:
+- Clear separation of concerns: System vs Strategy.
+- Robust active learning loop.
+- Extensible architecture for future strategies.
+
+**Test Coverage**:
+- Unit tests for `CalibrationSystem`.
+- Integration tests for `LBPAgent` with calibration.
+- End-to-end verification script.
+
+---
+
 ### Phase 7 (Continued): Dataset-Centric Architecture
 
 This was the largest and most impactful phase, fundamentally changing the architecture.

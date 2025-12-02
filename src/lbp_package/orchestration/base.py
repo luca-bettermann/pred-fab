@@ -9,6 +9,7 @@ from typing import Any, Dict
 from dataclasses import fields, is_dataclass
 
 from ..core.dataset import Dataset, ExperimentData
+from ..core.data_objects import DataReal, DataInt, DataBool, DataCategorical, DataDimension
 from ..utils import LBPLogger
 
 
@@ -38,9 +39,7 @@ class BaseOrchestrationSystem(ABC):
         pass
     
     def get_model_specs(self) -> Dict[str, Any]:
-        """Extract input/output DataObject specifications from registered models."""
-        from ..core.data_objects import DataReal, DataInt, DataBool, DataCategorical, DataDimension
-        
+        """Extract input/output DataObject specifications from registered models."""        
         specs = {"inputs": {}}  # param_name -> DataObject
         
         # Get models in implementation-specific structure

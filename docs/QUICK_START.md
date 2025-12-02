@@ -317,6 +317,59 @@ predictions = agent.predict(X_new)
 print(predictions)  # DataFrame with predicted features (auto-denormalized)
 ```
 
+---
+
+### 9. Calibration (Optional)
+
+Optimize process parameters using Active Learning.
+
+```python
+# 1. Configure Calibration Goals
+# Define weights for performance metrics (higher is better)
+agent.configure_calibration(
+    performance_weights={
+        "energy_consumption": 0.7,  # 70% importance
+        "surface_quality": 0.3      # 30% importance
+    }
+)
+
+# 2. Generate Baseline Experiments
+# Create initial random design (Latin Hypercube Sampling)
+baseline_exps = agent.calibration_system.generate_baseline_experiments(
+    n_samples=5,
+    param_ranges={
+        "print_speed": (10.0, 100.0),
+        "temperature": (190.0, 220.0)
+    }
+)
+
+# Run baseline experiments...
+for params in baseline_exps:
+    # ... run experiment ...
+    pass
+
+# 3. Active Learning Loop
+for i in range(10):
+    # Propose next experiment(s)
+    next_exps = agent.propose_next_experiments(
+        param_ranges={
+            "print_speed": (10.0, 100.0),
+            "temperature": (190.0, 220.0)
+        },
+        n_points=1,
+        mode='exploration'  # 'exploration' (uncertainty) or 'optimization' (performance)
+    )
+    
+    # Run proposed experiment
+    params = next_exps[0]
+    # ... run experiment and add to dataset ...
+```
+
+---
+
+## Alternative: Load Specific Experiments
+```
+
 **Split Configuration:**
 - `test_size`: Fraction for test set (default: 0.2)
 - `val_size`: Fraction of remaining for validation (default: 0.1)

@@ -384,7 +384,7 @@ class Dataset:
             if not params_block.has(name):
                 raise ValueError(f"Unknown parameter: {name}")
             
-            if name in self._static_values.keys() and self.logger:
+            if self._static_values.has_value(name) and self.logger:
                 self.logger.warning(f"Parameter '{name}' is static but also provided in exp_params for '{exp_code}'")
                 self.logger.warning(f"Parameter '{name}' is overwritting {self._static_values.get_value(name)} with {value} for '{exp_code}'")
             params_block.set_value(name, value)

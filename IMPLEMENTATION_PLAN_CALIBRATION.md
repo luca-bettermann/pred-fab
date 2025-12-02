@@ -20,13 +20,19 @@ comment: what is your plan for architectural configurations of the surrogate mod
     3.  **Active Learning:** The goal is to find the next best point to *label* (i.e., run a physical experiment). The surrogate's uncertainty guides us to unexplored regions, and its mean guides us to promising regions.
 *   **Refinement:** The "Prediction Model" is used to *label* the points for the Surrogate in the offline phase (simulating experiments), but the Surrogate drives the search.
 
-comment: the main reason for the surrogate in the first place was the capability of uncertainty quantification, which is not available in all ML models. Since the uncertainty is a core requirement of the architecture, that is why we went with the idea of surrogate model in the first place. efficiency is only a conditional requirement; it depends on the complexity of the prediction model. so, the choice between using the surrogate model or the prediction model should be user-specified, unless we require uncertainty quantification. the optimization loop itself can also be adjusted, so less calls are required (i.e. tighter bounds, etc.)
+comment: the main reason for the surrogate in the first place was the capability of uncertainty quantification, which is not available in all ML models. Since the uncertainty is a core requirement of the architecture, that is why we went with the idea of surrogate model in the first place. efficiency is only a conditional requirement.
 
-here is my interetation of the acquisition function: generally, we can see the acquisition function as w_exploration * f_uncertainty(X) + (1-w_exploration) * f_performance(X), f_performance(X) is evaluation(prediction(X)), i.e. the evaluation of the predicted features for X. Higher uncertainty should give higher scores, higher evaluation should get higher scores. We want to find the next sample that maximises the acqusition function. Surrogate model should be used for uncertainty by default and for feature prediction only if specifically requested by the user. The inference time of the prediction model might be efficient enough. 
+I think the way to go forward is to clearly distinguish between the active learning phase using exploration, and the deplyoment phase using optimization. for the exploration, we can use the surrogate model to compute the acquisition function as:
+
+w_exploration * f_uncertainty(X) + (1-w_exploration) * f_performance(X), 
+
+where f_performance(X) is evaluation(prediction(X)), i.e. the evaluation of the predicted features for X. please help me understand how we would extract the uncertainty of the surrogate model for a given input X.
+Higher uncertainty should give higher scores, higher evaluation should get higher scores. We want to find the next sample that maximises the acqusition function. 
+How do you think your approach of using mu and sigma directly compares to my proposal?
 
 If we take a step back, the goal of this acquisition function is to find the next data sample that maximises the value of the prediction model. that should be a combination of high performing areas and under-explored areas. do you think the proposed acquisition function in combination with the exploration weight satisfies this goal?
 
-How do you think your approach to the active learning problem compares? If we replace the prediction model with the surrogate model, why do we have the prediction model in the first place? This is its main use case in Learning by Printing. 
+Crucially, the surrogate model should play no part in the optimization step where we actually want to find the best performing parameters, neither in offline nor in online optimization. Here we need the most accurate model we have, and since the surrogate is only an approximation, it is not a viable option here. however this is perfectly fine, since no computation of the uncertainty is needed for optimization.
 
 ### C. Non-Determinism & Noise
 *   **Decision:** The Gaussian Process will explicitly model noise using a `WhiteKernel`.
@@ -70,8 +76,7 @@ comment: do we have options to use sklearn for this? I dont want to introduce ad
 
 comment: in my opinion, the surrogate model should be trained on the predictions of the prediction model, not the real data. it is a surrogate of the model itself, not of what the model is trying to predict. if the model is bad, the surrogate should model the bad predictions, not the actual features.
 
-again, the calibration should be done using the prediction model (and only the surrogate for the uncertainty part.)
-there would be an argument that we use your approach to the acquisition function with mu and sigma for faster exploration, and then use the prediction model only in the optimization mode, when we want to find the best performing sample. this would give a clear boundary between for what the surrogate is used and for what the actual prediction model is used.
+Unfortunately, we can not reuse the predicted_metrics datablock for the surrogate training, since it stores the prediction when that sample was proposed, meaning by a prior prediction model. that means, for the training of the surrogate, we need to create synthetic data from the prediction model itself. not extremely elegant, maybe you have additional ideas here.
 
 ### Phase 3: Deployment
 1.  **Export:**
@@ -109,6 +114,12 @@ comment: since we are in optimization stage here, I think we probably should onl
     *   Add `get_surrogate_folder`.
     *   Add `save_surrogate_model` / `load_surrogate_model`.
 
+comments:
+- interfaces/calibration: we want two functions: one for exploration (with exploration weight) and one for optimization. exploration uses surrogate, optimization uses prediction system. both "propose next point".
+- orchestration/calibration: lets call it generate_baseline_exps. hierarchically save the exps and return them (see local data functions).
+- prediction: do we need a completely new method for export surrogate, or can we reuse some of the already existing export model logic? for now, I would suggest that we leave comments in the docs / code about this, but for now we can skip the functionality of exporting / importing the surrogate model.
+- local_data: I am questioning what we require the three additional methods for. can you elaborate on the need for this.
+
 ## 5. Addressing User Questions
 
 *   **"Should surrogate be part of PredictionSystem?"**: Yes, as a managed resource, but used by Calibration.
@@ -124,5 +135,5 @@ comment: since we are in optimization stage here, I think we probably should onl
 5.  Update `agent.py` to orchestrate the new workflow.
 
 
-OVERALL:
+OVERALL COMMENT:
 I think we need to find clear boundaries between when to use the surrogate and when to use the prediction model. I think active learning -> surrogate models vs optimization -> prediction model would be a good approach. let me know your thoughts.

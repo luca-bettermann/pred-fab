@@ -1,0 +1,57 @@
+{
+  "cea51a59b02a7b04f36cac9f4f5d3c9e7b6571898e2827de39bbf1053e1eef01": {
+    "schema_id": "schema_001",
+    "created": "2025-12-02T23:53:12.212771",
+    "structure": {
+      "parameters": {
+        "type": "Parameters",
+        "data_objects": {
+          "speed": {
+            "name": "speed",
+            "type": "DataReal",
+            "dtype": "float",
+            "constraints": {
+              "min": 10.0,
+              "max": 100.0
+            }
+          },
+          "power": {
+            "name": "power",
+            "type": "DataReal",
+            "dtype": "float",
+            "constraints": {
+              "min": 50.0,
+              "max": 200.0
+            }
+          }
+        },
+        "values": {}
+      },
+      "dimensions": {
+        "type": "Dimensions",
+        "data_objects": {},
+        "values": {}
+      },
+      "performance_attrs": {
+        "type": "PerformanceAttributes",
+        "data_objects": {
+          "quality": {
+            "name": "quality",
+            "type": "DataReal",
+            "dtype": "float",
+            "constraints": {}
+          }
+        },
+        "values": {},
+        "calibration_weights": {}
+      },
+      "metric_arrays": {
+        "type": "MetricArrays",
+        "data_objects": {},
+        "values": {}
+      },
+      "default_round_digits": 3,
+      "schema_hash": "cea51a59b02a7b04f36cac9f4f5d3c9e7b6571898e2827de39bbf1053e1eef01"
+    }
+  }
+}

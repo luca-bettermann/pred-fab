@@ -23,13 +23,15 @@
 ┌─────────────────────────────────────────────────────┐
 │                   Orchestration                      │
 │     BaseOrchestrationSystem (abstract base)         │
-│   EvaluationSystem, PredictionSystem (concrete)     │
+│   EvaluationSystem, PredictionSystem,               │
+│           CalibrationSystem (concrete)              │
 │            Manage Model Execution                    │
 └─────────────────────────────────────────────────────┘
                          │
 ┌─────────────────────────────────────────────────────┐
 │                    Interfaces                        │
-│  (IEvaluationModel, IFeatureModel, IPredictionModel)│
+│  (IEvaluationModel, IFeatureModel, IPredictionModel,│
+│             ICalibrationStrategy)                   │
 │              User-Defined Models                     │
 └─────────────────────────────────────────────────────┘
                          │
@@ -458,6 +460,36 @@ bundle.predict(X) →
 
 ---
 
+#### 2.5 CalibrationSystem (`orchestration/calibration.py`)
+
+**Responsibility:** Orchestrate active learning and process optimization.
+
+**Inherits:** `BaseOrchestrationSystem`
+
+**Does:**
+- Manage the optimization loop (Active Learning)
+- Own the Surrogate Model (via Strategy)
+- Define System Performance (weighted sum of metrics)
+- Generate baseline experiments (Latin Hypercube Sampling)
+- Delegate "next point" proposal to `ICalibrationStrategy`
+- Interface with Dataset to retrieve experiment history
+
+**Does NOT:**
+- Implement the optimization algorithm (that's `ICalibrationStrategy`)
+- Predict features (that's `PredictionSystem`)
+- Evaluate experiments (that's `EvaluationSystem`)
+
+**Workflow:**
+```
+propose_new_experiments() →
+  collect history from dataset
+  compute system performance for each point
+  strategy.propose_next_points(history, bounds)
+  return new parameters
+```
+
+---
+
 ### 3. Interface Layer (`src/lbp_package/interfaces/`)
 
 #### 3.1 IEvaluationModel (`interfaces/evaluation.py`)
@@ -496,6 +528,26 @@ bundle.predict(X) →
 **Required Fields:**
 - `dataset: Dataset` - For memoization
 - `logger: LBPLogger` - For logging
+
+---
+
+#### 3.3 ICalibrationStrategy (`interfaces/calibration.py`)
+
+**Responsibility:** Define optimization algorithm for calibration.
+
+**Does:**
+- Declare `propose_next_points()` method
+- Implement specific optimization logic (e.g., Bayesian Optimization)
+- Manage internal state of the optimizer (e.g., GP model)
+
+**Does NOT:**
+- Manage the optimization loop (that's `CalibrationSystem`)
+- Access the dataset directly
+- Define system performance
+
+---
+
+### 4. Utilities Layer (`src/lbp_package/utils/`)
 
 **Returns:**
 - Feature values as floats (physical measurements)

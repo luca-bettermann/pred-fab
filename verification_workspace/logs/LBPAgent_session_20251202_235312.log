@@ -1,0 +1,54 @@
+2025-12-02 23:53:12,211 - INFO - info:43 - Initializing LBP Agent
+2025-12-02 23:53:12,212 - WARNING - console_warning:66 - CONSOLE WARNING: 
+
+No external data interface provided: Dataset records need to be available as local JSON files.
+
+2025-12-02 23:53:12,212 - INFO - console_info:56 - CONSOLE: 
+
+
+------- Welcome to Learning by Printing (AIXD) -------
+
+
+2025-12-02 23:53:12,212 - INFO - console_info:56 - CONSOLE: 
+
+Registered evaluation model: QualityEvaluationModel
+
+2025-12-02 23:53:12,212 - INFO - console_info:56 - CONSOLE: 
+
+Registered prediction model: QualityPredictionModel for performance codes: ['quality']
+
+2025-12-02 23:53:12,212 - INFO - console_info:56 - CONSOLE: 
+
+
+===== Initializing Dataset =====
+
+2025-12-02 23:53:12,212 - INFO - info:43 - Generating schema from registered models
+2025-12-02 23:53:12,212 - INFO - info:43 - Instantiating models from registered classes...
+2025-12-02 23:53:12,212 - INFO - info:43 - Instantiating evaluation model for 'quality': QualityEvaluationModel
+2025-12-02 23:53:12,212 - INFO - info:43 - Instantiating prediction model: QualityPredictionModel
+2025-12-02 23:53:12,212 - INFO - info:43 - Generating schema from registered model classes...
+2025-12-02 23:53:12,212 - INFO - info:43 -   Added parameter: speed
+2025-12-02 23:53:12,212 - INFO - info:43 -   Added parameter: power
+2025-12-02 23:53:12,212 - INFO - info:43 -   Added performance attribute: quality
+2025-12-02 23:53:12,212 - INFO - info:43 - Generated schema with 2 parameters, 0 dimensions, 1 performance attributes
+2025-12-02 23:53:12,213 - INFO - console_info:56 - CONSOLE: 
+
+Using schema ID: schema_001
+
+2025-12-02 23:53:12,213 - INFO - info:43 - Attaching dataset to orchestration systems
+2025-12-02 23:53:12,213 - INFO - info:43 - Attaching feature models to evaluation models
+2025-12-02 23:53:12,213 - INFO - info:43 - Added feature model: SimpleFeatureModel
+2025-12-02 23:53:12,213 - INFO - info:43 - Setting up prediction model mappings
+2025-12-02 23:53:12,213 - DEBUG - debug:39 - No feature model dependencies declared by prediction models
+2025-12-02 23:53:12,213 - INFO - console_summary:75 - CONSOLE SUMMARY:
+
+Dataset Initialization Summary:
+  - Schema ID: schema_001
+  - Parameters: 2
+  - Dimensions: 0
+  - Performance Attributes: 1
+2025-12-02 23:53:12,213 - INFO - console_success:61 - CONSOLE SUCCESS: 
+
+Successfully initialized dataset 'schema_001'.
+
+2025-12-02 23:53:12,213 - INFO - info:43 - Configured calibration weights: {'quality': 1.0}

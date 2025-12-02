@@ -1,4 +1,4 @@
-from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, ICalibrationModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, ICalibrationStrategy
 from .orchestration import LBPAgent, InferenceBundle
 
 __all__ = [
@@ -8,5 +8,5 @@ __all__ = [
     "IFeatureModel", 
     "IEvaluationModel",
     "IPredictionModel",
-    "ICalibrationModel",
+    "ICalibrationStrategy"
 ]

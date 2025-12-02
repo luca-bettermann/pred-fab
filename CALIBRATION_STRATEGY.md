@@ -1,16 +1,16 @@
-# Calibration Strategy: Surrogate-First Approach
+# Calibration Strategy: System + Strategy Pattern
 
 ## Overview
 The calibration module in the LBP framework is designed to find optimal process parameters that maximize performance metrics. This process involves exploring the parameter space and exploiting high-performing regions.
 
-We have adopted a **Surrogate-First** strategy using Bayesian Optimization (Gaussian Processes) as the standard implementation.
+We have adopted a **System + Strategy** architecture where the orchestration logic is separated from the optimization algorithm.
 
 ## Rationale
 
 ### 1. Decoupling Uncertainty from Prediction Models
 Most state-of-the-art Deep Learning models (Transformers, GNNs, etc.) are deterministic and do not output calibrated uncertainty estimates by default. Implementing uncertainty quantification (e.g., via Ensembles or Monte Carlo Dropout) for every user-defined model adds significant complexity and computational overhead.
 
-By using a Gaussian Process (GP) as a surrogate model, we decouple the uncertainty requirement from the prediction model. The GP models the objective function's surface and provides its own uncertainty estimates based on the density of sampled points.
+By using a Gaussian Process (GP) as a surrogate model within the calibration strategy, we decouple the uncertainty requirement from the prediction model. The GP models the objective function's surface and provides its own uncertainty estimates based on the density of sampled points.
 
 ### 2. Computational Efficiency (Online Learning)
 In an online learning context (e.g., during fabrication), we need to optimize parameters quickly.
@@ -22,20 +22,29 @@ The "Direct Mode" (where users implement `predict_uncertainty`) was removed to s
 
 ## Architecture
 
-### BayesianCalibration
-The core implementation is `BayesianCalibration`, which uses:
+### CalibrationSystem
+The `CalibrationSystem` is the orchestrator that manages the optimization loop. It:
+- Owns the **Surrogate Model** (GP).
+- Defines **System Performance** as a weighted sum of individual performance metrics.
+- Generates baseline experiments using **Latin Hypercube Sampling (LHS)**.
+- Delegates the decision of "where to sample next" to a **Strategy**.
+
+### BayesianCalibrationStrategy
+The default strategy (`BayesianCalibrationStrategy`) implements `ICalibrationStrategy` and uses:
 - **Surrogate Model**: `sklearn.gaussian_process.GaussianProcessRegressor` with Matern kernel.
 - **Acquisition Function**: Upper Confidence Bound (UCB).
-- **Exploration Weight**: A parameter (0.0 - 1.0) that scales the UCB kappa, allowing users to shift between pure optimization (exploitation) and active learning (exploration).
+- **Modes**:
+    - `exploration`: Prioritizes high uncertainty (Active Learning).
+    - `optimization`: Prioritizes high predicted performance (Exploitation).
 
 ### Workflow
-1.  **Initialize**: `agent.configure_calibration(...)` sets up the GP.
-2.  **Define Objectives**: Users specify which performance metrics to optimize and their weights.
-3.  **Calibrate**: `agent.calibrate(...)` runs the loop:
-    - Sample initial random points.
-    - Train GP on observed (param -> performance) pairs.
-    - Optimize Acquisition Function to find next best point.
-    - Evaluate next point using the Prediction Model.
+1.  **Initialize**: `agent.configure_calibration(performance_weights=...)` sets up the system goals.
+2.  **Baseline**: `agent.calibration_system.generate_baseline_experiments(...)` creates initial random points.
+3.  **Loop**:
+    - `agent.propose_next_experiments(...)` asks the strategy for the next best point(s).
+    - User/System runs the experiment.
+    - Data is added to the dataset.
+    - `CalibrationSystem` updates the surrogate model with the new history.
     - Repeat.
 
 ## Future Potential

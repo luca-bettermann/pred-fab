@@ -13,8 +13,8 @@ from ..core.dataset import Dataset
 from ..core.datamodule import DataModule
 from ..orchestration.evaluation import EvaluationSystem
 from ..orchestration.prediction import PredictionSystem
-from ..orchestration.calibration import BayesianCalibration
-from ..interfaces import IEvaluationModel, IPredictionModel, ICalibrationModel, IExternalData
+from ..orchestration.calibration import CalibrationSystem
+from ..interfaces import IEvaluationModel, IPredictionModel, IExternalData
 from ..utils import LocalData, LBPLogger
 
 
@@ -25,7 +25,7 @@ class LBPAgent:
     - Model registration and activation
     - Schema generation from active models
     - Dataset initialization and loading
-    - Coordination between EvaluationSystem, PredictionSystem, CalibrationModel
+    - Coordination between EvaluationSystem, PredictionSystem, CalibrationSystem
     """
     
     def __init__(
@@ -74,7 +74,7 @@ class LBPAgent:
         # Initialize system components (will be set with dataset reference)
         self.eval_system: Optional[EvaluationSystem] = None
         self.pred_system: Optional[PredictionSystem] = None
-        self.calibration_model: Optional[ICalibrationModel] = None
+        self.calibration_system: Optional[CalibrationSystem] = None
         
         # Model registry (store classes and params until dataset is initialized)
         self._evaluation_model_specs: Dict[str, tuple] = {}  # perf_code -> (class, kwargs)
@@ -127,21 +127,6 @@ class LBPAgent:
             f"for performance codes: {performance_codes}"
         )
     
-    def register_calibration_model(
-        self,
-        calibration_class: Type[ICalibrationModel],
-        **kwargs
-    ) -> None:
-        """Register a calibration model."""
-        if self._initialized:
-            raise RuntimeError(
-                "Cannot register models after initialize() has been called. "
-                "Create a new LBPAgent instance for additional models."
-            )
-        
-        self.calibration_model = calibration_class(logger=self.logger, **kwargs)
-        self.logger.console_info(f"Set calibration model to '{calibration_class.__name__}'.")
-    
     # === SCHEMA GENERATION & INITIALIZATION ===
     
     def _instantiate_models(self) -> None:
@@ -154,6 +139,7 @@ class LBPAgent:
         # Initialize systems (dataset will be set later)
         self.eval_system = EvaluationSystem(dataset=None, logger=self.logger)  # type: ignore
         self.pred_system = PredictionSystem(dataset=None, logger=self.logger)  # type: ignore
+        self.calibration_system = CalibrationSystem(dataset=None, logger=self.logger) # type: ignore
         
         # Instantiate evaluation model instances from registered classes
         for perf_code, (eval_class, eval_kwargs) in self._evaluation_model_specs.items():
@@ -237,6 +223,7 @@ class LBPAgent:
         self.logger.info("Attaching dataset to orchestration systems")
         self.eval_system.dataset = dataset  # type: ignore
         self.pred_system.dataset = dataset  # type: ignore
+        self.calibration_system.dataset = dataset # type: ignore
         
         # Step 5: Attach feature models to evaluation models (now that dataset exists)
         self.logger.info("Attaching feature models to evaluation models")
@@ -394,92 +381,43 @@ class LBPAgent:
     
     def configure_calibration(
         self,
-        calibration_model: Optional[ICalibrationModel] = None,
-        **kwargs
+        performance_weights: Dict[str, float]
     ) -> None:
         """
-        Configure the calibration model.
+        Configure the calibration system weights.
         
         Args:
-            calibration_model: Custom ICalibrationModel instance. If None, uses BayesianCalibration.
-            **kwargs: Arguments passed to BayesianCalibration if calibration_model is None.
-                      (n_iterations, n_initial_points, exploration_weight, random_seed)
+            performance_weights: Weights for system performance calculation.
         """
-        if calibration_model is not None:
-            self.calibration_model = calibration_model
-            self.logger.info(f"Configured custom calibration model: {type(calibration_model).__name__}")
+        if self.calibration_system:
+            self.calibration_system.set_performance_weights(performance_weights)
+            self.logger.info(f"Configured calibration weights: {performance_weights}")
         else:
-            # Default to BayesianCalibration
-            self.calibration_model = BayesianCalibration(
-                logger=self.logger,
-                **kwargs
-            )
-            self.logger.info("Configured default BayesianCalibration model")
+            self.logger.warning("Calibration system not initialized. Call initialize() first.")
 
-    def calibrate(
+    def propose_next_experiments(
         self,
         param_ranges: Dict[str, Tuple[float, float]],
-        objectives: Dict[str, Dict[str, Any]],
+        n_points: int = 1,
+        mode: Any = 'exploration', # using Any to avoid import issues if Literal not imported, but it is.
         fixed_params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, float]:
+    ) -> List[Dict[str, Any]]:
         """
-        Run calibration to find optimal parameters using the configured calibration model.
+        Propose next experiments using the calibration system.
         
         Args:
             param_ranges: Ranges for parameters to optimize.
-            objectives: Dict of {perf_code: {'weight': float, 'feature': str}}.
+            n_points: Number of experiments to propose.
+            mode: 'exploration' (Active Learning) or 'optimization' (Exploitation).
             fixed_params: Parameters to keep fixed.
         """
-        if not self._initialized:
+        if not self._initialized or self.calibration_system is None:
              raise RuntimeError("Agent not initialized.")
         
-        # Auto-configure if not set
-        if self.calibration_model is None:
-            self.logger.info("No calibration model configured. Using default BayesianCalibration.")
-            self.configure_calibration()
-             
-        # 2. Define Objective Function
-        def objective_fn(params: Dict[str, float]) -> float:
-            # Predict all features
-            predictions = self.pred_system._predict_from_params(params) # type: ignore
-            
-            total_score = 0.0
-            
-            for perf_code, config in objectives.items():
-                weight = config.get('weight', 1.0)
-                feature_name = config['feature']
-                
-                if feature_name not in predictions:
-                    raise ValueError(f"Feature '{feature_name}' not predicted.")
-                
-                feature_val = predictions[feature_name]
-                
-                if perf_code not in self.eval_system.evaluation_models: # type: ignore
-                    raise ValueError(f"Unknown performance code: {perf_code}")
-                    
-                eval_model = self.eval_system.evaluation_models[perf_code] # type: ignore
-                
-                # Compute target & scaling
-                target = eval_model._compute_target_value(**params)
-                scaling = eval_model._compute_scaling_factor(**params)
-                
-                # Compute performance
-                # feature_val might be a 0-d array or scalar, ensure float
-                if hasattr(feature_val, 'item'):
-                    feature_val = feature_val.item()
-                perf = eval_model._compute_performance(float(feature_val), target, scaling)
-                
-                total_score += perf * weight
-                
-            return total_score
-
-        # 3. Run Calibration
-        # We know self.calibration_model is not None here
-        best_params = self.calibration_model.calibrate( # type: ignore
+        return self.calibration_system.propose_new_experiments(
             param_ranges=param_ranges,
-            objective_fn=objective_fn,
+            n_points=n_points,
+            mode=mode,
             fixed_params=fixed_params
         )
-        
-        return best_params
 
