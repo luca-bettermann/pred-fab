@@ -46,7 +46,7 @@ def sample_dataset():
         param_2 = i + 10
         
         # Create experiment with metric_arrays initialized
-        exp_data = dataset.add_experiment(
+        exp_data = dataset.load_experiment(
             exp_code=exp_code,
             exp_params={"param_1": param_1, "param_2": param_2},
             performance={"accuracy": 0.8 + i * 0.01}

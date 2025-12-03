@@ -153,6 +153,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
             temp_exp_data.features.add(name, data_obj)
         
         # Run evaluation for each performance code
+        # TODO: encode feature code and performance code in the respective models.
         for perf_code in self.evaluation_models.keys():
             feature_name = f"{perf_code}_feature"
             eval_model = self.evaluation_models[perf_code]

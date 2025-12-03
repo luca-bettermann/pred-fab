@@ -36,7 +36,7 @@ def categorical_dataset():
     ]
     
     for i, (opt, lr, bs) in enumerate(configs):
-        exp = dataset.add_experiment(f'exp_{i}', {
+        exp = dataset.load_experiment(f'exp_{i}', {
             'optimizer': opt,
             'learning_rate': lr,
             'batch_size': bs
@@ -62,7 +62,7 @@ def dimensional_dataset():
     # Add experiments
     for i in range(3):
         n_layers = 5
-        exp = dataset.add_experiment(f'exp_{i}', {
+        exp = dataset.load_experiment(f'exp_{i}', {
             'temp': 200.0 + i * 10,
             'n_layers': n_layers
         })
@@ -91,7 +91,7 @@ def mixed_dataset():
     ]
     
     for i, (temp, cooling, mat, speed) in enumerate(configs):
-        exp = dataset.add_experiment(f'exp_{i}', {
+        exp = dataset.load_experiment(f'exp_{i}', {
             'temp': temp,
             'use_cooling': cooling,
             'material': mat,

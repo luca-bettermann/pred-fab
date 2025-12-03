@@ -38,7 +38,6 @@ class DataBlock:
         """Validate a value against the corresponding DataObject."""
         if name not in self.data_objects:
             raise KeyError(f"Parameter '{name}' not defined in {self.__class__.__name__}")
-        
         return self.data_objects[name].validate(value)
     
     def validate_all(self, values: Dict[str, Any]) -> bool:
@@ -122,6 +121,14 @@ class DataBlock:
             },
             "values": self.values  # Include current values
         }
+    
+    def is_compatible(self, other_block) -> bool:
+        """Helper function to check compatibility between two data blocks."""
+        self_objects = set(self.data_objects)
+        other_objects = set(other_block.data_objects)
+        if self_objects != other_objects:
+            return False
+        return True
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DataBlock':

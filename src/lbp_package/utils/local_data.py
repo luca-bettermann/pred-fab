@@ -179,10 +179,8 @@ class LocalData:
         )
 
     def save_features(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
-                           recompute: bool, **kwargs) -> bool:
+                      recompute: bool, feature_name: str, column_names: Optional[List[str]], **kwargs) -> bool:
         """Save feature arrays to local files."""
-        feature_name = kwargs.get('feature_name')
-        column_names = kwargs.get('column_names')
         if not feature_name:
             raise ValueError("feature_name required in kwargs for save_features")
         return self._save_files_generic(

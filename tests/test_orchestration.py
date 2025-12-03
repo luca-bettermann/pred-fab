@@ -240,7 +240,7 @@ class TestPredictionSystemWithSplits:
             exp_code = f"exp_{i:03d}"
             
             # Create experiment
-            exp_data = dataset.add_experiment(
+            exp_data = dataset.load_experiment(
                 exp_code=exp_code,
                 exp_params={
                     "param_1": float(i) * 0.1,

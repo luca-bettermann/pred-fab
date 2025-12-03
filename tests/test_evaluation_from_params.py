@@ -180,7 +180,7 @@ def test_evaluate_experiment_wrapper_consistency():
         )
         
         # Create exp_data
-        exp_data = dataset.add_experiment('exp1', {'temp': 200.0, 'n_layers': 2})
+        exp_data = dataset.load_experiment('exp1', {'temp': 200.0, 'n_layers': 2})
         
         # Method 1: Call evaluate_experiment (wrapper)
         eval_system.evaluate_experiment(exp_data)

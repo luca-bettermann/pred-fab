@@ -74,7 +74,7 @@ def simple_dataset():
     
     for i in range(3):
         exp_code = f"exp_{i}"
-        exp_data = dataset.add_experiment(
+        exp_data = dataset.load_experiment(
             exp_code=exp_code,
             exp_params={"x": float(i), "y": float(i * 2)}
         )

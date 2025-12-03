@@ -266,7 +266,7 @@ class TestDataModuleDimensionalExtraction:
         dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
         
         # Add experiment with dimensional features
-        exp_data = dataset.add_experiment(
+        exp_data = dataset.load_experiment(
             'exp_001',
             {'temp': 200.0, 'speed': 50.0, 'n_layers': 3, 'n_segments': 2}
         )
@@ -547,7 +547,7 @@ class TestPredictionSystemDimensional:
         dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
         
         # Add experiment
-        exp_data = dataset.add_experiment('exp_001', {'temp': 200.0, 'n_layers': 3})
+        exp_data = dataset.load_experiment('exp_001', {'temp': 200.0, 'n_layers': 3})
         exp_data.features = MetricArrays()
         deviation_data = np.array([0.1, 0.12, 0.11])
         exp_data.features.add('deviation', DataArray(name='deviation', shape=(3,)))
@@ -662,7 +662,7 @@ class TestOnlineLearning:
         train_dataset = Dataset(name='train', schema=schema, schema_id='test_schema')
         
         # Add complete training data
-        train_exp = train_dataset.add_experiment('train_001', {'temp': 190.0, 'n_layers': 10})
+        train_exp = train_dataset.load_experiment('train_001', {'temp': 190.0, 'n_layers': 10})
         train_exp.features = MetricArrays()
         train_data = np.random.rand(10) * 0.1 + 0.1
         train_exp.features.add('deviation', DataArray(name='deviation', shape=(10,)))
@@ -679,7 +679,7 @@ class TestOnlineLearning:
         
         # Create separate experiment with partial measurements for prediction
         pred_dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
-        exp_data = pred_dataset.add_experiment('ongoing', {'temp': 200.0, 'n_layers': 100})
+        exp_data = pred_dataset.load_experiment('ongoing', {'temp': 200.0, 'n_layers': 100})
         exp_data.features = MetricArrays()
         
         # Only first 10 layers measured - rest are NaN
@@ -738,7 +738,7 @@ class TestOnlineLearning:
         
         # Add historical experiments for initial training
         for i in range(3):
-            exp = dataset.add_experiment(
+            exp = dataset.load_experiment(
                 f'hist_{i:03d}',
                 {'temp': 200.0 + i*10, 'speed': 50.0, 'n_layers': 10, 'n_segments': 3}
             )
@@ -770,7 +770,7 @@ class TestOnlineLearning:
         
         # Start new fabrication experiment
         fab_params = {'temp': 215.0, 'speed': 55.0, 'n_layers': 20, 'n_segments': 3}
-        fab_exp = dataset.add_experiment('fab_ongoing', fab_params)
+        fab_exp = dataset.load_experiment('fab_ongoing', fab_params)
         
         # Initialize arrays
         total_positions = 20 * 3  # 20 layers × 3 segments
@@ -893,7 +893,7 @@ class TestOnlineLearning:
         
         # Historical data for training
         for i in range(3):
-            exp = dataset.add_experiment(
+            exp = dataset.load_experiment(
                 f'hist_{i:03d}',
                 {'temp': 200.0 + i*10, 'speed': 50.0, 'n_layers': 10}
             )
@@ -914,7 +914,7 @@ class TestOnlineLearning:
         
         # Fabrication experiment
         fab_params = {'temp': 215.0, 'speed': 55.0, 'n_layers': 20}
-        fab_exp = dataset.add_experiment('fab_ongoing', fab_params)
+        fab_exp = dataset.load_experiment('fab_ongoing', fab_params)
         fab_exp.features = MetricArrays()
         fab_exp.predicted_features = MetricArrays()
         
@@ -1024,7 +1024,7 @@ class TestDataValidation:
         dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
         
         # Add experiment with partial measurements (has NaN)
-        exp_data = dataset.add_experiment('incomplete', {'temp': 200.0, 'n_layers': 10})
+        exp_data = dataset.load_experiment('incomplete', {'temp': 200.0, 'n_layers': 10})
         exp_data.features = MetricArrays()
         
         # Only first 5 layers measured - rest are NaN
@@ -1057,7 +1057,7 @@ class TestDataValidation:
         dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
         
         # Add experiment with 'deviation' feature
-        exp_data = dataset.add_experiment('exp_001', {'temp': 200.0, 'n_layers': 5})
+        exp_data = dataset.load_experiment('exp_001', {'temp': 200.0, 'n_layers': 5})
         exp_data.features = MetricArrays()
         exp_data.features.add('deviation', DataArray(name='deviation', shape=(5,)))
         exp_data.features.set_value('deviation', np.random.rand(5) * 0.1)

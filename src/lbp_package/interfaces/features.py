@@ -57,9 +57,9 @@ class IFeatureModel(ABC):
     def run(self, feature_name: str, visualize: bool = False, **param_values) -> float:
         """Extract feature with memoization via Dataset."""
         # Check cache
-        if self.dataset.has_features_at(**param_values):
+        if self.dataset.has_cached_features_at(**param_values):
             try:
-                cached_value = self.dataset.get_feature_value(feature_name, **param_values)
+                cached_value = self.dataset.get_cached_feature_value(feature_name, **param_values)
                 self.logger.debug(f"Using cached feature '{feature_name}' for {param_values}")
                 return cached_value
             except KeyError:
@@ -77,6 +77,6 @@ class IFeatureModel(ABC):
             )
         
         # Cache and return
-        self.dataset.set_feature_value(feature_name, feature_value, **param_values)
+        self.dataset.cache_feature_value(feature_name, feature_value, **param_values)
         
         return feature_value

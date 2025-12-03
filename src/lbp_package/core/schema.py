@@ -13,6 +13,7 @@ import json
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, Set, Optional
+from .data_objects import DataDimension
 from .data_blocks import (
     Parameters,
     Dimensions,
@@ -94,9 +95,7 @@ class DatasetSchema:
         pred_specs: Dict[str, Any],
         logger: Optional[Any] = None
     ) -> 'DatasetSchema':
-        """Build schema from evaluation and prediction system specifications."""
-        from .data_objects import DataDimension
-        
+        """Build schema from evaluation and prediction system specifications."""        
         schema = cls()
         
         # 1. Merge input parameters from both systems
@@ -129,72 +128,21 @@ class DatasetSchema:
         return schema
     
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
-        """Check structural compatibility with another schema."""
-        errors = []
+        """Check structural compatibility with another schema."""        
+        # Check all blocks using helper function
+        block_checks = [
+            (self.parameters, other.parameters),
+            (self.dimensions, other.dimensions),
+            (self.performance_attrs, other.performance_attrs),
+            (self.features, other.features)
+        ]
         
-        # Check parameters
-        self_params = set(self.parameters.keys())
-        other_params = set(other.parameters.keys())
-        if self_params != other_params:
-            missing = other_params - self_params
-            extra = self_params - other_params
-            errors.append(
-                f"Parameters mismatch: "
-                f"missing {missing if missing else 'none'}, "
-                f"unexpected {extra if extra else 'none'}"
-            )
-        
-        # Check dimensions
-        self_dim = set(self.dimensions.keys())
-        other_dim = set(other.dimensions.keys())
-        if self_dim != other_dim:
-            missing = other_dim - self_dim
-            extra = self_dim - other_dim
-            errors.append(
-                f"Dimensions mismatch: "
-                f"missing {missing if missing else 'none'}, "
-                f"unexpected {extra if extra else 'none'}"
-            )
-        
-        # Check performance attributes
-        self_perf = set(self.performance_attrs.keys())
-        other_perf = set(other.performance_attrs.keys())
-        if self_perf != other_perf:
-            missing = other_perf - self_perf
-            extra = self_perf - other_perf
-            errors.append(
-                f"Performance attributes mismatch: "
-                f"missing {missing if missing else 'none'}, "
-                f"unexpected {extra if extra else 'none'}"
-            )
-        
-        # Check metric arrays
-        self_arrays = set(self.features.keys())
-        other_arrays = set(other.features.keys())
-        if self_arrays != other_arrays:
-            missing = other_arrays - self_arrays
-            extra = self_arrays - other_arrays
-            errors.append(
-                f"Metric arrays mismatch: "
-                f"missing {missing if missing else 'none'}, "
-                f"unexpected {extra if extra else 'none'}"
-            )
-        
-        # Check types match for common parameters
-        for name in self_params & other_params:
-            if type(self.parameters.get(name)) != type(other.parameters.get(name)):
-                errors.append(
-                    f"Type mismatch for parameter '{name}': "
-                    f"{type(self.parameters.get(name)).__name__} vs "
-                    f"{type(other.parameters.get(name)).__name__}"
-                )
-        
-        if errors:
-            raise ValueError(
-                "Schema compatibility check failed:\n" + 
-                "\n".join(f"  - {error}" for error in errors)
-            )
-        
+        for self_block, other_block in block_checks:
+            if not self_block._is_identical(other_block):
+                raise ValueError(
+                    f"Schema block '{self_block.__class__.__name__}' is not identical "
+                    f"to {other_block.__class__.__name__}."
+                )        
         return True
     
     def get_all_param_names(self) -> Set[str]:

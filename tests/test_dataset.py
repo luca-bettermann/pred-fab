@@ -98,7 +98,7 @@ class TestDatasetAddExperiment:
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
         
-        dataset.add_experiment(
+        dataset.load_experiment(
             exp_code="exp_001",
             exp_params={"batch_size": 32}
         )
@@ -115,7 +115,7 @@ class TestDatasetAddExperiment:
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
         
-        dataset.add_experiment(
+        dataset.load_experiment(
             exp_code="exp_001",
             exp_params={},
             performance={"accuracy": 0.95}
@@ -135,7 +135,7 @@ class TestDatasetAddExperiment:
         dataset.set_static_values({"lr": 0.001})
         
         energy_data = np.random.rand(100)
-        dataset.add_experiment(
+        dataset.load_experiment(
             exp_code="exp_001",
             exp_params={},
             metric_arrays={"energy": energy_data}
@@ -154,7 +154,7 @@ class TestDatasetAddExperiment:
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
         
-        dataset.add_experiment(exp_code="exp_001", exp_params={"batch_size": 32})
+        dataset.load_experiment(exp_code="exp_001", exp_params={"batch_size": 32})
         
         exp_data = dataset.get_experiment("exp_001")
         assert exp_data.parameters.get_value("lr") == 0.001  # Static
@@ -168,7 +168,7 @@ class TestDatasetAddExperiment:
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
         with pytest.raises(ValueError, match="Unknown parameter"):
-            dataset.add_experiment(
+            dataset.load_experiment(
                 exp_code="exp_001",
                 exp_params={"unknown_param": 123}
             )
@@ -184,7 +184,7 @@ class TestDatasetAccessors:
         
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
-        dataset.add_experiment(exp_code="exp_001", exp_params={})
+        dataset.load_experiment(exp_code="exp_001", exp_params={})
         
         exp_data = dataset.get_experiment("exp_001")
         
@@ -207,7 +207,7 @@ class TestDatasetAccessors:
         
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
-        dataset.add_experiment(exp_code="exp_001", exp_params={"batch_size": 32})
+        dataset.load_experiment(exp_code="exp_001", exp_params={"batch_size": 32})
         
         params = dataset.get_experiment_params("exp_001")
         
@@ -221,7 +221,7 @@ class TestDatasetAccessors:
         
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
-        dataset.add_experiment(exp_code="exp_001", exp_params={})
+        dataset.load_experiment(exp_code="exp_001", exp_params={})
         
         assert dataset.has_experiment("exp_001")
         assert not dataset.has_experiment("exp_999")
@@ -235,22 +235,22 @@ class TestFeatureMemoization:
         schema = DatasetSchema()
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
-        assert not dataset.has_features_at(lr=0.001, batch_size=32)
+        assert not dataset.has_cached_features_at(lr=0.001, batch_size=32)
         
-        dataset.set_feature_value("feature1", 123, lr=0.001, batch_size=32)
+        dataset.cache_feature_value("feature1", 123, lr=0.001, batch_size=32)
         
-        assert dataset.has_features_at(lr=0.001, batch_size=32)
+        assert dataset.has_cached_features_at(lr=0.001, batch_size=32)
     
     def test_set_and_get_feature_value(self):
         """Test caching and retrieving feature values."""
         schema = DatasetSchema()
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
-        dataset.set_feature_value("temperature", 25.5, location="A", time=100)
-        dataset.set_feature_value("pressure", 101.3, location="A", time=100)
+        dataset.cache_feature_value("temperature", 25.5, location="A", time=100)
+        dataset.cache_feature_value("pressure", 101.3, location="A", time=100)
         
-        assert dataset.get_feature_value("temperature", location="A", time=100) == 25.5
-        assert dataset.get_feature_value("pressure", location="A", time=100) == 101.3
+        assert dataset.get_cached_feature_value("temperature", location="A", time=100) == 25.5
+        assert dataset.get_cached_feature_value("pressure", location="A", time=100) == 101.3
     
     def test_get_feature_value_not_cached(self):
         """Test that retrieving uncached feature raises KeyError."""
@@ -258,29 +258,29 @@ class TestFeatureMemoization:
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
         with pytest.raises(KeyError, match="No features cached"):
-            dataset.get_feature_value("feature1", lr=0.001)
+            dataset.get_cached_feature_value("feature1", lr=0.001)
     
     def test_feature_cache_different_params(self):
         """Test that different params create separate cache entries."""
         schema = DatasetSchema()
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
-        dataset.set_feature_value("result", 10, x=1, y=2)
-        dataset.set_feature_value("result", 20, x=1, y=3)
+        dataset.cache_feature_value("result", 10, x=1, y=2)
+        dataset.cache_feature_value("result", 20, x=1, y=3)
         
-        assert dataset.get_feature_value("result", x=1, y=2) == 10
-        assert dataset.get_feature_value("result", x=1, y=3) == 20
+        assert dataset.get_cached_feature_value("result", x=1, y=2) == 10
+        assert dataset.get_cached_feature_value("result", x=1, y=3) == 20
     
     def test_feature_cache_param_order_irrelevant(self):
         """Test that parameter order doesn't affect cache key."""
         schema = DatasetSchema()
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         
-        dataset.set_feature_value("result", 42, a=1, b=2, c=3)
+        dataset.cache_feature_value("result", 42, a=1, b=2, c=3)
         
         # Different order should retrieve same cached value
-        assert dataset.get_feature_value("result", c=3, a=1, b=2) == 42
-        assert dataset.get_feature_value("result", b=2, c=3, a=1) == 42
+        assert dataset.get_cached_feature_value("result", c=3, a=1, b=2) == 42
+        assert dataset.get_cached_feature_value("result", b=2, c=3, a=1) == 42
 
 
 class TestDatasetIntegration:
@@ -311,7 +311,7 @@ class TestDatasetIntegration:
             exp_code = f"exp_{i:03d}"
             energy_data = np.random.rand(100) * 10
             
-            dataset.add_experiment(
+            dataset.load_experiment(
                 exp_code=exp_code,
                 exp_params={"batch_size": 32 * (i + 1)},
                 performance={
@@ -331,5 +331,5 @@ class TestDatasetIntegration:
         assert exp_data.features.get_value("energy").shape == (100,)
         
         # Feature caching
-        dataset.set_feature_value("processed_energy", 123.45, batch_size=64)
-        assert dataset.get_feature_value("processed_energy", batch_size=64) == 123.45
+        dataset.cache_feature_value("processed_energy", 123.45, batch_size=64)
+        assert dataset.get_cached_feature_value("processed_energy", batch_size=64) == 123.45
