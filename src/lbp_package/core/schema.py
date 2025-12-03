@@ -39,7 +39,7 @@ class DatasetSchema:
         self.parameters = Parameters()
         self.dimensions = Dimensions()
         self.performance_attrs = PerformanceAttributes()
-        self.metric_arrays = MetricArrays()
+        self.features = MetricArrays()
         self.default_round_digits = default_round_digits
     
     def _compute_schema_hash(self) -> str:
@@ -48,7 +48,7 @@ class DatasetSchema:
             "parameters": self._block_to_hash_structure(self.parameters),
             "dimensions": self._block_to_hash_structure(self.dimensions),
             "performance": self._block_to_hash_structure(self.performance_attrs),
-            "metric_arrays": self._block_to_hash_structure(self.metric_arrays)
+            "metric_arrays": self._block_to_hash_structure(self.features)
         }
         
         # Sort keys for determinism
@@ -71,7 +71,7 @@ class DatasetSchema:
             "parameters": self.parameters.to_dict(),
             "dimensions": self.dimensions.to_dict(),
             "performance_attrs": self.performance_attrs.to_dict(),
-            "metric_arrays": self.metric_arrays.to_dict(),
+            "metric_arrays": self.features.to_dict(),
             "default_round_digits": self.default_round_digits,
             "schema_hash": self._compute_schema_hash()
         }
@@ -84,7 +84,7 @@ class DatasetSchema:
         schema.parameters = Parameters.from_dict(data["parameters"])
         schema.dimensions = Dimensions.from_dict(data["dimensions"])
         schema.performance_attrs = PerformanceAttributes.from_dict(data["performance_attrs"])
-        schema.metric_arrays = MetricArrays.from_dict(data.get("metric_arrays", {"type": "MetricArrays", "data_objects": {}}))
+        schema.features = MetricArrays.from_dict(data.get("metric_arrays", {"type": "MetricArrays", "data_objects": {}}))
         return schema
     
     @classmethod
@@ -169,8 +169,8 @@ class DatasetSchema:
             )
         
         # Check metric arrays
-        self_arrays = set(self.metric_arrays.keys())
-        other_arrays = set(other.metric_arrays.keys())
+        self_arrays = set(self.features.keys())
+        other_arrays = set(other.features.keys())
         if self_arrays != other_arrays:
             missing = other_arrays - self_arrays
             extra = self_arrays - other_arrays

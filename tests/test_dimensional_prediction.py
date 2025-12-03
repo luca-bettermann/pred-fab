@@ -196,8 +196,8 @@ class TestDimensionalDataStructure:
         
         # Should have predicted_metric_arrays field (auto-initialized)
         assert hasattr(exp_data, 'predicted_metric_arrays')
-        assert exp_data.predicted_metric_arrays is not None
-        assert isinstance(exp_data.predicted_metric_arrays, MetricArrays)
+        assert exp_data.predicted_features is not None
+        assert isinstance(exp_data.predicted_features, MetricArrays)
     
     def test_metric_arrays_simplified_storage(self):
         """Metric arrays should store only feature values, not redundant data."""
@@ -220,24 +220,24 @@ class TestDimensionalDataStructure:
         exp_data = ExperimentData(
             exp_code="test_001",
             parameters=DataBlock(),
-            metric_arrays=MetricArrays(),
-            predicted_metric_arrays=MetricArrays()
+            features=MetricArrays(),
+            predicted_features=MetricArrays()
         )
         
         # Store measured features
         measured = np.array([[0.1, 0.15], [0.12, 0.14]])
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(2, 2)))
-        exp_data.metric_arrays.set_value('deviation', measured)
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(2, 2)))
+        exp_data.features.set_value('deviation', measured)
         
         # Store predicted features
         predicted = np.array([[0.11, 0.16], [0.13, 0.15]])
-        exp_data.predicted_metric_arrays.add('deviation', DataArray(name='deviation', shape=(2, 2)))
-        exp_data.predicted_metric_arrays.set_value('deviation', predicted)
+        exp_data.predicted_features.add('deviation', DataArray(name='deviation', shape=(2, 2)))
+        exp_data.predicted_features.set_value('deviation', predicted)
         
         # Verify separation
         assert not np.array_equal(
-            exp_data.metric_arrays.get_value('deviation'),
-            exp_data.predicted_metric_arrays.get_value('deviation')
+            exp_data.features.get_value('deviation'),
+            exp_data.predicted_features.get_value('deviation')
         )
 
 
@@ -273,9 +273,9 @@ class TestDataModuleDimensionalExtraction:
         
         # Populate metric arrays with feature values
         deviation_data = np.array([[0.1, 0.15], [0.12, 0.14], [0.11, 0.13]])  # (3, 2)
-        exp_data.metric_arrays = MetricArrays()
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(3, 2)))
-        exp_data.metric_arrays.set_value('deviation', deviation_data)
+        exp_data.features = MetricArrays()
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(3, 2)))
+        exp_data.features.set_value('deviation', deviation_data)
         
         return dataset
     
@@ -548,10 +548,10 @@ class TestPredictionSystemDimensional:
         
         # Add experiment
         exp_data = dataset.add_experiment('exp_001', {'temp': 200.0, 'n_layers': 3})
-        exp_data.metric_arrays = MetricArrays()
+        exp_data.features = MetricArrays()
         deviation_data = np.array([0.1, 0.12, 0.11])
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(3,)))
-        exp_data.metric_arrays.set_value('deviation', deviation_data)
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(3,)))
+        exp_data.features.set_value('deviation', deviation_data)
         
         logger = LBPLogger(name='test', log_folder=str(tmp_path))
         system = PredictionSystem(dataset=dataset, logger=logger)
@@ -663,10 +663,10 @@ class TestOnlineLearning:
         
         # Add complete training data
         train_exp = train_dataset.add_experiment('train_001', {'temp': 190.0, 'n_layers': 10})
-        train_exp.metric_arrays = MetricArrays()
+        train_exp.features = MetricArrays()
         train_data = np.random.rand(10) * 0.1 + 0.1
-        train_exp.metric_arrays.add('deviation', DataArray(name='deviation', shape=(10,)))
-        train_exp.metric_arrays.set_value('deviation', train_data)
+        train_exp.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+        train_exp.features.set_value('deviation', train_data)
         
         # Setup prediction system and train on complete data
         logger = LBPLogger(name='test', log_folder=str(tmp_path))
@@ -680,13 +680,13 @@ class TestOnlineLearning:
         # Create separate experiment with partial measurements for prediction
         pred_dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
         exp_data = pred_dataset.add_experiment('ongoing', {'temp': 200.0, 'n_layers': 100})
-        exp_data.metric_arrays = MetricArrays()
+        exp_data.features = MetricArrays()
         
         # Only first 10 layers measured - rest are NaN
         measured = np.full(100, np.nan)
         measured[:10] = np.random.rand(10) * 0.1 + 0.1
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(100,)))
-        exp_data.metric_arrays.set_value('deviation', measured)
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(100,)))
+        exp_data.features.set_value('deviation', measured)
         
         # Predict on ongoing experiment
         result = system.predict_experiment(
@@ -696,7 +696,7 @@ class TestOnlineLearning:
         )
         
         # Should have predictions
-        assert result.predicted_metric_arrays is not None
+        assert result.predicted_features is not None
         
         # Predict remaining layers using measured as context
         result = system.predict_experiment(
@@ -706,7 +706,7 @@ class TestOnlineLearning:
         )
         
         # Should use measured features as context
-        assert result.predicted_metric_arrays is not None
+        assert result.predicted_features is not None
     
     def test_online_fabrication_integration(self, tmp_path):
         """
@@ -742,7 +742,7 @@ class TestOnlineLearning:
                 f'hist_{i:03d}',
                 {'temp': 200.0 + i*10, 'speed': 50.0, 'n_layers': 10, 'n_segments': 3}
             )
-            exp.metric_arrays = MetricArrays()
+            exp.features = MetricArrays()
             
             # Synthetic deviation data with pattern: base + layer_effect + segment_effect
             deviation = np.zeros((10, 3))
@@ -753,8 +753,8 @@ class TestOnlineLearning:
                     seg_effect = seg * 0.002
                     deviation[layer, seg] = base + layer_effect + seg_effect
             
-            exp.metric_arrays.add('deviation', DataArray(name='deviation', shape=(10, 3)))
-            exp.metric_arrays.set_value('deviation', deviation)
+            exp.features.add('deviation', DataArray(name='deviation', shape=(10, 3)))
+            exp.features.set_value('deviation', deviation)
         
         # Setup prediction system
         logger = LBPLogger(name='fabrication_test', log_folder=str(tmp_path))
@@ -777,10 +777,10 @@ class TestOnlineLearning:
         measured_deviation = np.full((20, 3), np.nan)
         predicted_deviation = np.full((20, 3), np.nan)
         
-        fab_exp.metric_arrays.add('deviation', DataArray(name='deviation', shape=(20, 3)))
-        fab_exp.metric_arrays.set_value('deviation', measured_deviation)
-        fab_exp.predicted_metric_arrays.add('deviation', DataArray(name='deviation', shape=(20, 3)))
-        fab_exp.predicted_metric_arrays.set_value('deviation', predicted_deviation)
+        fab_exp.features.add('deviation', DataArray(name='deviation', shape=(20, 3)))
+        fab_exp.features.set_value('deviation', measured_deviation)
+        fab_exp.predicted_features.add('deviation', DataArray(name='deviation', shape=(20, 3)))
+        fab_exp.predicted_features.set_value('deviation', predicted_deviation)
         
         # Simulation parameters
         lookahead = 5  # Predict 5 layers ahead
@@ -801,9 +801,9 @@ class TestOnlineLearning:
                 )
                 
                 # Update predicted arrays
-                pred_values = prediction_result.predicted_metric_arrays.get_value('deviation')
+                pred_values = prediction_result.predicted_features.get_value('deviation')
                 predicted_deviation[current_layer+1:predict_to_layer, :] = pred_values[current_layer+1:predict_to_layer, :]
-                fab_exp.predicted_metric_arrays.set_value('deviation', predicted_deviation)
+                fab_exp.predicted_features.set_value('deviation', predicted_deviation)
             
             # Step 2: "Fabricate" current layer - simulate feature extraction/evaluation
             # In reality, this would be sensor readings or post-fabrication measurements
@@ -819,7 +819,7 @@ class TestOnlineLearning:
                 measured_deviation[current_layer, seg] = measured_value
             
             # Update measured arrays
-            fab_exp.metric_arrays.set_value('deviation', measured_deviation)
+            fab_exp.features.set_value('deviation', measured_deviation)
             
             # Step 3: Tune model with new measurements (every tune_frequency layers)
             if (current_layer + 1) % tune_frequency == 0 and current_layer > 0:
@@ -849,8 +849,8 @@ class TestOnlineLearning:
                     model.tuning(X_tune, y_tune)
         
         # Final verification
-        final_measured = fab_exp.metric_arrays.get_value('deviation')
-        final_predicted = fab_exp.predicted_metric_arrays.get_value('deviation')
+        final_measured = fab_exp.features.get_value('deviation')
+        final_predicted = fab_exp.predicted_features.get_value('deviation')
         
         # 1. All layers should be measured
         assert not np.any(np.isnan(final_measured)), "All positions should be measured"
@@ -897,10 +897,10 @@ class TestOnlineLearning:
                 f'hist_{i:03d}',
                 {'temp': 200.0 + i*10, 'speed': 50.0, 'n_layers': 10}
             )
-            exp.metric_arrays = MetricArrays()
+            exp.features = MetricArrays()
             deviation = np.array([0.1 + i*0.01 + j*0.005 for j in range(10)])
-            exp.metric_arrays.add('deviation', DataArray(name='deviation', shape=(10,)))
-            exp.metric_arrays.set_value('deviation', deviation)
+            exp.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+            exp.features.set_value('deviation', deviation)
         
         # Setup system
         logger = LBPLogger(name='online_test', log_folder=str(tmp_path))
@@ -915,15 +915,15 @@ class TestOnlineLearning:
         # Fabrication experiment
         fab_params = {'temp': 215.0, 'speed': 55.0, 'n_layers': 20}
         fab_exp = dataset.add_experiment('fab_ongoing', fab_params)
-        fab_exp.metric_arrays = MetricArrays()
-        fab_exp.predicted_metric_arrays = MetricArrays()
+        fab_exp.features = MetricArrays()
+        fab_exp.predicted_features = MetricArrays()
         
         measured = np.full(20, np.nan)
         predicted = np.full(20, np.nan)
-        fab_exp.metric_arrays.add('deviation', DataArray(name='deviation', shape=(20,)))
-        fab_exp.metric_arrays.set_value('deviation', measured)
-        fab_exp.predicted_metric_arrays.add('deviation', DataArray(name='deviation', shape=(20,)))
-        fab_exp.predicted_metric_arrays.set_value('deviation', predicted)
+        fab_exp.features.add('deviation', DataArray(name='deviation', shape=(20,)))
+        fab_exp.features.set_value('deviation', measured)
+        fab_exp.predicted_features.add('deviation', DataArray(name='deviation', shape=(20,)))
+        fab_exp.predicted_features.set_value('deviation', predicted)
         
         # Online loop
         for layer in range(20):
@@ -937,14 +937,14 @@ class TestOnlineLearning:
                 )
                 
                 # Update predictions
-                pred_vals = result.predicted_metric_arrays.get_value('deviation')
+                pred_vals = result.predicted_features.get_value('deviation')
                 predicted[:] = pred_vals
-                fab_exp.predicted_metric_arrays.set_value('deviation', predicted)
+                fab_exp.predicted_features.set_value('deviation', predicted)
             
             # "Fabricate" - measure
             measured_value = 0.11 + layer * 0.005 + np.random.normal(0, 0.003)
             measured[layer] = measured_value
-            fab_exp.metric_arrays.set_value('deviation', measured)
+            fab_exp.features.set_value('deviation', measured)
             
             # Tune every 5 layers
             if layer % 5 == 4 and layer > 0:
@@ -961,8 +961,8 @@ class TestOnlineLearning:
                     model.tuning(X_tune, y_tune)
         
         # Verify
-        final_measured = fab_exp.metric_arrays.get_value('deviation')
-        final_predicted = fab_exp.predicted_metric_arrays.get_value('deviation')
+        final_measured = fab_exp.features.get_value('deviation')
+        final_predicted = fab_exp.predicted_features.get_value('deviation')
         
         assert not np.any(np.isnan(final_measured)), "All layers measured"
         assert np.sum(~np.isnan(final_predicted)) > 0, "Should have predictions"
@@ -1025,13 +1025,13 @@ class TestDataValidation:
         
         # Add experiment with partial measurements (has NaN)
         exp_data = dataset.add_experiment('incomplete', {'temp': 200.0, 'n_layers': 10})
-        exp_data.metric_arrays = MetricArrays()
+        exp_data.features = MetricArrays()
         
         # Only first 5 layers measured - rest are NaN
         measured = np.full(10, np.nan)
         measured[:5] = np.random.rand(5) * 0.1 + 0.1
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(10,)))
-        exp_data.metric_arrays.set_value('deviation', measured)
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+        exp_data.features.set_value('deviation', measured)
         
         # Setup prediction system
         logger = LBPLogger(name='test', log_folder=str(tmp_path))
@@ -1058,9 +1058,9 @@ class TestDataValidation:
         
         # Add experiment with 'deviation' feature
         exp_data = dataset.add_experiment('exp_001', {'temp': 200.0, 'n_layers': 5})
-        exp_data.metric_arrays = MetricArrays()
-        exp_data.metric_arrays.add('deviation', DataArray(name='deviation', shape=(5,)))
-        exp_data.metric_arrays.set_value('deviation', np.random.rand(5) * 0.1)
+        exp_data.features = MetricArrays()
+        exp_data.features.add('deviation', DataArray(name='deviation', shape=(5,)))
+        exp_data.features.set_value('deviation', np.random.rand(5) * 0.1)
         
         # Setup prediction system
         logger = LBPLogger(name='test', log_folder=str(tmp_path))

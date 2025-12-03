@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import Literal, Callable
 import numpy as np
 
 from ..utils import LBPLogger
@@ -13,9 +13,11 @@ class ICalibrationStrategy(ABC):
     - Supports exploration (active learning) and optimization modes
     """
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger, predict: Callable, evaluate: Callable):
         """Initialize strategy with logger."""
         self.logger = logger
+        self.predict_fn = predict
+        self.evaluate_fn = evaluate
 
     @abstractmethod
     def propose_next_points(
@@ -24,7 +26,8 @@ class ICalibrationStrategy(ABC):
         y_history: np.ndarray,
         bounds: np.ndarray,
         n_points: int = 1,
-        mode: Literal['exploration', 'optimization'] = 'exploration'
+        mode: Literal['exploration', 'optimization'] = 'exploration',
+        **kwargs
     ) -> np.ndarray:
         """
         Propose next parameters to evaluate.

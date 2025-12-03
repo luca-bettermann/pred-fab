@@ -22,7 +22,7 @@ def categorical_dataset():
     schema.parameters.add('optimizer', Parameter.categorical(['adam', 'sgd', 'rmsprop']))
     schema.parameters.add('learning_rate', Parameter.real(min_val=0.001, max_val=0.1))
     schema.parameters.add('batch_size', Parameter.integer(min_val=16, max_val=256))
-    schema.metric_arrays.add('loss', DataArray(name='loss', shape=(1,)))
+    schema.features.add('loss', DataArray(name='loss', shape=(1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -41,7 +41,7 @@ def categorical_dataset():
             'learning_rate': lr,
             'batch_size': bs
         })
-        exp.metric_arrays.set_value('loss', np.array([0.5 - i * 0.05]))
+        exp.features.set_value('loss', np.array([0.5 - i * 0.05]))
     
     return dataset
 
@@ -55,7 +55,7 @@ def dimensional_dataset():
         param_name='n_layers', dim_name='layers', iterator_name='layer',
         min_val=1, max_val=10
     ))
-    schema.metric_arrays.add('deviation', DataArray(name='deviation', shape=(-1,)))
+    schema.features.add('deviation', DataArray(name='deviation', shape=(-1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -66,7 +66,7 @@ def dimensional_dataset():
             'temp': 200.0 + i * 10,
             'n_layers': n_layers
         })
-        exp.metric_arrays.set_value('deviation', np.random.rand(n_layers) * 0.1)
+        exp.features.set_value('deviation', np.random.rand(n_layers) * 0.1)
     
     return dataset
 
@@ -79,7 +79,7 @@ def mixed_dataset():
     schema.parameters.add('use_cooling', Parameter.boolean())
     schema.parameters.add('material', Parameter.categorical(['PLA', 'ABS', 'PETG']))
     schema.parameters.add('speed', Parameter.integer(min_val=10, max_val=100))
-    schema.metric_arrays.add('quality', DataArray(name='quality', shape=(1,)))
+    schema.features.add('quality', DataArray(name='quality', shape=(1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -97,7 +97,7 @@ def mixed_dataset():
             'material': mat,
             'speed': speed
         })
-        exp.metric_arrays.set_value('quality', np.array([0.8 + i * 0.02]))
+        exp.features.set_value('quality', np.array([0.8 + i * 0.02]))
     
     return dataset
 

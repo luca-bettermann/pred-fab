@@ -75,7 +75,7 @@ class DataModule:
         # Check if dataset has any experiments with data
         exp_codes = [
             code for code in self.dataset.get_experiment_codes()
-            if self.dataset.get_experiment(code).metric_arrays is not None
+            if self.dataset.get_experiment(code).features is not None
         ]
         
         if not exp_codes:
@@ -248,7 +248,7 @@ class DataModule:
         # Get experiments with metric arrays
         exp_codes = [
             code for code in self.dataset.get_experiment_codes()
-            if self.dataset.get_experiment(code).metric_arrays is not None
+            if self.dataset.get_experiment(code).features is not None
         ]
         
         if not exp_codes:
@@ -260,7 +260,7 @@ class DataModule:
         
         for code in exp_codes:
             exp_data = self.dataset.get_experiment(code)
-            if exp_data.metric_arrays is None:
+            if exp_data.features is None:
                 continue
             
             # Get parameter values
@@ -279,8 +279,8 @@ class DataModule:
             if not dim_params:
                 # No dimensions - treat as single position
                 y_dict = {}
-                for feature_name in exp_data.metric_arrays.keys():
-                    value = exp_data.metric_arrays.get_value(feature_name)
+                for feature_name in exp_data.features.keys():
+                    value = exp_data.features.get_value(feature_name)
                     # Safe conversion to float
                     if isinstance(value, np.ndarray):
                         y_dict[feature_name] = float(value.flat[0])
@@ -293,8 +293,8 @@ class DataModule:
             
             # Multi-dimensional case: flatten all positions
             # Get shape from first metric array
-            first_feature = list(exp_data.metric_arrays.keys())[0]
-            feature_array = exp_data.metric_arrays.get_value(first_feature)
+            first_feature = list(exp_data.features.keys())[0]
+            feature_array = exp_data.features.get_value(first_feature)
             
             if not isinstance(feature_array, np.ndarray):
                 continue
@@ -317,8 +317,8 @@ class DataModule:
                 
                 # Extract feature values at this position
                 y_dict = {}
-                for feature_name in exp_data.metric_arrays.keys():
-                    feature_array = exp_data.metric_arrays.get_value(feature_name)
+                for feature_name in exp_data.features.keys():
+                    feature_array = exp_data.features.get_value(feature_name)
                     if isinstance(feature_array, np.ndarray):
                         value = feature_array[idx]
                         if not np.isnan(value):
@@ -476,8 +476,8 @@ class DataModule:
         """Get list of features from first experiment with metric_arrays."""
         for code in self.dataset.get_experiment_codes():
             exp_data = self.dataset.get_experiment(code)
-            if exp_data.metric_arrays is not None:
-                return list(exp_data.metric_arrays.keys())
+            if exp_data.features is not None:
+                return list(exp_data.features.keys())
         return []
     
     def get_split_sizes(self) -> Dict[str, int]:

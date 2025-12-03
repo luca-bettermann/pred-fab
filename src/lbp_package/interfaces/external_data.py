@@ -11,100 +11,96 @@ class IExternalData(ABC):
 
     # === ABSTRACT METHODS ===
     @abstractmethod
-    def pull_exp_records(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def pull_parameters(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
-        Load experiment records in batch from external source.
+        Load experiment parameters in batch from external source.
         
         Args:
             exp_codes: List of experiment codes to load
             
         Returns:
             missing_exp_codes: List of experiment codes that were not found
-            exp_records_dict: Dict mapping experiment codes to their records
+            parameters_dict: Dict mapping experiment codes to their parameters
         """
         ...
 
     # === OPTIONAL METHODS ===        
-    def pull_aggr_metrics(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def pull_performance(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
         """
-        Load aggregated metrics from external source for multiple experiments.
+        Load performance metrics from external source for multiple experiments.
         
         Args:
             exp_codes: List of experiment codes to load
             
         Returns:
             missing_exp_codes: List of experiment codes that were not found
-            aggr_metrics_dict: Dict mapping experiment codes to their aggregated metrics
+            performance_dict: Dict mapping experiment codes to their performance metrics
         """
         missing_exp_codes = exp_codes
-        aggr_metrics_dict = {}
+        performance_dict = {}
 
         # Default implementation returns all as missing
-        return missing_exp_codes, aggr_metrics_dict
+        return missing_exp_codes, performance_dict
 
-    def pull_metrics_arrays(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, np.ndarray]]:
+    def pull_features(self, exp_codes: List[str], feature_name: str = "default", **kwargs) -> tuple[List[str], Dict[str, np.ndarray]]:
         """
-        Load metrics arrays from external source for multiple experiments.
+        Load feature arrays from external source for multiple experiments.
         
         Args:
             exp_codes: List of experiment codes to load
+            feature_name: Identifier for the feature type
             
         Returns:
             missing_exp_codes: List of experiment codes that were not found
-            metrics_arrays_dict: Dict mapping experiment codes to their metrics arrays
+            features_dict: Dict mapping experiment codes to their feature arrays
         """
         missing_exp_codes = exp_codes
-        metrics_arrays_dict = {}
+        features_dict = {}
 
         # Default implementation returns all as missing
-        return missing_exp_codes, metrics_arrays_dict
+        return missing_exp_codes, features_dict
 
-    def push_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+    def push_parameters(self, exp_codes: List[str], parameters: Dict[str, Dict[str, Any]], recompute: bool = False) -> bool:
         """
-        Save experiment records to external source.
+        Save experiment parameters to external source.
         
         Args:
             exp_codes: List of experiment codes to save
-            data: Dict mapping experiment codes to experiment record data
-            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
-            **kwargs: Additional arguments for implementation-specific options
+            parameters: Dict mapping experiment codes to their parameters
+            recompute: Whether to overwrite existing records
             
         Returns:
-            True if data was actually written/overwritten, False otherwise
+            success: True if all records were saved successfully
         """
-        # Default implementation - override in subclasses
         return False
 
-    def push_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], recompute: bool, **kwargs) -> bool:
+    def push_performance(self, exp_codes: List[str], performance: Dict[str, Dict[str, Any]], recompute: bool = False) -> bool:
         """
-        Save aggregated metrics to external source.
+        Save performance metrics to external source.
         
         Args:
             exp_codes: List of experiment codes to save
-            data: Dict mapping experiment codes to aggregated metrics data
-            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
-            **kwargs: Additional arguments for implementation-specific options
+            performance: Dict mapping experiment codes to their metrics
+            recompute: Whether to overwrite existing metrics
             
         Returns:
-            True if data was actually written/overwritten, False otherwise
+            success: True if all metrics were saved successfully
         """
-        # Default implementation - override in subclasses
         return False
 
-    def push_metrics_arrays(self, exp_codes: List[str], data: Dict[str, np.ndarray], recompute: bool, **kwargs) -> bool:
+    def push_features(self, exp_codes: List[str], features: Dict[str, np.ndarray], recompute: bool = False, feature_name: str = "default", **kwargs) -> bool:
         """
-        Save metrics arrays to external source.
+        Save feature arrays to external source.
         
         Args:
             exp_codes: List of experiment codes to save
-            data: Dict mapping experiment codes to metrics arrays data
-            recompute: If False, only push if data doesn't exist. If True, push/overwrite regardless.
-            **kwargs: Additional arguments for implementation-specific options
+            features: Dict mapping experiment codes to their arrays
+            recompute: Whether to overwrite existing arrays
+            feature_name: Identifier for the feature type
             
         Returns:
-            True if data was actually written/overwritten, False otherwise
+            success: True if all arrays were saved successfully
         """
-        # Default implementation - override in subclasses
         return False
     
     def push_schema(self, schema_id: str, schema_data: Dict[str, Any]) -> bool:
@@ -136,7 +132,7 @@ class IExternalData(ABC):
     
     # === PUBLIC API METHODS ===
     @final
-    def pull_exp_record(self, exp_code: str) -> Dict[str, Any]:
+    def pull_exp_parameters(self, exp_code: str) -> Dict[str, Any]:
         """
         Retrieve experiment record by experiment code.
         
@@ -146,7 +142,7 @@ class IExternalData(ABC):
         Returns:
             Dict of exp_record with "id", "Code" and "Parameters" keys
         """
-        missing, records = self.pull_exp_records([exp_code])
+        missing, records = self.pull_parameters([exp_code])
         if exp_code in missing or exp_code not in records:
             raise KeyError(f"Experiment record not found: {exp_code}")
         return records[exp_code]

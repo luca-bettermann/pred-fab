@@ -18,13 +18,13 @@ class TestSchemaCreation:
         assert schema.parameters is not None
         assert schema.dimensions is not None
         assert schema.performance_attrs is not None
-        assert schema.metric_arrays is not None
+        assert schema.features is not None
         
         # All blocks should be empty
         assert len(list(schema.parameters.keys())) == 0
         assert len(list(schema.dimensions.keys())) == 0
         assert len(list(schema.performance_attrs.keys())) == 0
-        assert len(list(schema.metric_arrays.keys())) == 0
+        assert len(list(schema.features.keys())) == 0
     
     def test_schema_with_parameters(self):
         """Test adding parameters to schema."""
@@ -50,12 +50,12 @@ class TestSchemaCreation:
         schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         
         # Add metric arrays
-        schema.metric_arrays.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
         
         assert len(list(schema.parameters.keys())) == 1
         assert len(list(schema.dimensions.keys())) == 1
         assert len(list(schema.performance_attrs.keys())) == 1
-        assert len(list(schema.metric_arrays.keys())) == 1
+        assert len(list(schema.features.keys())) == 1
 
 
 class TestSchemaHash:

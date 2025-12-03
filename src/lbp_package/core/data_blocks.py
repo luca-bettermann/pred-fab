@@ -57,6 +57,12 @@ class DataBlock:
             value = round(float(value), data_obj.round_digits)
         
         self.values[name] = value
+
+    def set_values(self, values: Dict[str, Any]) -> None:
+        """Set multiple values at once, ignoring unknown parameters."""
+        for name, value in values.items():
+            if self.has(name):
+                self.set_value(name, value)
     
     def get_value(self, name: str) -> Any:
         """Get value for a parameter."""

@@ -91,9 +91,15 @@ class IEvaluationModel(ABC):
         self.logger.info(f"Added feature model: {type(feature_model).__name__}")
     
     @final
-    def run(self, feature_name: str, performance_attr_name: str, exp_data: ExperimentData, 
-            evaluate_from: int = 0, evaluate_to: Optional[int] = None,
-            visualize: bool = False) -> None:
+    def run(
+        self, 
+        feature_name: str, 
+        performance_attr_name: str, 
+        exp_data: ExperimentData, 
+        evaluate_from: int = 0, 
+        evaluate_to: Optional[int] = None,
+        visualize: bool = False
+    ) -> None:
         """Evaluate feature against target values and store results in ExperimentData."""
         # Validate preconditions
         if self.feature_model is None:
@@ -136,9 +142,11 @@ class IEvaluationModel(ABC):
         for i, dims in enumerate(dim_combinations):
             self.logger.debug(f"Processing {i+1}/{total_combos}: {dims}")
             
-            feature_value, target_value, scaling_factor, performance_value = self._process_single_combination(
-                dims, dim_names, static_params, feature_name, visualize
-            )
+            dim_params = dict(zip(dim_names, dims))
+            params = {**static_params, **dim_params}
+
+            metrics = self._process_single_combination(params, feature_name, visualize)
+            feature_value, target_value, scaling_factor, performance_value = metrics
             
             # Store results in arrays
             metric_array[dims][:num_dims] = dims
@@ -150,7 +158,7 @@ class IEvaluationModel(ABC):
         
         # Store results in ExperimentData
         self._store_results(exp_data, feature_name, performance_attr_name, 
-                          metric_array, performance_array, dim_names, num_dims,
+                          metric_array, performance_array, num_dims,
                           evaluate_from, evaluate_to)
         
         # Compute aggregations
@@ -178,23 +186,18 @@ class IEvaluationModel(ABC):
     @final
     def _process_single_combination(
         self, 
-        dims: Tuple[int, ...], 
-        dim_names: List[str], 
-        static_params: Dict[str, Any], 
+        params: Dict[str, Any], 
         feature_name: str, 
         visualize: bool
     ) -> Tuple[float, float, Optional[float], Optional[float]]:
         """Process a single dimensional combination."""
         # Ensure feature model is available (checked in run(), but needed for type safety)
         assert self.feature_model is not None
-        
-        dim_params = dict(zip(dim_names, dims))
-        all_params = {**static_params, **dim_params}
-        
+            
         # Compute feature, target, and performance
-        feature_value = self.feature_model.run(feature_name, visualize=visualize, **all_params)
-        target_value = self._compute_target_value(**all_params)
-        scaling_factor = self._compute_scaling_factor(**all_params)
+        feature_value = self.feature_model.run(feature_name, visualize=visualize, **params)
+        target_value = self._compute_target_value(**params)
+        scaling_factor = self._compute_scaling_factor(**params)
         
         # Validate outputs from user implementation
         if not isinstance(target_value, (int, float, np.integer, np.floating)):
@@ -246,13 +249,11 @@ class IEvaluationModel(ABC):
     @final
     def _store_results(
         self, exp_data: ExperimentData, feature_name: str, performance_attr_name: str,
-        metric_array: np.ndarray, performance_array: np.ndarray, 
-        dim_names: List[str], num_dims: int,
+        metric_array: np.ndarray, performance_array: np.ndarray, num_dims: int,
         evaluate_from: int = 0, evaluate_to: Optional[int] = None
     ) -> None:
         """Store evaluation results in ExperimentData blocks."""
         
-        # Phase 10: Store only feature values (dimensions implicit in indices)
         # Extract feature values from metric_array
         feature_values = metric_array[..., num_dims]
         
@@ -271,8 +272,8 @@ class IEvaluationModel(ABC):
         
         # Store feature values in metric_arrays (always initialized)
         feature_data_array = DataArray(name=feature_name, shape=feature_values.shape, dtype=np.dtype(np.float64))
-        exp_data.metric_arrays.add(feature_name, feature_data_array)
-        exp_data.metric_arrays.set_value(feature_name, feature_values)
+        exp_data.features.add(feature_name, feature_data_array)
+        exp_data.features.set_value(feature_name, feature_values)
         
         # Store aggregated performance attribute (always initialized)
         perf_attr = Performance.real(min_val=0.0, max_val=1.0)

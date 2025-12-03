@@ -139,7 +139,11 @@ class LBPAgent:
         # Initialize systems (dataset will be set later)
         self.eval_system = EvaluationSystem(dataset=None, logger=self.logger)  # type: ignore
         self.pred_system = PredictionSystem(dataset=None, logger=self.logger)  # type: ignore
-        self.calibration_system = CalibrationSystem(dataset=None, logger=self.logger) # type: ignore
+        self.calibration_system = CalibrationSystem(
+            dataset=None, 
+            logger=self.logger, 
+            predict_fn=self.pred_system._predict_from_params,
+            evaluate_fn=self.eval_system.evaluate) 
         
         # Instantiate evaluation model instances from registered classes
         for perf_code, (eval_class, eval_kwargs) in self._evaluation_model_specs.items():
@@ -379,7 +383,7 @@ class LBPAgent:
 
     # === CALIBRATION ===
     
-    def configure_calibration(
+    def set_performance_weights(
         self,
         performance_weights: Dict[str, float]
     ) -> None:
@@ -400,7 +404,8 @@ class LBPAgent:
         param_ranges: Dict[str, Tuple[float, float]],
         n_points: int = 1,
         mode: Any = 'exploration', # using Any to avoid import issues if Literal not imported, but it is.
-        fixed_params: Optional[Dict[str, Any]] = None
+        fixed_params: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> List[Dict[str, Any]]:
         """
         Propose next experiments using the calibration system.
@@ -418,6 +423,7 @@ class LBPAgent:
             param_ranges=param_ranges,
             n_points=n_points,
             mode=mode,
-            fixed_params=fixed_params
+            fixed_params=fixed_params,
+            **kwargs
         )
 

@@ -129,64 +129,67 @@ class LocalData:
             raise ValueError(f"Code not available in memory: {code}")
         
     # === DATA LOADING METHODS ===
-    def load_exp_records(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load experiment records from local files."""
+    def load_parameters(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load experiment parameters from local files."""
         return self._load_files_generic(
             codes=exp_codes,
             subdirs=[str(self.schema_id), "{code}"],
-            filename="exp_record",
-            contains_columns=False
+            filename="parameters",
+            file_format="json"
         )
         
-    def load_aggr_metrics(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load aggregated metrics from local files."""
+    def load_performance(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load performance metrics from local files."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.schema_id), "{code}", "arrays"],
+            subdirs=[str(self.schema_id), "{code}"],
             filename="performance",
-            contains_columns=False
+            file_format="json"
         )
 
-    def load_metrics_arrays(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """Load metrics arrays from local files."""
-        perf_code = kwargs.get('perf_code')
-        if not perf_code:
-            raise ValueError("perf_code required in kwargs for load_metrics_arrays")
+    def load_features(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load feature arrays from local files."""
+        feature_name = kwargs.get('feature_name')
+        if not feature_name:
+            raise ValueError("feature_name required in kwargs for load_features")
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.schema_id), "{code}", "arrays"],
-            filename=perf_code,
-            contains_columns=True
+            subdirs=[str(self.schema_id), "{code}"],
+            filename=feature_name,
+            file_format="csv"
         )
 
     # === DATA SAVING METHODS ===
-    def save_exp_records(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+    def save_parameters(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
                         recompute: bool, **kwargs) -> bool:
-        """Save experiment records to local files."""
+        """Save experiment parameters to local files."""
         return self._save_files_generic(
             codes=exp_codes, data=data,
-            subdirs=["{code}"], filename="exp_record", recompute=recompute
+            subdirs=["{code}"], filename="parameters", recompute=recompute,
+            file_format="json"
         )
 
-    def save_aggr_metrics(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+    def save_performance(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
                          recompute: bool, **kwargs) -> bool:
-        """Save aggregated metrics to local files."""
+        """Save performance metrics to local files."""
         return self._save_files_generic(
             codes=exp_codes, data=data,
-            subdirs=["{code}", "arrays"], filename="performance", recompute=recompute
+            subdirs=["{code}"], filename="performance", recompute=recompute,
+            file_format="json"
         )
 
-    def save_metrics_arrays(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+    def save_features(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
                            recompute: bool, **kwargs) -> bool:
-        """Save metrics arrays to local files."""
-        perf_code = kwargs.get('perf_code')
+        """Save feature arrays to local files."""
+        feature_name = kwargs.get('feature_name')
         column_names = kwargs.get('column_names')
-        if not perf_code:
-            raise ValueError("perf_code required in kwargs for save_metrics_arrays")
+        if not feature_name:
+            raise ValueError("feature_name required in kwargs for save_features")
         return self._save_files_generic(
             codes=exp_codes, data=data,
-            subdirs=["{code}", "arrays"], filename=perf_code, 
-            recompute=recompute, column_names=column_names
+            subdirs=["{code}"], filename=feature_name, 
+            recompute=recompute, column_names=column_names,
+            file_format="csv"
         )
     
     def save_schema(self, schema_dict: Dict[str, Any], recompute: bool = False) -> bool:
@@ -207,7 +210,8 @@ class LocalData:
     
     # === PRIVATE METHODS ===
     def _load_files_generic(
-        self, codes: List[str], subdirs: List[str], filename: str, contains_columns: bool = False
+        self, codes: List[str], subdirs: List[str], filename: str, 
+        contains_columns: bool = False, file_format: str = "json"
     ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Generic file loader for JSON/CSV files."""
         if not self.schema_id:
@@ -215,7 +219,9 @@ class LocalData:
             
         missing_codes = []
         result_dict = {}
-        file_type = "csv" if contains_columns else "json"
+        
+        # Determine file type
+        file_type = file_format
 
         for code in codes:
             try:
@@ -244,14 +250,15 @@ class LocalData:
 
     def _save_files_generic(
         self, codes: List[str], data: Dict[str, Any], subdirs: List[str], 
-        filename: str, recompute: bool, column_names: Optional[List[str]] = None
+        filename: str, recompute: bool, column_names: Optional[List[str]] = None,
+        file_format: str = "json"
     ) -> bool:
         """Generic file saver for JSON/CSV files."""
         if not self.schema_id:
             raise ValueError("Schema ID must be set")
             
         saved = False
-        file_type = "csv" if column_names is not None else "json"
+        file_type = file_format
         
         for code in codes:
             if code not in data:
@@ -271,12 +278,21 @@ class LocalData:
             if not os.path.exists(file_path) or recompute:
                 code_data = data[code]
 
-                if file_type == "csv" and column_names is not None:
+                if file_type == "csv":
                     # Reshape and save as CSV
-                    if len(code_data) > 1:
-                        code_data = code_data.reshape(-1, len(column_names))
-                    df = pd.DataFrame(code_data, columns=column_names)
-                    df.to_csv(file_path, index=False)
+                    # If column_names is None, we create default ones or save without header?
+                    # Pandas to_csv needs columns if we want header.
+                    # If column_names is None, we can save with header=False
+                    
+                    if column_names is not None:
+                        if len(code_data) > 1 and len(code_data.shape) > 1:
+                             # Ensure dimensions match
+                             pass
+                        df = pd.DataFrame(code_data, columns=column_names)
+                        df.to_csv(file_path, index=False)
+                    else:
+                        df = pd.DataFrame(code_data)
+                        df.to_csv(file_path, index=False, header=False)
                 else:
                     # Save as JSON
                     with open(file_path, 'w') as f:

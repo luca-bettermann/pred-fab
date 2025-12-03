@@ -25,8 +25,8 @@ class TestExperimentDataDataclass:
         assert exp_data.parameters is not None
         # All data blocks are auto-initialized (not None)
         assert exp_data.performance is not None
-        assert exp_data.metric_arrays is not None
-        assert exp_data.predicted_metric_arrays is not None
+        assert exp_data.features is not None
+        assert exp_data.predicted_features is not None
     
     def test_experiment_data_dimensions_property(self):
         """Test dimensions property extracts dimensional params."""
@@ -129,7 +129,7 @@ class TestDatasetAddExperiment:
         """Test adding experiment with metric arrays."""
         schema = DatasetSchema()
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema.metric_arrays.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
         
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
@@ -142,8 +142,8 @@ class TestDatasetAddExperiment:
         )
         
         exp_data = dataset.get_experiment("exp_001")
-        assert exp_data.metric_arrays is not None
-        assert np.array_equal(exp_data.metric_arrays.get_value("energy"), energy_data)
+        assert exp_data.features is not None
+        assert np.array_equal(exp_data.features.get_value("energy"), energy_data)
     
     def test_add_experiment_combines_static_and_dynamic(self):
         """Test that static values are copied into experiment parameters."""
@@ -295,7 +295,7 @@ class TestDatasetIntegration:
         schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
         schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         schema.performance_attrs.add("loss", Performance.real(min_val=0.0, max_val=100.0))
-        schema.metric_arrays.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
         
         # Create dataset
         dataset = Dataset(name="robot_study", schema=schema, schema_id="schema_abc")
@@ -328,7 +328,7 @@ class TestDatasetIntegration:
         assert exp_data.parameters.get_value("learning_rate") == 0.001  # Static
         assert exp_data.parameters.get_value("batch_size") == 64  # Dynamic
         assert exp_data.performance.get_value("accuracy") == 0.91
-        assert exp_data.metric_arrays.get_value("energy").shape == (100,)
+        assert exp_data.features.get_value("energy").shape == (100,)
         
         # Feature caching
         dataset.set_feature_value("processed_energy", 123.45, batch_size=64)

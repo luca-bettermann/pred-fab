@@ -344,10 +344,10 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Store prediction arrays in exp_data.predicted_metric_arrays."""
         for feature_name, pred_array in predictions.items():
-            if feature_name not in exp_data.predicted_metric_arrays.keys():
+            if feature_name not in exp_data.predicted_features.keys():
                 arr = DataArray(name=feature_name, shape=pred_array.shape)
-                exp_data.predicted_metric_arrays.add(feature_name, arr)
-            exp_data.predicted_metric_arrays.set_value(feature_name, pred_array)
+                exp_data.predicted_features.add(feature_name, arr)
+            exp_data.predicted_features.set_value(feature_name, pred_array)
     
     def _extract_dimensional_structure_from_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Extract dimensional info (shape, params, positions) from schema and params dict."""

@@ -5,7 +5,8 @@ from ..utils import LBPLogger
 from ..interfaces.evaluation import IEvaluationModel
 from ..interfaces.features import IFeatureModel
 from ..core.dataset import Dataset, ExperimentData
-from ..core.data_objects import DataArray
+from ..core.data_objects import DataArray, DataReal
+from ..core.data_blocks import DataBlock
 from .base import BaseOrchestrationSystem
 
 
@@ -53,9 +54,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         return self.evaluation_models
     
     def get_model_specs(self) -> Dict[str, Dict[str, Any]]:
-        """Extract input/output DataObject specifications from registered evaluation models."""
-        from ..core.data_objects import DataReal
-        
+        """Extract input/output DataObject specifications from registered evaluation models."""        
         # Get base specs (inputs)
         specs = super().get_model_specs()
         
@@ -132,9 +131,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         recompute: bool = False
     ) -> tuple[Dict[str, float], Dict[str, np.ndarray]]:
         """Core evaluation logic from raw parameters."""
-        from ..core.dataset import ExperimentData
-        from ..core.data_blocks import DataBlock
-        
+
         # Create temporary exp_data for evaluation models
         temp_exp_data = ExperimentData(
             exp_code="temp_eval",
@@ -152,8 +149,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
         for name, data_obj in self.dataset.schema.performance_attrs.items():
             temp_exp_data.performance.add(name, data_obj)
         
-        for name, data_obj in self.dataset.schema.metric_arrays.items():
-            temp_exp_data.metric_arrays.add(name, data_obj)
+        for name, data_obj in self.dataset.schema.features.items():
+            temp_exp_data.features.add(name, data_obj)
         
         # Run evaluation for each performance code
         for perf_code in self.evaluation_models.keys():
@@ -175,9 +172,9 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Extract results
         perf_results = temp_exp_data.performance.get_values_dict()
         metric_results = {
-            name: temp_exp_data.metric_arrays.get_value(name)
-            for name in temp_exp_data.metric_arrays.keys()
-            if temp_exp_data.metric_arrays.has_value(name)
+            name: temp_exp_data.features.get_value(name)
+            for name in temp_exp_data.features.keys()
+            if temp_exp_data.features.has_value(name)
         }
         
         return perf_results, metric_results
@@ -198,10 +195,10 @@ class EvaluationSystem(BaseOrchestrationSystem):
         
         # Store metric arrays
         for array_name, array_value in metric_results.items():
-            if not exp_data.metric_arrays.has(array_name):
+            if not exp_data.features.has(array_name):
                 data_obj = DataArray(name=array_name, shape=array_value.shape)
-                exp_data.metric_arrays.add(array_name, data_obj)
-            exp_data.metric_arrays.set_value(array_name, array_value)
+                exp_data.features.add(array_name, data_obj)
+            exp_data.features.set_value(array_name, array_value)
 
     def get_evaluation_models(self) -> Dict[str, IEvaluationModel]:
         """Get all evaluation models."""

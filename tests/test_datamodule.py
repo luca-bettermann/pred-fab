@@ -53,15 +53,15 @@ def sample_dataset():
         )
         
         # Initialize metric_arrays (Dataset.add_experiment sets it to None)
-        exp_data.metric_arrays = MetricArrays()
+        exp_data.features = MetricArrays()
         
         # Add scalar features to metric_arrays
         feature_1_arr = DataArray(name="feature_1", shape=())
         feature_2_arr = DataArray(name="feature_2", shape=())
-        exp_data.metric_arrays.add("feature_1", feature_1_arr)
-        exp_data.metric_arrays.add("feature_2", feature_2_arr)
-        exp_data.metric_arrays.set_value("feature_1", np.array(float(i) * 2.0))
-        exp_data.metric_arrays.set_value("feature_2", np.array(float(i) * 0.5 + 10.0))
+        exp_data.features.add("feature_1", feature_1_arr)
+        exp_data.features.add("feature_2", feature_2_arr)
+        exp_data.features.set_value("feature_1", np.array(float(i) * 2.0))
+        exp_data.features.set_value("feature_2", np.array(float(i) * 0.5 + 10.0))
     
     return dataset
 
