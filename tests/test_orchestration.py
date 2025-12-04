@@ -60,7 +60,7 @@ class MockEvaluationModel(IEvaluationModel):
     """Mock evaluation model for testing."""
     
     @property
-    def feature_model_type(self) -> Type[IFeatureModel]:
+    def feature_model_class(self) -> Type[IFeatureModel]:
         return MockFeatureModel
     
     def _compute_target_value(self, **param_values) -> float:
@@ -81,7 +81,7 @@ class MockPredictionModel(IPredictionModel):
         self.y_train = None
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["test_feature"]
     
     def train(self, X, y, **kwargs):
@@ -145,7 +145,7 @@ class TestEvaluationSystem:
             feature_model_class=MockFeatureModel
         )
         
-        models = system.get_evaluation_models()
+        models = system.get_evaluation_model_dict()
         
         assert len(models) == 1
         assert "test_perf" in models

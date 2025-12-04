@@ -38,7 +38,7 @@ class SimpleEvaluationModel(IEvaluationModel):
     """Simple evaluation model for testing."""
     
     @property
-    def feature_model_type(self) -> Type[IFeatureModel]:
+    def feature_model_class(self) -> Type[IFeatureModel]:
         return SimpleFeatureModel
     
     def _compute_target_value(self, **param_values) -> float:
@@ -62,7 +62,7 @@ class SimplePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def predicted_features(self):
+    def feature_output_codes(self):
         return ["predicted_feature"]
     
     def train(self, X, y, **kwargs):

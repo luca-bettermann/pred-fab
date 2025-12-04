@@ -150,9 +150,9 @@ class Parameters(DataBlock):
     Unified parameter block for ALL parameters (replaces Static/Dynamic split).
     
     Parameters may be:
-    - Static: Same value across all experiments in dataset (set via Dataset.set_static_values)
-    - Dynamic: Vary per experiment (provided in Dataset.add_experiment)
-    - Dimensional: Subset of parameters used for iteration (referenced by Dimensions block)
+    - Static: Same value across all experiments in dataset
+    - Dynamic: Vary per experiment
+    - Dimensional: Subset of parameters used for iteration
     """
     
     def __init__(self):

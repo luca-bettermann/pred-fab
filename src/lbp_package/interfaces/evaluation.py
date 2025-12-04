@@ -12,7 +12,6 @@ from ..core.data_objects import DataDimension, DataArray, Performance
 from ..utils import LBPLogger
 
 
-@dataclass
 class IEvaluationModel(ABC):
     """
     Abstract base class for evaluation models.
@@ -20,27 +19,55 @@ class IEvaluationModel(ABC):
     Evaluates feature values against target values to compute performance metrics.
     Stores results directly in ExperimentData.
     
-    Models declare their parameters as dataclass fields (DataObjects).
-    Optionally implement _get_model_artifacts() and _set_model_artifacts() for export support.
+    # Models declare their parameters as dataclass fields (DataObjects).
+    # Optionally implement _get_model_artifacts() and _set_model_artifacts() for export support.
     """
-    
-    logger: LBPLogger  # Required field for logging
-    feature_model: Optional[IFeatureModel] = None  # Set via add_feature_model()
+
+    def __init__(self, logger: LBPLogger):
+        """Initialize evaluation model."""
+        self.logger = logger
+        self.feature_model: IFeatureModel
     
     # === ABSTRACT METHODS ===
-    
+
     @property
     @abstractmethod
-    def feature_model_type(self) -> Type[IFeatureModel]:
+    def performance_code(self) -> str:
         """
-        Return the class of the feature model used by this evaluation model.
+        Unique code identifying the performance metric evaluated by this model.
+        Used by orchestration system to map evaluation results to performance attributes.
         
+        Returns:
+            Performance code string (e.g., 'dimensional_accuracy')
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def feature_input_code(self) -> str:
+        """
+        Return the code of the feature model used by this evaluation model.
         Used by the orchestration system to instantiate the correct feature model.
+
+        Important: input code needs to match the feature model's declared output code.
         
         Returns:
             Class type of the feature model (e.g. MyFeatureModel)
         """
         ...
+
+    # @property
+    # @abstractmethod
+    # def feature_model_class(self) -> Type[IFeatureModel]:
+    #     """
+    #     Return the class of the feature model used by this evaluation model.
+        
+    #     Used by the orchestration system to instantiate the correct feature model.
+        
+    #     Returns:
+    #         Class type of the feature model (e.g. MyFeatureModel)
+    #     """
+    #     ...
 
     @abstractmethod
     def _compute_target_value(self, **param_values) -> float:
@@ -85,7 +112,7 @@ class IEvaluationModel(ABC):
     
     # === PUBLIC API ===
     @final
-    def add_feature_model(self, feature_model: IFeatureModel) -> None:
+    def set_feature_model(self, feature_model: IFeatureModel) -> None:
         """Connect feature model for evaluation."""
         self.feature_model = feature_model
         self.logger.info(f"Added feature model: {type(feature_model).__name__}")
@@ -283,43 +310,43 @@ class IEvaluationModel(ABC):
         exp_data.performance.add(performance_attr_name, perf_attr)
         exp_data.performance.set_value(performance_attr_name, float(np.nanmean(performance_array)))
     
-    # === EXPORT/IMPORT SUPPORT (OPTIONAL) ===
+    # # === EXPORT/IMPORT SUPPORT (OPTIONAL) ===
     
-    def _get_model_artifacts(self) -> Dict[str, Any]:
-        """
-        Optionally serialize model state for export.
+    # def _get_model_artifacts(self) -> Dict[str, Any]:
+    #     """
+    #     Optionally serialize model state for export.
         
-        Override only if evaluation model has state to preserve (lookup tables,
-        configuration, precomputed data). Default returns empty dict.
+    #     Override only if evaluation model has state to preserve (lookup tables,
+    #     configuration, precomputed data). Default returns empty dict.
         
-        Most evaluation models don't need this - they just compute targets/scaling
-        via pure functions using parameters.
+    #     Most evaluation models don't need this - they just compute targets/scaling
+    #     via pure functions using parameters.
         
-        Returns:
-            Dict containing model state (default: empty)
+    #     Returns:
+    #         Dict containing model state (default: empty)
             
-        Example:
-            def _get_model_artifacts(self):
-                return {
-                    'target_lookup': self.target_lookup_table,
-                    'scaling_config': {'max_deviation': 10.0}
-                }
-        """
-        return {}
+    #     Example:
+    #         def _get_model_artifacts(self):
+    #             return {
+    #                 'target_lookup': self.target_lookup_table,
+    #                 'scaling_config': {'max_deviation': 10.0}
+    #             }
+    #     """
+    #     return {}
     
-    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
-        """
-        Optionally restore model state from export.
+    # def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+    #     """
+    #     Optionally restore model state from export.
         
-        Override only if you override _get_model_artifacts(). Must perfectly
-        reverse _get_model_artifacts(). Default does nothing.
+    #     Override only if you override _get_model_artifacts(). Must perfectly
+    #     reverse _get_model_artifacts(). Default does nothing.
         
-        Args:
-            artifacts: Dict containing model state (from _get_model_artifacts())
+    #     Args:
+    #         artifacts: Dict containing model state (from _get_model_artifacts())
             
-        Example:
-            def _set_model_artifacts(self, artifacts):
-                self.target_lookup_table = artifacts['target_lookup']
-                self.scaling_config = artifacts['scaling_config']
-        """
-        pass
+    #     Example:
+    #         def _set_model_artifacts(self, artifacts):
+    #             self.target_lookup_table = artifacts['target_lookup']
+    #             self.scaling_config = artifacts['scaling_config']
+    #     """
+    #     pass

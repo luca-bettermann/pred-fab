@@ -44,11 +44,11 @@ class IndependentPositionModel(IPredictionModel):
         self._dim_cols = []  # Will be set during training
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ['deviation']
     
     @property
-    def features_as_input(self) -> List[str]:
+    def feature_input_codes(self) -> List[str]:
         return []  # No external features needed
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs):
@@ -91,7 +91,7 @@ class TransformerStyleModel(IPredictionModel):
         self._feature_cols = []  # Will be set during training
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ['deviation']
     
     @property
@@ -143,11 +143,11 @@ class ExternalFeatureModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ['surface_quality']
     
     @property
-    def features_as_input(self) -> List[str]:
+    def feature_input_codes(self) -> List[str]:
         return ['temperature_measured', 'humidity']
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs):
@@ -163,7 +163,7 @@ class ExternalFeatureModel(IPredictionModel):
             raise RuntimeError("Model not trained")
         
         # Validate required features present
-        missing = set(self.features_as_input) - set(X.columns)
+        missing = set(self.feature_input_codes) - set(X.columns)
         if missing:
             raise ValueError(f"Missing required features: {missing}")
         
@@ -460,7 +460,7 @@ class TestExternalFeatureHandling:
         """Model should declare required external features."""
         model = ExternalFeatureModel()
         
-        required = model.features_as_input
+        required = model.feature_input_codes
         assert 'temperature_measured' in required
         assert 'humidity' in required
     
@@ -1073,11 +1073,11 @@ class TestDataValidation:
                 self.is_trained = False
             
             @property
-            def features_as_input(self):
+            def feature_input_codes(self):
                 return ['surface_quality']  # Doesn't exist in dataset
             
             @property
-            def predicted_features(self):
+            def feature_output_codes(self):
                 return ['surface_quality']
             
             def train(self, X, y):
@@ -1135,7 +1135,7 @@ class TestBreakingChanges:
         model = ExternalFeatureModel()
         
         # features_as_input property is mandatory
-        required = model.features_as_input
+        required = model.feature_input_codes
         assert isinstance(required, list)
         assert len(required) > 0
         

@@ -20,36 +20,36 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def __init__(self, dataset: Dataset, logger: LBPLogger):
         """Initialize evaluation system."""
         super().__init__(dataset, logger)
-        self.evaluation_models: Dict[str, IEvaluationModel] = {}
+        self.evaluation_models: List[IEvaluationModel] = []
 
     # === PUBLIC API ===
     
-    def add_evaluation_model(
-        self, 
-        performance_code: str, 
-        evaluation_model: IEvaluationModel,
-        feature_model_class: Type[IFeatureModel],
-        **feature_model_params
-    ) -> None:
-        """Add an evaluation model with its feature model."""
-        if not isinstance(evaluation_model, IEvaluationModel):
-            raise TypeError(f"Expected IEvaluationModel instance, got {type(evaluation_model).__name__}")
+    # def add_evaluation_model(
+    #     self, 
+    #     performance_code: str, 
+    #     evaluation_model: IEvaluationModel,
+    #     feature_model_class: Type[IFeatureModel],
+    #     **feature_model_params
+    # ) -> None:
+    #     """Add an evaluation model with its feature model."""
+    #     if not isinstance(evaluation_model, IEvaluationModel):
+    #         raise TypeError(f"Expected IEvaluationModel instance, got {type(evaluation_model).__name__}")
         
-        self.logger.info(f"Adding '{type(evaluation_model).__name__}' model for '{performance_code}'")
+    #     self.logger.info(f"Adding '{type(evaluation_model).__name__}' model for '{performance_code}'")
         
-        # Create feature model with dataset reference
-        feature_model = feature_model_class(
-            dataset=self.dataset,
-            logger=self.logger,
-            **feature_model_params
-        )
+    #     # Create feature model with dataset reference
+    #     feature_model = feature_model_class(
+    #         dataset=self.dataset,
+    #         logger=self.logger,
+    #         **feature_model_params
+    #     )
         
-        # Connect feature model to evaluation model
-        evaluation_model.add_feature_model(feature_model)
+    #     # Connect feature model to evaluation model
+    #     evaluation_model.add_feature_model(feature_model)
         
-        self.evaluation_models[performance_code] = evaluation_model
+    #     self.evaluation_models[performance_code] = evaluation_model
     
-    def get_models(self) -> Dict[str, IEvaluationModel]:
+    def get_models(self) -> List[IEvaluationModel]:
         """Return registered evaluation models."""
         return self.evaluation_models
     
@@ -65,38 +65,38 @@ class EvaluationSystem(BaseOrchestrationSystem):
         
         return specs
 
-    def run(self, exp_code: str, feature_name: str, performance_attr_name: str,
-            evaluate_from: int = 0, evaluate_to: Optional[int] = None,
-            visualize: bool = False, recompute: bool = False) -> ExperimentData:
-        """Execute evaluation for an experiment."""
-        # Get experiment from dataset
-        exp_data = self.dataset.get_experiment(exp_code)
+    # def run(self, exp_code: str, feature_name: str, performance_attr_name: str,
+    #         evaluate_from: int = 0, evaluate_to: Optional[int] = None,
+    #         visualize: bool = False, recompute: bool = False) -> ExperimentData:
+    #     """Execute evaluation for an experiment."""
+    #     # Get experiment from dataset
+    #     exp_data = self.dataset.get_experiment(exp_code)
         
-        # Find evaluation model for this performance attribute
-        if performance_attr_name not in self.evaluation_models:
-            raise ValueError(f"No evaluation model for '{performance_attr_name}'")
+    #     # Find evaluation model for this performance attribute
+    #     if performance_attr_name not in self.evaluation_models:
+    #         raise ValueError(f"No evaluation model for '{performance_attr_name}'")
         
-        eval_model = self.evaluation_models[performance_attr_name]
+    #     eval_model = self.evaluation_models[performance_attr_name]
         
-        self.logger.info(f"Running evaluation for '{performance_attr_name}' on experiment {exp_code}")
+    #     self.logger.info(f"Running evaluation for '{performance_attr_name}' on experiment {exp_code}")
         
-        # Handle recompute logic
-        if recompute:
-            self.logger.info("Recompute flag set - clearing cached features")
-            self.dataset.clear_feature_cache()
+    #     # Handle recompute logic
+    #     if recompute:
+    #         self.logger.info("Recompute flag set - clearing cached features")
+    #         self.dataset.clear_feature_cache()
         
-        # Run evaluation - stores results directly in exp_data
-        eval_model.run(
-            feature_name, 
-            performance_attr_name, 
-            exp_data, 
-            evaluate_from=evaluate_from,
-            evaluate_to=evaluate_to,
-            visualize=visualize
-        )
+    #     # Run evaluation - stores results directly in exp_data
+    #     eval_model.run(
+    #         feature_name, 
+    #         performance_attr_name, 
+    #         exp_data, 
+    #         evaluate_from=evaluate_from,
+    #         evaluate_to=evaluate_to,
+    #         visualize=visualize
+    #     )
         
-        self.logger.info("Evaluation completed successfully")
-        return exp_data
+    #     self.logger.info("Evaluation completed successfully")
+    #     return exp_data
 
     def evaluate_experiment(
         self,
@@ -155,7 +155,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         
         # Run evaluation for each performance code
 
-        # TODO: 
+        # TODO: do not pass exp_data to interfaces
         # TODO: encode feature code and performance code in the respective models.
 
         for perf_code in self.evaluation_models.keys():
@@ -216,6 +216,9 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 exp_data.features.add(array_name, data_obj)
             exp_data.features.set_value(array_name, array_value)
 
-    def get_evaluation_models(self) -> Dict[str, IEvaluationModel]:
-        """Get all evaluation models."""
-        return self.evaluation_models
+    def get_evaluation_model_dict(self) -> Dict[str, IEvaluationModel]:
+        """Get a dict of performance code to evaluation models."""
+        eval_models = {}
+        for model in self.evaluation_models:
+            eval_models[model.performance_code] = model
+        return eval_models

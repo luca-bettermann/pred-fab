@@ -175,8 +175,7 @@ class SchemaRegistry:
             local_folder: Base local data folder
         """
         self.local_folder = local_folder
-        self.lbp_folder = os.path.join(local_folder, ".lbp")
-        self.registry_path = os.path.join(self.lbp_folder, "schema_registry.json")
+        self.registry_path = os.path.join(self.local_folder, "schema_registry.json")
         self.registry: Dict[str, Dict[str, Any]] = {}
         
         self._load_registry()
@@ -188,13 +187,13 @@ class SchemaRegistry:
                 self.registry = json.load(f)
         else:
             # Create .lbp folder if needed
-            os.makedirs(self.lbp_folder, exist_ok=True)
+            os.makedirs(self.local_folder, exist_ok=True)
             self.registry = {}
             self._save_registry()
     
     def _save_registry(self) -> None:
         """Save registry to file."""
-        os.makedirs(self.lbp_folder, exist_ok=True)
+        os.makedirs(self.local_folder, exist_ok=True)
         with open(self.registry_path, 'w') as f:
             json.dump(self.registry, f, indent=2)
     

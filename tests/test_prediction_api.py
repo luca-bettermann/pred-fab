@@ -69,11 +69,11 @@ class SingleFeaturePredictionModel(IPredictionModel):
     
     def __post_init__(self):
         self.logger = None
-        self._feature_models = {}
+        self.feature_model_dependencies = {}
         self.is_trained = False
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["energy"]
     
     def train(self, X, y, **kwargs):
@@ -99,11 +99,11 @@ class MultiFeaturePredictionModel(IPredictionModel):
     
     def __post_init__(self):
         self.logger = None
-        self._feature_models = {}
+        self.feature_model_dependencies = {}
         self.is_trained = False
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["feature_a", "feature_b", "feature_c"]  # Multiple features
     
     def train(self, X, y, **kwargs):
@@ -131,11 +131,11 @@ class ModelWithFeatureModelDependency(IPredictionModel):
     
     def __post_init__(self):
         self.logger = None
-        self._feature_models = {}
+        self.feature_model_dependencies = {}
         self.is_trained = False
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["predicted_output"]
     
     @property
@@ -167,11 +167,11 @@ class AnotherModelWithSameFeatureModel(IPredictionModel):
     
     def __post_init__(self):
         self.logger = None
-        self._feature_models = {}
+        self.feature_model_dependencies = {}
         self.is_trained = False
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["other_output"]
     
     @property
@@ -286,10 +286,10 @@ class TestPredictionSystemAPI:
         model2 = MultiFeaturePredictionModel()
         
         # Single feature model
-        assert model1.predicted_features == ["energy"]
+        assert model1.feature_output_codes == ["energy"]
         
         # Multi-feature model
-        assert model2.predicted_features == ["feature_a", "feature_b", "feature_c"]
+        assert model2.feature_output_codes == ["feature_a", "feature_b", "feature_c"]
 
 
 class TestFeatureModelDependencies:
@@ -322,8 +322,8 @@ class TestFeatureModelDependencies:
         model.add_feature_model("feat1", feature_instance)
         
         # Should be stored in _feature_models
-        assert "feat1" in model._feature_models
-        assert model._feature_models["feat1"] is feature_instance
+        assert "feat1" in model.feature_model_dependencies
+        assert model.feature_model_dependencies["feat1"] is feature_instance
     
     def test_multiple_models_can_share_feature_model_instance(self, dataset, logger):
         """Test that multiple models can receive the same feature model instance."""
@@ -338,9 +338,9 @@ class TestFeatureModelDependencies:
         model2.add_feature_model("shared_feat", shared_instance)
         
         # Both should reference the same instance
-        assert model1._feature_models["feat1"] is shared_instance
-        assert model2._feature_models["shared_feat"] is shared_instance
-        assert model1._feature_models["feat1"] is model2._feature_models["shared_feat"]
+        assert model1.feature_model_dependencies["feat1"] is shared_instance
+        assert model2.feature_model_dependencies["shared_feat"] is shared_instance
+        assert model1.feature_model_dependencies["feat1"] is model2.feature_model_dependencies["shared_feat"]
     
     def test_feature_model_instance_sharing_prevents_duplication(self, dataset, logger):
         """Test that sharing feature model instances prevents creating duplicates."""
@@ -359,8 +359,8 @@ class TestFeatureModelDependencies:
         shared_instance.call_count = 42
         
         # Both models should see the modification (proving it's the same instance)
-        assert model1._feature_models["feat1"].call_count == 42
-        assert model2._feature_models["shared_feat"].call_count == 42
+        assert model1.feature_model_dependencies["feat1"].call_count == 42
+        assert model2.feature_model_dependencies["shared_feat"].call_count == 42
 
 
 class TestBackwardCompatibility:
@@ -386,4 +386,4 @@ class TestBackwardCompatibility:
         system.add_prediction_model(model)
         
         assert model.feature_models_as_input == {}
-        assert len(model._feature_models) == 0
+        assert len(model.feature_model_dependencies) == 0

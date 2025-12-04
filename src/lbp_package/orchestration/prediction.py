@@ -39,7 +39,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _get_model_name(self, model: IPredictionModel) -> str:
         """Get primary feature name from model for logging."""
-        return model.predicted_features[0] if model.predicted_features else "unknown"
+        return model.feature_output_codes[0] if model.feature_output_codes else "unknown"
     
     def get_models(self) -> List[IPredictionModel]:
         """Return registered prediction models."""
@@ -53,7 +53,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Add predicted features
         specs["predicted_features"] = set()
         for pred_model in self.prediction_models:
-            specs["predicted_features"].update(pred_model.predicted_features)
+            specs["predicted_features"].update(pred_model.feature_output_codes)
         
         return specs
     
@@ -63,7 +63,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.prediction_models.append(model)
         
         # Create feature-to-model mappings
-        for feature_name in model.predicted_features:
+        for feature_name in model.feature_output_codes:
             if feature_name in self.feature_to_model:
                 self.logger.warning(
                     f"Feature '{feature_name}' already registered to another model. "
@@ -72,11 +72,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.feature_to_model[feature_name] = model
         
         primary_feature = self._get_model_name(model)
-        self.logger.info(f"Added prediction model for features: {model.predicted_features} (primary: {primary_feature})")
+        self.logger.info(f"Added prediction model for features: {model.feature_output_codes} (primary: {primary_feature})")
     
     def _prepare_model_data(self, model: IPredictionModel, y_norm: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
         """Prepare normalized feature data for a specific model."""
-        feature_cols = model.predicted_features
+        feature_cols = model.feature_output_codes
         primary_feature = self._get_model_name(model)
         
         missing_cols = set(feature_cols) - set(y_norm.columns)
@@ -223,10 +223,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         results = {}
         for model in self.prediction_models:
             # Get primary feature name
-            primary_feature = model.predicted_features[0] if model.predicted_features else "unknown"
+            primary_feature = model.feature_output_codes[0] if model.feature_output_codes else "unknown"
             
             # Get feature columns
-            feature_cols = model.predicted_features
+            feature_cols = model.feature_output_codes
             missing_cols = set(feature_cols) - set(y_split.columns)
             if missing_cols:
                 self.logger.warning(
@@ -394,7 +394,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         # Collect all feature names from registered models
         for model in self.prediction_models:
-            for feature_name in model.predicted_features:
+            for feature_name in model.feature_output_codes:
                 if feature_name not in predictions:
                     # Initialize with NaN (positions will be filled during prediction)
                     predictions[feature_name] = np.full(shape, np.nan)
@@ -481,7 +481,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Run all model predictions on X_batch, denormalize, and store in predictions dict."""
         for model in self.prediction_models:
             # Validate required features present
-            missing_required = set(model.features_as_input) - set(X_batch.columns)
+            missing_required = set(model.feature_input_codes) - set(X_batch.columns)
             if missing_required:
                 raise ValueError(
                     f"Model requires evaluation features that are missing: {missing_required}. "
@@ -495,7 +495,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             y_pred = self.datamodule.denormalize_features(y_pred_norm)  # type: ignore
             
             # Store predictions in arrays
-            for feature_name in model.predicted_features:
+            for feature_name in model.feature_output_codes:
                 if feature_name not in y_pred.columns:
                     continue
                 
@@ -556,10 +556,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             fresh_model._set_model_artifacts(artifacts)
             
             # Verify feature_names match
-            if fresh_model.predicted_features != model.predicted_features:
+            if fresh_model.feature_output_codes != model.feature_output_codes:
                 raise ValueError(
                     f"Round-trip validation failed: feature_names mismatch. "
-                    f"Original: {model.predicted_features}, Restored: {fresh_model.predicted_features}"
+                    f"Original: {model.feature_output_codes}, Restored: {fresh_model.feature_output_codes}"
                 )
             
             self.logger.info(f"✓ Validated {ModelClass.__name__}")
@@ -584,7 +584,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             'prediction_models': [
                 {
                     'class_path': f"{model.__class__.__module__}.{model.__class__.__name__}",
-                    'feature_names': model.predicted_features,
+                    'feature_names': model.feature_output_codes,
                     'artifacts': model._get_model_artifacts()
                 }
                 for model in self.prediction_models

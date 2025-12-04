@@ -25,26 +25,26 @@ class IPredictionModel(ABC):
     - Must be dataclasses with DataObject fields for parameters (schema generation)
     """
     
-    def __init__(self, logger: LBPLogger, **kwargs):
+    def __init__(self, logger: LBPLogger):
         """Initialize prediction model."""
         self.logger = logger
-        self._feature_models: Dict[str, IFeatureModel] = {}
+        self.feature_model_dependencies: List[IFeatureModel] = []
     
     @property
     @abstractmethod
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         """
-        Names of features this model predicts.
+        Codes of features this model predicts.
         
         Returns:
-            List of feature names (e.g., ['filament_width', 'layer_height'])
+            List of feature codes (e.g., ['filament_width', 'layer_height'])
         """
         pass
     
     @property
-    def features_as_input(self) -> List[str]:
+    def feature_input_codes(self) -> List[str]:
         """
-        Evaluation features required as inputs during prediction.
+        Features required as inputs during prediction.
         
         Lists feature names from the evaluation system that must be provided
         in X during forward_pass(). These are features already computed by
@@ -58,22 +58,22 @@ class IPredictionModel(ABC):
         """
         return []
     
-    @property
-    def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
-        """
-        Additional feature models needed as inputs during prediction.
+    # @property
+    # def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
+    #     """
+    #     Additional feature models needed as inputs during prediction.
         
-        Maps feature codes to IFeatureModel classes that compute additional
-        input features NOT in the evaluation system (e.g., sensor data processors
-        like temperature/humidity extractors). The system will create shared
-        instances and attach them via add_feature_model().
+    #     Maps feature codes to IFeatureModel classes that compute additional
+    #     input features NOT in the evaluation system (e.g., sensor data processors
+    #     like temperature/humidity extractors). The system will create shared
+    #     instances and attach them via add_feature_model().
         
-        Returns:
-            Dict mapping feature codes to IFeatureModel types
-            (e.g., {'temp_sensor': TemperatureSensorFeature, 'humidity': HumidityFeature})
-            Empty dict if no additional feature models needed (default).
-        """
-        return {}
+    #     Returns:
+    #         Dict mapping feature codes to IFeatureModel types
+    #         (e.g., {'temp_sensor': TemperatureSensorFeature, 'humidity': HumidityFeature})
+    #         Empty dict if no additional feature models needed (default).
+    #     """
+    #     return {}
     
     @abstractmethod
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -122,11 +122,11 @@ class IPredictionModel(ABC):
         )
 
     @final
-    def add_feature_model(self, code: str, feature_model: IFeatureModel) -> None:
+    def add_feature_model(self, feature_model: IFeatureModel) -> None:
         """Attach feature model instance for use during training/prediction."""
-        self._feature_models[code] = feature_model
+        self.feature_model_dependencies.append(feature_model)
         if self.logger:
-            self.logger.debug(f"Attached feature model '{code}' to prediction model")
+            self.logger.debug(f"Attached feature model '{feature_model}' to prediction model")
     
     # === EXPORT/IMPORT SUPPORT ===
     

@@ -30,7 +30,7 @@ class BadPredictionModel(IPredictionModel):
     
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["test_feature"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -86,7 +86,7 @@ class BadEvaluationModel(IEvaluationModel):
         self.feature_model = None
     
     @property
-    def feature_model_type(self):
+    def feature_model_class(self):
         return BadFeatureModel
     
     def _compute_target_value(self, **param_values):

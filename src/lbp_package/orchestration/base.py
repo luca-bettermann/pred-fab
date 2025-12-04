@@ -33,7 +33,7 @@ class BaseOrchestrationSystem(ABC):
         """
         Return registered models in implementation-specific structure.
         
-        EvaluationSystem: Dict[str, IEvaluationModel]
+        EvaluationSystem: List[IEvaluationModel]
         PredictionSystem: List[IPredictionModel]
         """
         pass
@@ -45,20 +45,16 @@ class BaseOrchestrationSystem(ABC):
         # Get models in implementation-specific structure
         models = self.get_models()
         
-        # Handle both dict (EvaluationSystem) and list (PredictionSystem) structures
-        model_list = models.values() if isinstance(models, dict) else models
-        
-        for model in model_list:
+        for model in models:
             # Verify model is a dataclass
             if not is_dataclass(model):
-                continue
+                raise TypeError(
+                    f"Model {model.__class__.__name__} must be a dataclass to extract DataObject fields."
+                )
             
             # Extract input parameters from model fields
             model_fields = fields(model)
             for field in model_fields:
-                # Skip special fields
-                if field.name in ('logger', 'feature_model', 'feature_models', 'dataset'):
-                    continue
                 
                 # Check if field default is a DataObject
                 if field.default is not field.default_factory:  # type: ignore
@@ -79,7 +75,6 @@ class BaseOrchestrationSystem(ABC):
                                 )
                         else:
                             specs["inputs"][param_name] = default_val
-        
         return specs
     
     def _get_params_from_exp_data(self, exp_data: ExperimentData) -> Dict[str, Any]:

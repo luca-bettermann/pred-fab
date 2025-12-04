@@ -58,7 +58,7 @@ class ConcreteEvaluationModel(IEvaluationModel):
     """Concrete implementation for testing."""
     
     @property
-    def feature_model_type(self) -> Type[IFeatureModel]:
+    def feature_model_class(self) -> Type[IFeatureModel]:
         return ConcreteFeatureModel
     
     def _compute_target_value(self, **param_values) -> float:
@@ -82,7 +82,7 @@ class ConcretePredictionModel(IPredictionModel):
     
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ["feature_1"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -172,7 +172,7 @@ class TestIEvaluationModel:
         feature_model = ConcreteFeatureModel(dataset=dataset, logger=logger)
         eval_model = ConcreteEvaluationModel(logger=logger)
         
-        eval_model.add_feature_model(feature_model)
+        eval_model.set_feature_model(feature_model)
         
         assert eval_model.feature_model is feature_model
     
@@ -182,7 +182,7 @@ class TestIEvaluationModel:
         # creating complex ExperimentData with proper DataBlocks
         feature_model = ConcreteFeatureModel(dataset=dataset, logger=logger)
         eval_model = ConcreteEvaluationModel(logger=logger)
-        eval_model.add_feature_model(feature_model)
+        eval_model.set_feature_model(feature_model)
         
         # Note: Full test would create ExperimentData with proper schema-based
         # DataBlocks. For now, we just validate the method signature exists
@@ -211,7 +211,7 @@ class TestIPredictionModel:
         """Test abstract properties."""
         model = ConcretePredictionModel(logger=logger)
         
-        assert model.predicted_features == ["feature_1"]
+        assert model.feature_output_codes == ["feature_1"]
     
     def test_prediction_model_train(self, logger):
         """Test training method."""

@@ -16,11 +16,11 @@ class TrackingModel(IPredictionModel):
         self.prediction_calls = []  # Track all forward_pass calls
     
     @property
-    def predicted_features(self):
+    def feature_output_codes(self):
         return ['value']
     
     @property
-    def features_as_input(self):
+    def feature_input_codes(self):
         return []
     
     def train(self, X, y, **kwargs):

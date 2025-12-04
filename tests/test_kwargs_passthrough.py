@@ -19,7 +19,7 @@ class KwargsCapturingModel(IPredictionModel):
     
     
     @property
-    def predicted_features(self) -> List[str]:
+    def feature_output_codes(self) -> List[str]:
         return ['test_feature']
     
     def __init__(self):
