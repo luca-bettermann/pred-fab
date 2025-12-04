@@ -253,6 +253,8 @@ class IEvaluationModel(ABC):
         evaluate_from: int = 0, evaluate_to: Optional[int] = None
     ) -> None:
         """Store evaluation results in ExperimentData blocks."""
+        # TODO: Move store results to orchestration
+        # TODO: Document that Interfaces interact with dicts, orchestration with ExperimentData and data blocks
         
         # Extract feature values from metric_array
         feature_values = metric_array[..., num_dims]

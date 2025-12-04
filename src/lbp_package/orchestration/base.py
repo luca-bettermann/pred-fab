@@ -82,10 +82,6 @@ class BaseOrchestrationSystem(ABC):
         
         return specs
     
-    def _extract_params_from_exp_data(self, exp_data: ExperimentData) -> Dict[str, Any]:
+    def _get_params_from_exp_data(self, exp_data: ExperimentData) -> Dict[str, Any]:
         """Extract all parameters from exp_data into a flat dict."""
-        params = {}
-        for name in self.dataset.schema.parameters.keys():
-            if exp_data.parameters.has_value(name):
-                params[name] = exp_data.parameters.get_value(name)
-        return params
+        return exp_data.parameters.get_values_dict()

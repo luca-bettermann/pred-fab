@@ -108,7 +108,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
     ) -> None:
         """Execute all evaluations for an experiment and mutate exp_data with results."""
         # Extract parameters from exp_data
-        params = self._extract_params_from_exp_data(exp_data)
+        params = self._get_params_from_exp_data(exp_data)
+        dims = exp_data.dimensions
         
         # Get evaluation results from core logic
         perf_results, metric_results = self._evaluate_from_params(
@@ -153,22 +154,36 @@ class EvaluationSystem(BaseOrchestrationSystem):
             temp_exp_data.features.add(name, data_obj)
         
         # Run evaluation for each performance code
+
+        # TODO: 
         # TODO: encode feature code and performance code in the respective models.
+
         for perf_code in self.evaluation_models.keys():
             feature_name = f"{perf_code}_feature"
             eval_model = self.evaluation_models[perf_code]
             
             self.logger.info(f"Evaluating '{perf_code}' with provided parameters")
-            
+
             # Run evaluation - mutates temp_exp_data
             eval_model.run(
                 feature_name=feature_name,
                 performance_attr_name=perf_code,
+                dim_combinations=temp_exp_data.dimensions.get_dim_combinations(),
                 exp_data=temp_exp_data,
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
                 visualize=visualize
             )
+
+            # # Run evaluation - mutates temp_exp_data
+            # eval_model.run(
+            #     feature_name=feature_name,
+            #     performance_attr_name=perf_code,
+            #     exp_data=temp_exp_data,
+            #     evaluate_from=evaluate_from,
+            #     evaluate_to=evaluate_to,
+            #     visualize=visualize
+            # )
         
         # Extract results
         perf_results = temp_exp_data.performance.get_values_dict()

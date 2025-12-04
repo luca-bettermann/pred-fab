@@ -5,7 +5,8 @@ DataBlocks group DataObjects into logical collections and store their values.
 They provide both schema structure and data storage.
 """
 
-from typing import Dict, Any, Optional
+import itertools
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 from .data_objects import DataObject
 
@@ -170,6 +171,15 @@ class Dimensions(DataBlock):
     def __init__(self):
         """Initialize Dimensions block."""
         super().__init__()
+
+    def get_dim_combinations(self) -> List[Tuple[int, ...]]:
+        """Get mapping of param_name to iterator_name for all dimensions."""
+        # Extract dimension values
+        dim_values = [value for value in self.values.values()]
+
+        # Generate dimensional combinations
+        dim_ranges = [range(size) for size in dim_values]
+        return list(itertools.product(*dim_ranges))
 
 
 class PerformanceAttributes(DataBlock):

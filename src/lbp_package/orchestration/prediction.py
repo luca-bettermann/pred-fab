@@ -321,7 +321,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                      across batch boundaries. Must be < batch_size.
         """
         # Extract parameters from exp_data
-        params = self._extract_params_from_exp_data(exp_data)
+        params = self._get_params_from_exp_data(exp_data)
         
         # Get predictions from core logic
         predictions = self._predict_from_params(
