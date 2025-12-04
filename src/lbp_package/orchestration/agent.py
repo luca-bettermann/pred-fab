@@ -13,7 +13,7 @@ from ..core.datamodule import DataModule
 from ..orchestration.evaluation import EvaluationSystem
 from ..orchestration.prediction import PredictionSystem
 from ..orchestration.calibration import CalibrationSystem
-from ..interfaces import IEvaluationModel, IPredictionModel, IExternalData
+from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExternalData
 from ..utils import LocalData, LBPLogger
 
 
@@ -75,7 +75,7 @@ class LBPAgent:
         self.calibration_system: Optional[CalibrationSystem] = None
         
         # Model registry (store classes and params until dataset is initialized)
-        self._feature_model_specs: List[Tuple[Type[IPredictionModel], dict]] = []  # List of (class, kwargs)
+        self._feature_model_specs: List[Tuple[Type[IFeatureModel], dict]] = []  # List of (class, kwargs)
         self._evaluation_model_specs: List[Tuple[Type[IEvaluationModel], dict]] = []  # List of (class, kwargs)
         self._prediction_model_specs: List[Tuple[Type[IPredictionModel], dict]] = []  # List of (class, kwargs)
         
@@ -135,14 +135,20 @@ class LBPAgent:
             evaluate_fn=self.eval_system.evaluate)
         
         # Instanticate feature model instances from registered classes
-        feature_model_instances = {}
+        feature_model_mappings = {}
         for feature_class, feature_kwargs in self._feature_model_specs:
             self.logger.info(f"Instantiating feature model: {feature_class.__name__}")
             feature_model = feature_class(logger=self.logger, **feature_kwargs)
-            if feature_class in feature_model_instances:
+            if feature_model in feature_model_mappings.values():
                 raise ValueError(f"Feature model {feature_class.__name__} registered multiple times.")
             # Store instance for later attachment
-            feature_model_instances[feature_class] = feature_model
+            for feature_code in feature_model.feature_codes:
+                if feature_code in feature_model_mappings:
+                    raise ValueError(
+                        f"Feature model for code '{feature_code}' already registered. "
+                        f"Cannot register multiple models for the same feature code."
+                    )
+                feature_model_mappings[feature_code] = feature_model
         
         # Instantiate evaluation model instances from registered classes
         for eval_class, eval_kwargs in self._evaluation_model_specs:
@@ -150,14 +156,14 @@ class LBPAgent:
             eval_model = eval_class(logger=self.logger, **eval_kwargs)
 
             # Ensure feature model dependency is satisfied
-            if eval_model.feature_input_code not in feature_model_instances:
+            if eval_model.feature_input_code not in feature_model_mappings:
                 raise ValueError(
                     f"Feature model for code '{eval_model.feature_input_code}' "
                     f"not registered but required by evaluation model '{eval_class.__name__}'."
                 )
-            eval_model.set_feature_model(feature_model_instances[eval_model.feature_input_code])
+            eval_model.set_feature_model(feature_model_mappings[eval_model.feature_input_code])
 
-            # Store instance in system (feature model attachment happens later with dataset)
+            # Store instance in system
             if eval_model in self.eval_system.evaluation_models:
                 raise ValueError(f"Evaluation model {eval_class.__name__} registered multiple times.")
             self.eval_system.evaluation_models.append(eval_model)
@@ -169,12 +175,12 @@ class LBPAgent:
 
             for feature_code in pred_model.feature_input_codes:
                 # Ensure feature model dependencies are satisfied
-                if feature_code not in feature_model_instances:
+                if feature_code not in feature_model_mappings:
                     raise ValueError(
                         f"Feature model for code '{feature_code}' not registered "
                         f"but required by prediction model '{pred_class.__name__}'."
                     )
-                pred_model.add_feature_model(feature_model_instances[feature_code])
+                pred_model.add_feature_model(feature_model_mappings[feature_code])
 
             # Store instance in system
             if pred_model in self.pred_system.prediction_models:
@@ -321,6 +327,31 @@ class LBPAgent:
     #         f"({len(feature_model_dict)} unique types)"
     #     )
     
+    # === EVALUATION OPERATIONS ===
+
+    def evaluate(
+        self,
+        exp_data: 'ExperimentData',  # type: ignore
+        evaluate_from: int = 0,
+        evaluate_to: Optional[int] = None,
+        visualize: bool = False,
+        recompute: bool = False
+    ) -> None:
+        """Evaluate experiment and mutate exp_data with results."""
+        if self.eval_system is None:
+            raise RuntimeError("EvaluationSystem not initialized. Call initialize() first.")
+        
+        # Delegate to evaluation system
+        self.eval_system.evaluate_experiment(
+            exp_data=exp_data,
+            evaluate_from=evaluate_from,
+            evaluate_to=evaluate_to,
+            visualize=visualize,
+            recompute=recompute
+        )
+        
+        self.logger.console_info(f"Experiment '{exp_data.exp_code}' evaluated successfully")
+
     # === PREDICTION OPERATIONS ===
     
     def train(self, datamodule: DataModule, **kwargs) -> None:
@@ -364,26 +395,6 @@ class LBPAgent:
             f"Predicted dimensions [{predict_from}:{predict_to}] for '{exp_data.exp_code}'"
         )
     
-    def evaluate(
-        self,
-        exp_data: 'ExperimentData',  # type: ignore
-        evaluate_from: int = 0,
-        evaluate_to: Optional[int] = None,
-        visualize: bool = False,
-        recompute: bool = False
-    ) -> None:
-        """Evaluate experiment and mutate exp_data with results."""
-        # Delegate to evaluation system
-        self.eval_system.evaluate_experiment(  # type: ignore[attr-defined]
-            exp_data=exp_data,
-            evaluate_from=evaluate_from,
-            evaluate_to=evaluate_to,
-            visualize=visualize,
-            recompute=recompute
-        )
-        
-        self.logger.console_info(f"Experiment '{exp_data.exp_code}' evaluated successfully")
-
     # === CALIBRATION ===
     
     def set_performance_weights(

@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional, final
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
-from numpy.typing import NDArray
 from ..core.dataset import Dataset
 from ..utils import LBPLogger
 
@@ -21,6 +20,12 @@ class IFeatureModel(ABC):
     logger: LBPLogger  # Required field for logging
     
     # === ABSTRACT METHODS ===
+    @property
+    @abstractmethod
+    def feature_codes(self) -> List[str]:
+        """List of the feature codes produced by this model."""
+        ...
+
     @abstractmethod
     def _load_data(self, **param_values) -> Any:
         """
@@ -38,7 +43,7 @@ class IFeatureModel(ABC):
         ...
 
     @abstractmethod
-    def _compute_features(self, data: Any, visualize: bool = False) -> float:
+    def _compute_features(self, data: Any, visualize: bool = False) -> Dict[str, float]:
         """
         Extract feature value from loaded data.
         
@@ -47,15 +52,17 @@ class IFeatureModel(ABC):
             visualize: Enable visualizations if True
             
         Returns:
-            Computed feature value
+            Computed feature values as a dict mapping feature codes to numeric values
         """
         ...
     
     # === PUBLIC API ===
     
     @final
-    def run(self, feature_name: str, visualize: bool = False, **param_values) -> float:
+    def run(self, feature_name: str, visualize: bool = False, **param_values) -> Dict[str, float]:
         """Extract feature with memoization via Dataset."""
+        # TODO: check if **params is equal to dims or not. how are we handling non-dim params?
+
         # Check cache
         if self.dataset.has_cached_features_at(**param_values):
             try:
@@ -68,15 +75,16 @@ class IFeatureModel(ABC):
         # Load and compute
         self.logger.debug(f"Computing feature '{feature_name}' for {param_values}")
         data = self._load_data(**param_values)
-        feature_value = self._compute_features(data, visualize=visualize)
+        feature_dict = self._compute_features(data, visualize=visualize)
         
         # Validate output from user implementation
-        if not isinstance(feature_value, (int, float, np.integer, np.floating)):
-            raise TypeError(
-                f"_compute_features() must return numeric value, got {type(feature_value).__name__}"
-            )
+        for feature_code, feature_value in feature_dict.items():
+            if not isinstance(feature_value, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_features() must return numeric values, got {type(feature_value).__name__} for feature '{feature_code}'"
+                )
         
-        # Cache and return
-        self.dataset.cache_feature_value(feature_name, feature_value, **param_values)
+            # Cache and return
+            self.dataset.cache_feature_value(feature_code, feature_value, **param_values)
         
-        return feature_value
+        return feature_dict

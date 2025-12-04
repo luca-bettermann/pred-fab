@@ -7,12 +7,12 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 
 import numpy as np
 import os
-from typing import Callable, Dict, Any, Optional, List, Tuple, Literal
+from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 from dataclasses import dataclass
 import functools
 
 from .schema import DatasetSchema
-from .data_blocks import DataBlock, Parameters, MetricArrays, PerformanceAttributes
+from .data_blocks import DataBlock, Parameters, Dimensions, MetricArrays, PerformanceAttributes
 from .data_objects import DataDimension
 
 from ..interfaces.external_data import IExternalData
@@ -26,25 +26,28 @@ class ExperimentData:
     """
     Complete data for a single experiment.
     
-    - Parameters (static + dynamic + dimensional)
-    - Performance, metric arrays, and predicted metric arrays (always initialized to empty blocks)
-    - Features (optional, deprecated)
+    - Parameters
+    - Dimensions
+    - Performance
+    - Features
+    - Predicted Features
     """
     exp_code: str
     parameters: Parameters
+    dimensions: Dimensions
     performance: PerformanceAttributes
     features: MetricArrays
     predicted_features: MetricArrays
     
-    @property
-    def dimensions(self) -> Dict[str, Any]:
-        """View into parameters for only dimensional parameters (those with '.' in name)."""
-        dims = {}
-        for name, data_obj in self.parameters.items():
-            if isinstance(data_obj, DataDimension):
-                if self.parameters.has_value(name):
-                    dims[name] = self.parameters.get_value(name)
-        return dims
+    # @property
+    # def dimensions(self) -> Dict[str, Any]:
+    #     """View into parameters for only dimensional parameters (those with '.' in name)."""
+    #     dims = {}
+    #     for name, data_obj in self.parameters.items():
+    #         if isinstance(data_obj, DataDimension):
+    #             if self.parameters.has_value(name):
+    #                 dims[name] = self.parameters.get_value(name)
+    #     return dims
     
     def is_valid(self, schema: 'DatasetSchema') -> bool:
         """Check structural compatibility of exp with schema."""
@@ -53,11 +56,12 @@ class ExperimentData:
             (self.parameters, schema.parameters),
             (self.dimensions, schema.dimensions),
             (self.performance, schema.performance_attrs),
-            (self.features, schema.features)
+            (self.features, schema.features),
+            (self.predicted_features, schema.features)
         ]
         
         for self_block, other_block in block_checks:
-            if not self_block._is_identical(other_block):
+            if not self_block.is_compatible(other_block):
                 raise ValueError(
                     f"Schema block '{self_block.__class__.__name__}' is not identical "
                     f"to {other_block.__class__.__name__}."
@@ -70,6 +74,8 @@ class ExperimentData:
         """Set values for a specific data type."""
         if block_type == "parameters":
             self.parameters.set_values(values)
+        elif block_type == "dimensions":
+            self.dimensions.set_values(values)
         elif block_type == "performance":
             self.performance.set_values(values)
         elif block_type == "feature":
@@ -83,6 +89,8 @@ class ExperimentData:
         """Get values as dict for a specific data type."""
         if block_type == "parameters":
             return self.parameters.get_values_dict()
+        elif block_type == "dimensions":
+            return self.dimensions.get_values_dict()
         elif block_type == "performance":
             return self.performance.get_values_dict()
         elif block_type == "feature":
@@ -96,6 +104,8 @@ class ExperimentData:
         """Check if values are set for a specific data type."""
         if block_type == "parameters":
             return bool(self.parameters.get_values_dict())
+        elif block_type == "dimensions":
+            return bool(self.dimensions.get_values_dict())
         elif block_type == "performance":
             return bool(self.performance.get_values_dict())
         elif block_type == "feature":
@@ -143,36 +153,74 @@ class Dataset:
         # Feature memoization for IFeatureModel efficiency
         self._feature_cache: Dict[Tuple[str, ...], Dict[str, Any]] = {}  # param_tuple → feature_dict
 
+    def get_experiment(self, exp_code: str) -> ExperimentData:
+        """Get complete ExperimentData for an exp_code."""
+        if exp_code not in self._experiments:
+            raise KeyError(f"Experiment {exp_code} not found")
+        return self._experiments[exp_code]
+    
+    # === Create ExperimentData Objects ===
+
+    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock) -> Any:
+        block = block_class()
+        for name, data_obj in schema_dict.items():
+            block.add(name, data_obj)
+        return block
+        
     def _create_experiment_shell(self, exp_code: str) -> ExperimentData:
         """Create new empty experiment shell with all blocks initialized."""
-        params_block = Parameters()
-        for name, data_obj in self.schema.parameters.items():
-            params_block.add(name, data_obj)
-        
-        perf_block = PerformanceAttributes()
-        for name, data_obj in self.schema.performance_attrs.items():
-            perf_block.add(name, data_obj)
-        
-        arrays_block = MetricArrays()
-        for name, data_obj in self.schema.features.items():
-            arrays_block.add(name, data_obj)
-            
-        pred_block = MetricArrays()
-        for name, data_obj in self.schema.features.items():
-            pred_block.add(name, data_obj)
+        params_block = self._init_from_schema(Parameters, self.schema.parameters)
+        dim_block = self._init_from_schema(Dimensions, self.schema.dimensions)
+        perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance_attrs)
+        arrays_block = self._init_from_schema(MetricArrays, self.schema.features)
+        pred_block = self._init_from_schema(MetricArrays, self.schema.features)
         
         return ExperimentData(
             exp_code=exp_code,
             parameters=params_block,
+            dimensions=dim_block,
             performance=perf_block,
             features=arrays_block,
             predicted_features=pred_block
         )
     
+    def _build_experiment_data(
+        self,
+        exp_code: str,
+        parameters: Dict[str, Any],
+        dimensions: Dict[str, Any],
+        performance: Optional[Dict[str, Any]],
+        metric_arrays: Optional[Dict[str, np.ndarray]],
+        predicted_arrays: Optional[Dict[str, np.ndarray]] = None
+    ) -> ExperimentData:
+        """Build ExperimentData from loaded components."""
+        # 1. Create shell with schema structure
+        exp_data = self._create_experiment_shell(exp_code)
+        
+        # 2. Set parameters and dimensions
+        exp_data.parameters.set_values(parameters)
+        exp_data.dimensions.set_values(dimensions)
+        
+        # 3. Set optional blocks
+        if performance:
+            exp_data.set_data(performance, block_type="performance")
+
+        if metric_arrays:
+            exp_data.set_data(metric_arrays, block_type="feature")
+            
+        if predicted_arrays:
+            exp_data.set_data(predicted_arrays, block_type="predicted_feature")
+
+        # 4. Validate against schema
+        exp_data.is_valid(self.schema)
+
+        return exp_data
+    
     def create_experiment(
         self,
         exp_code: str,
-        exp_params: Dict[str, Any],
+        parameters: Dict[str, Any],
+        dimensions: Dict[str, Any],
         performance: Optional[Dict[str, Any]] = None,
         metric_arrays: Optional[Dict[str, np.ndarray]] = None,
         recompute: bool = False
@@ -182,7 +230,8 @@ class Dataset:
         
         Args:
             exp_code: Unique experiment code
-            exp_params: Dictionary of parameter values (Mandatory)
+            parameters: Dictionary of parameter values (Mandatory)
+            dimensions: Dictionary of dimension values (Mandatory)
             performance: Optional performance metrics
             metric_arrays: Optional feature arrays
             recompute: If True, overwrite existing experiment in memory
@@ -202,68 +251,31 @@ class Dataset:
                  raise ValueError(f"Experiment {exp_code} already exists locally")
 
         # Build and store
-        exp_data = self._build_experiment_data(exp_code, exp_params, performance, metric_arrays)
+        exp_data = self._build_experiment_data(exp_code, parameters, dimensions, performance, metric_arrays)
         self._experiments[exp_code] = exp_data
-        return exp_data
-    
-    def get_experiment(self, exp_code: str) -> ExperimentData:
-        """Get complete ExperimentData for an exp_code."""
-        if exp_code not in self._experiments:
-            raise KeyError(f"Experiment {exp_code} not found")
-        return self._experiments[exp_code]
-
-    def _build_experiment_data(
-        self,
-        exp_code: str,
-        exp_params: Dict[str, Any],
-        performance: Optional[Dict[str, Any]],
-        metric_arrays: Optional[Dict[str, np.ndarray]],
-        predicted_arrays: Optional[Dict[str, np.ndarray]] = None
-    ) -> ExperimentData:
-        """Build ExperimentData from loaded components."""
-        # 1. Create shell with schema structure
-        exp_data = self._create_experiment_shell(exp_code)
-        
-        # 2. Set parameters (with strict validation)
-        for name, value in exp_params.items():
-            if not exp_data.parameters.has(name):
-                raise ValueError(f"Unknown parameter: {name}")
-            
-            exp_data.parameters.set_value(name, value)
-        
-        # 3. Set optional blocks
-        if performance:
-            exp_data.set_data(performance, block_type="performance")
-
-        if metric_arrays:
-            exp_data.set_data(metric_arrays, block_type="feature")
-            
-        if predicted_arrays:
-            exp_data.set_data(predicted_arrays, block_type="predicted_feature")
-        
         return exp_data
     
     # === Feature Memoization for IFeatureModel ===
     
-    def has_cached_features_at(self, **param_values) -> bool:
+    def has_cached_features_at(self, **dim_values) -> bool:
         """Check if features are cached for specific parameter values."""
-        param_tuple = self._make_param_tuple(param_values)
+        param_tuple = self._make_param_tuple(dim_values)
         return param_tuple in self._feature_cache
     
-    def get_cached_feature_value(self, feature_name: str, **param_values) -> Any:
+    def get_cached_feature_value(self, feature_name: str, **dim_values) -> Any:
         """Get cached feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(param_values)
+        param_tuple = self._make_param_tuple(dim_values)
         if param_tuple not in self._feature_cache:
-            raise KeyError(f"No features cached for parameters: {param_values}")
+            raise KeyError(f"No features cached for parameters: {dim_values}")
         
         if feature_name not in self._feature_cache[param_tuple]:
             raise KeyError(f"Feature '{feature_name}' not found in cache")
         
         return self._feature_cache[param_tuple][feature_name]
     
-    def cache_feature_value(self, feature_name: str, value: Any, **param_values) -> None:
+    def cache_feature_value(self, feature_name: str, value: Any, **dim_values) -> None:
         """Cache feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(param_values)
+        param_tuple = self._make_param_tuple(dim_values)
         if param_tuple not in self._feature_cache:
             self._feature_cache[param_tuple] = {}
         self._feature_cache[param_tuple][feature_name] = value
@@ -336,9 +348,9 @@ class Dataset:
         
         if exp_code in missing:
             raise KeyError(f"Experiment {exp_code} could not be loaded")
-            
-        return self._experiments[exp_code]
-
+        
+        return self.get_experiment(exp_code)
+    
     def load_experiments(self, exp_codes: List[str], recompute: bool = False) -> List[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
         # 1. Ensure shells exist
@@ -360,8 +372,11 @@ class Dataset:
         if missing_params:
             raise ValueError(f"No parameters found for any of the following experiments: {missing_params}")
         
-        # Filter codes that were actually found (parameters are mandatory)
+        # Filter codes that were actually found and validate (parameters are mandatory)
         found_codes = [code for code in exp_codes if code not in missing_params]
+        for code in found_codes:
+            exp_data = self.get_experiment(code)
+            exp_data.is_valid(self.schema)
 
         # 3. Load Performance Metrics
         missing_performance = self._hierarchical_load(

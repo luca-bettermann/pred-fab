@@ -13,6 +13,7 @@ import json
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, Set, Optional
+from ..utils import LBPLogger
 from .data_objects import DataDimension
 from .data_blocks import (
     Parameters,
@@ -93,7 +94,7 @@ class DatasetSchema:
         cls,
         eval_specs: Dict[str, Any],
         pred_specs: Dict[str, Any],
-        logger: Optional[Any] = None
+        logger: LBPLogger
     ) -> 'DatasetSchema':
         """Build schema from evaluation and prediction system specifications."""        
         schema = cls()
@@ -105,25 +106,21 @@ class DatasetSchema:
         for param_name, data_obj in all_inputs.items():
             if isinstance(data_obj, DataDimension):
                 schema.dimensions.add(param_name, data_obj)
-                if logger:
-                    logger.info(f"  Added dimension: {param_name}")
+                logger.info(f"  Added dimension: {param_name}")
             else:
                 schema.parameters.add(param_name, data_obj)
-                if logger:
-                    logger.info(f"  Added parameter: {param_name}")
+                logger.info(f"  Added parameter: {param_name}")
         
         # 2. Add performance attributes
         for perf_code, perf_obj in eval_specs["outputs"].items():
             schema.performance_attrs.add(perf_code, perf_obj)
-            if logger:
-                logger.info(f"  Added performance attribute: {perf_code}")
+            logger.info(f"  Added performance attribute: {perf_code}")
         
-        if logger:
-            logger.info(
-                f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
-                f"{len(schema.dimensions.data_objects)} dimensions, "
-                f"{len(schema.performance_attrs.data_objects)} performance attributes"
-            )
+        logger.info(
+            f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
+            f"{len(schema.dimensions.data_objects)} dimensions, "
+            f"{len(schema.performance_attrs.data_objects)} performance attributes"
+        )
         
         return schema
     

@@ -9,6 +9,7 @@ import itertools
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 from .data_objects import DataObject
+from .data_blocks import DataBlock
 
 
 class DataBlock:
@@ -75,18 +76,7 @@ class DataBlock:
         return name in self.values
     
     def to_numpy(self, dtype: type = np.float64) -> np.ndarray:
-        """
-        Convert all values to numpy array for ML.
-        
-        Args:
-            dtype: Target numpy dtype (default: float64)
-            
-        Returns:
-            Numpy array of values
-            
-        Raises:
-            ValueError: If non-numeric values are present
-        """
+        """Convert all values to numpy array for ML."""
         values = []
         for name in self.data_objects.keys():
             if name in self.values:
@@ -132,7 +122,7 @@ class DataBlock:
         return True
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DataBlock':
+    def from_dict(cls, data: Dict[str, Any]) -> DataBlock:
         """Reconstruct from dictionary."""
         block = cls()
         for name, obj_data in data.get("data_objects", {}).items():

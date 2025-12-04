@@ -8,11 +8,12 @@ from numpy.typing import NDArray
 from .features import IFeatureModel
 from ..core.dataset import ExperimentData
 from ..core.data_blocks import MetricArrays, PerformanceAttributes
-from ..core.data_objects import DataDimension, DataArray, Performance
+from ..core.data_objects import DataDimension, DataArray
+from ..utils.dataclass_fields import Performance, DataclassMixin
 from ..utils import LBPLogger
 
 
-class IEvaluationModel(ABC):
+class IEvaluationModel(DataclassMixin, ABC):
     """
     Abstract base class for evaluation models.
     
@@ -120,72 +121,62 @@ class IEvaluationModel(ABC):
     @final
     def run(
         self, 
-        feature_name: str, 
-        performance_attr_name: str, 
-        exp_data: ExperimentData, 
+        params: Dict[str, Any],
+        dim_names: List[str],
+        dim_combinations: List[Tuple[int, ...]],
         evaluate_from: int = 0, 
         evaluate_to: Optional[int] = None,
-        visualize: bool = False
-    ) -> None:
+        visualize: bool = False,
+        recompute: bool = False
+    ) -> Tuple[Dict[str, float], Dict[str, NDArray]]:
         """Evaluate feature against target values and store results in ExperimentData."""
         # Validate preconditions
         if self.feature_model is None:
             raise ValueError("Feature model not set. Call add_feature_model() first")
-        if exp_data.dimensions is None:
-            raise ValueError("ExperimentData must have dimensions defined")
         
-        self.logger.info(f"Starting evaluation for feature '{feature_name}'")
+        self.logger.info(f"Starting evaluation for '{self.performance_code}'")
         
-        # Extract dimension info
-        dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
-                      if isinstance(obj, DataDimension)]
-        dim_names = [obj.name for obj in dim_objects]
-        dim_sizes = tuple(exp_data.parameters.get_value(obj.name) for obj in dim_objects)
+        # # Extract dimension info
+        # dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
+        #               if isinstance(obj, DataDimension)]
+        # dim_names = [obj.name for obj in dim_objects]
+        # dim_sizes = tuple(exp_data.parameters.get_value(obj.name) for obj in dim_objects)
         
         # Initialize metric arrays
+        n_rows = len(dim_combinations) if dim_combinations else 1
         num_dims = len(dim_names)
-        total_metrics = num_dims + 4
-        metric_array = np.empty(dim_sizes + (total_metrics,))
-        performance_array = np.empty(dim_sizes)
+        feature_array = np.empty((n_rows, num_dims + 1))
         
-        # Generate dimensional combinations
-        dim_ranges = [range(size) for size in dim_sizes]
-        all_dim_combinations = list(itertools.product(*dim_ranges))
+        # # Generate dimensional combinations
+        # dim_ranges = [range(size) for size in n_columns]
+        # all_dim_combinations = list(itertools.product(*dim_ranges))
         
         # Apply dimensional slice
         if evaluate_to is None:
-            dim_combinations = all_dim_combinations[evaluate_from:]
+            dim_process = dim_combinations[evaluate_from:]
         else:
-            dim_combinations = all_dim_combinations[evaluate_from:evaluate_to]
-        
-        total_combos = len(dim_combinations)
-        total_all = len(all_dim_combinations)
-        self.logger.info(f"Processing {total_combos}/{total_all} dimensional combinations [{evaluate_from}:{evaluate_to}]")
-        
-        # Build static parameters
-        static_params = dict(exp_data.parameters.values) if exp_data.parameters else {}
+            dim_process = dim_combinations[evaluate_from:evaluate_to]
+        self.logger.info(f"Processing {len(dim_process)}/{len(dim_combinations)} dimensional combinations [{evaluate_from}:{evaluate_to}]")
         
         # Process each combination
-        for i, dims in enumerate(dim_combinations):
-            self.logger.debug(f"Processing {i+1}/{total_combos}: {dims}")
+        i_last = evaluate_to if evaluate_to is not None else len(dim_combinations)
+        for i, dims in enumerate(dim_process):
+            i_global = evaluate_from + i
+            self.logger.debug(f"Processing {i_global}/{i_last}: {dims}")
             
             dim_params = dict(zip(dim_names, dims))
             params = {**static_params, **dim_params}
 
-            metrics = self._process_single_combination(params, feature_name, visualize)
+            metrics = self._process_single_combination(params, visualize)
             feature_value, target_value, scaling_factor, performance_value = metrics
             
             # Store results in arrays
-            metric_array[dims][:num_dims] = dims
-            metric_array[dims][num_dims] = feature_value
-            metric_array[dims][num_dims + 1] = target_value
-            metric_array[dims][num_dims + 2] = scaling_factor if scaling_factor is not None else np.nan
-            metric_array[dims][num_dims + 3] = performance_value if performance_value is not None else np.nan
-            performance_array[dims] = performance_value if performance_value is not None else np.nan
-        
+            feature_array[dims][:num_dims] = dims
+            feature_array[dims][num_dims] = feature_value
+
         # Store results in ExperimentData
         self._store_results(exp_data, feature_name, performance_attr_name, 
-                          metric_array, performance_array, num_dims,
+                          feature_array, performance_array, num_dims,
                           evaluate_from, evaluate_to)
         
         # Compute aggregations

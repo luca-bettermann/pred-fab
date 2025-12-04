@@ -1,4 +1,4 @@
-from typing import Any, Dict, Type, Optional, List
+from typing import Any, Dict, Tuple, Type, Optional, List
 import numpy as np
 
 from ..utils import LBPLogger
@@ -60,8 +60,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
         
         # Add outputs (performance attributes)
         specs["outputs"] = {}
-        for perf_code in self.evaluation_models.keys():
-            specs["outputs"][perf_code] = DataReal(perf_code)
+        for eval_model in self.evaluation_models:
+            specs["outputs"][eval_model.performance_code] = DataReal(eval_model.performance_code)
         
         return specs
 
@@ -109,16 +109,21 @@ class EvaluationSystem(BaseOrchestrationSystem):
         """Execute all evaluations for an experiment and mutate exp_data with results."""
         # Extract parameters from exp_data
         params = self._get_params_from_exp_data(exp_data)
-        dims = exp_data.dimensions
+        dim_combinations = exp_data.dimensions.get_dim_combinations()
         
         # Get evaluation results from core logic
         perf_results, metric_results = self._evaluate_from_params(
             params=params,
+            dim_combinations=dim_combinations,
             evaluate_from=evaluate_from,
             evaluate_to=evaluate_to,
             visualize=visualize,
             recompute=recompute
         )
+
+        # Update exp_data with results
+        exp_data.features.set_values(metric_results)
+        exp_data.performance.set_values(perf_results)
         
         # Store results in exp_data
         self._store_results_in_exp_data(exp_data, perf_results, metric_results)
@@ -126,74 +131,61 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def _evaluate_from_params(
         self,
         params: Dict[str, Any],
+        dim_combinations: List[Tuple[int, ...]],
         evaluate_from: int = 0,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
         recompute: bool = False
-    ) -> tuple[Dict[str, float], Dict[str, np.ndarray]]:
+    ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
         """Core evaluation logic from raw parameters."""
 
         # Create temporary exp_data for evaluation models
-        temp_exp_data = ExperimentData(
-            exp_code="temp_eval",
-            parameters=DataBlock()
-        )
+        # temp_exp_data = ExperimentData(
+        #     exp_code="temp_eval",
+        #     parameters=DataBlock()
+        # )
         
-        # Populate parameters
-        for name, value in params.items():
-            if name in self.dataset.schema.parameters.keys():
-                data_obj = self.dataset.schema.parameters.data_objects[name]
-                temp_exp_data.parameters.add(name, data_obj)
-                temp_exp_data.parameters.set_value(name, value)
+        # # Populate parameters
+        # for name, value in params.items():
+        #     if name in self.dataset.schema.parameters.keys():
+        #         data_obj = self.dataset.schema.parameters.data_objects[name]
+        #         temp_exp_data.parameters.add(name, data_obj)
+        #         temp_exp_data.parameters.set_value(name, value)
         
-        # Initialize performance and metric_arrays
-        for name, data_obj in self.dataset.schema.performance_attrs.items():
-            temp_exp_data.performance.add(name, data_obj)
+        # # Initialize performance and metric_arrays
+        # for name, data_obj in self.dataset.schema.performance_attrs.items():
+        #     temp_exp_data.performance.add(name, data_obj)
         
-        for name, data_obj in self.dataset.schema.features.items():
-            temp_exp_data.features.add(name, data_obj)
+        # for name, data_obj in self.dataset.schema.features.items():
+        #     temp_exp_data.features.add(name, data_obj)
         
         # Run evaluation for each performance code
 
         # TODO: do not pass exp_data to interfaces
         # TODO: encode feature code and performance code in the respective models.
 
-        for perf_code in self.evaluation_models.keys():
-            feature_name = f"{perf_code}_feature"
-            eval_model = self.evaluation_models[perf_code]
-            
-            self.logger.info(f"Evaluating '{perf_code}' with provided parameters")
+        performance_dict: Dict[str, float] = {}
+        feature_dict: Dict[str, np.ndarray] = {}
 
-            # Run evaluation - mutates temp_exp_data
-            eval_model.run(
-                feature_name=feature_name,
-                performance_attr_name=perf_code,
-                dim_combinations=temp_exp_data.dimensions.get_dim_combinations(),
-                exp_data=temp_exp_data,
+        for eval_model in self.evaluation_models:
+            
+            self.logger.info(f"Evaluating '{eval_model.performance_code}' with provided parameters")
+
+            # Run evaluation
+            features, performance = eval_model.run(
+                params=params,
+                dim_combinations=dim_combinations,
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
-                visualize=visualize
+                visualize=visualize,
+                recompute=recompute
             )
 
-            # # Run evaluation - mutates temp_exp_data
-            # eval_model.run(
-            #     feature_name=feature_name,
-            #     performance_attr_name=perf_code,
-            #     exp_data=temp_exp_data,
-            #     evaluate_from=evaluate_from,
-            #     evaluate_to=evaluate_to,
-            #     visualize=visualize
-            # )
-        
-        # Extract results
-        perf_results = temp_exp_data.performance.get_values_dict()
-        metric_results = {
-            name: temp_exp_data.features.get_value(name)
-            for name in temp_exp_data.features.keys()
-            if temp_exp_data.features.has_value(name)
-        }
-        
-        return perf_results, metric_results
+            # Collect results
+            performance_dict[eval_model.performance_code] = performance
+            feature_dict[eval_model.feature_input_code] = features
+
+        return feature_dict, performance_dict
     
     def _store_results_in_exp_data(
         self,
@@ -216,9 +208,9 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 exp_data.features.add(array_name, data_obj)
             exp_data.features.set_value(array_name, array_value)
 
-    def get_evaluation_model_dict(self) -> Dict[str, IEvaluationModel]:
-        """Get a dict of performance code to evaluation models."""
-        eval_models = {}
-        for model in self.evaluation_models:
-            eval_models[model.performance_code] = model
-        return eval_models
+    # def get_evaluation_model_dict(self) -> Dict[str, IEvaluationModel]:
+    #     """Get a dict of performance code to evaluation models."""
+    #     eval_models = {}
+    #     for model in self.evaluation_models:
+    #         eval_models[model.performance_code] = model
+    #     return eval_models

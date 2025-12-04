@@ -7,6 +7,7 @@ They provide validation, type information, and value storage.
 
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict, Tuple, Literal
+from dataclasses import field, fields, Field, dataclass
 import numpy as np
 
 
@@ -349,69 +350,3 @@ class DataArray(DataObject):
         dtype = np.dtype(dtype_str) if dtype_str else None
         return cls(name, shape, dtype)
 
-
-# === FACTORY CLASSES ===
-
-class Parameter:
-    """Factory for creating parameter DataObjects."""
-    
-    @staticmethod
-    def real(min_val: Optional[float] = None, max_val: Optional[float] = None,
-             round_digits: Optional[int] = None) -> DataReal:
-        """Create a real-valued parameter."""
-        return DataReal(name="", min_val=min_val, max_val=max_val, round_digits=round_digits)
-    
-    @staticmethod
-    def integer(min_val: Optional[int] = None, max_val: Optional[int] = None) -> DataInt:
-        """Create an integer parameter."""
-        return DataInt(name="", min_val=min_val, max_val=max_val)
-    
-    @staticmethod
-    def categorical(categories: List[str]) -> DataCategorical:
-        """Create a categorical parameter."""
-        return DataCategorical(name="", categories=categories)
-    
-    @staticmethod
-    def boolean() -> DataBool:
-        """Create a boolean parameter."""
-        return DataBool(name="")
-
-
-class Performance:
-    """Factory for creating performance attribute DataObjects."""
-    
-    @staticmethod
-    def real(min_val: Optional[float] = None, max_val: Optional[float] = None,
-             round_digits: Optional[int] = None) -> DataReal:
-        """Create a real-valued performance attribute."""
-        return DataReal(name="", min_val=min_val, max_val=max_val, round_digits=round_digits)
-    
-    @staticmethod
-    def integer(min_val: Optional[int] = None, max_val: Optional[int] = None) -> DataInt:
-        """Create an integer performance attribute."""
-        return DataInt(name="", min_val=min_val, max_val=max_val)
-
-
-class Dimension:
-    """Factory for creating dimensional parameter DataObjects."""
-    
-    @staticmethod
-    def integer(param_name: str, dim_name: str, iterator_name: str, 
-                min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
-        """
-        Create a dimensional parameter.
-        
-        Args:
-            param_name: Parameter name (e.g., "n_layers")
-            dim_name: Human-readable dimension name (e.g., "layers")
-            iterator_name: Iterator variable name (e.g., "layer_id")
-            min_val: Minimum value (default 1)
-            max_val: Maximum value (optional)
-        """
-        dim_obj = DataDimension(dim_name, param_name, iterator_name)
-        # Add min/max constraints
-        if min_val is not None:
-            dim_obj.constraints["min"] = min_val
-        if max_val is not None:
-            dim_obj.constraints["max"] = max_val
-        return dim_obj

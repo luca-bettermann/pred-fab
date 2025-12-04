@@ -11,6 +11,8 @@ from lbp_package.core.data_objects import (
     DataCategorical,
     DataDimension,
     DataArray,
+)
+from lbp_package.utils.dataclass_fields import (
     Parameter,
     Performance,
     Dimension,
@@ -297,8 +299,8 @@ class TestRounding:
     
     def test_factory_with_round_digits(self):
         """Test factory classes support round_digits."""
-        param = Parameter.real(min_val=0.0, max_val=1.0, round_digits=5)
-        assert param.round_digits == 5
+        param_field = Parameter.real(min_val=0.0, max_val=1.0, round_digits=5)
+        assert param_field.metadata['aixd_schema'].round_digits == 5
         
-        perf = Performance.real(min_val=0.0, max_val=1.0, round_digits=3)
-        assert perf.round_digits == 3
+        perf_field = Performance.real(min_val=0.0, max_val=1.0, round_digits=3)
+        assert perf_field.metadata['aixd_schema'].round_digits == 3

@@ -12,9 +12,10 @@ import pandas as pd
 
 from ..utils.logger import LBPLogger
 from .features import IFeatureModel
+from ..utils.dataclass_fields import DataclassMixin
 
 
-class IPredictionModel(ABC):
+class IPredictionModel(DataclassMixin, ABC):
     """
     Abstract base class for prediction models.
     
