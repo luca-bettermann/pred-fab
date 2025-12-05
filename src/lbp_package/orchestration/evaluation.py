@@ -4,9 +4,7 @@ import numpy as np
 from ..utils import LBPLogger
 from ..interfaces.evaluation import IEvaluationModel
 from ..interfaces.features import IFeatureModel
-from ..core.dataset import Dataset, ExperimentData
-from ..core.data_objects import DataArray, DataReal
-from ..core.data_blocks import DataBlock
+from ..core import Dataset, ExperimentData, DataArray, DataReal, Dimensions, Parameters
 from .base import BaseOrchestrationSystem
 
 
@@ -107,14 +105,26 @@ class EvaluationSystem(BaseOrchestrationSystem):
         recompute: bool = False
     ) -> None:
         """Execute all evaluations for an experiment and mutate exp_data with results."""
-        # Extract parameters from exp_data
-        params = self._get_params_from_exp_data(exp_data)
-        dim_combinations = exp_data.dimensions.get_dim_combinations()
-        
+
+        # Initialize arrays in exp_data if not present
+        for eval_model in self.evaluation_models:
+            # TODO: initialie arrays on a per-eval-model basis
+            
+            required_dims = eval_model._get_required_dimensions()
+            shape = exp_data.get_array_shape(dims=required_dims)
+
+
+        shape = exp_data.get_array_shape()
+        if not exp_data.features.values:
+            exp_data.initialize_array(block_type="feature", feature_code="feature", shape=shape)
+        else:
+            if exp_data.features.values() != shape:
+                raise ValueError("Existing feature arrays in exp_data have incompatible shape")
+
         # Get evaluation results from core logic
         perf_results, metric_results = self._evaluate_from_params(
-            params=params,
-            dim_combinations=dim_combinations,
+            parameters=exp_data.parameters,
+            dimensions=exp_data.dimensions,
             evaluate_from=evaluate_from,
             evaluate_to=evaluate_to,
             visualize=visualize,
@@ -130,8 +140,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     def _evaluate_from_params(
         self,
-        params: Dict[str, Any],
-        dim_combinations: List[Tuple[int, ...]],
+        parameters: Parameters,
+        dimensions: Dimensions,
         evaluate_from: int = 0,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
@@ -164,6 +174,11 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # TODO: do not pass exp_data to interfaces
         # TODO: encode feature code and performance code in the respective models.
 
+        # Handle recompute logic
+        if recompute:
+            self.logger.info(f"Recompute flag set - clearing cache")
+            self.dataset.clear_feature_cache()
+
         performance_dict: Dict[str, float] = {}
         feature_dict: Dict[str, np.ndarray] = {}
 
@@ -173,17 +188,19 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
             # Run evaluation
             features, performance = eval_model.run(
-                params=params,
-                dim_combinations=dim_combinations,
+                parameters=parameters,
+                dimensions=dimensions,
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
-                visualize=visualize,
-                recompute=recompute
+                visualize=visualize
             )
 
             # Collect results
             performance_dict[eval_model.performance_code] = performance
             feature_dict[eval_model.feature_input_code] = features
+
+        # Clear feature cache after evaluation to free memory
+        self.dataset.clear_feature_cache()
 
         return feature_dict, performance_dict
     
@@ -204,7 +221,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Store metric arrays
         for array_name, array_value in metric_results.items():
             if not exp_data.features.has(array_name):
-                data_obj = DataArray(name=array_name, shape=array_value.shape)
+                data_obj = DataArray(code=array_name, shape=array_value.shape)
                 exp_data.features.add(array_name, data_obj)
             exp_data.features.set_value(array_name, array_value)
 

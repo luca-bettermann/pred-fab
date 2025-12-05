@@ -187,8 +187,8 @@ class TestMetricArrays:
         """Test adding DataArray objects."""
         arrays = MetricArrays()
         
-        arrays.add("energy", DataArray(name="energy", shape=(100,), dtype=np.float64))
-        arrays.add("position", DataArray(name="position", shape=(100, 3), dtype=np.float32))
+        arrays.add("energy", DataArray(code="energy", shape=(100,), dtype=np.float64))
+        arrays.add("position", DataArray(code="position", shape=(100, 3), dtype=np.float32))
         
         assert len(list(arrays.keys())) == 2
         assert arrays.has("energy")
@@ -197,7 +197,7 @@ class TestMetricArrays:
     def test_metric_arrays_value_storage(self):
         """Test storing and retrieving array values."""
         arrays = MetricArrays()
-        arrays.add("data", DataArray(name="data", shape=(5,), dtype=np.float64))
+        arrays.add("data", DataArray(code="data", shape=(5,), dtype=np.float64))
         
         arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         arrays.set_value("data", arr)
@@ -230,7 +230,7 @@ class TestDataBlockIntegration:
         
         # Metric Arrays
         arrays = MetricArrays()
-        arrays.add("energy", DataArray(name="energy", shape=(100,), dtype=np.float64))
+        arrays.add("energy", DataArray(code="energy", shape=(100,), dtype=np.float64))
         energy_data = np.random.rand(100)
         arrays.set_value("energy", energy_data)
         

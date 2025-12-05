@@ -81,7 +81,7 @@ def simple_dataset():
         
         # Initialize metric_arrays and add features
         exp_data.features = MetricArrays()
-        test_feature_arr = DataArray(name="test_feature", shape=())
+        test_feature_arr = DataArray(code="test_feature", shape=())
         exp_data.features.add("test_feature", test_feature_arr)
         exp_data.features.set_value("test_feature", np.array(float(i + 1)))
     

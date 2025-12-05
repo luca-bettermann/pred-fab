@@ -10,12 +10,13 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Type, Optional, Any, final
 import pandas as pd
 
+from .base import BaseInterface
 from ..utils.logger import LBPLogger
 from .features import IFeatureModel
-from ..utils.dataclass_fields import DataclassMixin
+from ..core import DataObject, Dataset
 
 
-class IPredictionModel(DataclassMixin, ABC):
+class IPredictionModel(BaseInterface):
     """
     Abstract base class for prediction models.
     
@@ -25,11 +26,10 @@ class IPredictionModel(DataclassMixin, ABC):
     - Support export/import for production inference via InferenceBundle
     - Must be dataclasses with DataObject fields for parameters (schema generation)
     """
-    
-    def __init__(self, logger: LBPLogger):
-        """Initialize prediction model."""
-        self.logger = logger
-        self.feature_model_dependencies: List[IFeatureModel] = []
+
+    def __init__(self, dataset: Dataset, logger: LBPLogger):
+        """Initialize evaluation system."""
+        super().__init__(dataset, logger)
     
     @property
     @abstractmethod

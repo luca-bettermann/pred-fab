@@ -66,7 +66,7 @@ def test_evaluate_from_params_basic():
     schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
     schema.parameters.add('speed', Parameter.real(min_val=10, max_val=100))
     schema.parameters.add('n_layers', Dimension.integer(
-        param_name='n_layers', dim_name='layers', iterator_name='layer',
+        code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
     schema.performance_attrs.add('deviation', Parameter.real())
@@ -114,7 +114,7 @@ def test_evaluate_from_params_for_calibration():
     schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
     schema.parameters.add('speed', Parameter.real(min_val=10, max_val=100))
     schema.parameters.add('n_layers', Dimension.integer(
-        param_name='n_layers', dim_name='layers', iterator_name='layer',
+        code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
     schema.performance_attrs.add('deviation', Parameter.real())
@@ -161,7 +161,7 @@ def test_evaluate_experiment_wrapper_consistency():
     schema = DatasetSchema()
     schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
     schema.parameters.add('n_layers', Dimension.integer(
-        param_name='n_layers', dim_name='layers', iterator_name='layer',
+        code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
     schema.performance_attrs.add('deviation', Parameter.real())

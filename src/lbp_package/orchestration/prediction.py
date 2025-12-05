@@ -345,7 +345,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Store prediction arrays in exp_data.predicted_metric_arrays."""
         for feature_name, pred_array in predictions.items():
             if feature_name not in exp_data.predicted_features.keys():
-                arr = DataArray(name=feature_name, shape=pred_array.shape)
+                arr = DataArray(code=feature_name, shape=pred_array.shape)
                 exp_data.predicted_features.add(feature_name, arr)
             exp_data.predicted_features.set_value(feature_name, pred_array)
     
@@ -369,7 +369,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 raise ValueError(f"Missing dimensional parameter in params: {dim_name}")
             size = params[dim_name]
             dim_sizes.append(int(size))
-            dim_names.append(dim_obj.dim_iterator_name)
+            dim_names.append(dim_obj.dim_iterator_code)
         
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape))

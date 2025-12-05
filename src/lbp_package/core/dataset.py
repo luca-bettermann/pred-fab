@@ -49,6 +49,17 @@ class ExperimentData:
     #                 dims[name] = self.parameters.get_value(name)
     #     return dims
     
+    def get_array_shape(self, dims: List[DataDimension], n_metrics: int = 1) -> Tuple[int, ...]:
+        """Get shape tuple for metric arrays based on dimension sizes."""
+        dim_combinations = self.dimensions.get_dim_combinations(dims=dims, evaluate_from=0, evaluate_to=None)
+        shape = (len(dim_combinations), len(dims) + n_metrics)
+        return shape
+
+    def initialize_array(self, block_type: BlockType, feature_code: str, shape: Tuple[int, ...], n_metrics: int = 1) -> None:
+        """Initialize an array in the specified block."""
+        array = np.empty(shape)
+        self.set_data({feature_code: array}, block_type=block_type)
+    
     def is_valid(self, schema: 'DatasetSchema') -> bool:
         """Check structural compatibility of exp with schema."""
         # Check all blocks using helper function
@@ -257,25 +268,25 @@ class Dataset:
     
     # === Feature Memoization for IFeatureModel ===
     
-    def has_cached_features_at(self, **dim_values) -> bool:
+    def has_cached_features_at(self, params: Dict[str, Any]) -> bool:
         """Check if features are cached for specific parameter values."""
-        param_tuple = self._make_param_tuple(dim_values)
+        param_tuple = self._make_param_tuple(params)
         return param_tuple in self._feature_cache
     
-    def get_cached_feature_value(self, feature_name: str, **dim_values) -> Any:
+    def get_cached_feature_value(self, feature_name: str, params) -> Any:
         """Get cached feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(dim_values)
+        param_tuple = self._make_param_tuple(params)
         if param_tuple not in self._feature_cache:
-            raise KeyError(f"No features cached for parameters: {dim_values}")
+            raise KeyError(f"No features cached for parameters: {params}")
         
         if feature_name not in self._feature_cache[param_tuple]:
             raise KeyError(f"Feature '{feature_name}' not found in cache")
         
         return self._feature_cache[param_tuple][feature_name]
     
-    def cache_feature_value(self, feature_name: str, value: Any, **dim_values) -> None:
+    def cache_feature_value(self, feature_name: str, value: Any, params) -> None:
         """Cache feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(dim_values)
+        param_tuple = self._make_param_tuple(params)
         if param_tuple not in self._feature_cache:
             self._feature_cache[param_tuple] = {}
         self._feature_cache[param_tuple][feature_name] = value
@@ -284,9 +295,9 @@ class Dataset:
         """Clear all cached feature values. Used for recomputation."""
         self._feature_cache.clear()
     
-    def _make_param_tuple(self, param_dict: Dict[str, Any]) -> Tuple[str, ...]:
+    def _make_param_tuple(self, params: Dict[str, Any]) -> Tuple[str, ...]:
         """Create hashable tuple from parameter dict for cache keys."""
-        items = sorted(param_dict.items())
+        items = sorted(params.items())
         return tuple(f"{name}={value}" for name, value in items)
     
     def get_experiment_codes(self) -> List[str]:
@@ -369,8 +380,10 @@ class Dataset:
             recompute=recompute
         )
         
-        if missing_params:
+        if missing_params and len(self.schema.parameters.data_objects):
             raise ValueError(f"No parameters found for any of the following experiments: {missing_params}")
+        
+        # TODO: Load dimensional parameters?
         
         # Filter codes that were actually found and validate (parameters are mandatory)
         found_codes = [code for code in exp_codes if code not in missing_params]

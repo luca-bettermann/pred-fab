@@ -9,7 +9,6 @@ from .data_objects import (
     DataDimension,
     DataArray,
     Parameter,
-    Performance,
     Dimension
 )
 
@@ -34,7 +33,6 @@ __all__ = [
     'DataDimension',
     'DataArray',
     'Parameter',
-    'Performance',
     'Dimension',
     'DataBlock',
     'Parameters',

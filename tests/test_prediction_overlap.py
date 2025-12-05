@@ -44,7 +44,7 @@ def test_prediction_overlap_batching():
     """Test that overlap parameter correctly includes overlapping positions in batches."""
     schema = DatasetSchema()
     schema.parameters.add('n', Dimension.integer(
-        param_name='n', dim_name='n', iterator_name='n', min_val=1, max_val=20
+        code='n', dim_name='n', iterator_code='n', min_val=1, max_val=20
     ))
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -83,7 +83,7 @@ def test_prediction_no_overlap():
     """Test that batching works correctly without overlap."""
     schema = DatasetSchema()
     schema.parameters.add('n', Dimension.integer(
-        param_name='n', dim_name='n', iterator_name='n', min_val=1, max_val=20
+        code='n', dim_name='n', iterator_code='n', min_val=1, max_val=20
     ))
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -118,7 +118,7 @@ def test_prediction_overlap_validation():
     """Test that overlap parameter validation works correctly."""
     schema = DatasetSchema()
     schema.parameters.add('n', Dimension.integer(
-        param_name='n', dim_name='n', iterator_name='n', min_val=1, max_val=20
+        code='n', dim_name='n', iterator_code='n', min_val=1, max_val=20
     ))
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     

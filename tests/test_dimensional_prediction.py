@@ -206,7 +206,7 @@ class TestDimensionalDataStructure:
         
         # Store ONLY feature values (no dims, targets, scaling)
         deviation_array = np.random.rand(10, 5)  # 10 layers, 5 segments
-        arrays.add('deviation', DataArray(name='deviation', shape=(10, 5)))
+        arrays.add('deviation', DataArray(code='deviation', shape=(10, 5)))
         arrays.set_value('deviation', deviation_array)
         
         # Retrieve and verify
@@ -226,12 +226,12 @@ class TestDimensionalDataStructure:
         
         # Store measured features
         measured = np.array([[0.1, 0.15], [0.12, 0.14]])
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(2, 2)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(2, 2)))
         exp_data.features.set_value('deviation', measured)
         
         # Store predicted features
         predicted = np.array([[0.11, 0.16], [0.13, 0.15]])
-        exp_data.predicted_features.add('deviation', DataArray(name='deviation', shape=(2, 2)))
+        exp_data.predicted_features.add('deviation', DataArray(code='deviation', shape=(2, 2)))
         exp_data.predicted_features.set_value('deviation', predicted)
         
         # Verify separation
@@ -255,11 +255,11 @@ class TestDataModuleDimensionalExtraction:
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('speed', Parameter.real(min_val=10, max_val=100))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=100
         ))
         schema.parameters.add('n_segments', Dimension.integer(
-            param_name='n_segments', dim_name='segments', iterator_name='segment',
+            code='n_segments', dim_name='segments', iterator_code='segment',
             min_val=1, max_val=10
         ))
         
@@ -274,7 +274,7 @@ class TestDataModuleDimensionalExtraction:
         # Populate metric arrays with feature values
         deviation_data = np.array([[0.1, 0.15], [0.12, 0.14], [0.11, 0.13]])  # (3, 2)
         exp_data.features = MetricArrays()
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(3, 2)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(3, 2)))
         exp_data.features.set_value('deviation', deviation_data)
         
         return dataset
@@ -540,7 +540,7 @@ class TestPredictionSystemDimensional:
         schema = DatasetSchema()
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=5
         ))
         
@@ -550,7 +550,7 @@ class TestPredictionSystemDimensional:
         exp_data = dataset.load_experiment('exp_001', {'temp': 200.0, 'n_layers': 3})
         exp_data.features = MetricArrays()
         deviation_data = np.array([0.1, 0.12, 0.11])
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(3,)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(3,)))
         exp_data.features.set_value('deviation', deviation_data)
         
         logger = LBPLogger(name='test', log_folder=str(tmp_path))
@@ -655,7 +655,7 @@ class TestOnlineLearning:
         schema = DatasetSchema()
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=100
         ))
         
@@ -665,7 +665,7 @@ class TestOnlineLearning:
         train_exp = train_dataset.load_experiment('train_001', {'temp': 190.0, 'n_layers': 10})
         train_exp.features = MetricArrays()
         train_data = np.random.rand(10) * 0.1 + 0.1
-        train_exp.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+        train_exp.features.add('deviation', DataArray(code='deviation', shape=(10,)))
         train_exp.features.set_value('deviation', train_data)
         
         # Setup prediction system and train on complete data
@@ -685,7 +685,7 @@ class TestOnlineLearning:
         # Only first 10 layers measured - rest are NaN
         measured = np.full(100, np.nan)
         measured[:10] = np.random.rand(10) * 0.1 + 0.1
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(100,)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(100,)))
         exp_data.features.set_value('deviation', measured)
         
         # Predict on ongoing experiment
@@ -726,11 +726,11 @@ class TestOnlineLearning:
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('speed', Parameter.real(min_val=10, max_val=100))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=50
         ))
         schema.parameters.add('n_segments', Dimension.integer(
-            param_name='n_segments', dim_name='segments', iterator_name='segment',
+            code='n_segments', dim_name='segments', iterator_code='segment',
             min_val=1, max_val=5
         ))
         
@@ -753,7 +753,7 @@ class TestOnlineLearning:
                     seg_effect = seg * 0.002
                     deviation[layer, seg] = base + layer_effect + seg_effect
             
-            exp.features.add('deviation', DataArray(name='deviation', shape=(10, 3)))
+            exp.features.add('deviation', DataArray(code='deviation', shape=(10, 3)))
             exp.features.set_value('deviation', deviation)
         
         # Setup prediction system
@@ -777,9 +777,9 @@ class TestOnlineLearning:
         measured_deviation = np.full((20, 3), np.nan)
         predicted_deviation = np.full((20, 3), np.nan)
         
-        fab_exp.features.add('deviation', DataArray(name='deviation', shape=(20, 3)))
+        fab_exp.features.add('deviation', DataArray(code='deviation', shape=(20, 3)))
         fab_exp.features.set_value('deviation', measured_deviation)
-        fab_exp.predicted_features.add('deviation', DataArray(name='deviation', shape=(20, 3)))
+        fab_exp.predicted_features.add('deviation', DataArray(code='deviation', shape=(20, 3)))
         fab_exp.predicted_features.set_value('deviation', predicted_deviation)
         
         # Simulation parameters
@@ -885,7 +885,7 @@ class TestOnlineLearning:
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('speed', Parameter.real(min_val=10, max_val=100))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=50
         ))
         
@@ -899,7 +899,7 @@ class TestOnlineLearning:
             )
             exp.features = MetricArrays()
             deviation = np.array([0.1 + i*0.01 + j*0.005 for j in range(10)])
-            exp.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+            exp.features.add('deviation', DataArray(code='deviation', shape=(10,)))
             exp.features.set_value('deviation', deviation)
         
         # Setup system
@@ -920,9 +920,9 @@ class TestOnlineLearning:
         
         measured = np.full(20, np.nan)
         predicted = np.full(20, np.nan)
-        fab_exp.features.add('deviation', DataArray(name='deviation', shape=(20,)))
+        fab_exp.features.add('deviation', DataArray(code='deviation', shape=(20,)))
         fab_exp.features.set_value('deviation', measured)
-        fab_exp.predicted_features.add('deviation', DataArray(name='deviation', shape=(20,)))
+        fab_exp.predicted_features.add('deviation', DataArray(code='deviation', shape=(20,)))
         fab_exp.predicted_features.set_value('deviation', predicted)
         
         # Online loop
@@ -1017,7 +1017,7 @@ class TestDataValidation:
         schema = DatasetSchema()
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=10
         ))
         
@@ -1030,7 +1030,7 @@ class TestDataValidation:
         # Only first 5 layers measured - rest are NaN
         measured = np.full(10, np.nan)
         measured[:5] = np.random.rand(5) * 0.1 + 0.1
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(10,)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(10,)))
         exp_data.features.set_value('deviation', measured)
         
         # Setup prediction system
@@ -1050,7 +1050,7 @@ class TestDataValidation:
         schema = DatasetSchema()
         schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
         schema.parameters.add('n_layers', Dimension.integer(
-            param_name='n_layers', dim_name='layers', iterator_name='layer',
+            code='n_layers', dim_name='layers', iterator_code='layer',
             min_val=1, max_val=10
         ))
         
@@ -1059,7 +1059,7 @@ class TestDataValidation:
         # Add experiment with 'deviation' feature
         exp_data = dataset.load_experiment('exp_001', {'temp': 200.0, 'n_layers': 5})
         exp_data.features = MetricArrays()
-        exp_data.features.add('deviation', DataArray(name='deviation', shape=(5,)))
+        exp_data.features.add('deviation', DataArray(code='deviation', shape=(5,)))
         exp_data.features.set_value('deviation', np.random.rand(5) * 0.1)
         
         # Setup prediction system

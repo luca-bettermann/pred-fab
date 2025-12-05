@@ -25,9 +25,9 @@ class TestDataReal:
     
     def test_datareal_creation(self):
         """Test creating DataReal with constraints."""
-        param = DataReal(name="learning_rate", min_val=0.0, max_val=1.0)
+        param = DataReal(code="learning_rate", min_val=0.0, max_val=1.0)
         
-        assert param.name == "learning_rate"
+        assert param.code == "learning_rate"
         assert param.dtype == float
         assert param.constraints["min"] == 0.0
         assert param.constraints["max"] == 1.0
@@ -35,14 +35,14 @@ class TestDataReal:
     
     def test_datareal_value_storage(self):
         """Test storing value in DataReal."""
-        param = DataReal(name="lr", min_val=0.0, max_val=1.0)
+        param = DataReal(code="lr", min_val=0.0, max_val=1.0)
         param.value = 0.01
         
         assert param.value == 0.01
     
     def test_datareal_validation_success(self):
         """Test valid value passes validation."""
-        param = DataReal(name="lr", min_val=0.0, max_val=1.0)
+        param = DataReal(code="lr", min_val=0.0, max_val=1.0)
         
         assert param.validate(0.5) is True
         assert param.validate(0.0) is True  # Min boundary
@@ -50,7 +50,7 @@ class TestDataReal:
     
     def test_datareal_validation_out_of_range(self):
         """Test value outside range fails validation."""
-        param = DataReal(name="lr", min_val=0.0, max_val=1.0)
+        param = DataReal(code="lr", min_val=0.0, max_val=1.0)
         
         with pytest.raises(ValueError, match="below minimum"):
             param.validate(-0.1)
@@ -64,16 +64,16 @@ class TestDataInt:
     
     def test_dataint_creation(self):
         """Test creating DataInt with constraints."""
-        param = DataInt(name="batch_size", min_val=1, max_val=256)
+        param = DataInt(code="batch_size", min_val=1, max_val=256)
         
-        assert param.name == "batch_size"
+        assert param.code == "batch_size"
         assert param.dtype == int
         assert param.constraints["min"] == 1
         assert param.constraints["max"] == 256
     
     def test_dataint_validation_success(self):
         """Test valid integers pass validation."""
-        param = DataInt(name="num_layers", min_val=1, max_val=10)
+        param = DataInt(code="num_layers", min_val=1, max_val=10)
         
         assert param.validate(5) is True
         assert param.validate(1) is True
@@ -81,7 +81,7 @@ class TestDataInt:
     
     def test_dataint_validation_fail(self):
         """Test invalid integers fail validation."""
-        param = DataInt(name="num_layers", min_val=1, max_val=10)
+        param = DataInt(code="num_layers", min_val=1, max_val=10)
         
         with pytest.raises(ValueError):
             param.validate(0)
@@ -95,15 +95,15 @@ class TestDataCategorical:
     
     def test_datacategorical_creation(self):
         """Test creating categorical parameter."""
-        param = DataCategorical(name="optimizer", categories=["adam", "sgd", "rmsprop"])
+        param = DataCategorical(code="optimizer", categories=["adam", "sgd", "rmsprop"])
         
-        assert param.name == "optimizer"
+        assert param.code == "optimizer"
         assert param.dtype == str
         assert param.constraints["categories"] == ["adam", "sgd", "rmsprop"]
     
     def test_datacategorical_validation(self):
         """Test categorical validation."""
-        param = DataCategorical(name="optimizer", categories=["adam", "sgd"])
+        param = DataCategorical(code="optimizer", categories=["adam", "sgd"])
         
         assert param.validate("adam") is True
         assert param.validate("sgd") is True
@@ -117,9 +117,9 @@ class TestDataArray:
     
     def test_dataarray_creation(self):
         """Test creating DataArray with shape and dtype."""
-        arr = DataArray(name="test_array", shape=(10, 3), dtype=np.float64)
+        arr = DataArray(code="test_array", shape=(10, 3), dtype=np.float64)
         
-        assert arr.name == "test_array"
+        assert arr.code == "test_array"
         assert arr.constraints["shape"] == (10, 3)
         # dtype is stored as class type in constraints
         assert arr.constraints["dtype"] == np.float64.__class__ or np.float64
@@ -128,7 +128,7 @@ class TestDataArray:
     def test_dataarray_set_valid_value(self):
         """Test setting valid numpy array via DataBlock."""
         
-        arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float32)
+        arr = DataArray(code="test_array", shape=(5, 2), dtype=np.float32)
         data = np.random.rand(5, 2).astype(np.float32)
         
         # Values are stored in DataBlock, not DataObject
@@ -144,7 +144,7 @@ class TestDataArray:
     def test_dataarray_shape_mismatch(self):
         """Test that mismatched shape raises ValueError."""
         
-        arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float64)
+        arr = DataArray(code="test_array", shape=(5, 2), dtype=np.float64)
         wrong_data = np.random.rand(3, 4)
         
         block = DataBlock()
@@ -156,7 +156,7 @@ class TestDataArray:
     def test_dataarray_dtype_mismatch(self):
         """Test that mismatched dtype raises ValueError."""
         
-        arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float32)
+        arr = DataArray(code="test_array", shape=(5, 2), dtype=np.float32)
         wrong_dtype = np.random.rand(5, 2).astype(np.float64)
         
         block = DataBlock()
@@ -168,7 +168,7 @@ class TestDataArray:
     def test_dataarray_not_ndarray(self):
         """Test that non-ndarray raises TypeError."""
         
-        arr = DataArray(name="test_array", shape=(5, 2), dtype=np.float64)
+        arr = DataArray(code="test_array", shape=(5, 2), dtype=np.float64)
         
         block = DataBlock()
         block.add("test_array", arr)
@@ -256,7 +256,7 @@ class TestRounding:
     def test_datareal_rounding(self):
         """Test DataReal with round_digits via DataBlock."""
         
-        param = DataReal(name="energy", round_digits=3)
+        param = DataReal(code="energy", round_digits=3)
         
         block = DataBlock()
         block.add("energy", param)
@@ -267,7 +267,7 @@ class TestRounding:
     def test_datareal_no_rounding(self):
         """Test DataReal without round_digits preserves full precision."""
         
-        param = DataReal(name="energy")
+        param = DataReal(code="energy")
         
         block = DataBlock()
         block.add("energy", param)
@@ -278,7 +278,7 @@ class TestRounding:
     def test_datareal_rounding_zero_digits(self):
         """Test DataReal with zero decimal places."""
         
-        param = DataReal(name="energy", round_digits=0)
+        param = DataReal(code="energy", round_digits=0)
         
         block = DataBlock()
         block.add("energy", param)
@@ -288,7 +288,7 @@ class TestRounding:
     
     def test_datareal_serialization_with_round_digits(self):
         """Test that round_digits is preserved in serialization."""
-        param = DataReal(name="energy", round_digits=4)
+        param = DataReal(code="energy", round_digits=4)
         param_dict = param.to_dict()
         
         assert param_dict["round_digits"] == 4

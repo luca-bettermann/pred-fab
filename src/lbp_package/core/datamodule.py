@@ -171,7 +171,7 @@ class DataModule:
             
             # Check dimensions (iterator names like 'layer')
             for dim_obj in self.dataset.schema.parameters.data_objects.values():
-                if isinstance(dim_obj, DataDimension) and dim_obj.dim_iterator_name == parameter_name:
+                if isinstance(dim_obj, DataDimension) and dim_obj.dim_iterator_code == parameter_name:
                     strategy = dim_obj.normalize_strategy
                     if strategy == 'default':
                         return cast(NormalizeMethod, self._default_normalize)
@@ -311,7 +311,7 @@ class DataModule:
                 for i, dim_name in enumerate(dim_names):
                     dim_obj = dim_params[dim_name]
                     # Use iterator name (e.g., 'layer' instead of 'n_layers')
-                    row_dict[dim_obj.dim_iterator_name] = idx[i]
+                    row_dict[dim_obj.dim_iterator_code] = idx[i]
                 
                 X_rows.append(row_dict)
                 

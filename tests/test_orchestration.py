@@ -250,7 +250,7 @@ class TestPredictionSystemWithSplits:
             
             # Initialize metric_arrays and add features
             exp_data.features = MetricArrays()
-            test_feature_arr = DataArray(name="test_feature", shape=())
+            test_feature_arr = DataArray(code="test_feature", shape=())
             exp_data.features.add("test_feature", test_feature_arr)
             feature_val = exp_data.parameters.get_value("param_1") * 2.0 + \
                          exp_data.parameters.get_value("param_2") * 3.0 + \

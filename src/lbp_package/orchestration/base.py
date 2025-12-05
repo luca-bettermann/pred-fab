@@ -44,14 +44,18 @@ class BaseOrchestrationSystem(ABC):
         models = self.get_models()
         
         for model in models:
-            # Use DataclassMixin to get schema objects
-            if hasattr(model, 'get_schema_objects'):
-                schema_objects = model.get_schema_objects()
+            # Use new explicit schema property
+            if hasattr(model, 'required_parameters'):
+                # required_parameters is now a List[DataObject]
+                schema_objects = model.required_parameters
                 
-                for param_name, data_obj in schema_objects.items():
+                for data_obj in schema_objects:
+                    param_name = data_obj.name
+                    
                     # Check for conflicts
                     if param_name in specs["inputs"]:
                         existing = specs["inputs"][param_name]
+                        # Compare dictionaries to check for compatibility
                         if existing.to_dict() != data_obj.to_dict():
                             raise ValueError(
                                 f"Parameter '{param_name}' has conflicting definitions:\n"

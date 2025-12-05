@@ -3,27 +3,40 @@ from typing import Any, Dict, List, Optional, final
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
-from ..core.dataset import Dataset
+from .base import BaseInterface
+from ..core import Dataset, DataObject
 from ..utils import LBPLogger
 
 
-@dataclass
-class IFeatureModel(ABC):
+class IFeatureModel(BaseInterface):
     """
     Abstract base class for feature extraction models.
     
     Uses Dataset memoization to avoid redundant feature computation.
     Models declare their parameters as dataclass fields (DataObjects).
     """
-    
-    dataset: Dataset  # Required field for memoization
-    logger: LBPLogger  # Required field for logging
+
+    def __init__(self, dataset: Dataset, logger: LBPLogger):
+        """Initialize evaluation system."""
+        super().__init__(dataset, logger)
     
     # === ABSTRACT METHODS ===
     @property
     @abstractmethod
     def feature_codes(self) -> List[str]:
         """List of the feature codes produced by this model."""
+        ...
+
+    @property
+    @abstractmethod
+    def required_parameters(self) -> List[DataObject]:
+        """
+        Define the parameters and dimensions this model needs from the experiment.
+        
+        Returns:
+            List of DataObjects defining the schema.
+            Example: [Parameter.real("speed", ...), Dimension.int("layers", ...)]
+        """
         ...
 
     @abstractmethod
@@ -59,23 +72,28 @@ class IFeatureModel(ABC):
     # === PUBLIC API ===
     
     @final
-    def run(self, feature_name: str, visualize: bool = False, **param_values) -> Dict[str, float]:
+    def run(
+        self, 
+        feature_name: str,
+        params: Dict[str, Any], 
+        visualize: bool = False, 
+        ) -> float:
         """Extract feature with memoization via Dataset."""
-        # TODO: check if **params is equal to dims or not. how are we handling non-dim params?
-
         # Check cache
-        if self.dataset.has_cached_features_at(**param_values):
+        if self.dataset.has_cached_features_at(params):
             try:
-                cached_value = self.dataset.get_cached_feature_value(feature_name, **param_values)
-                self.logger.debug(f"Using cached feature '{feature_name}' for {param_values}")
+                cached_value = self.dataset.get_cached_feature_value(feature_name, params)
+                self.logger.debug(f"Using cached feature '{feature_name}' for {params}")
                 return cached_value
             except KeyError:
-                pass
+                raise KeyError(
+                    f"Feature '{feature_name}' not found in cache for parameters {params} despite has_cached_features_at() returning True"
+                )
         
         # Load and compute
-        self.logger.debug(f"Computing feature '{feature_name}' for {param_values}")
-        data = self._load_data(**param_values)
-        feature_dict = self._compute_features(data, visualize=visualize)
+        self.logger.debug(f"Computing feature '{feature_name}' for {params}")
+        data = self._load_data(**params)
+        feature_dict = self._compute_features(data, visualize=visualize, **params)
         
         # Validate output from user implementation
         for feature_code, feature_value in feature_dict.items():
@@ -85,6 +103,6 @@ class IFeatureModel(ABC):
                 )
         
             # Cache and return
-            self.dataset.cache_feature_value(feature_code, feature_value, **param_values)
+            self.dataset.cache_feature_value(feature_code, feature_value, params)
         
-        return feature_dict
+        return feature_dict[feature_name]

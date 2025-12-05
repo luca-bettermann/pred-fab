@@ -22,7 +22,7 @@ def categorical_dataset():
     schema.parameters.add('optimizer', Parameter.categorical(['adam', 'sgd', 'rmsprop']))
     schema.parameters.add('learning_rate', Parameter.real(min_val=0.001, max_val=0.1))
     schema.parameters.add('batch_size', Parameter.integer(min_val=16, max_val=256))
-    schema.features.add('loss', DataArray(name='loss', shape=(1,)))
+    schema.features.add('loss', DataArray(code='loss', shape=(1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -52,10 +52,10 @@ def dimensional_dataset():
     schema = DatasetSchema()
     schema.parameters.add('temp', Parameter.real(min_val=150, max_val=250))
     schema.parameters.add('n_layers', Dimension.integer(
-        param_name='n_layers', dim_name='layers', iterator_name='layer',
+        code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
-    schema.features.add('deviation', DataArray(name='deviation', shape=(-1,)))
+    schema.features.add('deviation', DataArray(code='deviation', shape=(-1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -79,7 +79,7 @@ def mixed_dataset():
     schema.parameters.add('use_cooling', Parameter.boolean())
     schema.parameters.add('material', Parameter.categorical(['PLA', 'ABS', 'PETG']))
     schema.parameters.add('speed', Parameter.integer(min_val=10, max_val=100))
-    schema.features.add('quality', DataArray(name='quality', shape=(1,)))
+    schema.features.add('quality', DataArray(code='quality', shape=(1,)))
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     

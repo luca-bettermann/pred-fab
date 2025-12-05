@@ -8,7 +8,7 @@ They provide both schema structure and data storage.
 import itertools
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
-from .data_objects import DataObject
+from .data_objects import DataObject, DataDimension
 from .data_blocks import DataBlock
 
 
@@ -162,14 +162,22 @@ class Dimensions(DataBlock):
         """Initialize Dimensions block."""
         super().__init__()
 
-    def get_dim_combinations(self) -> List[Tuple[int, ...]]:
+    def get_dim_combinations(self, dims: Optional[List[DataDimension]] = None, evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
         """Get mapping of param_name to iterator_name for all dimensions."""
         # Extract dimension values
-        dim_values = [value for value in self.values.values()]
+        if dims is None:
+            dims = self.data_objects
+        dim_values = [self.get_value(dim) for dim in dims]
 
         # Generate dimensional combinations
         dim_ranges = [range(size) for size in dim_values]
-        return list(itertools.product(*dim_ranges))
+        dim_combinations = list(itertools.product(*dim_ranges))
+
+        # Slice combinations if needed
+        if evaluate_to is None:
+            return dim_combinations[evaluate_from:]
+        else:
+            return dim_combinations[evaluate_from:evaluate_to]
 
 
 class PerformanceAttributes(DataBlock):
@@ -231,3 +239,14 @@ class MetricArrays(DataBlock):
     def __init__(self):
         """Initialize MetricArrays block."""
         super().__init__()
+
+    def initialize_array(self, code: str, shape: Tuple[int, ...]):
+        """Initialize numpy array for a given metric code."""
+        if code not in self.data_objects:
+            raise KeyError(f"Metric array code '{code}' not defined")
+        
+        if code in self.values:
+            raise ValueError(f"Metric array '{code}' already initialized")
+        data_array_obj = self.data_objects[code]
+        data_array_obj.set_value(np.empty(shape))
+        self.values[code] = data_array_obj.array

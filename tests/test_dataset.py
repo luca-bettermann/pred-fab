@@ -36,7 +36,7 @@ class TestExperimentDataDataclass:
         params.set_value("lr", 0.01)
         
         # Add dimensional parameter
-        dim_obj = DataDimension(dim_name="timestep", dim_param_name="trajectory", dim_iterator_name="t")
+        dim_obj = DataDimension(code="timestep", dim_param_name="trajectory", iterator_code="t")
         params.add("trajectory", dim_obj)
         params.set_value("trajectory", 100)
         
@@ -129,7 +129,7 @@ class TestDatasetAddExperiment:
         """Test adding experiment with metric arrays."""
         schema = DatasetSchema()
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(code="energy", shape=(100,)))
         
         dataset = Dataset(name="test", schema=schema, schema_id="schema_1")
         dataset.set_static_values({"lr": 0.001})
@@ -295,7 +295,7 @@ class TestDatasetIntegration:
         schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
         schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         schema.performance_attrs.add("loss", Performance.real(min_val=0.0, max_val=100.0))
-        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(code="energy", shape=(100,)))
         
         # Create dataset
         dataset = Dataset(name="robot_study", schema=schema, schema_id="schema_abc")

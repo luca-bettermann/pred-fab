@@ -1,33 +1,25 @@
 import numpy as np
-import itertools
 from typing import Any, Dict, List, Type, Tuple, Optional, final
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
+from .base import BaseInterface
 from .features import IFeatureModel
-from ..core.dataset import ExperimentData
-from ..core.data_blocks import MetricArrays, PerformanceAttributes
-from ..core.data_objects import DataDimension, DataArray
-from ..utils.dataclass_fields import Performance, DataclassMixin
+from ..core import ExperimentData, DataArray, DataObject, DataDimension, Dimensions, Parameters, Dataset
 from ..utils import LBPLogger
 
 
-class IEvaluationModel(DataclassMixin, ABC):
+class IEvaluationModel(BaseInterface):
     """
     Abstract base class for evaluation models.
     
     Evaluates feature values against target values to compute performance metrics.
     Stores results directly in ExperimentData.
-    
-    # Models declare their parameters as dataclass fields (DataObjects).
-    # Optionally implement _get_model_artifacts() and _set_model_artifacts() for export support.
     """
 
-    def __init__(self, logger: LBPLogger):
-        """Initialize evaluation model."""
-        self.logger = logger
-        self.feature_model: IFeatureModel
+    def __init__(self, dataset: Dataset, logger: LBPLogger):
+        """Initialize evaluation system."""
+        super().__init__(dataset, logger)
     
     # === ABSTRACT METHODS ===
 
@@ -56,19 +48,6 @@ class IEvaluationModel(DataclassMixin, ABC):
             Class type of the feature model (e.g. MyFeatureModel)
         """
         ...
-
-    # @property
-    # @abstractmethod
-    # def feature_model_class(self) -> Type[IFeatureModel]:
-    #     """
-    #     Return the class of the feature model used by this evaluation model.
-        
-    #     Used by the orchestration system to instantiate the correct feature model.
-        
-    #     Returns:
-    #         Class type of the feature model (e.g. MyFeatureModel)
-    #     """
-    #     ...
 
     @abstractmethod
     def _compute_target_value(self, **param_values) -> float:
@@ -121,13 +100,11 @@ class IEvaluationModel(DataclassMixin, ABC):
     @final
     def run(
         self, 
-        params: Dict[str, Any],
-        dim_names: List[str],
-        dim_combinations: List[Tuple[int, ...]],
+        parameters: Parameters,
+        dimensions: Dimensions,
         evaluate_from: int = 0, 
         evaluate_to: Optional[int] = None,
-        visualize: bool = False,
-        recompute: bool = False
+        visualize: bool = False
     ) -> Tuple[Dict[str, float], Dict[str, NDArray]]:
         """Evaluate feature against target values and store results in ExperimentData."""
         # Validate preconditions
@@ -136,20 +113,24 @@ class IEvaluationModel(DataclassMixin, ABC):
         
         self.logger.info(f"Starting evaluation for '{self.performance_code}'")
         
+
+        # TODO: input should be dim_combinations,
+
         # # Extract dimension info
         # dim_objects = [obj for obj in exp_data.parameters.data_objects.values() 
         #               if isinstance(obj, DataDimension)]
         # dim_names = [obj.name for obj in dim_objects]
         # dim_sizes = tuple(exp_data.parameters.get_value(obj.name) for obj in dim_objects)
-        
-        # Initialize metric arrays
+
+        # Unnpack DataBlocks
+        dims = dimensions.get_values_dict()
+        dim_combinations = dimensions.get_dim_combinations()
+        params = parameters.get_values_dict()
+
+        # Initialize feature array
         n_rows = len(dim_combinations) if dim_combinations else 1
-        num_dims = len(dim_names)
+        num_dims = len(dims)
         feature_array = np.empty((n_rows, num_dims + 1))
-        
-        # # Generate dimensional combinations
-        # dim_ranges = [range(size) for size in n_columns]
-        # all_dim_combinations = list(itertools.product(*dim_ranges))
         
         # Apply dimensional slice
         if evaluate_to is None:
@@ -160,78 +141,64 @@ class IEvaluationModel(DataclassMixin, ABC):
         
         # Process each combination
         i_last = evaluate_to if evaluate_to is not None else len(dim_combinations)
-        for i, dims in enumerate(dim_process):
+        for i, current_dim in enumerate(dim_process):
             i_global = evaluate_from + i
-            self.logger.debug(f"Processing {i_global}/{i_last}: {dims}")
-            
-            dim_params = dict(zip(dim_names, dims))
-            params = {**static_params, **dim_params}
+            self.logger.debug(f"Processing {i_global}/{i_last}: {current_dim}")
 
-            metrics = self._process_single_combination(params, visualize)
-            feature_value, target_value, scaling_factor, performance_value = metrics
+            # merge dims and params into single dict
+            current_dim_dict = dict(zip(dims.keys(), current_dim))
+            combined = {**current_dim_dict, **params}
             
-            # Store results in arrays
-            feature_array[dims][:num_dims] = dims
-            feature_array[dims][num_dims] = feature_value
-
-        # Store results in ExperimentData
-        self._store_results(exp_data, feature_name, performance_attr_name, 
-                          feature_array, performance_array, num_dims,
-                          evaluate_from, evaluate_to)
-        
-        # Compute aggregations
-        aggr_metrics = self._compute_aggregation(exp_data)
-        if not isinstance(aggr_metrics, dict):
-            raise TypeError(
-                f"_compute_aggregation() must return dict. "
-                f"Expected dict, got {type(aggr_metrics).__name__}"
-            )
-        
-        # Validate aggregation values
-        for key, value in aggr_metrics.items():
-            if not isinstance(value, (int, float, np.integer, np.floating)):
+            # Compute feature, target, and performance
+            feature_value = self.feature_model.run(self.feature_input_code, combined, visualize=visualize)
+            target_value = self._compute_target_value()
+            scaling_factor = self._compute_scaling_factor()
+            
+            # Validate outputs from user implementation
+            if not isinstance(target_value, (int, float, np.integer, np.floating)):
                 raise TypeError(
-                    f"_compute_aggregation() values must be numeric. "
-                    f"Expected int/float for '{key}', got {type(value).__name__}"
+                    f"_compute_target_value() must return numeric. "
+                    f"Expected int/float, got {type(target_value).__name__}"
                 )
-        
-        self.logger.info(
-            f"Evaluation complete. Avg performance: {np.nanmean(performance_array):.3f}. "
-            f"Aggregations: {aggr_metrics}"
-        )
-    
-    # === PRIVATE METHODS ===
-    @final
-    def _process_single_combination(
-        self, 
-        params: Dict[str, Any], 
-        feature_name: str, 
-        visualize: bool
-    ) -> Tuple[float, float, Optional[float], Optional[float]]:
-        """Process a single dimensional combination."""
-        # Ensure feature model is available (checked in run(), but needed for type safety)
-        assert self.feature_model is not None
+            if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
+                raise TypeError(
+                    f"_compute_scaling_factor() must return numeric or None. "
+                    f"Expected int/float/None, got {type(scaling_factor).__name__}"
+                )
             
-        # Compute feature, target, and performance
-        feature_value = self.feature_model.run(feature_name, visualize=visualize, **params)
-        target_value = self._compute_target_value(**params)
-        scaling_factor = self._compute_scaling_factor(**params)
+            # compute performance value
+            performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
+            
+            # TODO: Inisialized arrays in ExperimentData and pass in this method. OR pass indices back
+
+            # Store results in arrays
+            feature_array[current_dim][:num_dims] = current_dim
+            feature_array[current_dim][num_dims] = feature_value
         
-        # Validate outputs from user implementation
-        if not isinstance(target_value, (int, float, np.integer, np.floating)):
-            raise TypeError(
-                f"_compute_target_value() must return numeric. "
-                f"Expected int/float, got {type(target_value).__name__}"
-            )
-        if scaling_factor is not None and not isinstance(scaling_factor, (int, float, np.integer, np.floating)):
-            raise TypeError(
-                f"_compute_scaling_factor() must return numeric or None. "
-                f"Expected int/float/None, got {type(scaling_factor).__name__}"
-            )
+
+        # TODO: Compute aggregation on-the-fly for a slice of the array. 
+        # TODO: Decide whether we should store performance at all?
+
+        # # Compute aggregations
+        # aggr_metrics = self._compute_aggregation(exp_data)
+        # if not isinstance(aggr_metrics, dict):
+        #     raise TypeError(
+        #         f"_compute_aggregation() must return dict. "
+        #         f"Expected dict, got {type(aggr_metrics).__name__}"
+        #     )
         
-        performance_value = self._compute_performance(feature_value, target_value, scaling_factor)
+        # # Validate aggregation values
+        # for key, value in aggr_metrics.items():
+        #     if not isinstance(value, (int, float, np.integer, np.floating)):
+        #         raise TypeError(
+        #             f"_compute_aggregation() values must be numeric. "
+        #             f"Expected int/float for '{key}', got {type(value).__name__}"
+        #         )
         
-        return feature_value, target_value, scaling_factor, performance_value
+        # self.logger.info(
+        #     f"Evaluation complete. Avg performance: {np.nanmean(performance_array):.3f}. "
+        #     f"Aggregations: {aggr_metrics}"
+        # )
 
     @final
     def _compute_performance(
@@ -291,7 +258,7 @@ class IEvaluationModel(DataclassMixin, ABC):
                 feature_values = sliced_flat
         
         # Store feature values in metric_arrays (always initialized)
-        feature_data_array = DataArray(name=feature_name, shape=feature_values.shape, dtype=np.dtype(np.float64))
+        feature_data_array = DataArray(code=feature_name, shape=feature_values.shape, dtype=np.dtype(np.float64))
         exp_data.features.add(feature_name, feature_data_array)
         exp_data.features.set_value(feature_name, feature_values)
         

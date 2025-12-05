@@ -50,7 +50,7 @@ class TestSchemaCreation:
         schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         
         # Add metric arrays
-        schema.features.add("energy", DataArray(name="energy", shape=(100,)))
+        schema.features.add("energy", DataArray(code="energy", shape=(100,)))
         
         assert len(list(schema.parameters.keys())) == 1
         assert len(list(schema.dimensions.keys())) == 1
