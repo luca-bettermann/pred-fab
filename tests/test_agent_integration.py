@@ -155,8 +155,8 @@ def test_schema_generation(agent):
     schema = agent.generate_schema_from_registered_models()
     
     assert isinstance(schema, DatasetSchema)
-    assert len(schema.performance_attrs.data_objects) == 1
-    assert "perf_metric" in schema.performance_attrs.data_objects
+    assert len(schema.performance.data_objects) == 1
+    assert "perf_metric" in schema.performance.data_objects
     
     # Should have extracted param_x and param_y from models
     assert "param_x" in schema.parameters.data_objects

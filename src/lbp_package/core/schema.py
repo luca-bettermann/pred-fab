@@ -17,7 +17,7 @@ from ..utils import LBPLogger
 from .data_objects import DataDimension
 from .data_blocks import (
     Parameters,
-    Dimensions,
+    # Dimensions,
     PerformanceAttributes,
     MetricArrays
 )
@@ -39,8 +39,8 @@ class DatasetSchema:
     def __init__(self, default_round_digits: int = 3):
         """Initialize empty schema with four DataBlocks."""
         self.parameters = Parameters()
-        self.dimensions = Dimensions()
-        self.performance_attrs = PerformanceAttributes()
+        # self.dimensions = Dimensions()
+        self.performance = PerformanceAttributes()
         self.features = MetricArrays()
         self.default_round_digits = default_round_digits
     
@@ -48,9 +48,9 @@ class DatasetSchema:
         """Compute deterministic hash from schema structure."""
         structure = {
             "parameters": self._block_to_hash_structure(self.parameters),
-            "dimensions": self._block_to_hash_structure(self.dimensions),
-            "performance": self._block_to_hash_structure(self.performance_attrs),
-            "metric_arrays": self._block_to_hash_structure(self.features)
+            # "dimensions": self._block_to_hash_structure(self.dimensions),
+            "performance": self._block_to_hash_structure(self.performance),
+            "features": self._block_to_hash_structure(self.features)
         }
         
         # Sort keys for determinism
@@ -71,9 +71,9 @@ class DatasetSchema:
         """Serialize schema to dictionary for storage."""
         return {
             "parameters": self.parameters.to_dict(),
-            "dimensions": self.dimensions.to_dict(),
-            "performance_attrs": self.performance_attrs.to_dict(),
-            "metric_arrays": self.features.to_dict(),
+            # "dimensions": self.dimensions.to_dict(),
+            "performance_attrs": self.performance.to_dict(),
+            "features": self.features.to_dict(),
             "default_round_digits": self.default_round_digits,
             "schema_hash": self._compute_schema_hash()
         }
@@ -84,9 +84,9 @@ class DatasetSchema:
         default_round_digits = data.get("default_round_digits", 3)
         schema = cls(default_round_digits=default_round_digits)
         schema.parameters = Parameters.from_dict(data["parameters"])
-        schema.dimensions = Dimensions.from_dict(data["dimensions"])
-        schema.performance_attrs = PerformanceAttributes.from_dict(data["performance_attrs"])
-        schema.features = MetricArrays.from_dict(data.get("metric_arrays", {"type": "MetricArrays", "data_objects": {}}))
+        # schema.dimensions = Dimensions.from_dict(data["dimensions"])
+        schema.performance = PerformanceAttributes.from_dict(data["performance_attrs"])
+        schema.features = MetricArrays.from_dict(data.get("features", {"type": "MetricArrays", "data_objects": {}}))
         return schema
     
     @classmethod
@@ -104,22 +104,22 @@ class DatasetSchema:
         
         # Separate dimensions from parameters
         for param_name, data_obj in all_inputs.items():
-            if isinstance(data_obj, DataDimension):
-                schema.dimensions.add(param_name, data_obj)
-                logger.info(f"  Added dimension: {param_name}")
-            else:
+            # if isinstance(data_obj, DataDimension):
+            #     schema.dimensions.add(param_name, data_obj)
+            #     logger.info(f"  Added dimension: {param_name}")
+            # else:
                 schema.parameters.add(param_name, data_obj)
                 logger.info(f"  Added parameter: {param_name}")
         
         # 2. Add performance attributes
         for perf_code, perf_obj in eval_specs["outputs"].items():
-            schema.performance_attrs.add(perf_code, perf_obj)
+            schema.performance.add(perf_code, perf_obj)
             logger.info(f"  Added performance attribute: {perf_code}")
         
         logger.info(
             f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
-            f"{len(schema.dimensions.data_objects)} dimensions, "
-            f"{len(schema.performance_attrs.data_objects)} performance attributes"
+            # f"{len(schema.dimensions.data_objects)} dimensions, "
+            f"{len(schema.performance.data_objects)} performance attributes"
         )
         
         return schema
@@ -129,8 +129,8 @@ class DatasetSchema:
         # Check all blocks using helper function
         block_checks = [
             (self.parameters, other.parameters),
-            (self.dimensions, other.dimensions),
-            (self.performance_attrs, other.performance_attrs),
+            # (self.dimensions, other.dimensions),
+            (self.performance, other.performance),
             (self.features, other.features)
         ]
         
@@ -148,11 +148,12 @@ class DatasetSchema:
     
     def get_dimension_names(self) -> Set[str]:
         """Get all dimension parameter names."""
-        return set(self.dimensions.keys())
+        dim_names = [name for name, obj in self.parameters.items() if isinstance(obj, DataDimension)]
+        return set(dim_names)
     
     def get_all_performance_codes(self) -> Set[str]:
         """Get all performance codes."""
-        return set(self.performance_attrs.keys())
+        return set(self.performance.keys())
 
 
 class SchemaRegistry:

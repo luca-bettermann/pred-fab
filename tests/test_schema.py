@@ -17,13 +17,13 @@ class TestSchemaCreation:
         
         assert schema.parameters is not None
         assert schema.dimensions is not None
-        assert schema.performance_attrs is not None
+        assert schema.performance is not None
         assert schema.features is not None
         
         # All blocks should be empty
         assert len(list(schema.parameters.keys())) == 0
         assert len(list(schema.dimensions.keys())) == 0
-        assert len(list(schema.performance_attrs.keys())) == 0
+        assert len(list(schema.performance.keys())) == 0
         assert len(list(schema.features.keys())) == 0
     
     def test_schema_with_parameters(self):
@@ -47,14 +47,14 @@ class TestSchemaCreation:
         schema.dimensions.add("traj.t", Dimension.integer("traj", "t", "i", min_val=0, max_val=100))
         
         # Add performance
-        schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         
         # Add metric arrays
         schema.features.add("energy", DataArray(code="energy", shape=(100,)))
         
         assert len(list(schema.parameters.keys())) == 1
         assert len(list(schema.dimensions.keys())) == 1
-        assert len(list(schema.performance_attrs.keys())) == 1
+        assert len(list(schema.performance.keys())) == 1
         assert len(list(schema.features.keys())) == 1
 
 
@@ -94,7 +94,7 @@ class TestSchemaHash:
         
         schema2 = DatasetSchema()
         schema2.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema2.performance_attrs.add("acc", Performance.real(min_val=0.0, max_val=1.0))
+        schema2.performance.add("acc", Performance.real(min_val=0.0, max_val=1.0))
         
         hash1 = schema1._compute_schema_hash()
         hash2 = schema2._compute_schema_hash()
@@ -123,13 +123,13 @@ class TestSchemaSerialization:
         schema = DatasetSchema()
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
-        schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
         
         schema_dict = schema.to_dict()
         restored = DatasetSchema.from_dict(schema_dict)
         
         assert len(list(restored.parameters.keys())) == 2
-        assert len(list(restored.performance_attrs.keys())) == 1
+        assert len(list(restored.performance.keys())) == 1
         assert restored._compute_schema_hash() == schema._compute_schema_hash()
 
 
@@ -150,14 +150,14 @@ class TestSchemaIntegration:
         schema.dimensions.add("trajectory.timestep", Dimension.integer("trajectory", "timestep", "t", min_val=0, max_val=100))
         
         # Add performance
-        schema.performance_attrs.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
-        schema.performance_attrs.add("loss", Performance.real(min_val=0.0, max_val=100.0))
-        schema.performance_attrs.calibration_weights = {"accuracy": 0.7, "loss": 0.3}
+        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("loss", Performance.real(min_val=0.0, max_val=100.0))
+        schema.performance.calibration_weights = {"accuracy": 0.7, "loss": 0.3}
         
         # Note: DataArray serialization needs fix, skip for now
         
         # Validate structure
         assert len(list(schema.parameters.keys())) == 3
         assert len(list(schema.dimensions.keys())) == 1
-        assert len(list(schema.performance_attrs.keys())) == 2
-        assert schema.performance_attrs.calibration_weights == {"accuracy": 0.7, "loss": 0.3}
+        assert len(list(schema.performance.keys())) == 2
+        assert schema.performance.calibration_weights == {"accuracy": 0.7, "loss": 0.3}

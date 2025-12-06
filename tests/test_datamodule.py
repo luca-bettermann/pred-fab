@@ -25,7 +25,7 @@ def sample_dataset():
     schema = DatasetSchema()
     schema.parameters.add("param_1", DataReal("param_1"))
     schema.parameters.add("param_2", DataInt("param_2"))
-    schema.performance_attrs.add("accuracy", DataReal("accuracy"))
+    schema.performance.add("accuracy", DataReal("accuracy"))
     
     dataset = Dataset(
         name="test_dataset",

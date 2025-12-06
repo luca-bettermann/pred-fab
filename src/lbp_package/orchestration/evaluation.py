@@ -4,7 +4,7 @@ import numpy as np
 from ..utils import LBPLogger
 from ..interfaces.evaluation import IEvaluationModel
 from ..interfaces.features import IFeatureModel
-from ..core import Dataset, ExperimentData, DataArray, DataReal, Dimensions, Parameters
+from ..core import Dataset, ExperimentData, DataArray, DataReal, Parameters
 from .base import BaseOrchestrationSystem
 
 
@@ -111,7 +111,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
             # TODO: initialie arrays on a per-eval-model basis
             
             required_dims = eval_model._get_required_dimensions()
-            shape = exp_data.get_array_shape(dims=required_dims)
+            shape = exp_data.get_array_shape(dim_codes=required_dims)
 
 
         shape = exp_data.get_array_shape()
@@ -124,7 +124,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Get evaluation results from core logic
         perf_results, metric_results = self._evaluate_from_params(
             parameters=exp_data.parameters,
-            dimensions=exp_data.dimensions,
+            # dimensions=exp_data.dimensions,
             evaluate_from=evaluate_from,
             evaluate_to=evaluate_to,
             visualize=visualize,
@@ -141,7 +141,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def _evaluate_from_params(
         self,
         parameters: Parameters,
-        dimensions: Dimensions,
+        # dimensions: Dimensions,
         evaluate_from: int = 0,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
@@ -189,7 +189,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
             # Run evaluation
             features, performance = eval_model.run(
                 parameters=parameters,
-                dimensions=dimensions,
+                # dimensions=dimensions,
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
                 visualize=visualize
@@ -214,7 +214,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Store performance values
         for perf_code, perf_value in perf_results.items():
             if not exp_data.performance.has(perf_code):
-                data_obj = self.dataset.schema.performance_attrs.data_objects[perf_code]
+                data_obj = self.dataset.schema.performance.data_objects[perf_code]
                 exp_data.performance.add(perf_code, data_obj)
             exp_data.performance.set_value(perf_code, perf_value)
         

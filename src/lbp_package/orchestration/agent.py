@@ -272,7 +272,7 @@ class LBPAgent:
             f"  - Schema ID: {new_schema_id}",
             f"  - Parameters: {len(schema.parameters.data_objects)}",
             f"  - Dimensions: {len(schema.dimensions.data_objects)}",
-            f"  - Performance Attributes: {len(schema.performance_attrs.data_objects)}",
+            f"  - Performance Attributes: {len(schema.performance.data_objects)}",
         ]
         self.logger.console_summary("\n".join(summary_lines))
         self.logger.console_success(f"Successfully initialized dataset '{new_schema_id}'.")

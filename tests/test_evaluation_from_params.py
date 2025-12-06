@@ -69,7 +69,7 @@ def test_evaluate_from_params_basic():
         code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
-    schema.performance_attrs.add('deviation', Parameter.real())
+    schema.performance.add('deviation', Parameter.real())
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -117,7 +117,7 @@ def test_evaluate_from_params_for_calibration():
         code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
-    schema.performance_attrs.add('deviation', Parameter.real())
+    schema.performance.add('deviation', Parameter.real())
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     
@@ -164,7 +164,7 @@ def test_evaluate_experiment_wrapper_consistency():
         code='n_layers', dim_name='layers', iterator_code='layer',
         min_val=1, max_val=10
     ))
-    schema.performance_attrs.add('deviation', Parameter.real())
+    schema.performance.add('deviation', Parameter.real())
     
     dataset = Dataset(name='test', schema=schema, schema_id='test_schema')
     

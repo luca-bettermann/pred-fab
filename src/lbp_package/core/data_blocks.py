@@ -8,8 +8,7 @@ They provide both schema structure and data storage.
 import itertools
 from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
-from .data_objects import DataObject, DataDimension
-from .data_blocks import DataBlock
+from .data_objects import DataObject, DataDimension, DataArray
 
 
 class DataBlock:
@@ -122,7 +121,7 @@ class DataBlock:
         return True
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> DataBlock:
+    def from_dict(cls, data: Dict[str, Any]) -> 'DataBlock':
         """Reconstruct from dictionary."""
         block = cls()
         for name, obj_data in data.get("data_objects", {}).items():
@@ -148,26 +147,36 @@ class Parameters(DataBlock):
     def __init__(self):
         """Initialize Parameters block."""
         super().__init__()
-
-
-class Dimensions(DataBlock):
-    """
-    Dimensional metadata block using DataDimension objects.
     
-    References parameters from Parameters block that define iteration structure.
-    Each DataDimension contains: param_name, dim_name, iterator_name.
-    """
+    def get_dim_names(self) -> List[str]:
+        """Get list of dimension parameter names."""
+        dim_object_dict = self.get_dim_objects()
+        return list(dim_object_dict.keys())
+        
+    def get_dim_objects(self) -> Dict[str, DataDimension]:
+        """Get view of dimension DataObjects from parameters."""
+        dim_objs = {
+            name: obj for name, obj in self.data_objects.items() 
+            if isinstance(obj, DataDimension)
+        }
+        return dim_objs
     
-    def __init__(self):
-        """Initialize Dimensions block."""
-        super().__init__()
+    def get_dim_iterator_names(self) -> Dict[str, str]:
+        """Get list of dimension iterator names."""
+        return {name: obj.dim_iterator_code for name, obj in self.get_dim_objects().items()}
 
-    def get_dim_combinations(self, dims: Optional[List[DataDimension]] = None, evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
-        """Get mapping of param_name to iterator_name for all dimensions."""
+    def get_dim_values(self) -> Dict[str, int]:
+        """Get view of dimension DataObjects from parameters."""
+        return {name: self.get_value(name) for name in self.get_dim_names()}
+
+    def get_dim_combinations(self, dims: List[str], evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
+        """Get all combinations of dimension indices for specified dimensions and the respective iterator names."""
         # Extract dimension values
-        if dims is None:
-            dims = self.data_objects
-        dim_values = [self.get_value(dim) for dim in dims]
+        dim_values = self.get_dim_values()
+        dim_values = [dim_values[dim] for dim in dims if dim in dim_values]
+        if len(dim_values) < len(dims):
+            missing_dims = [dim for dim in dims if dim not in dim_values]
+            raise KeyError(f"Missing dimensions: {', '.join(missing_dims)}")
 
         # Generate dimensional combinations
         dim_ranges = [range(size) for size in dim_values]
@@ -175,10 +184,10 @@ class Dimensions(DataBlock):
 
         # Slice combinations if needed
         if evaluate_to is None:
-            return dim_combinations[evaluate_from:]
+            dim_combinations = dim_combinations[evaluate_from:]
         else:
-            return dim_combinations[evaluate_from:evaluate_to]
-
+            dim_combinations = dim_combinations[evaluate_from:evaluate_to]
+        return dim_combinations
 
 class PerformanceAttributes(DataBlock):
     """
@@ -240,13 +249,43 @@ class MetricArrays(DataBlock):
         """Initialize MetricArrays block."""
         super().__init__()
 
-    def initialize_array(self, code: str, shape: Tuple[int, ...]):
-        """Initialize numpy array for a given metric code."""
-        if code not in self.data_objects:
-            raise KeyError(f"Metric array code '{code}' not defined")
+    def set_dim_codes(self, metric_code: str, dim_codes: List[str]) -> None:
+        """Set associated dimension codes for a given metric array."""
+        if metric_code not in self.data_objects:
+            raise KeyError(f"Metric array code '{metric_code}' not defined")
         
-        if code in self.values:
-            raise ValueError(f"Metric array '{code}' already initialized")
-        data_array_obj = self.data_objects[code]
-        data_array_obj.set_value(np.empty(shape))
-        self.values[code] = data_array_obj.array
+        data_array = self.data_objects[metric_code]
+        if not isinstance(data_array, DataArray):
+            raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
+        
+        # Set dimension codes for the DataArray object
+        data_array.set_dim_codes(dim_codes)
+
+    def initialize_array(self, metric_code: str, shape: Tuple[int, ...]):
+        """Initialize numpy array for a given metric code."""
+        if metric_code not in self.data_objects:
+            raise KeyError(f"Metric array code '{metric_code}' not defined")
+        
+        if metric_code in self.values:
+            raise ValueError(f"Metric array '{metric_code}' already initialized")
+        
+        # Create empty numpy array with specified shape
+        self.set_value(metric_code, np.empty(shape))
+        self.data_objects[metric_code].set_shape_constraint(shape) # type: ignore
+
+    def initialize_arrays(self, parameters: Parameters) -> None:
+        """Initialize all metric arrays with the same shape."""
+        for metric_code in self.data_objects.keys():
+            data_array = self.data_objects[metric_code]
+            if not isinstance(data_array, DataArray):
+                raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
+            if data_array.dim_codes is None:
+                raise ValueError(f"Dimension codes not set for metric array '{metric_code}'")
+            shape = self.get_array_shape(parameters, dim_codes=data_array.dim_codes)
+            self.initialize_array(metric_code, shape)
+
+    def get_array_shape(self, parameters: Parameters, dim_codes: List[str], n_metrics: int = 1) -> Tuple[int, ...]:
+        """Get shape tuple for metric arrays based on dimension sizes."""
+        dim_combinations = parameters.get_dim_combinations(dims=dim_codes, evaluate_from=0, evaluate_to=None)
+        shape = (len(dim_combinations), len(dim_codes) + n_metrics)
+        return shape

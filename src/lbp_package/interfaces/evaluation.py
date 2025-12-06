@@ -101,7 +101,7 @@ class IEvaluationModel(BaseInterface):
     def run(
         self, 
         parameters: Parameters,
-        dimensions: Dimensions,
+        # dimensions: Dimensions,
         evaluate_from: int = 0, 
         evaluate_to: Optional[int] = None,
         visualize: bool = False

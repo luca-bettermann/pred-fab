@@ -7,7 +7,7 @@ They provide validation, type information, and value storage.
 
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict, Tuple, Literal
-from dataclasses import field, fields, Field, dataclass
+from dataclasses import field
 import numpy as np
 
 
@@ -284,8 +284,8 @@ class DataArray(DataObject):
         """Initialize DataArray with optional shape and dtype constraints."""
         self.shape_constraint = shape
         self.dtype_constraint = dtype or np.float64
+        self.dim_codes: Optional[List[str]] = None
         super().__init__(code, np.ndarray, {
-            "shape": shape,
             "dtype": str(dtype) if dtype else "float64"
         })
     
@@ -293,6 +293,14 @@ class DataArray(DataObject):
     def normalize_strategy(self) -> NormalizeStrategy:
         """Use DataModule default normalization (typically 'standard')."""
         return 'default'
+    
+    def set_shape_constraint(self, shape: Tuple[int, ...]) -> None:
+        """Set shape constraint for this DataArray."""
+        self.shape_constraint = shape
+    
+    def set_dim_codes(self, dim_codes: List[str]) -> None:
+        """Set associated dimension codes for this DataArray."""
+        self.dim_codes = dim_codes
     
     def validate(self, value: Any) -> bool:
         """Validate numpy array against shape and dtype constraints."""
