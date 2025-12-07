@@ -24,17 +24,17 @@ class DummyFeatureModel(IFeatureModel):
         """No data loading needed for test."""
         return None
     
-    def _compute_features(self, data, **params) -> dict:
+    def _compute_feature_logic(self, data, **params) -> dict:
         """Return simple function of parameters."""
         temp = params.get('temp', 200)
         speed = params.get('speed', 50)
         layer = params.get('layer', 0)
         return {'value': temp / 100 + speed / 10 + layer * 0.1}
     
-    def run(self, feature_name: str, visualize: bool = False, **params) -> float:
+    def _compute_feature_values(self, feature_name: str, visualize: bool = False, **params) -> float:
         """Return simple function of parameters."""
         data = self._load_data(**params)
-        features = self._compute_features(data, **params)
+        features = self._compute_feature_logic(data, **params)
         return features['value']
 
 
@@ -54,7 +54,7 @@ class DummyEvaluationModel(IEvaluationModel):
         """Scaling factor is 1.0."""
         return 1.0
     
-    def _compute_aggregation(self, exp_data) -> dict:
+    def compute_performance(self, exp_data) -> dict:
         """Return empty dict - aggregation happens automatically."""
         return {}
 
@@ -92,7 +92,7 @@ def test_evaluate_from_params_basic():
             'n_layers': 3
         }
         
-        perf_results, metric_results = eval_system._evaluate_from_params(
+        perf_results, metric_results = eval_system._compute_features_from_params(
             params=params,
             evaluate_from=0,
             evaluate_to=None,
@@ -141,7 +141,7 @@ def test_evaluate_from_params_for_calibration():
         
         performances = []
         for params in candidate_params:
-            perf_results, _ = eval_system._evaluate_from_params(
+            perf_results, _ = eval_system._compute_features_from_params(
                 params=params,
                 evaluate_from=0,
                 evaluate_to=None,
@@ -183,12 +183,12 @@ def test_evaluate_experiment_wrapper_consistency():
         exp_data = dataset.load_experiment('exp1', {'temp': 200.0, 'n_layers': 2})
         
         # Method 1: Call evaluate_experiment (wrapper)
-        eval_system.evaluate_experiment(exp_data)
+        eval_system.compute_exp_features(exp_data)
         perf_from_wrapper = exp_data.performance.get_value('deviation')
         
         # Method 2: Call _evaluate_from_params directly
         params = {'temp': 200.0, 'n_layers': 2}
-        perf_results, _ = eval_system._evaluate_from_params(params=params)
+        perf_results, _ = eval_system._compute_features_from_params(params=params)
         perf_from_core = perf_results['deviation']
         
         # Both methods should produce the same result

@@ -8,7 +8,7 @@ import warnings
 
 from ..core.dataset import Dataset, ExperimentData
 from ..utils.logger import LBPLogger
-from ..interfaces.calibration import ICalibrationStrategy
+from ..interfaces.calibration import ICalibrationStrategy, CalibrationModes
 from .base import BaseOrchestrationSystem
 
 # Suppress sklearn warnings
@@ -41,7 +41,7 @@ class BayesianCalibrationStrategy(ICalibrationStrategy):
         y_history: np.ndarray,
         bounds: np.ndarray,
         n_points: int = 1,
-        mode: Literal['exploration', 'optimization'] = 'exploration',
+        mode: CalibrationModes = 'exploration',
         exploration_weight: float = 0.5
         ) -> np.ndarray:
         """Propose next points using Bayesian Optimization."""

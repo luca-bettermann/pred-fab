@@ -8,11 +8,11 @@ from lbp_package.core.data_blocks import (
     Parameters,
     Dimensions,
     PerformanceAttributes,
-    MetricArrays,
+    Features,
 )
 from lbp_package.core.data_objects import (
     Parameter,
-    Performance,
+    PerformanceAttribute,
     Dimension,
     DataArray,
 )
@@ -146,9 +146,9 @@ class TestPerformanceAttributes:
         """Test adding performance metrics."""
         perf = PerformanceAttributes()
         
-        perf.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
-        perf.add("loss", Performance.real(min_val=0.0, max_val=100.0))
-        perf.add("num_errors", Performance.integer(min_val=0, max_val=1000))
+        perf.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
+        perf.add("loss", PerformanceAttribute.real(min_val=0.0, max_val=100.0))
+        perf.add("num_errors", PerformanceAttribute.integer(min_val=0, max_val=1000))
         
         assert len(list(perf.keys())) == 3
         assert perf.has("accuracy")
@@ -158,7 +158,7 @@ class TestPerformanceAttributes:
     def test_performance_value_storage(self):
         """Test storing performance values."""
         perf = PerformanceAttributes()
-        perf.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        perf.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         
         perf.set_value("accuracy", 0.95)
         assert perf.get_value("accuracy") == 0.95
@@ -166,8 +166,8 @@ class TestPerformanceAttributes:
     def test_performance_calibration_weights(self):
         """Test calibration weights."""
         perf = PerformanceAttributes()
-        perf.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
-        perf.add("speed", Performance.real(min_val=0.0, max_val=100.0))
+        perf.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
+        perf.add("speed", PerformanceAttribute.real(min_val=0.0, max_val=100.0))
         
         perf.calibration_weights = {"accuracy": 0.7, "speed": 0.3}
         
@@ -180,12 +180,12 @@ class TestMetricArrays:
     
     def test_metric_arrays_creation(self):
         """Test creating MetricArrays block."""
-        arrays = MetricArrays()
+        arrays = Features()
         assert len(list(arrays.keys())) == 0
     
     def test_metric_arrays_add_objects(self):
         """Test adding DataArray objects."""
-        arrays = MetricArrays()
+        arrays = Features()
         
         arrays.add("energy", DataArray(code="energy", shape=(100,), dtype=np.float64))
         arrays.add("position", DataArray(code="position", shape=(100, 3), dtype=np.float32))
@@ -196,7 +196,7 @@ class TestMetricArrays:
     
     def test_metric_arrays_value_storage(self):
         """Test storing and retrieving array values."""
-        arrays = MetricArrays()
+        arrays = Features()
         arrays.add("data", DataArray(code="data", shape=(5,), dtype=np.float64))
         
         arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -224,12 +224,12 @@ class TestDataBlockIntegration:
         
         # Performance
         perf = PerformanceAttributes()
-        perf.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        perf.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         perf.set_value("accuracy", 0.95)
         perf.calibration_weights = {"accuracy": 1.0}
         
         # Metric Arrays
-        arrays = MetricArrays()
+        arrays = Features()
         arrays.add("energy", DataArray(code="energy", shape=(100,), dtype=np.float64))
         energy_data = np.random.rand(100)
         arrays.set_value("energy", energy_data)

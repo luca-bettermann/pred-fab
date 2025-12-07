@@ -19,18 +19,17 @@ class LocalData:
     def __init__(
             self, 
             root_folder: str,
-            local_folder: str, 
+            local_folder_name: str = "local"
             ) -> None:
         """
         Initialize folder navigator with base paths.
 
         Args:
             root_folder: Project root folder
-            local_folder: Path to local data storage
-            server_folder: Path to server data storage
+            local_folder_name: Name of local data storage folder
         """
         self.root_folder: str = root_folder
-        self.local_folder: str = local_folder
+        self.local_folder: str = os.path.join(root_folder, local_folder_name)
 
         self.schema_id: Optional[str] = None
         self.schema_folder: Optional[str] = None
@@ -67,15 +66,6 @@ class LocalData:
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before getting experiment folder")
         return os.path.join(self.schema_folder, exp_code)
-
-    # def get_server_experiment_folder(self, exp_code: str) -> str:
-    #     """Get full path to server experiment folder."""
-    #     if self.server_folder is None:
-    #         raise ValueError("Server folder must be set before getting server experiment folder")
-    #     if self.schema_id is None:
-    #         raise ValueError("Schema ID must be set before getting experiment folder")
-    #     assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
-    #     return os.path.join(self.server_folder, self.schema_id, exp_code)
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
         """Get full path to a file within an experiment folder."""

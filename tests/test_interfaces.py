@@ -48,7 +48,7 @@ class ConcreteFeatureModel(IFeatureModel):
         """Mock data loading - just return param values."""
         return param_values
     
-    def _compute_features(self, data, visualize: bool = False):
+    def _compute_feature_logic(self, data, visualize: bool = False):
         """Mock feature computation - sum of param values."""
         return sum(data.values())
 
@@ -82,7 +82,7 @@ class ConcretePredictionModel(IPredictionModel):
     
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["feature_1"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -134,7 +134,7 @@ class TestIFeatureModel:
         model = ConcreteFeatureModel(dataset=dataset, logger=logger)
         
         # Run feature extraction
-        result = model.run(feature_name="test_feature", x=3, y=4)
+        result = model._compute_feature_values(feature_name="test_feature", x=3, y=4)
         
         # Should compute sum: 3 + 4 = 7
         assert result == 7
@@ -144,11 +144,11 @@ class TestIFeatureModel:
         model = ConcreteFeatureModel(dataset=dataset, logger=logger)
         
         # First call - computes
-        result1 = model.run(feature_name="test_feature", x=3, y=4)
+        result1 = model._compute_feature_values(feature_name="test_feature", x=3, y=4)
         assert result1 == 7
         
         # Second call - should use cache
-        result2 = model.run(feature_name="test_feature", x=3, y=4)
+        result2 = model._compute_feature_values(feature_name="test_feature", x=3, y=4)
         assert result2 == 7
         
         # Verify it's cached
@@ -186,7 +186,7 @@ class TestIEvaluationModel:
         
         # Note: Full test would create ExperimentData with proper schema-based
         # DataBlocks. For now, we just validate the method signature exists
-        assert callable(eval_model.run)
+        assert callable(eval_model.compute_features)
     
     def test_evaluation_requires_feature_model(self, logger):
         """Test that evaluation fails without feature model."""
@@ -211,7 +211,7 @@ class TestIPredictionModel:
         """Test abstract properties."""
         model = ConcretePredictionModel(logger=logger)
         
-        assert model.feature_output_codes == ["feature_1"]
+        assert model.outputs == ["feature_1"]
     
     def test_prediction_model_train(self, logger):
         """Test training method."""

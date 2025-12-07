@@ -242,10 +242,14 @@ class DataDimension(DataInt):
     - dim_iterator_name: Iterator variable name (e.g., "layer_id")
     """
     
-    def __init__(self, code: str, iterator_code: str, min_val: int = 1, max_val: Optional[int] = None):
-        """Initialize DataDimension with three naming aspects."""
+    def __init__(self, code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None):
+        """Initialize DataDimension with two naming aspects and level hierarchy."""
         self.code = code
-        self.dim_iterator_code = iterator_code        
+        self.iterator_code = iterator_code
+
+        if not isinstance(level, int) or level < 0:
+            raise ValueError("Level must be a non-negative integer")
+        self.level = level
         super().__init__(code, min_val, max_val)
     
     @property
@@ -258,7 +262,8 @@ class DataDimension(DataInt):
         data = super().to_dict()
         data.update({
             "code": self.code,
-            "dim_iterator_code": self.dim_iterator_code
+            "dim_iterator_code": self.iterator_code,
+            "level": self.level
         })
         return data
     
@@ -268,8 +273,9 @@ class DataDimension(DataInt):
         return cls(
             code,
             constraints["dim_iterator_code"],
-            constraints["min_val"],
-            constraints["max_val"]
+            constraints.get("level", 1),
+            constraints.get("min", 1),
+            constraints.get("max")
         )
 
 
@@ -366,28 +372,55 @@ class Parameter:
         """Create a boolean parameter."""
         schema = DataBool(code=code)
         return field(default=default, metadata={'role': 'parameter', 'schema': schema})
-
-
-class Dimension:
-    """Factory for creating dimensional parameter DataObjects."""
     
     @staticmethod
-    def integer(code: str, iterator_code: str, 
-                min_val: int = 1, max_val: Optional[int] = None) -> Any:
-        """
-        Create a dimensional parameter.
+    def dimension(code: str, iterator_code: str, level: int,
+                  min_val: int = 1, max_val: Optional[int] = None) -> Any:
+        """Create a dimensional parameter."""
+        schema = DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val)
+        return field(default=None, metadata={'role': 'parameter', 'schema': schema})
+    
+
+class Feature:
+    """Factory for creating feature Feature objects."""
+
+    @staticmethod
+    def array(code: str, dtype: Optional[np.dtype] = None) -> Any:
+        """Create a metric_array DataObject."""
+        schema = DataArray(code=code, shape=None, dtype=dtype)
+        return field(default=None, metadata={'role': 'feature', 'schema': schema})
+    
+
+class PerformanceAttribute:
+    """Factory for creating Performance objects."""
+    
+    @staticmethod
+    def score(code: str, round_digits: Optional[int] = None) -> Any:
+        """Create a normalized score (0-1) performance attribute."""
+        schema = DataReal(code=code, min_val=0, max_val=1, round_digits=round_digits)
+        return field(default=None, metadata={'role': 'performance', 'schema': schema})
+
+
+# class Dimension:
+#     """Factory for creating dimensional parameter DataObjects."""
+    
+#     @staticmethod
+#     def integer(code: str, iterator_code: str, 
+#                 min_val: int = 1, max_val: Optional[int] = None) -> Any:
+#         """
+#         Create a dimensional parameter.
         
-        Args:
-            code: Parameter code (e.g., "n_layers")
-            dim_name: Human-readable dimension name (e.g., "layers")
-            iterator_name: Iterator variable name (e.g., "layer_id")
-            min_val: Minimum value (default 1)
-            max_val: Maximum value (optional)
-        """
-        dim_obj = DataDimension(code, iterator_code)
-        # Add min/max constraints
-        if min_val is not None:
-            dim_obj.constraints["min"] = min_val
-        if max_val is not None:
-            dim_obj.constraints["max"] = max_val
-        return field(default=None, metadata={'role': 'dimension', 'schema': dim_obj})
+#         Args:
+#             code: Parameter code (e.g., "n_layers")
+#             dim_name: Human-readable dimension name (e.g., "layers")
+#             iterator_name: Iterator variable name (e.g., "layer_id")
+#             min_val: Minimum value (default 1)
+#             max_val: Maximum value (optional)
+#         """
+#         dim_obj = DataDimension(code, iterator_code)
+#         # Add min/max constraints
+#         if min_val is not None:
+#             dim_obj.constraints["min"] = min_val
+#         if max_val is not None:
+#             dim_obj.constraints["max"] = max_val
+#         return field(default=None, metadata={'role': 'dimension', 'schema': dim_obj})

@@ -28,7 +28,7 @@ class SimpleFeatureModel(IFeatureModel):
         """Mock data loading."""
         return param_values
     
-    def _compute_features(self, data):
+    def _compute_feature_logic(self, data):
         """Mock feature computation."""
         return sum(data.values())
 
@@ -62,7 +62,7 @@ class SimplePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_output_codes(self):
+    def outputs(self):
         return ["predicted_feature"]
     
     def train(self, X, y, **kwargs):

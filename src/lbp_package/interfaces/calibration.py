@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Literal, Callable
 import numpy as np
-
 from ..utils import LBPLogger
 
+CalibrationModes = Literal['exploration', 'exploitation']
 
 class ICalibrationStrategy(ABC):
     """
@@ -26,7 +26,7 @@ class ICalibrationStrategy(ABC):
         y_history: np.ndarray,
         bounds: np.ndarray,
         n_points: int = 1,
-        mode: Literal['exploration', 'optimization'] = 'exploration',
+        mode: CalibrationModes = 'exploitation',
         **kwargs
     ) -> np.ndarray:
         """

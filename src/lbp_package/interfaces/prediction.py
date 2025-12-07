@@ -7,12 +7,11 @@ to compute performance metrics.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Type, Optional, Any, final
-import pandas as pd
+from typing import List, Dict, Type, Optional, Any, final, Tuple
+import numpy as np
 
 from .base import BaseInterface
 from ..utils.logger import LBPLogger
-from .features import IFeatureModel
 from ..core import DataObject, Dataset
 
 
@@ -31,78 +30,41 @@ class IPredictionModel(BaseInterface):
         """Initialize evaluation system."""
         super().__init__(dataset, logger)
     
-    @property
+    # === ABSTRACT METHODS ===
+
+    # abstract methods from BaseInterface:
+    # - input_parameters
+    # - input_features
+    # - outputs
+
     @abstractmethod
-    def feature_output_codes(self) -> List[str]:
-        """
-        Codes of features this model predicts.
-        
-        Returns:
-            List of feature codes (e.g., ['filament_width', 'layer_height'])
-        """
-        pass
-    
-    @property
-    def feature_input_codes(self) -> List[str]:
-        """
-        Features required as inputs during prediction.
-        
-        Lists feature names from the evaluation system that must be provided
-        in X during forward_pass(). These are features already computed by
-        evaluation models (e.g., ['path_deviation', 'surface_roughness']).
-        Framework will NOT automatically compute these - they must be present
-        in the input DataFrame.
-        
-        Returns:
-            List of evaluation feature names to use as inputs
-            Empty list if no evaluation features needed (default).
-        """
-        return []
-    
-    # @property
-    # def feature_models_as_input(self) -> Dict[str, Type[IFeatureModel]]:
-    #     """
-    #     Additional feature models needed as inputs during prediction.
-        
-    #     Maps feature codes to IFeatureModel classes that compute additional
-    #     input features NOT in the evaluation system (e.g., sensor data processors
-    #     like temperature/humidity extractors). The system will create shared
-    #     instances and attach them via add_feature_model().
-        
-    #     Returns:
-    #         Dict mapping feature codes to IFeatureModel types
-    #         (e.g., {'temp_sensor': TemperatureSensorFeature, 'humidity': HumidityFeature})
-    #         Empty dict if no additional feature models needed (default).
-    #     """
-    #     return {}
-    
-    @abstractmethod
-    def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
-        """
-        Train the prediction model on parameter→feature data.
-        
-        Args:
-            X: DataFrame with parameter columns (inputs)
-            y: DataFrame with feature columns (outputs to predict)
-            **kwargs: Additional training parameters (e.g., learning_rate, epochs, verbose)
-                     Allows user implementations to accept custom hyperparameters
-        """
-        pass
-    
-    @abstractmethod
-    def forward_pass(self, X: pd.DataFrame) -> pd.DataFrame:
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
         """
         Forward pass of given parameter values to retrieve features.
         
         Args:
-            X: DataFrame with parameter columns
+            X: Numpy array with normalized parameter values (batch_size, n_params)
         
         Returns:
-            DataFrame with feature columns (all floats)
+            Numpy array with normalized feature values (batch_size, n_features)
         """
         pass
-    
-    def tuning(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
+
+    @abstractmethod
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+        """
+        Train the prediction model on batched data.
+        
+        Args:
+            train_batches: List of (X, y) tuples for training
+            val_batches: List of (X, y) tuples for validation
+            **kwargs: Additional training parameters
+        """
+        pass
+
+    # === ONLINE LEARNING ===
+
+    def tuning(self, tune_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
         """
         Fine-tune model with new measurements during fabrication.
         
@@ -110,8 +72,7 @@ class IPredictionModel(BaseInterface):
         Default behavior: Raises NotImplementedError.
         
         Args:
-            X: DataFrame with parameter columns (inputs)
-            y: DataFrame with feature columns (new measurements)
+            tune_batches: List of (X, y) tuples for tuning
             **kwargs: Additional tuning parameters
         
         Raises:
@@ -121,13 +82,6 @@ class IPredictionModel(BaseInterface):
             f"{self.__class__.__name__} does not support tuning. "
             f"Override tuning() method to enable online learning."
         )
-
-    @final
-    def add_feature_model(self, feature_model: IFeatureModel) -> None:
-        """Attach feature model instance for use during training/prediction."""
-        self.feature_model_dependencies.append(feature_model)
-        if self.logger:
-            self.logger.debug(f"Attached feature model '{feature_model}' to prediction model")
     
     # === EXPORT/IMPORT SUPPORT ===
     
@@ -171,5 +125,4 @@ class IPredictionModel(BaseInterface):
             f"{self.__class__.__name__} does not support import. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable import."
         )
-
 

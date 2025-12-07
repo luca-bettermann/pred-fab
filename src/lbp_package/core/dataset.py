@@ -8,16 +8,13 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 import numpy as np
 import os
 from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
-from dataclasses import dataclass
 import functools
 
 from .schema import DatasetSchema
-from .data_blocks import DataBlock, Parameters, MetricArrays, PerformanceAttributes
-from .data_objects import DataDimension
+from ..core import DataBlock, Parameters, Features, PerformanceAttributes
 
 from ..interfaces.external_data import IExternalData
-from ..utils.local_data import LocalData
-from ..utils.logger import LBPLogger
+from ..utils import LocalData, LBPLogger
 
 BlockType = Literal['parameters', 'performance', 'feature', 'predicted_feature']
 
@@ -31,23 +28,21 @@ class ExperimentData:
     - Predicted Features
     """
 
-    def __init__(self, exp_code: str, parameters: Parameters, performance: PerformanceAttributes, features: MetricArrays, predicted_features: MetricArrays):
+    def __init__(self, 
+                 exp_code: str, 
+                 parameters: Parameters, 
+                 performance: PerformanceAttributes, 
+                 features: Features, 
+                 predicted_features: Features
+                 ):
         self.exp_code = exp_code
         self.parameters = parameters
         self.performance = performance
         self.features = features
         self.predicted_features = predicted_features
     
-    # @property
-    # def dimensions(self) -> Dict[str, Any]:
-    #     """View into parameter values for only dimensional parameters."""
-    #     dims = {}
-    #     for name, data_obj in self.parameters.items():
-    #         if isinstance(data_obj, DataDimension):
-    #             if self.parameters.has_value(name):
-    #                 dims[name] = self.parameters.get_value(name)
-    #     return dims
-    
+    # === Helper Methods for Validation ===
+
     def is_valid(self, schema: 'DatasetSchema') -> bool:
         """Check structural compatibility of exp with schema."""
         # Check all blocks using helper function
@@ -65,6 +60,19 @@ class ExperimentData:
                     f"to {other_block.__class__.__name__}."
                 )        
         return True
+    
+    def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: Optional[int]) -> bool:
+        """Check if feature array is non-empty in specified range."""
+        if not self.features.has(feature_code):
+            raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.exp_code}'")
+        
+        array = self.features.get_value(feature_code)
+        end_index = evaluate_to if evaluate_to is not None else array.shape[0]
+        
+        # Check if all values in the specified range are NaN
+        if np.all(not np.isnan(array[evaluate_from:end_index])):
+            return True
+        return False
 
     # === Helper Methods for Data Access ===
 
@@ -163,8 +171,8 @@ class Dataset:
         """Create new empty experiment shell with all blocks initialized."""
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
         perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance)
-        arrays_block = self._init_from_schema(MetricArrays, self.schema.features)
-        pred_block = self._init_from_schema(MetricArrays, self.schema.features)
+        arrays_block = self._init_from_schema(Features, self.schema.features)
+        pred_block = self._init_from_schema(Features, self.schema.features)
         
         return ExperimentData(
             exp_code=exp_code,
@@ -246,39 +254,51 @@ class Dataset:
         self._experiments[exp_code] = exp_data
         return exp_data
     
+    def add_experiment(self, exp_data: ExperimentData, recompute: bool = False) -> None:
+        """Manually add an existing ExperimentData to the dataset."""        
+        # Check memory
+        if exp_data.exp_code in self._experiments and not recompute:
+            raise ValueError(f"Experiment {exp_data.exp_code} already exists in memory")
+        
+        # Validate against schema
+        exp_data.is_valid(self.schema)
+        
+        # Store
+        self._experiments[exp_data.exp_code] = exp_data
+    
     # === Feature Memoization for IFeatureModel ===
     
-    def has_cached_features_at(self, params: Dict[str, Any]) -> bool:
-        """Check if features are cached for specific parameter values."""
-        param_tuple = self._make_param_tuple(params)
-        return param_tuple in self._feature_cache
+    # def has_cached_features_at(self, params: Dict[str, Any]) -> bool:
+    #     """Check if features are cached for specific parameter values."""
+    #     param_tuple = self._make_param_tuple(params)
+    #     return param_tuple in self._feature_cache
     
-    def get_cached_feature_value(self, feature_name: str, params) -> Any:
-        """Get cached feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(params)
-        if param_tuple not in self._feature_cache:
-            raise KeyError(f"No features cached for parameters: {params}")
+    # def get_cached_feature_value(self, feature_name: str, params) -> Any:
+    #     """Get cached feature value for specific parameters."""
+    #     param_tuple = self._make_param_tuple(params)
+    #     if param_tuple not in self._feature_cache:
+    #         raise KeyError(f"No features cached for parameters: {params}")
         
-        if feature_name not in self._feature_cache[param_tuple]:
-            raise KeyError(f"Feature '{feature_name}' not found in cache")
+    #     if feature_name not in self._feature_cache[param_tuple]:
+    #         raise KeyError(f"Feature '{feature_name}' not found in cache")
         
-        return self._feature_cache[param_tuple][feature_name]
+    #     return self._feature_cache[param_tuple][feature_name]
     
-    def cache_feature_value(self, feature_name: str, value: Any, params) -> None:
-        """Cache feature value for specific parameters."""
-        param_tuple = self._make_param_tuple(params)
-        if param_tuple not in self._feature_cache:
-            self._feature_cache[param_tuple] = {}
-        self._feature_cache[param_tuple][feature_name] = value
+    # def cache_feature_value(self, feature_name: str, value: Any, params) -> None:
+    #     """Cache feature value for specific parameters."""
+    #     param_tuple = self._make_param_tuple(params)
+    #     if param_tuple not in self._feature_cache:
+    #         self._feature_cache[param_tuple] = {}
+    #     self._feature_cache[param_tuple][feature_name] = value
     
-    def clear_feature_cache(self) -> None:
-        """Clear all cached feature values. Used for recomputation."""
-        self._feature_cache.clear()
+    # def clear_feature_cache(self) -> None:
+    #     """Clear all cached feature values. Used for recomputation."""
+    #     self._feature_cache.clear()
     
-    def _make_param_tuple(self, params: Dict[str, Any]) -> Tuple[str, ...]:
-        """Create hashable tuple from parameter dict for cache keys."""
-        items = sorted(params.items())
-        return tuple(f"{name}={value}" for name, value in items)
+    # def _make_param_tuple(self, params: Dict[str, Any]) -> Tuple[str, ...]:
+    #     """Create hashable tuple from parameter dict for cache keys."""
+    #     items = sorted(params.items())
+    #     return tuple(f"{name}={value}" for name, value in items)
     
     def get_experiment_codes(self) -> List[str]:
         """Get list of all experiment codes in dataset."""

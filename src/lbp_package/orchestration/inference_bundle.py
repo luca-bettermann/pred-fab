@@ -8,6 +8,7 @@ optionally evaluate performance.
 
 from typing import Dict, List, Any, Optional
 import pandas as pd
+import numpy as np
 import pickle
 import copy
 
@@ -46,7 +47,7 @@ class InferenceBundle:
         # Build feature-to-model mapping
         self.feature_to_model: Dict[str, IPredictionModel] = {}
         for model in prediction_models:
-            for feat in model.feature_output_codes:
+            for feat in model.outputs:
                 self.feature_to_model[feat] = model
     
     @classmethod
@@ -90,21 +91,103 @@ class InferenceBundle:
         # Validate inputs against schema
         self._validate_inputs(X)
         
+        # Prepare input (one-hot + normalize)
+        X_norm = self._prepare_input(X)
+        
         # Collect predictions from all models
         predictions: Dict[str, Any] = {}
         for model in self.prediction_models:
             # Predict (normalized)
-            y_pred_norm = model.forward_pass(X)
+            y_pred_norm = model.forward_pass(X_norm)
             
             # Denormalize
-            y_pred = self._denormalize(y_pred_norm, model.feature_output_codes)
+            y_pred = self._denormalize_values(y_pred_norm, model.outputs)
             
             # Add to results
-            for col in model.feature_output_codes:
-                if col in y_pred.columns:
-                    predictions[col] = y_pred[col].tolist()
+            for i, col in enumerate(model.outputs):
+                predictions[col] = y_pred[:, i].tolist()
         
         return pd.DataFrame(predictions)
+    
+    def _prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
+        """Prepare input DataFrame for inference (one-hot + normalize)."""
+        X = X_df.copy()
+        
+        categorical_mappings = self.normalization_state.get('categorical_mappings', {})
+        input_columns = self.normalization_state.get('input_columns', [])
+        parameter_stats = self.normalization_state.get('parameter_stats', {})
+        
+        # One-hot encode
+        if categorical_mappings:
+            for col, categories in categorical_mappings.items():
+                if col not in X.columns:
+                    continue
+                for category in categories:
+                    col_name = f"{col}_{category}"
+                    X[col_name] = (X[col] == category).astype(float)
+                X = X.drop(columns=[col])
+        
+        # Ensure columns match and are ordered correctly
+        for col in input_columns:
+            if col not in X.columns:
+                X[col] = 0.0
+        
+        X = X[input_columns]
+        X_arr = X.values.astype(np.float32)
+        
+        # Normalize
+        for i, col in enumerate(input_columns):
+            if col in parameter_stats:
+                X_arr[:, i] = self._apply_normalization(X_arr[:, i], parameter_stats[col])
+                
+        return X_arr
+
+    def _denormalize_values(self, values: np.ndarray, feature_names: List[str]) -> np.ndarray:
+        """Reverse normalization for specific features."""
+        feature_stats = self.normalization_state.get('feature_stats', {})
+        
+        y = values.copy()
+        if y.ndim == 1:
+            for i, name in enumerate(feature_names):
+                if name in feature_stats:
+                    y[i] = self._reverse_normalization(y[i], feature_stats[name])
+        else:
+            for i, name in enumerate(feature_names):
+                if name in feature_stats:
+                    y[:, i] = self._reverse_normalization(y[:, i], feature_stats[name])
+        return y
+
+    def _apply_normalization(self, data: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+        """Apply normalization to data array using pre-computed stats."""
+        method = stats['method']
+        
+        if method == 'none':
+            return data
+        elif method == 'standard':
+            return (data - stats['mean']) / (stats['std'] + 1e-8)
+        elif method == 'minmax':
+            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
+        elif method == 'robust':
+            iqr = stats['q3'] - stats['q1']
+            return (data - stats['median']) / (iqr + 1e-8)
+        else:
+            return data
+
+    def _reverse_normalization(self, data_norm: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+        """Reverse normalization for data array."""
+        method = stats['method']
+        
+        if method == 'none':
+            return data_norm
+        elif method == 'standard':
+            return data_norm * stats['std'] + stats['mean']
+        elif method == 'minmax':
+            return data_norm * (stats['max'] - stats['min']) + stats['min']
+        elif method == 'robust':
+            iqr = stats['q3'] - stats['q1']
+            return data_norm * iqr + stats['median']
+        else:
+            return data_norm
     
     def _validate_inputs(self, X: pd.DataFrame) -> None:
         """Validate parameter columns against schema."""
@@ -124,37 +207,6 @@ class InferenceBundle:
                 )
             
             # TODO: Add range validation using schema constraints
-    
-    def _denormalize(
-        self, 
-        y_norm: pd.DataFrame, 
-        feature_names: List[str]
-    ) -> pd.DataFrame:
-        """Apply inverse normalization transform to predictions."""
-        if not self.normalization_state['is_fitted']:
-            return y_norm.copy()
-        
-        y_denorm = y_norm.copy()
-        feature_stats = self.normalization_state['feature_stats']
-        
-        for feat in feature_names:
-            if feat not in feature_stats:
-                continue
-            
-            stats = feature_stats[feat]
-            method = stats['method']
-            
-            if method == 'standard':
-                y_denorm[feat] = y_norm[feat] * stats['std'] + stats['mean']
-            
-            elif method == 'minmax':
-                y_denorm[feat] = y_norm[feat] * (stats['max'] - stats['min']) + stats['min']
-            
-            elif method == 'robust':
-                iqr = stats['q3'] - stats['q1']
-                y_denorm[feat] = y_norm[feat] * iqr + stats['median']
-        
-        return y_denorm
     
     @property
     def feature_names(self) -> List[str]:

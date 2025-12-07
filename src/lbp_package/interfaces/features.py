@@ -1,10 +1,11 @@
 import numpy as np
 from typing import Any, Dict, List, Optional, final
+from numpy.typing import NDArray
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
 from .base import BaseInterface
-from ..core import Dataset, DataObject
+from ..core import Dataset, Parameters
 from ..utils import LBPLogger
 
 
@@ -21,26 +22,14 @@ class IFeatureModel(BaseInterface):
         super().__init__(dataset, logger)
     
     # === ABSTRACT METHODS ===
-    @property
-    @abstractmethod
-    def feature_codes(self) -> List[str]:
-        """List of the feature codes produced by this model."""
-        ...
 
-    @property
-    @abstractmethod
-    def required_parameters(self) -> List[DataObject]:
-        """
-        Define the parameters and dimensions this model needs from the experiment.
-        
-        Returns:
-            List of DataObjects defining the schema.
-            Example: [Parameter.real("speed", ...), Dimension.int("layers", ...)]
-        """
-        ...
+    # abstract methods from BaseInterface:
+    # - input_parameters
+    # - input_features
+    # - outputs
 
     @abstractmethod
-    def _load_data(self, **param_values) -> Any:
+    def _load_data(self, params: Dict, **dimensions) -> Any:
         """
         Load domain-specific data for feature extraction at specific parameter values.
         
@@ -48,7 +37,8 @@ class IFeatureModel(BaseInterface):
         databases, files, or other data sources not managed by Dataset.
         
         Args:
-            **param_values: Parameter name-value pairs defining the context
+            params: Parameter name-value pairs defining the context
+            **dimensions: Additional dimension parameters
             
         Returns:
             Loaded data object (format depends on domain)
@@ -56,13 +46,21 @@ class IFeatureModel(BaseInterface):
         ...
 
     @abstractmethod
-    def _compute_features(self, data: Any, visualize: bool = False) -> Dict[str, float]:
+    def _compute_feature_logic(
+        self, 
+        data: Any, 
+        params: Dict, 
+        visualize: bool = False,
+        **dimensions
+        ) -> Dict[str, float]:
         """
-        Extract feature value from loaded data.
+        Extract feature value(s) from loaded data.
         
         Args:
             data: Data object from _load_data
+            params: Parameter name-value pairs
             visualize: Enable visualizations if True
+            **dimensions: Additional dimension parameters
             
         Returns:
             Computed feature values as a dict mapping feature codes to numeric values
@@ -70,30 +68,83 @@ class IFeatureModel(BaseInterface):
         ...
     
     # === PUBLIC API ===
-    
+
     @final
-    def run(
+    def compute_features(
         self, 
-        feature_name: str,
-        params: Dict[str, Any], 
+        parameters: Parameters,
+        evaluate_from: int,
+        evaluate_to: Optional[int] = None,
+        visualize: bool = False
+        ) -> NDArray:
+        """Iterate over parameter combinations to compute feature array."""
+
+        self.logger.info(f"Starting evaluation for '{self.outputs}'")
+        
+        # Prepare dimension combinations
+        dim_objs = self.get_input_dimensions()
+        num_dims = len(dim_objs)
+        dim_iterator_codes = [dim.iterator_code for dim in dim_objs]
+        dim_combinations = parameters.get_dim_combinations(
+            dim_codes=[dim.code for dim in dim_objs], 
+            evaluate_from=evaluate_from, 
+            evaluate_to=evaluate_to
+            )
+        
+        # Initialize 3D-array
+        shape = (len(dim_combinations), num_dims + 1, len(self.outputs))
+        feature_array = np.empty(shape)
+
+        # Unpack DataBlocks
+        params = parameters.get_values_dict()
+
+        # Process each combination
+        i_end = evaluate_to if evaluate_to is not None else len(dim_combinations)
+        for i, current_dim in enumerate(dim_combinations):
+            i_global = evaluate_from + i
+
+            # merge dims and params into single dict
+            current_dim_dict = dict(zip(dim_iterator_codes, current_dim))
+            combined_params = {**current_dim_dict, **params}
+            self.logger.debug(f"Processing {i_global}/{i_end}: {current_dim_dict}")
+            
+            # Compute feature, target, and performance
+            feature_values = self._compute_feature_values(
+                params,
+                current_dim_dict,
+                visualize=visualize,
+                )
+
+            # Store in array
+            feature_array[i][:num_dims][:] = current_dim
+            feature_array[i][num_dims][:] = feature_values
+    
+        # return 3d array
+        return feature_array
+
+    @final
+    def _compute_feature_values(
+        self, 
+        params,
+        dimensions,
         visualize: bool = False, 
-        ) -> float:
+        ) -> List[float]:
         """Extract feature with memoization via Dataset."""
         # Check cache
-        if self.dataset.has_cached_features_at(params):
-            try:
-                cached_value = self.dataset.get_cached_feature_value(feature_name, params)
-                self.logger.debug(f"Using cached feature '{feature_name}' for {params}")
-                return cached_value
-            except KeyError:
-                raise KeyError(
-                    f"Feature '{feature_name}' not found in cache for parameters {params} despite has_cached_features_at() returning True"
-                )
+        # if self.dataset.has_cached_features_at(params):
+        #     try:
+        #         cached_value = self.dataset.get_cached_feature_value(feature_name, params)
+        #         self.logger.debug(f"Using cached feature '{feature_name}' for {params}")
+        #         return cached_value
+        #     except KeyError:
+        #         raise KeyError(
+        #             f"Feature '{feature_name}' not found in cache for parameters {params} despite has_cached_features_at() returning True"
+        #         )
         
         # Load and compute
-        self.logger.debug(f"Computing feature '{feature_name}' for {params}")
-        data = self._load_data(**params)
-        feature_dict = self._compute_features(data, visualize=visualize, **params)
+        self.logger.debug(f"Computing features '{self.outputs}' for {params}")
+        data = self._load_data(params, **dimensions)
+        feature_dict = self._compute_feature_logic(data, params, visualize=visualize, **dimensions)
         
         # Validate output from user implementation
         for feature_code, feature_value in feature_dict.items():
@@ -103,6 +154,8 @@ class IFeatureModel(BaseInterface):
                 )
         
             # Cache and return
-            self.dataset.cache_feature_value(feature_code, feature_value, params)
+            # self.dataset.cache_feature_value(feature_code, feature_value, params)
         
-        return feature_dict[feature_name]
+        # Get the correct order of feature values
+        feature_values = [feature_dict[code] for code in self.outputs] # type: ignore
+        return feature_values

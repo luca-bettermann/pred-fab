@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 
 from lbp_package.core import Dataset, DatasetSchema, DataModule
 from lbp_package.core.data_objects import DataReal, DataInt, DataArray
-from lbp_package.core.data_blocks import DataBlock, MetricArrays
+from lbp_package.core.data_blocks import DataBlock, Features
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.orchestration.prediction import PredictionSystem
 from lbp_package.utils.logger import LBPLogger
@@ -19,7 +19,7 @@ class KwargsCapturingModel(IPredictionModel):
     
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ['test_feature']
     
     def __init__(self):
@@ -80,7 +80,7 @@ def simple_dataset():
         )
         
         # Initialize metric_arrays and add features
-        exp_data.features = MetricArrays()
+        exp_data.features = Features()
         test_feature_arr = DataArray(code="test_feature", shape=())
         exp_data.features.add("test_feature", test_feature_arr)
         exp_data.features.set_value("test_feature", np.array(float(i + 1)))

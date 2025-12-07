@@ -6,7 +6,7 @@ import tempfile
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Type, Any
+from typing import Dict, List, Optional, Type, Any, Tuple
 
 from lbp_package.orchestration.evaluation import EvaluationSystem
 from lbp_package.orchestration.prediction import PredictionSystem
@@ -15,7 +15,7 @@ from lbp_package.interfaces.evaluation import IEvaluationModel
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.core.dataset import Dataset, ExperimentData
 from lbp_package.core.schema import DatasetSchema
-from lbp_package.core.data_blocks import Parameters, DataBlock, MetricArrays
+from lbp_package.core.data_blocks import Parameters, DataBlock, Features
 from lbp_package.core.data_objects import Parameter, DataReal, DataArray
 from lbp_package.core.datamodule import DataModule
 from lbp_package.utils.logger import LBPLogger
@@ -51,7 +51,7 @@ class MockFeatureModel(IFeatureModel):
     def _load_data(self, **param_values):
         return param_values
     
-    def _compute_features(self, data):
+    def _compute_feature_logic(self, data):
         return sum(data.values())
 
 
@@ -79,32 +79,40 @@ class MockPredictionModel(IPredictionModel):
         self.is_trained = False
         self.X_train = None
         self.y_train = None
+        self.mean_val = 0.0
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["test_feature"]
     
-    def train(self, X, y, **kwargs):
-        self.X_train = X
-        self.y_train = y
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs):
+        # Concatenate batches for storage/verification
+        if train_batches:
+            self.X_train = np.vstack([b[0] for b in train_batches])
+            self.y_train = np.vstack([b[1] for b in train_batches])
+            self.mean_val = np.mean(self.y_train)
+        else:
+            self.X_train = np.array([])
+            self.y_train = np.array([])
+            self.mean_val = 0.0
+            
         self.is_trained = True
     
-    def forward_pass(self, X):
-        if not self.is_trained or self.y_train is None:
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        if not self.is_trained:
             raise RuntimeError("Model not trained")
-        mean_val = self.y_train["test_feature"].mean()
-        return pd.DataFrame({"test_feature": [mean_val] * len(X)})
+        # Return mean value for all inputs
+        return np.full((len(X), 1), self.mean_val)
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
         return {
             "is_trained": self.is_trained,
-            "mean_value": self.y_train["test_feature"].mean() if self.y_train is not None else None
+            "mean_value": self.mean_val
         }
     
     def _set_model_artifacts(self, artifacts: Dict[str, Any]):
         self.is_trained = artifacts.get("is_trained", False)
-        if artifacts.get("mean_value") is not None:
-            self.y_train = pd.DataFrame({"test_feature": [artifacts["mean_value"]]})
+        self.mean_val = artifacts.get("mean_value", 0.0)
 
 
 class TestEvaluationSystem:
@@ -116,7 +124,7 @@ class TestEvaluationSystem:
         
         assert system.dataset is dataset
         assert system.logger is logger
-        assert len(system.evaluation_models) == 0
+        assert len(system.models) == 0
     
     def test_add_evaluation_model(self, dataset, logger):
         """Test adding an evaluation model."""
@@ -130,8 +138,8 @@ class TestEvaluationSystem:
             feature_model_class=MockFeatureModel
         )
         
-        assert "test_perf" in system.evaluation_models
-        assert system.evaluation_models["test_perf"] is eval_model
+        assert "test_perf" in system.models
+        assert system.models["test_perf"] is eval_model
         assert eval_model.feature_model is not None
     
     def test_get_evaluation_models(self, dataset, logger):
@@ -249,7 +257,7 @@ class TestPredictionSystemWithSplits:
             )
             
             # Initialize metric_arrays and add features
-            exp_data.features = MetricArrays()
+            exp_data.features = Features()
             test_feature_arr = DataArray(code="test_feature", shape=())
             exp_data.features.add("test_feature", test_feature_arr)
             feature_val = exp_data.parameters.get_value("param_1") * 2.0 + \

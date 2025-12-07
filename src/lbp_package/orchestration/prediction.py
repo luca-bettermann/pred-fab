@@ -13,7 +13,7 @@ import pickle
 
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
-from ..core.data_blocks import MetricArrays
+from ..core.data_blocks import Features
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..utils.logger import LBPLogger
@@ -37,25 +37,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.feature_to_model: Dict[str, IPredictionModel] = {}  # feature_name -> model
         self.datamodule: Optional[DataModule] = None  # Stored after training
     
-    def _get_model_name(self, model: IPredictionModel) -> str:
-        """Get primary feature name from model for logging."""
-        return model.feature_output_codes[0] if model.feature_output_codes else "unknown"
-    
     def get_models(self) -> List[IPredictionModel]:
         """Return registered prediction models."""
         return self.prediction_models
-    
-    def get_model_specs(self) -> Dict[str, Any]:
-        """Extract input/output DataObject specifications from registered prediction models."""
-        # Get base specs (inputs)
-        specs = super().get_model_specs()
-        
-        # Add predicted features
-        specs["predicted_features"] = set()
-        for pred_model in self.prediction_models:
-            specs["predicted_features"].update(pred_model.feature_output_codes)
-        
-        return specs
     
     def add_prediction_model(self, model: IPredictionModel) -> None:
         """Register a prediction model and create feature-to-model mappings."""
@@ -63,7 +47,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.prediction_models.append(model)
         
         # Create feature-to-model mappings
-        for feature_name in model.feature_output_codes:
+        for feature_name in model.outputs:
             if feature_name in self.feature_to_model:
                 self.logger.warning(
                     f"Feature '{feature_name}' already registered to another model. "
@@ -71,28 +55,14 @@ class PredictionSystem(BaseOrchestrationSystem):
                 )
             self.feature_to_model[feature_name] = model
         
-        primary_feature = self._get_model_name(model)
-        self.logger.info(f"Added prediction model for features: {model.feature_output_codes} (primary: {primary_feature})")
+        self.logger.info(f"Added prediction model for features: {model.outputs}")
     
-    def _prepare_model_data(self, model: IPredictionModel, y_norm: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
-        """Prepare normalized feature data for a specific model."""
-        feature_cols = model.feature_output_codes
-        primary_feature = self._get_model_name(model)
-        
-        missing_cols = set(feature_cols) - set(y_norm.columns)
-        if missing_cols:
-            raise ValueError(
-                f"Model requires features {missing_cols} not found in data. "
-                f"Available features: {list(y_norm.columns)}. "
-                f"Ensure data includes all required features for '{primary_feature}'."
-            )
-        
-        # Extract normalized features for this model
-        y_model_norm = y_norm[feature_cols]
-        if isinstance(y_model_norm, pd.Series):
-            y_model_norm = y_model_norm.to_frame()
-            
-        return y_model_norm, primary_feature
+    def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Filter batch targets to only include model outputs."""
+        if self.datamodule is None:
+            raise RuntimeError("DataModule not set")
+        indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
+        return [(X, y[:, indices]) for X, y in batches]
 
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration."""
@@ -109,34 +79,41 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         self.logger.console_info("Starting prediction model training...")
         
-        # Extract training split and fit normalization
-        self.logger.info("Extracting training data from dataset...")
-        X_train, y_train = self.datamodule.get_split('train')
+        # Fit normalization
+        self.logger.info("Fitting normalization on training data...")
+        self.datamodule.fit_normalize('train')
         
-        self.logger.info(f"Fitting normalization on {len(X_train)} training samples...")
-        self.datamodule.fit_normalize(X_train, y_train)
-        
-        # Normalize all data once
-        X_train_norm = self.datamodule.normalize_parameters(X_train)  # type: ignore
-        y_train_norm = self.datamodule.normalize_features(y_train)  # type: ignore
+        # Get batches
+        train_batches = self.datamodule.get_batches('train')
+        val_batches = self.datamodule.get_batches('val')
         
         # Train each registered model
         trained_count = 0
         for model in self.prediction_models:
-            y_model_norm, primary_feature = self._prepare_model_data(model, y_train_norm)
+            # Filter batches for this model
+            model_train_batches = self._filter_batches_for_model(train_batches, model)
+            model_val_batches = self._filter_batches_for_model(val_batches, model)
             
             # Train model with user-provided kwargs
-            self.logger.info(f"Training model for '{primary_feature}' on {len(X_train)} experiments...")
-            model.train(X_train_norm, y_model_norm, **kwargs)
+            self.logger.info(f"Training model for features {model.outputs}...")
+            model.train(model_train_batches, model_val_batches, **kwargs)
             trained_count += 1
             
+            primary_feature = model.outputs[0] if model.outputs else "unknown"
             self.logger.console_info(f"✓ Trained model for '{primary_feature}'")
         
         self.logger.console_success(
             f"Training complete: {trained_count}/{len(self.prediction_models)} models trained"
         )
     
-    def tune(self, datamodule: DataModule, **kwargs) -> None:
+    def tune(
+            self, 
+            exp_data: ExperimentData, 
+            start: int, 
+            end: Optional[int] = None,
+            batch_size: Optional[int] = None,
+            **kwargs
+            ) -> None:
         """
         Fine-tune models with new data (online learning mode).
         
@@ -144,7 +121,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         Only normalizes the new tuning data and calls model.tuning() for adaptation.
         
         Args:
-            datamodule: DataModule with tuning data
+            exp_data: ExperimentData containing tuning data
+            start: Start index of new data
+            end: End index of new data
             **kwargs: Additional tuning parameters passed to model.tuning()
         """
         if self.datamodule is None:
@@ -152,31 +131,50 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "PredictionSystem not trained yet. Call train() before tune(). "
                 "Tuning requires existing normalization parameters from training."
             )
+                        
+        # Create a temporary Dataset with only the tuning experiment
+        self.logger.info(f"Preparing tuning data from positions {start} to {end}...")
+        temp_dataset = Dataset(
+            schema=self.dataset.schema, 
+            schema_id=self.dataset.schema_id,
+            local_data=self.dataset.local_data,
+            logger=self.logger)
+        temp_dataset.add_experiment(exp_data)
+
+        # Create a temporary DataModule for tuning data
+        batch_size = end - start if batch_size is None and end is not None else batch_size
+        temp_datamodule = DataModule(
+            dataset=temp_dataset,
+            batch_size=batch_size,
+            val_size=0.0,
+            test_size=0.0,
+        )
         
-        self.logger.console_info("Starting online model tuning...")
+        # Copy normalization state
+        temp_datamodule.set_normalization_state(self.datamodule.get_normalization_state())
+        # Also copy column mappings to ensure consistency
+        temp_datamodule.input_columns = self.datamodule.input_columns
+        temp_datamodule.output_columns = self.datamodule.output_columns
+
+        # Get tuning batches
+        tune_batches = temp_datamodule.get_batches('train')
         
-        # Extract tuning data (use 'train' split from datamodule)
-        self.logger.info("Extracting tuning data from datamodule...")
-        X_tune, y_tune = datamodule.get_split('train')
-        
-        if len(X_tune) == 0:
+        if not tune_batches:
             raise ValueError("Tuning datamodule has no data in 'train' split.")
-        
-        # Normalize using EXISTING normalization fit (no refit)
-        self.logger.info(f"Normalizing {len(X_tune)} tuning samples with existing normalization...")
-        X_tune_norm = self.datamodule.normalize_parameters(X_tune)  # type: ignore
-        y_tune_norm = self.datamodule.normalize_features(y_tune)  # type: ignore
         
         # Tune each registered model
         tuned_count = 0
         skipped_count = 0
+        
+        self.logger.info("Starting prediction model online tuning...")
         for model in self.prediction_models:
-            y_model_norm, primary_feature = self._prepare_model_data(model, y_tune_norm)
+            model_tune_batches = self._filter_batches_for_model(tune_batches, model)
+            primary_feature = model.outputs[0] if model.outputs else "unknown"
             
             # Try to tune model
             try:
-                self.logger.info(f"Tuning model for '{primary_feature}' with {len(X_tune)} samples...")
-                model.tuning(X_tune_norm, y_model_norm, **kwargs)
+                self.logger.info(f"Tuning model for '{primary_feature}'...")
+                model.tuning(model_tune_batches, **kwargs)
                 tuned_count += 1
                 self.logger.console_info(f"✓ Tuned model for '{primary_feature}'")
             except NotImplementedError:
@@ -190,7 +188,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"Tuning complete: {tuned_count}/{len(self.prediction_models)} models tuned"
             )
         else:
-            self.logger.console_info(
+            self.logger.console_warning(
                 f"Tuning called but no models implement tuning(). "
                 f"Models skipped: {skipped_count}/{len(self.prediction_models)}"
             )
@@ -215,7 +213,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.console_info(f"Validating models on {split} set...")
         
         # Extract validation/test data
-        X_split, y_split = self.datamodule.get_split(split)
+        batches = self.datamodule.get_batches(split)
+        if not batches:
+            return {}
+            
+        # Concatenate batches
+        X_list, y_list = zip(*batches)
+        X_split = np.concatenate(X_list, axis=0)
+        y_split = np.concatenate(y_list, axis=0)
         
         self.logger.info(f"Evaluating {len(self.prediction_models)} models on {len(X_split)} samples...")
         
@@ -223,27 +228,26 @@ class PredictionSystem(BaseOrchestrationSystem):
         results = {}
         for model in self.prediction_models:
             # Get primary feature name
-            primary_feature = model.feature_output_codes[0] if model.feature_output_codes else "unknown"
+            primary_feature = model.outputs[0] if model.outputs else "unknown"
             
-            # Get feature columns
-            feature_cols = model.feature_output_codes
-            missing_cols = set(feature_cols) - set(y_split.columns)
-            if missing_cols:
-                self.logger.warning(
-                    f"Missing features for model '{primary_feature}': {missing_cols}, skipping"
-                )
+            # Get indices for this model
+            try:
+                indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
+            except ValueError:
+                self.logger.warning(f"Missing features for model '{primary_feature}', skipping")
                 continue
             
-            # Get ground truth
-            y_true = y_split[feature_cols]
+            # Get ground truth (denormalized)
+            y_true_norm = y_split[:, indices]
+            y_true = self.datamodule.denormalize_values(y_true_norm, model.outputs)
             
             # Predict
             y_pred_norm = model.forward_pass(X_split)
-            y_pred = self.datamodule.denormalize_features(y_pred_norm)
+            y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
             
             # Compute metrics for primary feature
-            y_true_vals = y_true[primary_feature].values
-            y_pred_vals = y_pred[primary_feature].values
+            y_true_vals = y_true[:, 0]
+            y_pred_vals = y_pred[:, 0]
             
             model_metrics = Metrics.calculate_regression_metrics(y_true_vals, y_pred_vals)
             
@@ -259,6 +263,42 @@ class PredictionSystem(BaseOrchestrationSystem):
         )
         
         return results
+
+    def predict_experiment(
+        self,
+        exp_data: ExperimentData,
+        predict_from: int = 0,
+        predict_to: Optional[int] = None,
+        batch_size: int = 1000,
+        overlap: int = 0
+    ) -> Dict[str, np.ndarray]:
+        """
+        Predict dimensional features and populate exp_data.predicted_metric_arrays.
+        
+        Args:
+            exp_data: ExperimentData with parameters set (predicted_metric_arrays populated)
+            predict_from: Start position index for prediction (default: 0)
+            predict_to: End position index for prediction (default: None = predict all)
+            batch_size: Number of dimensional positions per batch (default: 1000)
+            overlap: Number of positions to overlap between consecutive batches (default: 0).
+                     Useful for context-aware models (e.g., transformers) that need continuity
+                     across batch boundaries. Must be < batch_size.
+        """
+        # Extract parameters from exp_data
+        params = exp_data.parameters.get_values_dict()
+        
+        # Get predictions from core logic
+        predictions = self._predict_from_params(
+            params=params,
+            predict_from=predict_from,
+            predict_to=predict_to,
+            batch_size=batch_size,
+            overlap=overlap
+        )
+        
+        # Store predictions in exp_data.predicted_metric_arrays
+        self._store_predictions_in_exp_data(exp_data, predictions)
+        return predictions
     
     def _predict_from_params(
         self,
@@ -300,43 +340,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info(f"✓ Predicted {predict_to - predict_from} positions") # type: ignore
         return predictions
     
-    def predict_experiment(
-        self,
-        exp_data: ExperimentData,
-        predict_from: int = 0,
-        predict_to: Optional[int] = None,
-        batch_size: int = 1000,
-        overlap: int = 0
-    ) -> ExperimentData:
-        """
-        Predict dimensional features and populate exp_data.predicted_metric_arrays.
-        
-        Args:
-            exp_data: ExperimentData with parameters set (predicted_metric_arrays populated)
-            predict_from: Start position index for prediction (default: 0)
-            predict_to: End position index for prediction (default: None = predict all)
-            batch_size: Number of dimensional positions per batch (default: 1000)
-            overlap: Number of positions to overlap between consecutive batches (default: 0).
-                     Useful for context-aware models (e.g., transformers) that need continuity
-                     across batch boundaries. Must be < batch_size.
-        """
-        # Extract parameters from exp_data
-        params = self._get_params_from_exp_data(exp_data)
-        
-        # Get predictions from core logic
-        predictions = self._predict_from_params(
-            params=params,
-            predict_from=predict_from,
-            predict_to=predict_to,
-            batch_size=batch_size,
-            overlap=overlap
-        )
-        
-        # Store predictions in exp_data.predicted_metric_arrays
-        self._store_predictions_in_exp_data(exp_data, predictions)
-        
-        return exp_data
-    
     def _store_predictions_in_exp_data(
         self, 
         exp_data: ExperimentData, 
@@ -369,7 +372,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 raise ValueError(f"Missing dimensional parameter in params: {dim_name}")
             size = params[dim_name]
             dim_sizes.append(int(size))
-            dim_names.append(dim_obj.dim_iterator_code)
+            dim_names.append(dim_obj.iterator_code)
         
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape))
@@ -394,7 +397,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         # Collect all feature names from registered models
         for model in self.prediction_models:
-            for feature_name in model.feature_output_codes:
+            for feature_name in model.outputs:
                 if feature_name not in predictions:
                     # Initialize with NaN (positions will be filled during prediction)
                     predictions[feature_name] = np.full(shape, np.nan)
@@ -479,28 +482,29 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_indices: List[Tuple[int, ...]]
     ) -> None:
         """Run all model predictions on X_batch, denormalize, and store in predictions dict."""
+        if self.datamodule is None:
+             raise RuntimeError("DataModule not set")
+
+        # Prepare input (one-hot + normalize)
+        X_norm = self.datamodule.prepare_input(X_batch)
+        
         for model in self.prediction_models:
-            # Validate required features present
-            missing_required = set(model.feature_input_codes) - set(X_batch.columns)
-            if missing_required:
-                raise ValueError(
-                    f"Model requires evaluation features that are missing: {missing_required}. "
-                    f"Please provide these features in the input data."
-                )
-            
             # Predict in normalized space
-            y_pred_norm = model.forward_pass(X_batch)
+            y_pred_norm = model.forward_pass(X_norm)
             
             # Denormalize to original scale
-            y_pred = self.datamodule.denormalize_features(y_pred_norm)  # type: ignore
+            y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
             
             # Store predictions in arrays
-            for feature_name in model.feature_output_codes:
-                if feature_name not in y_pred.columns:
+            for i, feature_name in enumerate(model.outputs):
+                if feature_name not in predictions:
                     continue
                 
-                for i, idx in enumerate(batch_indices):
-                    predictions[feature_name][idx] = float(y_pred[feature_name].iloc[i])
+                # y_pred is (batch, n_outputs)
+                values = y_pred[:, i]
+                
+                for j, idx in enumerate(batch_indices):
+                    predictions[feature_name][idx] = float(values[j])
     
     # === EXPORT FOR PRODUCTION INFERENCE ===
     
@@ -556,10 +560,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             fresh_model._set_model_artifacts(artifacts)
             
             # Verify feature_names match
-            if fresh_model.feature_output_codes != model.feature_output_codes:
+            if fresh_model.outputs != model.outputs:
                 raise ValueError(
                     f"Round-trip validation failed: feature_names mismatch. "
-                    f"Original: {model.feature_output_codes}, Restored: {fresh_model.feature_output_codes}"
+                    f"Original: {model.outputs}, Restored: {fresh_model.outputs}"
                 )
             
             self.logger.info(f"✓ Validated {ModelClass.__name__}")
@@ -584,7 +588,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             'prediction_models': [
                 {
                     'class_path': f"{model.__class__.__module__}.{model.__class__.__name__}",
-                    'feature_names': model.feature_output_codes,
+                    'feature_names': model.outputs,
                     'artifacts': model._get_model_artifacts()
                 }
                 for model in self.prediction_models
@@ -593,7 +597,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             'schema': self.dataset.schema.to_dict()
         }
         
-        # NOTE: Evaluation models optional - only included if requested and available
         # InferenceBundle can work with predictions only (evaluation happens externally)
         if include_evaluation:
             self.logger.warning(

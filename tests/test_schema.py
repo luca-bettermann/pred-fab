@@ -4,8 +4,8 @@ Tests for unified schema structure with parameters, dimensions, performance_attr
 import pytest
 import numpy as np
 from lbp_package.core.schema import DatasetSchema
-from lbp_package.core.data_blocks import Parameters, Dimensions, PerformanceAttributes, MetricArrays
-from lbp_package.core.data_objects import Parameter, Performance, Dimension, DataArray
+from lbp_package.core.data_blocks import Parameters, Dimensions, PerformanceAttributes, Features
+from lbp_package.core.data_objects import Parameter, PerformanceAttribute, Dimension, DataArray
 
 
 class TestSchemaCreation:
@@ -47,7 +47,7 @@ class TestSchemaCreation:
         schema.dimensions.add("traj.t", Dimension.integer("traj", "t", "i", min_val=0, max_val=100))
         
         # Add performance
-        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         
         # Add metric arrays
         schema.features.add("energy", DataArray(code="energy", shape=(100,)))
@@ -94,7 +94,7 @@ class TestSchemaHash:
         
         schema2 = DatasetSchema()
         schema2.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema2.performance.add("acc", Performance.real(min_val=0.0, max_val=1.0))
+        schema2.performance.add("acc", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         
         hash1 = schema1._compute_schema_hash()
         hash2 = schema2._compute_schema_hash()
@@ -123,7 +123,7 @@ class TestSchemaSerialization:
         schema = DatasetSchema()
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
-        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         
         schema_dict = schema.to_dict()
         restored = DatasetSchema.from_dict(schema_dict)
@@ -150,8 +150,8 @@ class TestSchemaIntegration:
         schema.dimensions.add("trajectory.timestep", Dimension.integer("trajectory", "timestep", "t", min_val=0, max_val=100))
         
         # Add performance
-        schema.performance.add("accuracy", Performance.real(min_val=0.0, max_val=1.0))
-        schema.performance.add("loss", Performance.real(min_val=0.0, max_val=100.0))
+        schema.performance.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("loss", PerformanceAttribute.real(min_val=0.0, max_val=100.0))
         schema.performance.calibration_weights = {"accuracy": 0.7, "loss": 0.3}
         
         # Note: DataArray serialization needs fix, skip for now

@@ -12,45 +12,77 @@ import os
 import json
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, Set, Optional
+from typing import Dict, Any, Set, Optional, List
 from ..utils import LBPLogger
-from .data_objects import DataDimension
+from .data_objects import DataDimension, Feature, Parameter, PerformanceAttribute
 from .data_blocks import (
     Parameters,
-    # Dimensions,
     PerformanceAttributes,
-    MetricArrays
+    Features
 )
-
 
 class DatasetSchema:
     """
     Defines the structure and types of a dataset.
     
     Schema specifies:
-    - Parameters (unified - no static/dynamic split)
-    - Dimensions (dimensional metadata)
+    - Parameters (including dimensions)
     - Performance attributes (evaluation outputs)
-    - Metric arrays (multi-dimensional data storage)
+    - Feature arrays (multi-dimensional data storage)
     
     Schema hash provides deterministic ID generation via SchemaRegistry.
     """
     
-    def __init__(self, default_round_digits: int = 3):
-        """Initialize empty schema with four DataBlocks."""
-        self.parameters = Parameters()
-        # self.dimensions = Dimensions()
-        self.performance = PerformanceAttributes()
-        self.features = MetricArrays()
+    def __init__(
+            self, 
+            parameters: Parameters,
+            performance: PerformanceAttributes,
+            features: Features,
+            default_round_digits: int = 3
+            ):
+        """Initialize schema from DataBlocks."""
+        self.parameters = parameters
+        self.performance = performance
+        self.features = features
         self.default_round_digits = default_round_digits
-    
+        self.schema_id: Optional[str] = None  # Assigned via SchemaRegistry
+
+    @classmethod
+    def from_list(
+        cls, 
+        parameters: List[Parameter],
+        performance_attrs: List[PerformanceAttribute],
+        features: List[Feature],
+        default_round_digits: int = 3
+        ) -> 'DatasetSchema':
+        """Reconstruct schema from dictionary."""
+        parameter_block = Parameters.from_list(parameters)
+        performance_block = PerformanceAttributes.from_list(performance_attrs)
+        feature_block = Features.from_list(features)
+        return cls(parameter_block, performance_block, feature_block, default_round_digits)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DatasetSchema':
+        """Reconstruct schema from dictionary."""
+        parameter_block = Parameters.from_dict(data["parameters"])
+        performance_block = PerformanceAttributes.from_dict(data["performance_attrs"])
+        feature_block = Features.from_dict(data["features"])
+        
+        schema = cls(parameter_block, performance_block, feature_block, data.get("default_round_digits", 3))
+        schema_id = data.get("schema_id", None)
+        schema.schema_id = schema_id
+        return schema
+
+    def set_schema_id(self, schema_id: str) -> None:
+        """Set the schema ID."""
+        self.schema_id = schema_id
+
     def _compute_schema_hash(self) -> str:
         """Compute deterministic hash from schema structure."""
         structure = {
             "parameters": self._block_to_hash_structure(self.parameters),
-            # "dimensions": self._block_to_hash_structure(self.dimensions),
             "performance": self._block_to_hash_structure(self.performance),
-            "features": self._block_to_hash_structure(self.features)
+            "features": self._block_to_hash_structure(self.features),
         }
         
         # Sort keys for determinism
@@ -71,58 +103,45 @@ class DatasetSchema:
         """Serialize schema to dictionary for storage."""
         return {
             "parameters": self.parameters.to_dict(),
-            # "dimensions": self.dimensions.to_dict(),
             "performance_attrs": self.performance.to_dict(),
             "features": self.features.to_dict(),
             "default_round_digits": self.default_round_digits,
+            "schema_id": self.schema_id,
             "schema_hash": self._compute_schema_hash()
         }
     
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DatasetSchema':
-        """Reconstruct schema from dictionary."""
-        default_round_digits = data.get("default_round_digits", 3)
-        schema = cls(default_round_digits=default_round_digits)
-        schema.parameters = Parameters.from_dict(data["parameters"])
-        # schema.dimensions = Dimensions.from_dict(data["dimensions"])
-        schema.performance = PerformanceAttributes.from_dict(data["performance_attrs"])
-        schema.features = MetricArrays.from_dict(data.get("features", {"type": "MetricArrays", "data_objects": {}}))
-        return schema
     
-    @classmethod
-    def from_model_specs(
-        cls,
-        eval_specs: Dict[str, Any],
-        pred_specs: Dict[str, Any],
-        logger: LBPLogger
-    ) -> 'DatasetSchema':
-        """Build schema from evaluation and prediction system specifications."""        
-        schema = cls()
+    # @classmethod
+    # def from_model_specs(
+    #     cls,
+    #     feature_specs: Dict[str, Any],
+    #     eval_specs: Dict[str, Any],
+    #     pred_specs: Dict[str, Any],
+    #     logger: LBPLogger
+    # ) -> 'Schema':
+    #     """Build schema from evaluation and prediction system specifications."""        
+    #     schema = cls()
         
-        # 1. Merge input parameters from both systems
-        all_inputs = {**eval_specs["inputs"], **pred_specs["inputs"]}
+    #     # 1. Merge input parameters from both systems
+    #     all_inputs = {**eval_specs["inputs"], **pred_specs["inputs"]}
         
-        # Separate dimensions from parameters
-        for param_name, data_obj in all_inputs.items():
-            # if isinstance(data_obj, DataDimension):
-            #     schema.dimensions.add(param_name, data_obj)
-            #     logger.info(f"  Added dimension: {param_name}")
-            # else:
-                schema.parameters.add(param_name, data_obj)
-                logger.info(f"  Added parameter: {param_name}")
+    #     # Add parameters to schema
+    #     for param_name, data_obj in all_inputs.items():
+    #         schema.parameters.add(param_name, data_obj)
+    #         logger.info(f"  Added parameter: {param_name}")
         
-        # 2. Add performance attributes
-        for perf_code, perf_obj in eval_specs["outputs"].items():
-            schema.performance.add(perf_code, perf_obj)
-            logger.info(f"  Added performance attribute: {perf_code}")
+    #     # 2. Add performance attributes
+    #     for perf_code, perf_obj in eval_specs["outputs"].items():
+    #         schema.performance.add(perf_code, perf_obj)
+    #         logger.info(f"  Added performance attribute: {perf_code}")
         
-        logger.info(
-            f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
-            # f"{len(schema.dimensions.data_objects)} dimensions, "
-            f"{len(schema.performance.data_objects)} performance attributes"
-        )
+    #     logger.info(
+    #         f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
+    #         # f"{len(schema.dimensions.data_objects)} dimensions, "
+    #         f"{len(schema.performance.data_objects)} performance attributes"
+    #     )
         
-        return schema
+    #     return schema
     
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
         """Check structural compatibility with another schema."""        
@@ -141,19 +160,6 @@ class DatasetSchema:
                     f"to {other_block.__class__.__name__}."
                 )        
         return True
-    
-    def get_all_param_names(self) -> Set[str]:
-        """Get all parameter names."""
-        return set(self.parameters.keys())
-    
-    def get_dimension_names(self) -> Set[str]:
-        """Get all dimension parameter names."""
-        dim_names = [name for name, obj in self.parameters.items() if isinstance(obj, DataDimension)]
-        return set(dim_names)
-    
-    def get_all_performance_codes(self) -> Set[str]:
-        """Get all performance codes."""
-        return set(self.performance.keys())
 
 
 class SchemaRegistry:

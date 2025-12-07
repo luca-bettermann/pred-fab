@@ -9,15 +9,15 @@ from .data_objects import (
     DataDimension,
     DataArray,
     Parameter,
-    Dimension
+    Feature,
+    PerformanceAttribute
 )
 
 from .data_blocks import (
     DataBlock,
     Parameters,
-    Dimensions,
     PerformanceAttributes,
-    MetricArrays
+    Features
 )
 
 from .schema import DatasetSchema, SchemaRegistry
@@ -33,12 +33,12 @@ __all__ = [
     'DataDimension',
     'DataArray',
     'Parameter',
-    'Dimension',
+    'Feature',
+    'PerformanceAttribute',
     'DataBlock',
     'Parameters',
-    'Dimensions',
     'PerformanceAttributes',
-    'MetricArrays',
+    'Features',
     'DatasetSchema',
     'SchemaRegistry',
     'Dataset',

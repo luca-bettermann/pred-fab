@@ -12,7 +12,7 @@ from typing import List, Dict, Any
 from lbp_package.core import Dataset, DatasetSchema, DataModule
 from lbp_package.core.dataset import ExperimentData
 from lbp_package.core.data_objects import DataReal, DataInt, DataArray
-from lbp_package.core.data_blocks import DataBlock, MetricArrays
+from lbp_package.core.data_blocks import DataBlock, Features
 from lbp_package.interfaces.prediction import IPredictionModel
 from lbp_package.interfaces.features import IFeatureModel
 from lbp_package.interfaces.evaluation import IEvaluationModel
@@ -30,7 +30,7 @@ class BadPredictionModel(IPredictionModel):
     
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["test_feature"]
     
     def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs) -> None:
@@ -65,7 +65,7 @@ class BadFeatureModel(IFeatureModel):
     def _load_data(self, **param_values):
         return None
     
-    def _compute_features(self, data, visualize=False):
+    def _compute_feature_logic(self, data, visualize=False):
         """Returns wrong type based on self.return_type."""
         if self.return_type == "string":
             return "not a number"
@@ -99,7 +99,7 @@ class BadEvaluationModel(IEvaluationModel):
             return "not a number"
         return 1.0
     
-    def _compute_aggregation(self, exp_data):
+    def compute_performance(self, exp_data):
         if self.bad_method == "aggregation_type":
             return "not a dict"
         elif self.bad_method == "aggregation_values":
@@ -156,7 +156,7 @@ def simple_dataset():
             exp_params={"x": float(i), "y": float(i * 2)}
         )
         
-        exp_data.features = MetricArrays()
+        exp_data.features = Features()
         test_feature_arr = DataArray(code="test_feature", shape=())
         exp_data.features.add("test_feature", test_feature_arr)
         exp_data.features.set_value("test_feature", np.array(float(i + 1)))
@@ -172,14 +172,14 @@ class TestFeatureValidation:
         model = BadFeatureModel(simple_dataset, logger, return_type="string")
         
         with pytest.raises(TypeError, match="_compute_features\\(\\) must return numeric value"):
-            model.run("test_feature", x=1, y=2)
+            model._compute_feature_values("test_feature", x=1, y=2)
     
     def test_compute_features_returns_list(self, simple_dataset, logger):
         """Test that _compute_features returning list raises TypeError."""
         model = BadFeatureModel(simple_dataset, logger, return_type="list")
         
         with pytest.raises(TypeError, match="_compute_features\\(\\) must return numeric value"):
-            model.run("test_feature", x=1, y=2)
+            model._compute_feature_values("test_feature", x=1, y=2)
 
 
 class TestEvaluationValidation:

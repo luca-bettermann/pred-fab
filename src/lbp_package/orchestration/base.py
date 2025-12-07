@@ -5,9 +5,12 @@ Provides shared functionality for EvaluationSystem and PredictionSystem.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple, Optional
+
+from lbp_package.core.data_objects import DataObject
 
 from ..core.dataset import Dataset, ExperimentData
+from ..interfaces import BaseInterface
 from ..utils import LBPLogger
 
 
@@ -23,49 +26,41 @@ class BaseOrchestrationSystem(ABC):
     
     def __init__(self, dataset: Dataset, logger: LBPLogger):
         """Initialize orchestration system with dataset and logger."""
-        self.dataset = dataset
-        self.logger = logger
+        self.dataset: Dataset = dataset
+        self.logger: LBPLogger = logger
+        self.active: bool = True
+        self.models: List[Any] = []
     
-    @abstractmethod
     def get_models(self) -> Any:
-        """
-        Return registered models in implementation-specific structure.
-        
-        EvaluationSystem: List[IEvaluationModel]
-        PredictionSystem: List[IPredictionModel]
-        """
-        pass
+        """Return registered models in implementation-specific structure."""
+        return self.models
     
-    def get_model_specs(self) -> Dict[str, Any]:
+    def get_model_specs(self) -> Dict[str, List[str]]:
         """Extract input/output DataObject specifications from registered models."""        
-        specs = {"inputs": {}}  # param_name -> DataObject
+        specs = {
+            "input_parameters": [],
+            "input_features": [],
+            "outputs": [],
+            }
         
-        # Get models in implementation-specific structure
-        models = self.get_models()
-        
-        for model in models:
-            # Use new explicit schema property
-            if hasattr(model, 'required_parameters'):
-                # required_parameters is now a List[DataObject]
-                schema_objects = model.required_parameters
-                
-                for data_obj in schema_objects:
-                    param_name = data_obj.name
-                    
-                    # Check for conflicts
-                    if param_name in specs["inputs"]:
-                        existing = specs["inputs"][param_name]
-                        # Compare dictionaries to check for compatibility
-                        if existing.to_dict() != data_obj.to_dict():
-                            raise ValueError(
-                                f"Parameter '{param_name}' has conflicting definitions:\n"
-                                f"  Existing: {existing.to_dict()}\n"
-                                f"  New: {data_obj.to_dict()}"
-                            )
-                    else:
-                        specs["inputs"][param_name] = data_obj
+        # Get models in implementation-specific structure        
+        for model in self.get_models():
+            specs["input_parameters"].extend(model.input_parameters)
+            specs["input_features"].extend(model.input_features)
+            
+            for output in model.outputs:
+                if output not in specs["outputs"]:
+                    specs["outputs"].append(output)
+                else:
+                    raise ValueError(
+                        f"Output '{output}' is produced by multiple models."
+                    )
         return specs
     
-    def _get_params_from_exp_data(self, exp_data: ExperimentData) -> Dict[str, Any]:
-        """Extract all parameters from exp_data into a flat dict."""
-        return exp_data.parameters.get_values_dict()
+    def deactivate(self) -> None:
+        """Deactivate the orchestration system."""
+        self.active = False
+
+    def activate(self) -> None:
+        """Activate the orchestration system."""
+        self.active = True

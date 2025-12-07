@@ -10,7 +10,8 @@ Ensures that the prediction system correctly handles:
 
 import pytest
 import pandas as pd
-from typing import List, Dict, Type, Any
+import numpy as np
+from typing import List, Dict, Type, Any, Tuple
 from dataclasses import dataclass
 
 from lbp_package.core.schema import DatasetSchema
@@ -37,7 +38,7 @@ class MockFeatureModel1(IFeatureModel):
         """Mock data loading."""
         return {"data": [1.0, 2.0, 3.0]}
     
-    def _compute_features(self, data_dict):
+    def _compute_feature_logic(self, data_dict):
         """Mock feature computation."""
         self.call_count += 1
         return pd.DataFrame({"computed_feature_1": [1.0]})
@@ -54,7 +55,7 @@ class MockFeatureModel2(IFeatureModel):
         """Mock data loading."""
         return {"data": [4.0, 5.0, 6.0]}
     
-    def _compute_features(self, data_dict):
+    def _compute_feature_logic(self, data_dict):
         """Mock feature computation."""
         self.call_count += 1
         return pd.DataFrame({"computed_feature_2": [2.0]})
@@ -73,14 +74,15 @@ class SingleFeaturePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["energy"]
     
-    def train(self, X, y, **kwargs):
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs):
         self.is_trained = True
     
-    def forward_pass(self, X):
-        return pd.DataFrame({"energy": [1.0] * len(X)})
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        # Return array of ones with shape (batch_size, 1)
+        return np.ones((len(X), 1))
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
         return {"is_trained": self.is_trained}
@@ -103,18 +105,21 @@ class MultiFeaturePredictionModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["feature_a", "feature_b", "feature_c"]  # Multiple features
     
-    def train(self, X, y, **kwargs):
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs):
         self.is_trained = True
     
-    def forward_pass(self, X):
-        return pd.DataFrame({
-            "feature_a": [1.0] * len(X),
-            "feature_b": [2.0] * len(X),
-            "feature_c": [3.0] * len(X),
-        })
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        # Return array with shape (batch_size, 3)
+        # Col 0: 1.0, Col 1: 2.0, Col 2: 3.0
+        batch_size = len(X)
+        result = np.zeros((batch_size, 3))
+        result[:, 0] = 1.0
+        result[:, 1] = 2.0
+        result[:, 2] = 3.0
+        return result
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
         return {"is_trained": self.is_trained}
@@ -135,7 +140,7 @@ class ModelWithFeatureModelDependency(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["predicted_output"]
     
     @property
@@ -145,12 +150,12 @@ class ModelWithFeatureModelDependency(IPredictionModel):
             "feat2": MockFeatureModel2,
         }
     
-    def train(self, X, y, **kwargs):
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs):
         self.is_trained = True
     
-    def forward_pass(self, X):
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
         # Could use self._feature_models["feat1"] here
-        return pd.DataFrame({"predicted_output": [4.0] * len(X)})
+        return np.full((len(X), 1), 4.0)
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
         return {"is_trained": self.is_trained}
@@ -171,7 +176,7 @@ class AnotherModelWithSameFeatureModel(IPredictionModel):
         self.is_trained = False
     
     @property
-    def feature_output_codes(self) -> List[str]:
+    def outputs(self) -> List[str]:
         return ["other_output"]
     
     @property
@@ -180,11 +185,11 @@ class AnotherModelWithSameFeatureModel(IPredictionModel):
             "shared_feat": MockFeatureModel1,  # Same type as first model
         }
     
-    def train(self, X, y, **kwargs):
+    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs):
         self.is_trained = True
     
-    def forward_pass(self, X):
-        return pd.DataFrame({"other_output": [5.0] * len(X)})
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        return np.full((len(X), 1), 5.0)
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
         return {"is_trained": self.is_trained}
@@ -286,10 +291,10 @@ class TestPredictionSystemAPI:
         model2 = MultiFeaturePredictionModel()
         
         # Single feature model
-        assert model1.feature_output_codes == ["energy"]
+        assert model1.outputs == ["energy"]
         
         # Multi-feature model
-        assert model2.feature_output_codes == ["feature_a", "feature_b", "feature_c"]
+        assert model2.outputs == ["feature_a", "feature_b", "feature_c"]
 
 
 class TestFeatureModelDependencies:
