@@ -6,12 +6,13 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 """
 
 import numpy as np
+import pandas as pd
 import os
 from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 import functools
 
 from .schema import DatasetSchema
-from ..core import DataBlock, Parameters, Features, PerformanceAttributes
+from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDimension
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, LBPLogger
@@ -265,40 +266,6 @@ class Dataset:
         
         # Store
         self._experiments[exp_data.exp_code] = exp_data
-    
-    # === Feature Memoization for IFeatureModel ===
-    
-    # def has_cached_features_at(self, params: Dict[str, Any]) -> bool:
-    #     """Check if features are cached for specific parameter values."""
-    #     param_tuple = self._make_param_tuple(params)
-    #     return param_tuple in self._feature_cache
-    
-    # def get_cached_feature_value(self, feature_name: str, params) -> Any:
-    #     """Get cached feature value for specific parameters."""
-    #     param_tuple = self._make_param_tuple(params)
-    #     if param_tuple not in self._feature_cache:
-    #         raise KeyError(f"No features cached for parameters: {params}")
-        
-    #     if feature_name not in self._feature_cache[param_tuple]:
-    #         raise KeyError(f"Feature '{feature_name}' not found in cache")
-        
-    #     return self._feature_cache[param_tuple][feature_name]
-    
-    # def cache_feature_value(self, feature_name: str, value: Any, params) -> None:
-    #     """Cache feature value for specific parameters."""
-    #     param_tuple = self._make_param_tuple(params)
-    #     if param_tuple not in self._feature_cache:
-    #         self._feature_cache[param_tuple] = {}
-    #     self._feature_cache[param_tuple][feature_name] = value
-    
-    # def clear_feature_cache(self) -> None:
-    #     """Clear all cached feature values. Used for recomputation."""
-    #     self._feature_cache.clear()
-    
-    # def _make_param_tuple(self, params: Dict[str, Any]) -> Tuple[str, ...]:
-    #     """Create hashable tuple from parameter dict for cache keys."""
-    #     items = sorted(params.items())
-    #     return tuple(f"{name}={value}" for name, value in items)
     
     def get_experiment_codes(self) -> List[str]:
         """Get list of all experiment codes in dataset."""
@@ -603,6 +570,79 @@ class Dataset:
             self.logger.info(f"Debug mode: Skipped pushing {dtype} {codes_to_save} to external source.")
         else:
             self.logger.warning(f"No external data interface provided: Skipped pushing {dtype} {codes_to_save} to external source.")
+
+    def export_to_dataframe(self, experiment_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Export experiment data to flattened DataFrames (X, y).
+        Uses Parameters block logic for dimension iteration.
+        """
+        if not experiment_codes:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        X_rows = []
+        y_rows = []
+        
+        for code in experiment_codes:
+            exp_data = self.get_experiment(code)
+            if exp_data.features is None:
+                continue
+            
+            # Get parameter info
+            all_params = exp_data.parameters.get_values_dict()
+            dim_names = exp_data.parameters.get_dim_names()
+            
+            # Static params (X base)
+            static_params = {k: v for k, v in all_params.items() if k not in dim_names}
+            
+            if not dim_names:
+                # Case 1: No dimensions (Scalar experiment)
+                y_dict = {}
+                for feature_name in exp_data.features.keys():
+                    value = exp_data.features.get_value(feature_name)
+                    # Handle scalar or 1-element array
+                    if isinstance(value, np.ndarray):
+                        y_dict[feature_name] = float(value.flat[0])
+                    else:
+                        y_dict[feature_name] = float(value)
+                
+                X_rows.append(static_params)
+                y_rows.append(y_dict)
+                continue
+            
+            # Case 2: Multi-dimensional experiment
+            # Get all index combinations
+            dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
+            iterator_map = exp_data.parameters.get_dim_iterator_names()
+            
+            # Pre-fetch feature arrays
+            feature_arrays = {
+                name: exp_data.features.get_value(name) 
+                for name in exp_data.features.keys()
+            }
+            
+            for idx_tuple in dim_combinations:
+                # Build X row (Static + Iterators)
+                row_dict = static_params.copy()
+                for i, dim_name in enumerate(dim_names):
+                    iterator_name = iterator_map[dim_name]
+                    row_dict[iterator_name] = idx_tuple[i]
+                
+                X_rows.append(row_dict)
+                
+                # Build y row (Features at index)
+                y_dict = {}
+                for feature_name, array in feature_arrays.items():
+                    if isinstance(array, np.ndarray):
+                        val = array[idx_tuple]
+                        if not np.isnan(val):
+                            y_dict[feature_name] = float(val)
+                
+                y_rows.append(y_dict)
+        
+        if not X_rows:
+            return pd.DataFrame(), pd.DataFrame()
+        
+        return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
 
     def __repr__(self) -> str:
         """String representation."""

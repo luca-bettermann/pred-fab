@@ -3,7 +3,8 @@ import numpy as np
 
 from ..utils import LBPLogger
 from ..core import Dataset, ExperimentData, DataReal, Parameters
-from .base import BaseOrchestrationSystem
+from ..interfaces import IEvaluationModel
+from .base_system import BaseOrchestrationSystem
 
 
 class EvaluationSystem(BaseOrchestrationSystem):
@@ -13,9 +14,10 @@ class EvaluationSystem(BaseOrchestrationSystem):
     Manages evaluation model execution and stores results in ExperimentData.
     """
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger):
         """Initialize evaluation system."""
-        super().__init__(dataset, logger)
+        super().__init__(logger)
+        self.models: List[IEvaluationModel] = []
 
     # === EVALUATION ===
 
@@ -72,7 +74,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Run evaluation for each performance code
         for eval_model in self.models:
             # Skip if already loaded
-            if skip_for_code.get(eval_model.outputs, False):
+            if skip_for_code.get(eval_model.output_performance, False):
                 self.logger.info(f"Skipping evaluation for '{eval_model.outputs}' as performance already complete.")
                 continue
             # Skip if the feature array is incomplete -> we only evaluate on complete feature arrays
@@ -87,7 +89,11 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 )
 
             # Collect results
-            performance_dict[eval_model.outputs] = avg_performance
-            self.logger.info(f"Computed performance '{eval_model.outputs}': {avg_performance}")
+            performance_dict[eval_model.output_performance] = avg_performance
+            self.logger.info(f"Computed performance '{eval_model.output_performance}': {avg_performance}")
         
         return performance_dict
+    
+    def get_models(self) -> List[IEvaluationModel]:
+        """Return registered evaluation models."""
+        return self.models

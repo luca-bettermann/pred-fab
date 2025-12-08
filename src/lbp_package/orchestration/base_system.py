@@ -24,14 +24,13 @@ class BaseOrchestrationSystem(ABC):
     - Parameter extraction from ExperimentData
     """
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger):
         """Initialize orchestration system with dataset and logger."""
-        self.dataset: Dataset = dataset
         self.logger: LBPLogger = logger
         self.active: bool = True
         self.models: List[Any] = []
     
-    def get_models(self) -> Any:
+    def get_models(self) -> List[Any]:
         """Return registered models in implementation-specific structure."""
         return self.models
     

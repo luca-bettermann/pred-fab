@@ -11,14 +11,11 @@ import pandas as pd
 import numpy as np
 import pickle
 
-from ..core.dataset import Dataset, ExperimentData
-from ..core.datamodule import DataModule
-from ..core.data_blocks import Features
+from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
-from ..utils.logger import LBPLogger
-from ..utils.metrics import Metrics
-from .base import BaseOrchestrationSystem
+from ..utils import LBPLogger, Metrics, LocalData
+from .base_system import BaseOrchestrationSystem
 
 
 class PredictionSystem(BaseOrchestrationSystem):
@@ -30,44 +27,27 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger, schema: DatasetSchema, local_data: LocalData):
         """Initialize prediction system."""
-        super().__init__(dataset, logger)
-        self.prediction_models: List[IPredictionModel] = []  # All registered models
-        self.feature_to_model: Dict[str, IPredictionModel] = {}  # feature_name -> model
+        super().__init__(logger)
+        self.models: List[IPredictionModel] = []
+
+        self.schema: DatasetSchema = schema
+        self.local_data: LocalData = local_data
         self.datamodule: Optional[DataModule] = None  # Stored after training
-    
-    def get_models(self) -> List[IPredictionModel]:
-        """Return registered prediction models."""
-        return self.prediction_models
-    
-    def add_prediction_model(self, model: IPredictionModel) -> None:
-        """Register a prediction model and create feature-to-model mappings."""
-        # Add to model list
-        self.prediction_models.append(model)
-        
-        # Create feature-to-model mappings
-        for feature_name in model.outputs:
-            if feature_name in self.feature_to_model:
-                self.logger.warning(
-                    f"Feature '{feature_name}' already registered to another model. "
-                    f"Overwriting with new model."
-                )
-            self.feature_to_model[feature_name] = model
-        
-        self.logger.info(f"Added prediction model for features: {model.outputs}")
     
     def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Filter batch targets to only include model outputs."""
         if self.datamodule is None:
             raise RuntimeError("DataModule not set")
-        indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
-        return [(X, y[:, indices]) for X, y in batches]
+        input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
+        output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
+        return [(X[:, input_indices], y[:, output_indices]) for X, y in batches]
 
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration."""
         # Store a copy to prevent mutation after training
-        self.datamodule = datamodule.copy()
+        self.datamodule = datamodule
         
         # Check if training split is empty
         split_sizes = self.datamodule.get_split_sizes()
@@ -89,7 +69,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         # Train each registered model
         trained_count = 0
-        for model in self.prediction_models:
+        for model in self.models:
             # Filter batches for this model
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
@@ -103,7 +83,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.console_info(f"✓ Trained model for '{primary_feature}'")
         
         self.logger.console_success(
-            f"Training complete: {trained_count}/{len(self.prediction_models)} models trained"
+            f"Training complete: {trained_count}/{len(self.models)} models trained"
         )
     
     def tune(
@@ -135,9 +115,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Create a temporary Dataset with only the tuning experiment
         self.logger.info(f"Preparing tuning data from positions {start} to {end}...")
         temp_dataset = Dataset(
-            schema=self.dataset.schema, 
-            schema_id=self.dataset.schema_id,
-            local_data=self.dataset.local_data,
+            schema=self.schema, 
+            schema_id=self.schema.schema_id, # type: ignore
+            local_data=self.local_data,
             logger=self.logger)
         temp_dataset.add_experiment(exp_data)
 
@@ -167,30 +147,28 @@ class PredictionSystem(BaseOrchestrationSystem):
         skipped_count = 0
         
         self.logger.info("Starting prediction model online tuning...")
-        for model in self.prediction_models:
+        for model in self.models:
             model_tune_batches = self._filter_batches_for_model(tune_batches, model)
-            primary_feature = model.outputs[0] if model.outputs else "unknown"
             
             # Try to tune model
             try:
-                self.logger.info(f"Tuning model for '{primary_feature}'...")
+                self.logger.info(f"Tuning {model.__class__.__name__}...")
                 model.tuning(model_tune_batches, **kwargs)
                 tuned_count += 1
-                self.logger.console_info(f"✓ Tuned model for '{primary_feature}'")
+                self.logger.console_success(f"Tuned {model.__class__.__name__}")
             except NotImplementedError:
                 # Model doesn't implement tuning
-                self.logger.info(f"Model '{primary_feature}' does not support tuning, skipping...")
                 skipped_count += 1
-                self.logger.console_info(f"⊘ Skipped '{primary_feature}' (tuning not implemented)")
+                self.logger.console_info(f"⊘ Skipped {model.__class__.__name__} (tuning not implemented)")
         
         if tuned_count > 0:
             self.logger.console_success(
-                f"Tuning complete: {tuned_count}/{len(self.prediction_models)} models tuned"
+                f"Tuning complete: {tuned_count}/{len(self.models)} models tuned"
             )
         else:
             self.logger.console_warning(
                 f"Tuning called but no models implement tuning(). "
-                f"Models skipped: {skipped_count}/{len(self.prediction_models)}"
+                f"Models skipped: {skipped_count}/{len(self.models)}"
             )
     
     def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
@@ -215,6 +193,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Extract validation/test data
         batches = self.datamodule.get_batches(split)
         if not batches:
+            self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
             
         # Concatenate batches
@@ -222,20 +201,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         X_split = np.concatenate(X_list, axis=0)
         y_split = np.concatenate(y_list, axis=0)
         
-        self.logger.info(f"Evaluating {len(self.prediction_models)} models on {len(X_split)} samples...")
+        self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
         
         # Compute metrics for each model
         results = {}
-        for model in self.prediction_models:
-            # Get primary feature name
-            primary_feature = model.outputs[0] if model.outputs else "unknown"
-            
+        for model in self.models:
             # Get indices for this model
-            try:
-                indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
-            except ValueError:
-                self.logger.warning(f"Missing features for model '{primary_feature}', skipping")
-                continue
+            indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
             
             # Get ground truth (denormalized)
             y_true_norm = y_split[:, indices]
@@ -245,18 +217,26 @@ class PredictionSystem(BaseOrchestrationSystem):
             y_pred_norm = model.forward_pass(X_split)
             y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
             
-            # Compute metrics for primary feature
-            y_true_vals = y_true[:, 0]
-            y_pred_vals = y_pred[:, 0]
+            # Calculate metrics and store
+            model_metrics = Metrics.calculate_regression_metrics(y_true, y_pred)
+            results.update(model_metrics)
             
-            model_metrics = Metrics.calculate_regression_metrics(y_true_vals, y_pred_vals)
+            self.logger.console_info(f"  Model ({', '.join(model.outputs)}):")
             
-            results[primary_feature] = model_metrics
-            
-            self.logger.console_info(
-                f"  {primary_feature}: MAE={model_metrics['mae']:.4f}, "
-                f"RMSE={model_metrics['rmse']:.4f}, R²={model_metrics['r2']:.4f}"
-            )
+            # Calculate and log metrics per feature
+            for i, feature_name in enumerate(model.outputs):
+                # Extract single feature vectors
+                y_true_feat = y_true[:, i]
+                y_pred_feat = y_pred[:, i]
+                
+                feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
+                
+                self.logger.console_info(
+                    f"    • {feature_name:<20}: "
+                    f"MAE={feat_metrics['mae']:.4f}, "
+                    f"RMSE={feat_metrics['rmse']:.4f}, "
+                    f"R²={feat_metrics['r2']:.4f}"
+                )
         
         self.logger.console_success(
             f"Validation complete on {split} set ({len(X_split)} experiments)"
@@ -354,39 +334,38 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _extract_dimensional_structure_from_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Extract dimensional info (shape, params, positions) from schema and params dict."""
-        # Get dimensional parameters from schema
-        dim_params = {
-            name: obj for name, obj in self.dataset.schema.parameters.data_objects.items()
-            if isinstance(obj, DataDimension)
-        }
+        # Use schema parameters to get dimensions sorted correctly by level
+        sorted_dims = self.schema.parameters.get_sorted_dimensions()
         
-        if not dim_params:
+        if not sorted_dims:
             raise ValueError("No dimensional parameters in schema - cannot predict dimensional features")
         
-        # Calculate shape from params values
         dim_sizes = []
-        dim_names = []
-        for dim_name in sorted(dim_params.keys()):
-            dim_obj = dim_params[dim_name]
-            if dim_name not in params:
-                raise ValueError(f"Missing dimensional parameter in params: {dim_name}")
-            size = params[dim_name]
-            dim_sizes.append(int(size))
-            dim_names.append(dim_obj.iterator_code)
+        dim_iterators = []
+        dim_codes = set()
+        
+        for dim_obj in sorted_dims:
+            name = dim_obj.code
+            if name not in params:
+                raise ValueError(f"Missing dimensional parameter in params: {name}")
+            
+            size = int(params[name])
+            dim_sizes.append(size)
+            dim_iterators.append(dim_obj.iterator_code)
+            dim_codes.add(name)
         
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape))
         
         # Extract non-dimensional parameters for feature matrix base
         param_base = {}
-        for name in self.dataset.schema.parameters.keys():
-            if name not in dim_params and name in params:
+        for name in self.schema.parameters.keys():
+            if name not in dim_codes and name in params:
                 param_base[name] = params[name]
         
         return {
-            'dim_params': dim_params,
             'shape': shape,
-            'dim_names': dim_names,
+            'dim_iterators': dim_iterators,
             'param_base': param_base,
             'total_positions': total_positions
         }
@@ -396,7 +375,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         predictions = {}
         
         # Collect all feature names from registered models
-        for model in self.prediction_models:
+        for model in self.models:
             for feature_name in model.outputs:
                 if feature_name not in predictions:
                     # Initialize with NaN (positions will be filled during prediction)
@@ -454,7 +433,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Build feature matrix X with params + dimensional indices for batch positions."""
         shape = dim_info['shape']
         param_base = dim_info['param_base']
-        dim_params = dim_info['dim_params']
+        dim_iterators = dim_info['dim_iterators']
         
         X_batch_rows = []
         batch_indices = []
@@ -466,9 +445,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             
             # Create feature row: non-dimensional params + dimensional indices
             row = param_base.copy()
-            for i, dim_name in enumerate(sorted(dim_params.keys())):
-                dim_obj = dim_params[dim_name]
-                row[dim_obj.dim_iterator_name] = idx[i]
+            for i, iterator_name in enumerate(dim_iterators):
+                row[iterator_name] = idx[i]
             
             X_batch_rows.append(row)
         
@@ -488,7 +466,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Prepare input (one-hot + normalize)
         X_norm = self.datamodule.prepare_input(X_batch)
         
-        for model in self.prediction_models:
+        for model in self.models:
             # Predict in normalized space
             y_pred_norm = model.forward_pass(X_norm)
             
@@ -520,7 +498,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.console_info("Validating models for export...")
         
         # Validate prediction models
-        for model in self.prediction_models:
+        for model in self.models:
             self._validate_model_export(model)
         
         self.logger.console_info("✓ All models validated successfully")
@@ -591,10 +569,10 @@ class PredictionSystem(BaseOrchestrationSystem):
                     'feature_names': model.outputs,
                     'artifacts': model._get_model_artifacts()
                 }
-                for model in self.prediction_models
+                for model in self.models
             ],
             'normalization': self.datamodule.get_normalization_state(),
-            'schema': self.dataset.schema.to_dict()
+            'schema': self.schema.to_dict()
         }
         
         # InferenceBundle can work with predictions only (evaluation happens externally)

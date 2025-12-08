@@ -1,5 +1,5 @@
 from .external_data import IExternalData
-from .base import BaseInterface
+from .base_interface import BaseInterface
 from .features import IFeatureModel
 from .evaluation import IEvaluationModel
 from .prediction import IPredictionModel

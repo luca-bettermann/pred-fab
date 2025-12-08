@@ -11,8 +11,6 @@ from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
 from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
-from ..core.data_blocks import Parameters, PerformanceAttributes, Features
-from ..core.data_objects import DataDimension
 from ..orchestration import (
     FeatureSystem,
     EvaluationSystem,
@@ -24,7 +22,7 @@ from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExt
 from ..interfaces.calibration import CalibrationModes
 from ..utils import LocalData, LBPLogger
 
-system_names = Literal['feature', 'evaluation', 'prediction', 'calibration']
+SystemNames = Literal['feature', 'evaluation', 'prediction', 'calibration']
 
 class LBPAgent:
     """
@@ -82,7 +80,6 @@ class LBPAgent:
         self.eval_system: EvaluationSystem
         self.pred_system: PredictionSystem
         self.calibration_system: CalibrationSystem
-        self.dataset: Dataset
         
         # Model registry (store classes and params until dataset is initialized)
         self._feature_model_specs: List[Tuple[Type[IFeatureModel], dict]] = []  # List of (class, kwargs)
@@ -147,8 +144,15 @@ class LBPAgent:
         schema.set_schema_id(new_schema_id)
         self.local_data.set_schema(new_schema_id)
         self.logger.console_info(f"Using schema ID: {new_schema_id}")
-        
-        # Step 2: Create dataset with storage interfaces
+
+        # Step 2: Instantiate models from registered classes and validate against schema
+        self._instantiate_models(schema)
+        self._validate_systems_against_schema(schema)
+                
+        # Mark as initialized
+        self._initialized = True
+                
+        # Step 3: Create dataset with storage interfaces
         dataset = Dataset(
             schema=schema,
             schema_id=new_schema_id,
@@ -158,19 +162,6 @@ class LBPAgent:
             debug_mode=self.debug_flag,
         )
 
-        # Step 3: Instantiate models from registered classes and validate against schema
-        self._instantiate_models(dataset)
-        self._validate_systems_against_schema(schema)
-        
-        # Step 4: Attach dataset to already-initialized systems
-        self.logger.info("Attaching dataset to orchestration systems")
-        self.eval_system.dataset = dataset  # type: ignore
-        self.pred_system.dataset = dataset  # type: ignore
-        self.calibration_system.dataset = dataset # type: ignore
-                
-        # Mark as initialized
-        self._initialized = True
-        
         # Display summary
         summary_lines = [
             "Dataset Initialization Summary:",
@@ -184,18 +175,18 @@ class LBPAgent:
         
         return dataset
 
-    def _instantiate_models(self, dataset: Dataset) -> None:
+    def _instantiate_models(self, schema: DatasetSchema) -> None:
         """Instantiate model instances from registered classes and populate systems."""
         if not self._feature_model_specs:
             raise ValueError("No feature models registered. Call register_feature_model() first.")
                 
         # Initialize systems (dataset will be set later)
         self.logger.info("Instantiating models from registered classes...")
-        self.feature_system = FeatureSystem(dataset=dataset, logger=self.logger)
-        self.eval_system = EvaluationSystem(dataset=dataset, logger=self.logger)
-        self.pred_system = PredictionSystem(dataset=dataset, logger=self.logger)
+        self.feature_system = FeatureSystem(logger=self.logger)
+        self.eval_system = EvaluationSystem(logger=self.logger)
+        self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
         self.calibration_system = CalibrationSystem(
-            dataset=dataset,
+            dataset=None,
             logger=self.logger, 
             predict_fn=self.pred_system._predict_from_params,
             evaluate_fn=self.eval_system._evaluate_feature_dict
@@ -214,7 +205,7 @@ class LBPAgent:
         )
         self._instantiate_model_group(
             self._prediction_model_specs,
-            self.pred_system.prediction_models,
+            self.pred_system.models,
             "prediction"
         )
         
@@ -254,13 +245,13 @@ class LBPAgent:
                 f"{uncomputed_inputs}"
             )
         
-    def activate_system(self, system_name: system_names) -> None:
+    def activate_system(self, system_name: SystemNames) -> None:
         """Activate a specific orchestration system."""
         if not self._initialized:
             raise RuntimeError("Cannot activate systems before initialize() is called.")
         self._toggle_system(system_name, activate=True)
 
-    def deactivate_system(self, system_name: system_names) -> None:
+    def deactivate_system(self, system_name: SystemNames) -> None:
         """Deactivate a specific orchestration system."""
         if not self._initialized:
             raise RuntimeError("Cannot deactivate systems before initialize() is called.")
@@ -274,45 +265,50 @@ class LBPAgent:
         self.active_exp = exp_data
         self.logger.info(f"Active experiment set to: {exp_data.exp_code}")
 
-    # === STEP OPERATIONS ===
+    # === FULL STEP OPERATIONS ===
     
     def step(
             self,
             exp_data: Optional[ExperimentData],
             dimension: Optional[str] = None,
             step_index: Optional[int] = None,
+            datamodule: Optional[DataModule] = None,
+            batch_size: Optional[int] = None,
             recompute: bool = False,
-            visualize: bool = False
+            visualize: bool = False,
+            online: bool = False,
+            **kwargs
             ) -> None:
         """Perform a full offline step of all active systems."""
         
         # Run validations whether systems are initialized and active
-        if not self._initialized:
-            raise RuntimeError("Cannot perform step before initialize() is called.")
         self._check_systems_all_active()
 
         # Retrieve experiment data
         exp_data, start, end = self._step_config(exp_data, dimension, step_index)
         
-        # 1. Features
-        self.logger.info(f"Step Offline: Computing features for {exp_data.exp_code}")
+        # 1. Extract Features
         self.feature_system.compute_exp_features(exp_data, start, end, recompute=recompute, visualize=visualize)
-        self._log_step_completion(exp_data.exp_code, start, end, action="computed features")
+        self._log_step_completion(exp_data.exp_code, start, end, action="had features extracted")
 
-        # 2. Evaluate (Features + Performance)
-        self.logger.info(f"Step Offline: Evaluating experiment {exp_data.exp_code}")
+        # 2. Evaluate Performance
         self.eval_system.compute_exp_evaluation(exp_data, start, end, recompute=recompute)
         self._log_step_completion(exp_data.exp_code, start, end, action="evaluated")
 
-        # TODO: FIX TRAINING
-        # TODO: STEP OFFLINE AND STEP ONLINE? OR ALL IN ONE?
+        # 3. Train or Tune Prediction Model
+        if not online:
+            # train takes datamodule as input
+            self.pred_system.train(datamodule, **kwargs) # type: ignore
+            self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
+        else:
+            # tune automatically computes datamodule from exp_data
+            self.pred_system.tune(exp_data, start, end, batch_size, **kwargs)
+        self._log_step_completion(exp_data.exp_code, start, end, action="used for tuning")
 
+        # 4. Calibration (Propose next)
+        if not online:
+            self.calibration_system.train
         # self.logger.info(f"Step Online: Processing {dimension} {step_index} [{start}:{end}]")
-
-        # 3. Train Prediction
-        # self.logger.info("Step Offline: Training prediction models")
-        # dm = DataModule(self.dataset)
-        # self.train(dm)
         
         # 4. Calibration (Propose next)
         # In offline mode, we typically propose new experiments after analysis
@@ -322,7 +318,7 @@ class LBPAgent:
         # No counter update needed for offline step
 
 
-    # === STEP OPERATIONS ===
+    # === PARTIAL STEP OPERATIONS ===
 
     def feature_step(
         self,
@@ -449,48 +445,59 @@ class LBPAgent:
     
     # === CALIBRATION ===
     
-    def set_performance_weights(
+    def configure_calibration(
         self,
-        performance_weights: Dict[str, float]
-    ) -> None:
-        """
-        Configure the calibration system weights.
-        
-        Args:
-            performance_weights: Weights for system performance calculation.
-        """
-        if self.calibration_system:
-            self.calibration_system.set_performance_weights(performance_weights)
-            self.logger.info(f"Configured calibration weights: {performance_weights}")
-        else:
-            self.logger.warning("Calibration system not initialized. Call initialize() first.")
-
-    def propose_next_experiments(
-        self,
-        param_ranges: Dict[str, Tuple[float, float]],
-        n_points: int = 1,
-        mode: Any = 'exploration', # using Any to avoid import issues if Literal not imported, but it is.
+        offline_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        online_deltas: Optional[Dict[str, float]] = None,
         fixed_params: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> List[Dict[str, Any]]:
+        performance_weights: Optional[Dict[str, float]] = None
+    ) -> None:
+        """Configure calibration system parameters."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+            
+        if performance_weights:
+            self.calibration_system.set_performance_weights(performance_weights)
+            
+        if offline_bounds:
+            self.calibration_system.configure_offline_ranges(offline_bounds, fixed_params)
+            
+        if online_deltas:
+            self.calibration_system.configure_online_deltas(online_deltas, fixed_params)
+            
+        self.logger.info("Configured calibration system.")
+
+    def propose_new_parameters(
+        self,
+        online: bool = False,
+        exploration_weight: float = 0.5,
+        current_params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Propose next experiments using the calibration system.
+        Propose next parameter set using calibration system.
         
         Args:
-            param_ranges: Ranges for parameters to optimize.
-            n_points: Number of experiments to propose.
-            mode: 'exploration' (Active Learning) or 'optimization' (Exploitation).
-            fixed_params: Parameters to keep fixed.
+            online: If True, use Trust Region (deltas) and force exploitation.
+            exploration_weight: 0.0 (Exploitation) to 1.0 (Exploration).
+            current_params: Current parameters (required for online mode).
         """
         if not self._initialized or self.calibration_system is None:
              raise RuntimeError("Agent not initialized.")
         
-        return self.calibration_system.propose_new_experiments(
-            param_ranges=param_ranges,
-            n_points=n_points,
-            mode=mode,
-            fixed_params=fixed_params,
-            **kwargs
+        # Get or create DataModule
+        if self.pred_system and self.pred_system.datamodule:
+            dm = self.pred_system.datamodule
+        else:
+            # Create temp datamodule
+            self.logger.info("Creating temporary DataModule for calibration...")
+            dm = DataModule(self.calibration_system.dataset)
+            dm.fit_normalize()
+            
+        return self.calibration_system.propose_new_parameters(
+            datamodule=dm,
+            current_params=current_params,
+            online=online,
+            exploration_weight=exploration_weight
         )
 
     # === Helper Functions ===
@@ -525,7 +532,7 @@ class LBPAgent:
                 f"{unused}"
             )        
 
-    def _toggle_system(self, system_name: system_names, activate: bool) -> None:
+    def _toggle_system(self, system_name: SystemNames, activate: bool) -> None:
         """Toggle a system on or off."""
         system = self._get_system(system_name)
         action = "Activated" if activate else "Deactivated"
@@ -537,7 +544,7 @@ class LBPAgent:
         
         self.logger.info(f"{action} {system_name.capitalize()} System.")
 
-    def _get_system(self, system_name: system_names) -> Any:
+    def _get_system(self, system_name: SystemNames) -> Any:
         """Get a system by name, raising an error if not initialized."""
         systems = {
             'evaluation': self.eval_system,

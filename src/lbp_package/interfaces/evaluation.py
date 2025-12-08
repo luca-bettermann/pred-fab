@@ -3,7 +3,7 @@ from typing import Tuple, Optional, List, final, Dict
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
-from .base import BaseInterface
+from .base_interface import BaseInterface
 from ..core import Parameters, Dataset
 from ..utils import LBPLogger
 
@@ -22,8 +22,9 @@ class IEvaluationModel(BaseInterface):
     
     # === ABSTRACT METHODS ===
 
-    # this includes the input_parameters abstract property from BaseInterface
-
+    # abstract methods from BaseInterface:
+    # - input_parameters
+    
     @abstractmethod
     def input_feature(self) -> str:
         """

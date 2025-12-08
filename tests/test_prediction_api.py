@@ -235,16 +235,16 @@ class TestPredictionSystemAPI:
         system.add_prediction_model(model)
         
         # Verify model is in list
-        assert model in system.prediction_models
-        assert len(system.prediction_models) == 1
+        assert model in system.models
+        assert len(system.models) == 1
     
     def test_prediction_models_is_list_not_dict(self, dataset, logger):
         """Test that prediction_models is a List, not a Dict."""
         system = PredictionSystem(dataset, logger)
         
         # Should be an empty list
-        assert isinstance(system.prediction_models, list)
-        assert len(system.prediction_models) == 0
+        assert isinstance(system.models, list)
+        assert len(system.models) == 0
         
         # Add models
         model1 = SingleFeaturePredictionModel()
@@ -253,10 +253,10 @@ class TestPredictionSystemAPI:
         system.add_prediction_model(model2)
         
         # Should be a list of models
-        assert isinstance(system.prediction_models, list)
-        assert len(system.prediction_models) == 2
-        assert model1 in system.prediction_models
-        assert model2 in system.prediction_models
+        assert isinstance(system.models, list)
+        assert len(system.models) == 2
+        assert model1 in system.models
+        assert model2 in system.models
     
     def test_feature_to_model_mapping_auto_generated(self, dataset, logger):
         """Test that feature_to_model mapping is automatically created from model.feature_names."""
@@ -379,7 +379,7 @@ class TestBackwardCompatibility:
         system.add_prediction_model(model)
         
         # Should work exactly as before
-        assert len(system.prediction_models) == 1
+        assert len(system.models) == 1
         assert "energy" in system.feature_to_model
     
     def test_models_without_feature_dependencies_still_work(self, dataset, logger):

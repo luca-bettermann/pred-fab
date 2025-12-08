@@ -342,7 +342,7 @@ class Features(DataBlock):
     Multi-dimensional metric arrays using DataArray objects.
     
     Stores numpy arrays with validation for feature extraction and evaluation results.
-    Each DataArray wraps a numpy array with shape/dtype constraints.
+    Each Feature wraps a numpy array with shape/dtype constraints.
     """
     
     def __init__(self):

@@ -1,46 +1,71 @@
 from abc import ABC, abstractmethod
-from typing import Literal, Callable
+from typing import Literal, Tuple
 import numpy as np
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from ..utils import LBPLogger
 
 CalibrationModes = Literal['exploration', 'exploitation']
 
-class ICalibrationStrategy(ABC):
+class ISurrogateModel(ABC):
     """
-    Strategy interface for calibration optimization.
+    Interface for surrogate models used in calibration.
     
-    - Defines how to propose next experiments based on history
-    - Supports exploration (active learning) and optimization modes
+    Provides performance predictions and uncertainty estimates.
     """
     
-    def __init__(self, logger: LBPLogger, predict: Callable, evaluate: Callable):
-        """Initialize strategy with logger."""
+    def __init__(self, logger: LBPLogger, random_seed: int = 42):
         self.logger = logger
-        self.predict_fn = predict
-        self.evaluate_fn = evaluate
+        self.random_seed = random_seed
 
     @abstractmethod
-    def propose_next_points(
-        self,
-        X_history: np.ndarray,
-        y_history: np.ndarray,
-        bounds: np.ndarray,
-        n_points: int = 1,
-        mode: CalibrationModes = 'exploitation',
-        **kwargs
-    ) -> np.ndarray:
+    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Fit the surrogate model to history data."""
+        pass
+
+    @abstractmethod
+    def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Propose next parameters to evaluate.
+        Predict feature and uncertainty of the predictions.
+        Make sure the uncertainty is normalized to be comparable across different features.
         
         Args:
-            X_history: Array of shape (n_samples, n_params) with past parameters
-            y_history: Array of shape (n_samples,) with past system performance [0, 1]
-            bounds: Array of shape (n_params, 2) with min/max for each parameter
-            n_points: Number of points to propose
-            mode: 'exploration' (use surrogate uncertainty) or 'optimization' (exploit only)
+            X: Input array (n_samples, n_features)
             
         Returns:
-            Array of shape (n_points, n_params) with proposed parameters
+            Tuple of (prediction, uncertainty) arrays
         """
         pass
+
+
+class GaussianProcessSurrogate(ISurrogateModel):
+    """
+    Default Gaussian Process implementation of ISurrogateModel.
+    Uses Matern kernel + WhiteKernel for noise handling.
+    """
+    
+    def __init__(self, logger: LBPLogger, random_seed: int = 42, **kwargs):
+        super().__init__(logger, random_seed)
+        kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-5)
+        self.gp = GaussianProcessRegressor(
+            kernel=kernel,
+            n_restarts_optimizer=5,
+            random_state=random_seed,
+            normalize_y=True
+        )
+        self.is_fitted = False
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Fit GP to data."""
+        if len(X) == 0:
+            return
+        self.gp.fit(X, y)
+        self.is_fitted = True
+
+    def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Predict mean and std."""
+        mean, std = self.gp.predict(X, return_std=True) # type: ignore
+        return mean, std
+
+
 

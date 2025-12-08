@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Type, Optional, Any, final, Tuple
 import numpy as np
 
-from .base import BaseInterface
+from .base_interface import BaseInterface
 from ..utils.logger import LBPLogger
 from ..core import DataObject, Dataset
 

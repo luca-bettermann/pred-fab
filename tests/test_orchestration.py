@@ -168,7 +168,7 @@ class TestPredictionSystem:
         
         assert system.dataset is dataset
         assert system.logger is logger
-        assert len(system.prediction_models) == 0
+        assert len(system.models) == 0
         assert system.datamodule is None
     
     def test_add_prediction_model(self, dataset, logger):
@@ -181,7 +181,7 @@ class TestPredictionSystem:
         
         assert "test_feature" in system.feature_to_model
         assert system.feature_to_model["test_feature"] is pred_model
-        assert pred_model in system.prediction_models
+        assert pred_model in system.models
     
     def test_train_prediction_model(self, dataset, logger):
         """Test training a prediction model (requires DataModule)."""
@@ -193,7 +193,7 @@ class TestPredictionSystem:
         system.add_prediction_model(pred_model)
         
         # Just verify model is registered
-        assert pred_model in system.prediction_models
+        assert pred_model in system.models
         assert "test_feature" in system.feature_to_model
     
     def test_predict_with_model(self, dataset, logger):
@@ -206,7 +206,7 @@ class TestPredictionSystem:
         system.add_prediction_model(pred_model)
         
         # Just verify model is registered
-        assert pred_model in system.prediction_models
+        assert pred_model in system.models
         assert "test_feature" in system.feature_to_model
     
     def test_get_prediction_models(self, dataset, logger):
@@ -217,8 +217,8 @@ class TestPredictionSystem:
         system.add_prediction_model(pred_model)
         
         # Check prediction_models list and feature_to_model mapping
-        assert len(system.prediction_models) == 1
-        assert pred_model in system.prediction_models
+        assert len(system.models) == 1
+        assert pred_model in system.models
         assert "test_feature" in system.feature_to_model
         assert system.feature_to_model["test_feature"] is pred_model
 

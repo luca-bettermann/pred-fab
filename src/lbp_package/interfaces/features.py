@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 from dataclasses import dataclass
 
 from abc import ABC, abstractmethod
-from .base import BaseInterface
+from .base_interface import BaseInterface
 from ..core import Dataset, Parameters
 from ..utils import LBPLogger
 
@@ -105,7 +105,6 @@ class IFeatureModel(BaseInterface):
 
             # merge dims and params into single dict
             current_dim_dict = dict(zip(dim_iterator_codes, current_dim))
-            combined_params = {**current_dim_dict, **params}
             self.logger.debug(f"Processing {i_global}/{i_end}: {current_dim_dict}")
             
             # Compute feature, target, and performance
@@ -130,16 +129,6 @@ class IFeatureModel(BaseInterface):
         visualize: bool = False, 
         ) -> List[float]:
         """Extract feature with memoization via Dataset."""
-        # Check cache
-        # if self.dataset.has_cached_features_at(params):
-        #     try:
-        #         cached_value = self.dataset.get_cached_feature_value(feature_name, params)
-        #         self.logger.debug(f"Using cached feature '{feature_name}' for {params}")
-        #         return cached_value
-        #     except KeyError:
-        #         raise KeyError(
-        #             f"Feature '{feature_name}' not found in cache for parameters {params} despite has_cached_features_at() returning True"
-        #         )
         
         # Load and compute
         self.logger.debug(f"Computing features '{self.outputs}' for {params}")
@@ -153,9 +142,7 @@ class IFeatureModel(BaseInterface):
                     f"_compute_features() must return numeric values, got {type(feature_value).__name__} for feature '{feature_code}'"
                 )
         
-            # Cache and return
-            # self.dataset.cache_feature_value(feature_code, feature_value, params)
-        
         # Get the correct order of feature values
         feature_values = [feature_dict[code] for code in self.outputs] # type: ignore
         return feature_values
+

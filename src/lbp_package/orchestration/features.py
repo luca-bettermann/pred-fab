@@ -1,10 +1,12 @@
 from typing import Any, Dict, Tuple, Type, Optional, List
 import numpy as np
 
+from lbp_package.interfaces.features import IFeatureModel
+
 
 from ..utils import LBPLogger
 from ..core import Dataset, ExperimentData, Parameters
-from .base import BaseOrchestrationSystem
+from .base_system import BaseOrchestrationSystem
 
 
 class FeatureSystem(BaseOrchestrationSystem):
@@ -14,10 +16,11 @@ class FeatureSystem(BaseOrchestrationSystem):
     Manages evaluation model execution and stores results in ExperimentData.
     """
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger):
         """Initialize evaluation system."""
-        super().__init__(dataset, logger)
-    
+        super().__init__(logger)
+        self.models: List[IFeatureModel] = []
+
     # === FEATURE EXTRACTION ===
 
     def compute_exp_features(
@@ -67,11 +70,11 @@ class FeatureSystem(BaseOrchestrationSystem):
         # Run feature extraction for each feature code
         for feature_model in self.models:
             # Skip if already loaded
-            if skip_feature_code.get(feature_model.feature_codes, False):
-                self.logger.info(f"Skipping feature extraction for '{feature_model.feature_input_code}' as feature already complete")
+            if all(skip_feature_code.get(code, False) for code in feature_model.outputs):
+                self.logger.info(f"Skipping feature extraction for '{feature_model.outputs}' as features already complete")
                 continue
 
-            # Run feature extraction
+            # Run feature extraction and return 3d feature array
             feature_array = feature_model.compute_features(
                 parameters=parameters,
                 evaluate_from=evaluate_from,
@@ -80,6 +83,8 @@ class FeatureSystem(BaseOrchestrationSystem):
             )
 
             # Collect results
-            feature_dict[feature_model.feature_input_code] = feature_array
+            for i, code in enumerate(feature_model.outputs):
+                feature_dict[code] = feature_array[i]
 
         return feature_dict
+
