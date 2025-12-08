@@ -52,6 +52,7 @@ class LocalData:
         
         self.schema_id = schema_id
         self.schema_folder = os.path.join(self.local_folder, self.schema_id)
+        os.makedirs(self.schema_folder, exist_ok=True)
 
     def get_experiment_code(self, exp_nr: int) -> str:
         """Generate experiment code from experiment number."""
@@ -79,6 +80,8 @@ class LocalData:
         """List all experiment folder names within the schema folder."""
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before listing experiments")
+        if not os.path.exists(self.schema_folder):
+            return []
         
         return [
             d

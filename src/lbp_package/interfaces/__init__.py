@@ -3,7 +3,7 @@ from .base_interface import BaseInterface
 from .features import IFeatureModel
 from .evaluation import IEvaluationModel
 from .prediction import IPredictionModel
-from .calibration import ICalibrationStrategy
+from .calibration import ISurrogateModel
 
 __all__ = [
     "BaseInterface",
@@ -11,5 +11,5 @@ __all__ = [
     "IFeatureModel", 
     "IEvaluationModel",
     "IPredictionModel",
-    "ICalibrationStrategy"
+    "ISurrogateModel"
 ]

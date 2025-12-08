@@ -51,7 +51,7 @@ class ExperimentData:
             (self.parameters, schema.parameters),
             (self.performance, schema.performance),
             (self.features, schema.features),
-            (self.predicted_features, schema.features)
+            (self.predicted_features, schema.predicted_features)
         ]
         
         for self_block, other_block in block_checks:
@@ -115,6 +115,14 @@ class ExperimentData:
             return bool(self.predicted_features.get_values_dict())
         else:
             raise ValueError(f"Unknown block type: {block_type}")
+            
+    def is_feature_populated(self, feature_name: str) -> bool:
+        """Check if a specific feature is populated (not just initialized)."""
+        return self.features.is_populated(feature_name)
+        
+    def is_predicted_feature_populated(self, feature_name: str) -> bool:
+        """Check if a specific predicted feature is populated (not just initialized)."""
+        return self.predicted_features.is_populated(feature_name)
 
 class Dataset:
     """
@@ -150,9 +158,6 @@ class Dataset:
         
         # Master storage using ExperimentData
         self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
-        
-        # Feature memoization for IFeatureModel efficiency
-        self._feature_cache: Dict[Tuple[str, ...], Dict[str, Any]] = {}  # param_tuple → feature_dict
 
     def get_experiment(self, exp_code: str) -> ExperimentData:
         """Get complete ExperimentData for an exp_code."""
@@ -162,10 +167,10 @@ class Dataset:
     
     # === Create ExperimentData Objects ===
 
-    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock) -> Any:
+    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock, suffix: str = '') -> Any:
         block = block_class()
         for name, data_obj in schema_dict.items():
-            block.add(name, data_obj)
+            block.add(suffix + name, data_obj)
         return block
         
     def _create_experiment_shell(self, exp_code: str) -> ExperimentData:
@@ -173,7 +178,7 @@ class Dataset:
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
         perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance)
         arrays_block = self._init_from_schema(Features, self.schema.features)
-        pred_block = self._init_from_schema(Features, self.schema.features)
+        pred_block = self._init_from_schema(Features, self.schema.features, suffix='pred_')
         
         return ExperimentData(
             exp_code=exp_code,
@@ -187,7 +192,6 @@ class Dataset:
         self,
         exp_code: str,
         parameters: Dict[str, Any],
-        # dimensions: Dict[str, Any],
         performance: Optional[Dict[str, Any]],
         metric_arrays: Optional[Dict[str, np.ndarray]],
         predicted_arrays: Optional[Dict[str, np.ndarray]] = None
@@ -331,6 +335,7 @@ class Dataset:
     
     def load_experiments(self, exp_codes: List[str], recompute: bool = False) -> List[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
+        
         # 1. Ensure shells exist
         for code in exp_codes:
             if code not in self._experiments:
@@ -349,57 +354,71 @@ class Dataset:
         
         if missing_params and len(self.schema.parameters.data_objects):
             raise ValueError(f"No parameters found for any of the following experiments: {missing_params}")
-                
+
         # Filter codes that were actually found and validate (parameters are mandatory)
-        found_codes = [code for code in exp_codes if code not in missing_params]
-        for code in found_codes:
+        for code in exp_codes:
             exp_data = self.get_experiment(code)
             exp_data.is_valid(self.schema)
 
             # Initialize feature arrays based on loaded parameters
             exp_data.features.initialize_arrays(exp_data.parameters)
             exp_data.predicted_features.initialize_arrays(exp_data.parameters)
-
+        
         # 3. Load Performance Metrics
         missing_performance = self._hierarchical_load(
             "performance metrics",
-            found_codes,
+            exp_codes,
             loader=self.local_data.load_performance,
             setter=functools.partial(self._set_exp_data, block_type="performance"),
             in_memory=functools.partial(self._has_exp_data, block_type="performance"),
             external_loader=self.external_data.pull_performance if self.external_data else None,
             recompute=recompute
         )
-        self.logger.console_info(f"Performance metrics loaded for {len(found_codes)-len(missing_performance)}/{len(found_codes)} experiments.")
         
         # 4. Load Features
+        missing_features_union = set()
         for metric_name in self.schema.features.keys():
             missing_features = self._hierarchical_load(
                 f"feature '{metric_name}'",
-                found_codes,
+                exp_codes,
                 loader=self.local_data.load_features,
                 setter=functools.partial(self._set_exp_data, block_type="feature"),
-                in_memory=functools.partial(self._has_exp_data, block_type="feature"),
+                in_memory=lambda code: self.get_experiment(code).is_feature_populated(metric_name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
                 recompute=recompute,
                 feature_name=metric_name # Passed to kwargs
             )
-            self.logger.console_info(f"Feature '{metric_name}' loaded for {len(found_codes)-len(missing_features)}/{len(found_codes)} experiments.")
+            missing_features_union.update(missing_features)
 
         # 5. Load Predicted Features
+        missing_pred_features_union = set()
         for metric_name in self.schema.features.keys():
             pred_name = f"predicted_{metric_name}"
             missing_pred_features = self._hierarchical_load(
                 f"predicted feature '{metric_name}'",
-                found_codes,
+                exp_codes,
                 loader=self.local_data.load_features,
                 setter=functools.partial(self._set_exp_data, block_type="predicted_feature"),
-                in_memory=functools.partial(self._has_exp_data, block_type="predicted_feature"),
+                in_memory=lambda code: self.get_experiment(code).is_predicted_feature_populated(metric_name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
                 recompute=recompute,
                 feature_name=pred_name # Passed to kwargs
             )
-            self.logger.console_info(f"Predicted feature '{metric_name}' loaded for {len(found_codes)-len(missing_pred_features)}/{len(found_codes)} experiments.")
+            missing_pred_features_union.update(missing_pred_features)
+
+        # Summary
+        total = len(exp_codes)
+        summary = [
+            "\n===== Loading Experiments =====",
+            f"\nExperiments: {total}",
+            f"  - Parameters: {total - len(missing_params)}/{total}",
+            f"  - Performance: {total - len(missing_performance)}/{total}",
+            f"  - Features: {total - len(missing_features_union)}/{total}",
+            f"  - Predicted Features: {total - len(missing_pred_features_union)}/{total}",
+        ]
+        
+        self.logger.console_info("\n".join(summary))
+
         return missing_params
     
     def save_all(self, recompute: bool = False) -> None:
@@ -491,11 +510,12 @@ class Dataset:
                         in_memory: Callable[[str], bool],
                         external_loader: Optional[Callable[..., Tuple[List[str], Any]]] = None,
                         recompute: bool = False,
+                        console_output: bool = False,
                         **kwargs) -> List[str]:
         """Universal hierarchical data loading: Memory → Local Files → External Source"""
         # 1. Check memory
         missing_memory = [code for code in target_codes if not in_memory(code)]
-        self._check_for_retrieved_codes(target_codes, missing_memory, dtype, "memory")
+        self._check_for_retrieved_codes(target_codes, missing_memory, dtype, "memory", console_output=console_output)
 
         if not missing_memory:
             return []
@@ -506,7 +526,7 @@ class Dataset:
             # directly store retrieved data in ExpData object
             for code, data in local_data.items():
                 setter(code, data)
-            self._check_for_retrieved_codes(missing_memory, missing_local, dtype, "local files", console_output=True)
+            self._check_for_retrieved_codes(missing_memory, missing_local, dtype, "local files", console_output=console_output)
         else:
             missing_local = missing_memory
             self.logger.info(f"Recompute mode: Skipping loading {dtype} from local files")
@@ -520,7 +540,7 @@ class Dataset:
             # directly store retrieved data in ExpData object
             for code, data in external_data.items():
                 setter(code, data)
-            self._check_for_retrieved_codes(missing_local, missing_external, dtype, "external source", console_output=True)
+            self._check_for_retrieved_codes(missing_local, missing_external, dtype, "external source", console_output=console_output)
         elif self.debug_mode:
             missing_external = missing_local 
             self.logger.info(f"Debug mode: Skipping loading {dtype} from external source")

@@ -16,9 +16,9 @@ class IEvaluationModel(BaseInterface):
     Stores results directly in ExperimentData.
     """
 
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger):
         """Initialize evaluation system."""
-        super().__init__(dataset, logger)
+        super().__init__(logger)
     
     # === ABSTRACT METHODS ===
 

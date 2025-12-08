@@ -15,9 +15,8 @@ class BaseInterface(ABC):
     - Parameter extraction from ExperimentData
     """
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
+    def __init__(self, logger: LBPLogger):
         """Initialize interface model with dataset and logger."""
-        self.dataset = dataset
         self.logger = logger
 
         # reference to DataObjects from schema

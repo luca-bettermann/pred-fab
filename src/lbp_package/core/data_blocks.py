@@ -5,6 +5,7 @@ DataBlocks group DataObjects into logical collections and store their values.
 They provide both schema structure and data storage.
 """
 
+from abc import abstractmethod
 import itertools
 from typing import Dict, Any, List, Optional, Tuple, Type
 import numpy as np
@@ -19,17 +20,23 @@ class DataBlock:
     Provides validation, access methods, and value management for typed parameter collections.
     """
     
-    def __init__(self, data_object_type: Type[Any]):
+    def __init__(self, data_object_type: Type[Any], allowed_role: Optional[str] = None):
         """Initialize empty DataBlock."""
         self.data_object_type = data_object_type
+        self.allowed_role = allowed_role
 
         self.data_objects: Dict[str, DataObject] = {}  # Schema structure
         self.values: Dict[str, Any] = {}  # Actual values
+        self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized
     
     def add(self, name: str, data_obj: DataObject) -> None:
         """Add a DataObject to the block."""
         if not isinstance(data_obj, self.data_object_type):
             raise TypeError(f"Expected data object of type {self.data_object_type.__name__}, got {type(data_obj).__name__}")
+        
+        if self.allowed_role and data_obj.role != self.allowed_role:
+            raise ValueError(f"Expected data object with role '{self.allowed_role}', got '{data_obj.role}'")
+            
         self.data_objects[name] = data_obj
     
     def get(self, name: str) -> DataObject:
@@ -52,7 +59,7 @@ class DataBlock:
             self.validate_value(name, value)
         return True
     
-    def set_value(self, name: str, value: Any) -> None:
+    def set_value(self, name: str, value: Any, as_populated: bool = True) -> None:
         """Set value for a parameter after validation."""
         self.validate_value(name, value)  # Raises if invalid
         
@@ -62,12 +69,13 @@ class DataBlock:
             value = round(float(value), data_obj.round_digits)
         
         self.values[name] = value
+        self.populated_status[name] = as_populated
 
-    def set_values(self, values: Dict[str, Any]) -> None:
+    def set_values(self, values: Dict[str, Any], as_populated: bool = True) -> None:
         """Set multiple values at once, ignoring unknown parameters."""
         for name, value in values.items():
             if self.has(name):
-                self.set_value(name, value)
+                self.set_value(name, value, as_populated=as_populated)
     
     def get_value(self, name: str) -> Any:
         """Get value for a parameter."""
@@ -78,6 +86,10 @@ class DataBlock:
     def has_value(self, name: str) -> bool:
         """Check if value is set for parameter."""
         return name in self.values
+    
+    def is_populated(self, name: str) -> bool:
+        """Check if value is populated (not just initialized)."""
+        return self.populated_status.get(name, False)
     
     def to_numpy(self, dtype: type = np.float64) -> np.ndarray:
         """Convert all values to numpy array for ML."""
@@ -159,7 +171,7 @@ class Parameters(DataBlock):
     
     def __init__(self):
         """Initialize Parameters block."""
-        super().__init__(Parameter)
+        super().__init__(DataObject, allowed_role="parameter")
 
     def get_dim_objects(self) -> Dict[str, DataDimension]:
         """Get view of dimension DataObjects from parameters."""
@@ -192,21 +204,11 @@ class Parameters(DataBlock):
         for name, dim in dim_objs.items():
             levels.append((dim.level, name))
         levels.sort()
-        
-        # Check for duplicates
-        seen_levels = set()
-        for level, name in levels:
-            if level in seen_levels:
-                raise ValueError(f"Duplicate dimension level {level} found for '{name}'")
-            seen_levels.add(level)
-            
-        # Check start and sequence
-        if levels[0][0] != 1:
-            raise ValueError(f"Dimension levels must start at 1, found {levels[0][0]} for '{levels[0][1]}'")
-            
-        for i in range(len(levels) - 1):
-            if levels[i+1][0] != levels[i][0] + 1:
-                raise ValueError(f"Gap in dimension levels between {levels[i][0]} and {levels[i+1][0]}")
+
+        for i, (level, name) in enumerate(levels, start=1):
+            if level != i:
+                raise ValueError(f"Dimension levels must be consecutive starting from 1. "
+                                 f"Expected level {i} for '{name}', got {level}")
 
     def get_dim_by_level(self, level: int) -> Optional[DataDimension]:
         """Get dimension object by level."""
@@ -283,7 +285,10 @@ class Parameters(DataBlock):
     @classmethod
     def from_list(cls, data_objs: List[Any]) -> 'Parameters':
         """Reconstruct from list including weights."""
-        return super().from_list(Parameters, data_objs)
+        block = cls()
+        for data_obj in data_objs:
+            block.add(data_obj.code, data_obj)
+        return block
 
 class PerformanceAttributes(DataBlock):
     """
@@ -295,7 +300,7 @@ class PerformanceAttributes(DataBlock):
     
     def __init__(self):
         """Initialize PerformanceAttributes block."""
-        super().__init__(PerformanceAttribute)
+        super().__init__(DataObject, allowed_role="performance")
         self.calibration_weights: Dict[str, float] = {}
     
     def set_weight(self, perf_code: str, weight: float) -> None:
@@ -335,7 +340,10 @@ class PerformanceAttributes(DataBlock):
     @classmethod
     def from_list(cls, data_objs: List[Any]) -> 'PerformanceAttributes':
         """Reconstruct from list including weights."""
-        return super().from_list(PerformanceAttributes, data_objs)
+        block = cls()
+        for data_obj in data_objs:
+            block.add(data_obj.code, data_obj)
+        return block
 
 class Features(DataBlock):
     """
@@ -347,19 +355,7 @@ class Features(DataBlock):
     
     def __init__(self):
         """Initialize MetricArrays block."""
-        super().__init__(Feature)
-
-    def set_dim_codes(self, metric_code: str, dim_codes: List[str]) -> None:
-        """Set associated dimension codes for a given metric array."""
-        if metric_code not in self.data_objects:
-            raise KeyError(f"Metric array code '{metric_code}' not defined")
-        
-        data_array = self.data_objects[metric_code]
-        if not isinstance(data_array, DataArray):
-            raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
-        
-        # Set dimension codes for the DataArray object
-        data_array.set_dim_codes(dim_codes)
+        super().__init__(DataObject, allowed_role="feature")
 
     def initialize_array(self, metric_code: str, shape: Tuple[int, ...]):
         """Initialize numpy array for a given metric code."""
@@ -370,19 +366,24 @@ class Features(DataBlock):
             raise ValueError(f"Metric array '{metric_code}' already initialized")
         
         # Create empty numpy array with specified shape
-        self.set_value(metric_code, np.empty(shape))
-        self.data_objects[metric_code].set_shape_constraint(shape) # type: ignore
+        self.set_value(metric_code, np.empty(shape), as_populated=False)
+        # self.data_objects[metric_code].set_shape_constraint(shape) # type: ignore
 
     def initialize_arrays(self, parameters: Parameters) -> None:
-        """Initialize all metric arrays with the same shape."""
+        """Initialize all metric arrays with the respective shape."""
         for metric_code in self.data_objects.keys():
             data_array = self.data_objects[metric_code]
             if not isinstance(data_array, DataArray):
                 raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
             if data_array.dim_codes is None:
                 raise ValueError(f"Dimension codes not set for metric array '{metric_code}'")
+            
+            # compute shape based on parameter dimensions
             dim_values = parameters.get_dim_values()
-            shape = (int(np.prod(list(dim_values.values()))), len(dim_values) + 1)
+            filtered_dim_values = [dim_values[dim] for dim in data_array.dim_codes]
+            shape = (int(np.prod(filtered_dim_values)), len(filtered_dim_values) + 1)
+
+            # Initialize array with computed shape
             self.initialize_array(metric_code, shape)
 
     @classmethod
@@ -393,4 +394,7 @@ class Features(DataBlock):
     @classmethod
     def from_list(cls, data_objs: List[Any]) -> 'Features':
         """Reconstruct from list including weights."""
-        return super().from_list(Features, data_objs)
+        block = cls()
+        for data_obj in data_objs:
+            block.add(data_obj.code, data_obj)
+        return block

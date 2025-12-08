@@ -19,12 +19,12 @@ from lbp_package.utils import LBPLogger
 class MockFeatureModelA(IFeatureModel):
     """Mock feature model A."""
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
-        super().__init__(dataset, logger)
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
         
     @property
     def input_parameters(self) -> List[str]:
-        return ["param_1", "param_2"]
+        return ["param_1", "dim_1", "dim_2"]
         
     @property
     def input_features(self) -> List[str]:
@@ -60,12 +60,12 @@ class MockFeatureModelA(IFeatureModel):
 class MockFeatureModelB(IFeatureModel):
     """Mock feature model B."""
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
-        super().__init__(dataset, logger)
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
         
     @property
     def input_parameters(self) -> List[str]:
-        return []
+        return ["param_2"]
         
     @property
     def input_features(self) -> List[str]:
@@ -96,8 +96,8 @@ class MockFeatureModelB(IFeatureModel):
 class MockEvaluationModelA(IEvaluationModel):
     """Mock evaluation model A."""
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
-        super().__init__(dataset, logger)
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
         
     @property
     def input_parameters(self) -> List[str]:
@@ -123,8 +123,8 @@ class MockEvaluationModelA(IEvaluationModel):
 class MockEvaluationModelB(IEvaluationModel):
     """Mock evaluation model B."""
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
-        super().__init__(dataset, logger)
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
         
     @property
     def input_parameters(self) -> List[str]:
@@ -152,8 +152,8 @@ class MockEvaluationModelB(IEvaluationModel):
 class MockPredictionModel(IPredictionModel):
     """Mock prediction model."""
     
-    def __init__(self, dataset: Dataset, logger: LBPLogger):
-        super().__init__(dataset, logger)
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
         # Inputs: param_1, param_2, dim_1, dim_2, feature_3
         # Outputs: feature_1, feature_2
         self.weights = np.random.rand(5, 2) 
@@ -191,7 +191,7 @@ class MockExternalData(IExternalData):
         for i, code in enumerate(exp_codes):
             found_params[code] = {
                 "param_1": 5.0 * i/3,
-                "param_2": 2 + i/2,
+                "param_2": int(2 + i/2),
                 "dim_1": 2 + i,
                 "dim_2": 3
             }

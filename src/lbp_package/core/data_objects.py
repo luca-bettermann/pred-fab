@@ -22,12 +22,13 @@ class DataObject(ABC):
     """
     
     def __init__(self, code: str, dtype: type, constraints: Optional[Dict[str, Any]] = None, 
-                 round_digits: Optional[int] = None):
+                 round_digits: Optional[int] = None, role: Optional[str] = None):
         """Initialize DataObject with name, dtype, constraints, and optional rounding."""
         self.code = code
         self.dtype = dtype
         self.constraints = constraints or {}
         self.round_digits = round_digits
+        self.role = role
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
@@ -107,14 +108,14 @@ class DataReal(DataObject):
     """Floating-point numeric parameter."""
     
     def __init__(self, code: str, min_val: Optional[float] = None, max_val: Optional[float] = None,
-                 round_digits: Optional[int] = None):
+                 round_digits: Optional[int] = None, role: Optional[str] = None):
         """Initialize DataReal with optional min/max bounds and rounding."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
         if max_val is not None:
             constraints["max"] = max_val
-        super().__init__(code, float, constraints, round_digits)
+        super().__init__(code, float, constraints, round_digits, role=role)
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
@@ -145,14 +146,14 @@ class DataReal(DataObject):
 class DataInt(DataObject):
     """Integer numeric parameter."""
     
-    def __init__(self, code: str, min_val: Optional[int] = None, max_val: Optional[int] = None):
+    def __init__(self, code: str, min_val: Optional[int] = None, max_val: Optional[int] = None, role: Optional[str] = None):
         """Initialize DataInt with optional min/max bounds."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
         if max_val is not None:
             constraints["max"] = max_val
-        super().__init__(code, int, constraints, 0)
+        super().__init__(code, int, constraints, 0, role=role)
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
@@ -181,9 +182,9 @@ class DataInt(DataObject):
 class DataBool(DataObject):
     """Boolean parameter."""
     
-    def __init__(self, code: str):
+    def __init__(self, code: str, role: Optional[str] = None):
         """Initialize DataBool."""
-        super().__init__(code, bool, {})
+        super().__init__(code, bool, {}, role=role)
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
@@ -204,11 +205,11 @@ class DataBool(DataObject):
 class DataCategorical(DataObject):
     """Categorical parameter with fixed set of allowed values."""
     
-    def __init__(self, code: str, categories: List[str]):
+    def __init__(self, code: str, categories: List[str], role: Optional[str] = None):
         """Initialize DataCategorical with allowed categories."""
         if not categories:
             raise ValueError("Categories list cannot be empty")
-        super().__init__(code, str, {"categories": categories})
+        super().__init__(code, str, {"categories": categories}, role=role)
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
@@ -242,7 +243,7 @@ class DataDimension(DataInt):
     - dim_iterator_name: Iterator variable name (e.g., "layer_id")
     """
     
-    def __init__(self, code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None):
+    def __init__(self, code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None, role: Optional[str] = None):
         """Initialize DataDimension with two naming aspects and level hierarchy."""
         self.code = code
         self.iterator_code = iterator_code
@@ -250,22 +251,14 @@ class DataDimension(DataInt):
         if not isinstance(level, int) or level < 0:
             raise ValueError("Level must be a non-negative integer")
         self.level = level
-        super().__init__(code, min_val, max_val)
+        super().__init__(code, min_val, max_val, role=role)
+        self.constraints["level"] = level
+        self.constraints["dim_iterator_code"] = iterator_code
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
         """Dimensional indices use minmax to preserve ordinal structure."""
         return 'minmax'
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize including all three aspects."""
-        data = super().to_dict()
-        data.update({
-            "code": self.code,
-            "dim_iterator_code": self.iterator_code,
-            "level": self.level
-        })
-        return data
     
     @classmethod
     def _from_dict_impl(cls, code: str, constraints: Dict[str, Any],
@@ -286,27 +279,31 @@ class DataArray(DataObject):
     Used for metric_arrays storage in ExperimentData.
     """
     
-    def __init__(self, code: str, shape: Optional[Tuple[int, ...]] = None, dtype: Optional[np.dtype] = None):
+    def __init__(self, code: str, dtype: Optional[np.dtype] = None, role: Optional[str] = None):
         """Initialize DataArray with optional shape and dtype constraints."""
-        self.shape_constraint = shape
         self.dtype_constraint = dtype or np.float64
         self.dim_codes: Optional[List[str]] = None
-        super().__init__(code, np.ndarray, {
-            "dtype": str(dtype) if dtype else "float64"
-        })
+        
+        constraints: Dict[str, Any] = {
+            "dtype": str(dtype) if dtype else "float64",
+            "dim_codes": self.dim_codes
+        }
+            
+        super().__init__(code, np.ndarray, constraints, role=role)
     
     @property
     def normalize_strategy(self) -> NormalizeStrategy:
         """Use DataModule default normalization (typically 'standard')."""
         return 'default'
     
-    def set_shape_constraint(self, shape: Tuple[int, ...]) -> None:
-        """Set shape constraint for this DataArray."""
-        self.shape_constraint = shape
+    # def set_shape_constraint(self, shape: Tuple[int, ...]) -> None:
+    #     """Set shape constraint for this DataArray."""
+    #     self.shape_constraint = shape
     
     def set_dim_codes(self, dim_codes: List[str]) -> None:
         """Set associated dimension codes for this DataArray."""
         self.dim_codes = dim_codes
+        self.constraints["dim_codes"] = dim_codes
     
     def validate(self, value: Any) -> bool:
         """Validate numpy array against shape and dtype constraints."""
@@ -320,26 +317,28 @@ class DataArray(DataObject):
             )
         
         # Validate shape if specified (allowing -1 for dynamic dimensions)
-        if self.shape_constraint:
-            if len(value.shape) != len(self.shape_constraint):
-                raise ValueError(
-                    f"{self.code} shape rank mismatch: expected {len(self.shape_constraint)}D, got {len(value.shape)}D"
-                )
-            for i, (expected, actual) in enumerate(zip(self.shape_constraint, value.shape)):
-                if expected != -1 and expected != actual:
-                    raise ValueError(
-                        f"{self.code} shape mismatch at dimension {i}: expected {expected}, got {actual}"
-                    )
+        # if self.shape_constraint:
+        #     if len(value.shape) != len(self.shape_constraint):
+        #         raise ValueError(
+        #             f"{self.code} shape rank mismatch: expected {len(self.shape_constraint)}D, got {len(value.shape)}D"
+        #         )
+        #     for i, (expected, actual) in enumerate(zip(self.shape_constraint, value.shape)):
+        #         if expected != -1 and expected != actual:
+        #             raise ValueError(
+        #                 f"{self.code} shape mismatch at dimension {i}: expected {expected}, got {actual}"
+        #             )
         
         return True
     
     @classmethod
     def _from_dict_impl(cls, code: str, constraints: Dict[str, Any],
                        round_digits: Optional[int] = None) -> 'DataArray':
-        shape = constraints.get("shape")
         dtype_str = constraints.get("dtype", "float64")
         dtype = np.dtype(dtype_str) if dtype_str else None
-        return cls(code, shape, dtype)
+        obj = cls(code, dtype)
+        if "dim_codes" in constraints:
+            obj.set_dim_codes(constraints["dim_codes"])
+        return obj
 
 
 
@@ -350,77 +349,46 @@ class Parameter:
     
     @staticmethod
     def real(code: str, min_val: Optional[float] = None, max_val: Optional[float] = None,
-             round_digits: Optional[int] = None, default: Optional[float] = None) -> Any:
+             round_digits: Optional[int] = None, default: Optional[float] = None) -> DataReal:
         """Create a real-valued parameter."""
-        schema = DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits)
-        return field(default=default, metadata={'role': 'parameter', 'schema': schema})
+        return DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role="parameter")
     
     @staticmethod
-    def integer(code: str, min_val: Optional[int] = None, max_val: Optional[int] = None, default: Optional[int] = None) -> Any:
+    def integer(code: str, min_val: Optional[int] = None, max_val: Optional[int] = None, default: Optional[int] = None) -> DataInt:
         """Create an integer parameter."""
-        schema = DataInt(code=code, min_val=min_val, max_val=max_val)
-        return field(default=default, metadata={'role': 'parameter', 'schema': schema})
+        return DataInt(code=code, min_val=min_val, max_val=max_val, role="parameter")
     
     @staticmethod
-    def categorical(code: str, categories: List[str], default: Optional[str] = None) -> Any:
+    def categorical(code: str, categories: List[str], default: Optional[str] = None) -> DataCategorical:
         """Create a categorical parameter."""
-        schema = DataCategorical(code=code, categories=categories)
-        return field(default=default, metadata={'role': 'parameter', 'schema': schema})
+        return DataCategorical(code=code, categories=categories, role="parameter")
     
     @staticmethod
-    def boolean(code: str, default: Optional[bool] = None) -> Any:
+    def boolean(code: str, default: Optional[bool] = None) -> DataBool:
         """Create a boolean parameter."""
-        schema = DataBool(code=code)
-        return field(default=default, metadata={'role': 'parameter', 'schema': schema})
+        return DataBool(code=code, role="parameter")
     
     @staticmethod
     def dimension(code: str, iterator_code: str, level: int,
-                  min_val: int = 1, max_val: Optional[int] = None) -> Any:
+                  min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
         """Create a dimensional parameter."""
-        schema = DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val)
-        return field(default=None, metadata={'role': 'parameter', 'schema': schema})
+        return DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val, role="parameter")
     
 
 class Feature:
     """Factory for creating feature Feature objects."""
 
     @staticmethod
-    def array(code: str, dtype: Optional[np.dtype] = None) -> Any:
+    def array(code: str, dtype: Optional[np.dtype] = None) -> DataArray:
         """Create a metric_array DataObject."""
-        schema = DataArray(code=code, shape=None, dtype=dtype)
-        return field(default=None, metadata={'role': 'feature', 'schema': schema})
+        return DataArray(code=code, dtype=dtype, role="feature")
     
 
 class PerformanceAttribute:
     """Factory for creating Performance objects."""
     
     @staticmethod
-    def score(code: str, round_digits: Optional[int] = None) -> Any:
+    def score(code: str, round_digits: Optional[int] = None) -> DataReal:
         """Create a normalized score (0-1) performance attribute."""
-        schema = DataReal(code=code, min_val=0, max_val=1, round_digits=round_digits)
-        return field(default=None, metadata={'role': 'performance', 'schema': schema})
-
-
-# class Dimension:
-#     """Factory for creating dimensional parameter DataObjects."""
+        return DataReal(code=code, min_val=0, max_val=1, round_digits=round_digits, role="performance")
     
-#     @staticmethod
-#     def integer(code: str, iterator_code: str, 
-#                 min_val: int = 1, max_val: Optional[int] = None) -> Any:
-#         """
-#         Create a dimensional parameter.
-        
-#         Args:
-#             code: Parameter code (e.g., "n_layers")
-#             dim_name: Human-readable dimension name (e.g., "layers")
-#             iterator_name: Iterator variable name (e.g., "layer_id")
-#             min_val: Minimum value (default 1)
-#             max_val: Maximum value (optional)
-#         """
-#         dim_obj = DataDimension(code, iterator_code)
-#         # Add min/max constraints
-#         if min_val is not None:
-#             dim_obj.constraints["min"] = min_val
-#         if max_val is not None:
-#             dim_obj.constraints["max"] = max_val
-#         return field(default=None, metadata={'role': 'dimension', 'schema': dim_obj})

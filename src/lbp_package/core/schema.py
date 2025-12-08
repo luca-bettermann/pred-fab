@@ -13,9 +13,11 @@ import json
 import hashlib
 from datetime import datetime
 from typing import Dict, Any, Set, Optional, List
-from ..utils import LBPLogger
-from .data_objects import DataDimension, Feature, Parameter, PerformanceAttribute
+
+from .data_objects import DataArray, DataDimension, Feature, Parameter, PerformanceAttribute
+import copy
 from .data_blocks import (
+    DataBlock,
     Parameters,
     PerformanceAttributes,
     Features
@@ -44,6 +46,7 @@ class DatasetSchema:
         self.parameters = parameters
         self.performance = performance
         self.features = features
+        self.predicted_features = self._return_copy_with_suffix(features, "pred_")
         self.default_round_digits = default_round_digits
         self.schema_id: Optional[str] = None  # Assigned via SchemaRegistry
 
@@ -72,10 +75,35 @@ class DatasetSchema:
         schema_id = data.get("schema_id", None)
         schema.schema_id = schema_id
         return schema
+    
+    def initialize(self, registry: 'SchemaRegistry', feature_models: List[Any]) -> str:
+        """Initialize schema by computing hash and registering with SchemaRegistry."""
+        # First, set dimension codes for metric arrays
+        self._set_dim_codes_for_arrays(feature_models)
+
+        # Validate dimensions before hashing
+        self.parameters.validate_dimensions()
+        schema_hash = self._compute_schema_hash()
+        schema_struct = self.to_dict()
+        new_schema_id = registry.get_or_create_schema_id(schema_hash, schema_struct)
+        self.set_schema_id(new_schema_id)
+        return new_schema_id
 
     def set_schema_id(self, schema_id: str) -> None:
         """Set the schema ID."""
         self.schema_id = schema_id
+
+    def _set_dim_codes_for_arrays(self, feature_models: List[Any]) -> None:
+        """Set dimension codes for all metric arrays based on dataset parameters."""
+        dim_codes = self.parameters.get_dim_names()
+        
+        # Iterate over all feature models to set dim codes
+        for model in feature_models:
+            for output_code in model.outputs:
+                data_array = self.features.data_objects[output_code]
+                if isinstance(data_array, DataArray):
+                    model_dim_codes = [code for code in model.input_parameters if code in dim_codes]
+                    data_array.set_dim_codes(model_dim_codes)
 
     def _compute_schema_hash(self) -> str:
         """Compute deterministic hash from schema structure."""
@@ -83,6 +111,8 @@ class DatasetSchema:
             "parameters": self._block_to_hash_structure(self.parameters),
             "performance": self._block_to_hash_structure(self.performance),
             "features": self._block_to_hash_structure(self.features),
+            "default_round_digits": self.default_round_digits,
+            "calibration_weights": self.performance.calibration_weights
         }
         
         # Sort keys for determinism
@@ -90,12 +120,9 @@ class DatasetSchema:
         return hashlib.sha256(hash_str.encode()).hexdigest()
     
     def _block_to_hash_structure(self, block) -> Dict[str, Any]:
-        """Convert DataBlock to hashable structure (types + constraints only)."""
+        """Convert DataBlock to hashable structure using full object serialization."""
         return {
-            name: {
-                "type": obj.__class__.__name__,
-                **obj.constraints  # Include min/max/categories for collision prevention
-            }
+            name: obj.to_dict()
             for name, obj in block.items()
         }
     
@@ -106,42 +133,9 @@ class DatasetSchema:
             "performance_attrs": self.performance.to_dict(),
             "features": self.features.to_dict(),
             "default_round_digits": self.default_round_digits,
-            "schema_id": self.schema_id,
-            "schema_hash": self._compute_schema_hash()
+            # "schema_id": self.schema_id,
+            # "schema_hash": self._compute_schema_hash()
         }
-    
-    
-    # @classmethod
-    # def from_model_specs(
-    #     cls,
-    #     feature_specs: Dict[str, Any],
-    #     eval_specs: Dict[str, Any],
-    #     pred_specs: Dict[str, Any],
-    #     logger: LBPLogger
-    # ) -> 'Schema':
-    #     """Build schema from evaluation and prediction system specifications."""        
-    #     schema = cls()
-        
-    #     # 1. Merge input parameters from both systems
-    #     all_inputs = {**eval_specs["inputs"], **pred_specs["inputs"]}
-        
-    #     # Add parameters to schema
-    #     for param_name, data_obj in all_inputs.items():
-    #         schema.parameters.add(param_name, data_obj)
-    #         logger.info(f"  Added parameter: {param_name}")
-        
-    #     # 2. Add performance attributes
-    #     for perf_code, perf_obj in eval_specs["outputs"].items():
-    #         schema.performance.add(perf_code, perf_obj)
-    #         logger.info(f"  Added performance attribute: {perf_code}")
-        
-    #     logger.info(
-    #         f"Generated schema with {len(schema.parameters.data_objects)} parameters, "
-    #         # f"{len(schema.dimensions.data_objects)} dimensions, "
-    #         f"{len(schema.performance.data_objects)} performance attributes"
-    #     )
-        
-    #     return schema
     
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
         """Check structural compatibility with another schema."""        
@@ -160,7 +154,15 @@ class DatasetSchema:
                     f"to {other_block.__class__.__name__}."
                 )        
         return True
-
+    
+    def _return_copy_with_suffix(self, data_block: DataBlock, suffix: str) -> DataBlock:
+        data_block_suffix = Features()
+        for feat in data_block.data_objects.values():
+            # Create a new feature instance with the modified code
+            new_feat = copy.deepcopy(feat)
+            new_feat.code = f"{suffix}{feat.code}"
+            data_block_suffix.add(new_feat.code, new_feat)
+        return data_block_suffix
 
 class SchemaRegistry:
     """

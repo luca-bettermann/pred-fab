@@ -67,7 +67,7 @@ class LBPAgent:
         if external_data is None:
             self.logger.console_warning(
                 "No external data interface provided: "
-                "Dataset records need to be available as local JSON files."
+                "Experiments need to be available as local JSON files."
             )
         
         # Flag settings
@@ -111,7 +111,7 @@ class LBPAgent:
         
         # Store class and params until dataset is created
         model_specs.append((model_class, kwargs))
-        self.logger.console_info(f"Registered model: {model_class.__name__}")
+        self.logger.info(f"Registered model: {model_class.__name__}")
 
     def register_feature_model(self, feature_class: Type[Any], **kwargs) -> None:
         """Register a feature model."""
@@ -131,22 +131,52 @@ class LBPAgent:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
 
         self.logger.console_info("\n===== Initializing Dataset =====")
+                
+        # Step 1: Initialize systems (dataset will be set later)
+        self.logger.info("Instantiating models from registered classes...")
+        if not self._feature_model_specs:
+            raise ValueError("No feature models registered. Call register_feature_model() first.")
 
-        # Step 1: Get or create schema ID via registry
+        
+        # Instantiate feature models
+        self.feature_system = FeatureSystem(logger=self.logger)
+        self._instantiate_model_group(
+            self._feature_model_specs,
+            self.feature_system.models,
+            "feature"
+        )
+
+        # Instantiate evaluation models
+        self.eval_system = EvaluationSystem(logger=self.logger)
+        self._instantiate_model_group(
+            self._evaluation_model_specs,
+            self.eval_system.models,
+            "evaluation"
+        )
+
+        # Initialize schema: it requires feature models to set dimension codes
         registry = SchemaRegistry(self.local_data.local_folder)
-        
-        # Validate dimensions before hashing
-        schema.parameters.validate_dimensions()
-        
-        schema_hash = schema._compute_schema_hash()
-        schema_struct = schema.to_dict()
-        new_schema_id = registry.get_or_create_schema_id(schema_hash, schema_struct)
-        schema.set_schema_id(new_schema_id)
+        new_schema_id = schema.initialize(registry, self.feature_system.models)
         self.local_data.set_schema(new_schema_id)
-        self.logger.console_info(f"Using schema ID: {new_schema_id}")
+        self.logger.info(f"\nUsing schema ID: {new_schema_id}")
+
+        # Prediction system requires schema to be set
+        self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
+        self._instantiate_model_group(
+            self._prediction_model_specs,
+            self.pred_system.models,
+            "prediction"
+        )
+        
+        # Calibration system requires prediction and evaluation systems to be set
+        self.calibration_system = CalibrationSystem(
+            dataset=None,
+            logger=self.logger, 
+            predict_fn=self.pred_system._predict_from_params,
+            evaluate_fn=self.eval_system._evaluate_feature_dict
+            )
 
         # Step 2: Instantiate models from registered classes and validate against schema
-        self._instantiate_models(schema)
         self._validate_systems_against_schema(schema)
                 
         # Mark as initialized
@@ -164,50 +194,16 @@ class LBPAgent:
 
         # Display summary
         summary_lines = [
-            "Dataset Initialization Summary:",
+            "\nDataset:",
             f"  - Schema ID: {new_schema_id}",
-            f"  - Parameters: {len(schema.parameters.data_objects)}",
-            f"  - Dimensions: {len(schema.parameters.get_dim_objects())}",
+            f"  - Parameters: {len(schema.parameters.data_objects)} ({len(schema.parameters.get_dim_names())} dims)",
+            f"  - Features: {len(schema.features.data_objects)}",
             f"  - Performance Attributes: {len(schema.performance.data_objects)}",
         ]
         self.logger.console_summary("\n".join(summary_lines))
         self.logger.console_success(f"Successfully initialized dataset '{new_schema_id}'.")
         
-        return dataset
-
-    def _instantiate_models(self, schema: DatasetSchema) -> None:
-        """Instantiate model instances from registered classes and populate systems."""
-        if not self._feature_model_specs:
-            raise ValueError("No feature models registered. Call register_feature_model() first.")
-                
-        # Initialize systems (dataset will be set later)
-        self.logger.info("Instantiating models from registered classes...")
-        self.feature_system = FeatureSystem(logger=self.logger)
-        self.eval_system = EvaluationSystem(logger=self.logger)
-        self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
-        self.calibration_system = CalibrationSystem(
-            dataset=None,
-            logger=self.logger, 
-            predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict
-            )
-        
-        # Instantiate all registered models using helper function
-        self._instantiate_model_group(
-            self._feature_model_specs,
-            self.feature_system.models,
-            "feature"
-        )
-        self._instantiate_model_group(
-            self._evaluation_model_specs,
-            self.eval_system.models,
-            "evaluation"
-        )
-        self._instantiate_model_group(
-            self._prediction_model_specs,
-            self.pred_system.models,
-            "prediction"
-        )
+        return dataset        
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
         """Validate all orchestration systems against the provided schema."""
@@ -217,6 +213,7 @@ class LBPAgent:
         input_params = feat_specs["input_parameters"]
         input_features = feat_specs["input_features"]
         output_features = feat_specs["outputs"]
+        output_predicted_features = []
         output_performance_attrs = []
 
         if self.eval_system:
@@ -229,7 +226,7 @@ class LBPAgent:
             pred_specs = self.pred_system.get_model_specs()
             input_params.extend(pred_specs["input_parameters"])
             input_features.extend(pred_specs["input_features"])
-            output_features.extend(pred_specs["outputs"])
+            output_predicted_features.extend(pred_specs["outputs"])
 
         # Validate that all lists are represented in schema
         self._check_sets_against_keys(set(input_params), schema.parameters.keys())
@@ -243,6 +240,14 @@ class LBPAgent:
             raise ValueError(
                 f"The following input features are not computed by any model: "
                 f"{uncomputed_inputs}"
+            )
+        
+        # Check if there are any predicted features that are not computed by feature models
+        unpredicted_features = set(output_predicted_features) - set(output_features)
+        if unpredicted_features:
+            raise ValueError(
+                f"The following predicted features are not computed by any feature model: "
+                f"{unpredicted_features}"
             )
         
     def activate_system(self, system_name: SystemNames) -> None:
@@ -512,10 +517,10 @@ class LBPAgent:
         # Instanticate feature model instances from registered classes
         for _class, _kwargs in model_specs:
             self.logger.info(f"Instantiating {model_type} model: {_class.__name__}")
-            feature_model = _class(logger=self.logger, **_kwargs)
-            if feature_model in system_model_list:
+            model = _class(logger=self.logger, **_kwargs)
+            if model in system_model_list:
                 raise ValueError(f"{model_type} model {_class.__name__} registered multiple times.")
-            system_model_list.append(feature_model)
+            system_model_list.append(model)
 
     def _check_sets_against_keys(self, model_codes: Set[str], schema_keys: List[str]) -> None:
         not_represented = model_codes - set(schema_keys)
