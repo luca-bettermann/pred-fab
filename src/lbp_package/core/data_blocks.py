@@ -82,6 +82,7 @@ class DataBlock:
         if name not in self.values:
             raise KeyError(f"No value set for parameter '{name}'")
         return self.values[name]
+        # return self.data_objects[name].dtype(self.values[name])
     
     def has_value(self, name: str) -> bool:
         """Check if value is set for parameter."""
@@ -127,6 +128,7 @@ class DataBlock:
                 for name, obj in self.data_objects.items()
             },
             "values": self.values  # Include current values
+            
         }
     
     def is_compatible(self, other_block) -> bool:
@@ -173,11 +175,11 @@ class Parameters(DataBlock):
         """Initialize Parameters block."""
         super().__init__(DataObject, allowed_role="parameter")
 
-    def get_dim_objects(self) -> Dict[str, DataDimension]:
+    def get_dim_objects(self, codes: Optional[List[str]] = None) -> Dict[str, DataDimension]:
         """Get view of dimension DataObjects from parameters."""
         dim_objs = {
             name: obj for name, obj in self.data_objects.items() 
-            if isinstance(obj, DataDimension)
+            if isinstance(obj, DataDimension) and (codes is None or name in codes)
         }
         return dim_objs
         
@@ -365,8 +367,8 @@ class Features(DataBlock):
         if metric_code in self.values:
             raise ValueError(f"Metric array '{metric_code}' already initialized")
         
-        # Create empty numpy array with specified shape
-        self.set_value(metric_code, np.empty(shape), as_populated=False)
+        # Create array filled with NaNs
+        self.set_value(metric_code, np.full(shape, np.nan), as_populated=False)
         # self.data_objects[metric_code].set_shape_constraint(shape) # type: ignore
 
     def initialize_arrays(self, parameters: Parameters) -> None:

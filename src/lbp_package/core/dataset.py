@@ -66,12 +66,12 @@ class ExperimentData:
         """Check if feature array is non-empty in specified range."""
         if not self.features.has(feature_code):
             raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.exp_code}'")
-        
+
         array = self.features.get_value(feature_code)
         end_index = evaluate_to if evaluate_to is not None else array.shape[0]
         
         # Check if all values in the specified range are NaN
-        if np.all(not np.isnan(array[evaluate_from:end_index])):
+        if np.all(~np.isnan(array[evaluate_from:end_index])):
             return True
         return False
 

@@ -3,13 +3,14 @@ Example workflow using LBP Package.
 """
 
 import os
-import shutil
 from lbp_package.core import DatasetSchema
 from lbp_package.core.data_objects import Parameter, Feature, PerformanceAttribute
 from lbp_package.core.data_blocks import Parameters, PerformanceAttributes, Features
 from lbp_package.orchestration.agent import LBPAgent
 from lbp_package.core.dataset import ExperimentData
 from lbp_package.core import DataModule
+
+from lbp_package.utils import StepType
 
 # Import mock interfaces
 from interfaces import (
@@ -23,10 +24,7 @@ from interfaces import (
 
 def main():
     # 1. Setup Workspace
-    root_folder = "./examples/test_workflow"
-    # Clean up previous run if exists
-    if os.path.exists(root_folder):
-        shutil.rmtree(root_folder)
+    root_folder = "./examples"
     os.makedirs(root_folder, exist_ok=True)
 
     # 2. Define Schema
@@ -36,6 +34,7 @@ def main():
     p2 = Parameter.integer("param_2", min_val=1, max_val=5)
     p3 = Parameter.dimension("dim_1", iterator_code="d1", level=1)
     p4 = Parameter.dimension("dim_2", iterator_code="d2", level=2)
+    p5 = Parameter.categorical("param_3", categories=["A", "B", "C"])
 
     feat1 = Feature.array("feature_1")
     feat2 = Feature.array("feature_2")
@@ -50,6 +49,7 @@ def main():
     
     # Initialize Schema
     schema = DatasetSchema(
+        name="schema_001",
         parameters=param_block,
         features=feat_block,
         performance=perf_block,
@@ -79,8 +79,8 @@ def main():
     exp_2 = dataset.get_experiment("exp_002")
 
     # 6. Run Feature Extraction Step
-    agent.evaluation_step(exp_1)
-    agent.evaluation_step(exp_2)
+    agent.step_offline(exp_1, step_type=StepType.EVAL)
+    agent.step_offline(exp_2, step_type=StepType.EVAL)
 
     last_exp = dataset.get_experiment("exp_003")
 
@@ -88,13 +88,9 @@ def main():
     # We need to create a DataModule for training
     datamodule = DataModule(dataset)
     
-    agent.step(
+    agent.step_offline(
         exp_data=last_exp,
-        datamodule=datamodule,
-        recompute=True,
-        visualize=False,
-        online=False, # Offline mode (training)
-        epochs=1 # Kwarg for training
+        datamodule=datamodule
     )
 
     print("\n--- Workflow Complete ---")

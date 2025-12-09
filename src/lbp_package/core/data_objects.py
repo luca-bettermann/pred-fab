@@ -66,6 +66,7 @@ class DataObject(ABC):
         """Serialize to dictionary for schema storage."""
         data = {
             "code": self.code,
+            "role": self.role,
             "type": self.__class__.__name__,
             "dtype": self.dtype.__name__,
             "constraints": self.constraints
@@ -150,9 +151,9 @@ class DataInt(DataObject):
         """Initialize DataInt with optional min/max bounds."""
         constraints = {}
         if min_val is not None:
-            constraints["min"] = min_val
+            constraints["min"] = int(min_val)
         if max_val is not None:
-            constraints["max"] = max_val
+            constraints["max"] = int(max_val)
         super().__init__(code, int, constraints, 0, role=role)
     
     @property

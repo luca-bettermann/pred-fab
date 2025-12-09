@@ -93,7 +93,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             end: Optional[int] = None,
             batch_size: Optional[int] = None,
             **kwargs
-            ) -> None:
+            ) -> DataModule:
         """
         Fine-tune models with new data (online learning mode).
         
@@ -105,6 +105,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             start: Start index of new data
             end: End index of new data
             **kwargs: Additional tuning parameters passed to model.tuning()
+        
+        Returns:
+            Temporary DataModule used for tuning
         """
         if self.datamodule is None:
             raise RuntimeError(
@@ -170,6 +173,8 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"Tuning called but no models implement tuning(). "
                 f"Models skipped: {skipped_count}/{len(self.models)}"
             )
+
+        return temp_datamodule
     
     def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
         """Validate prediction models on validation or test set."""

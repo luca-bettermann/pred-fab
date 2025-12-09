@@ -12,7 +12,7 @@ This folder contains the complete documentation for the LBP package AIXD archite
 - 5-minute workflow guide
 - Complete code examples
 - Common operations
-- Phase 10 dimensional prediction architecture
+- Schema-First architecture guide
 
 **Start here** if you're new to the package.
 
@@ -38,7 +38,6 @@ This folder contains the complete documentation for the LBP package AIXD archite
 - DataObjects (typed primitives)
 - DataBlocks (value collections)
 - DatasetSchema (structure definition)
-- SchemaRegistry (hash-to-ID mapping)
 - ExperimentData (single experiment)
 - Dataset (experiment collection)
 - Serialization formats
@@ -51,7 +50,7 @@ This folder contains the complete documentation for the LBP package AIXD archite
 ### 4. [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
 **For**: Understanding what has been implemented and how it evolved  
 **Contains**:
-- Evolution timeline (Phases 1-7)
+- Evolution timeline (Phases 1-11)
 - Current architecture
 - Code statistics
 - Breaking changes from previous versions
@@ -96,11 +95,11 @@ Developer Flow:
 
 ## Additional Resources
 
-- **Example code**: `../examples/aixd_example.py`
+- **Example code**: `../examples/workflow.py`
 - **Core module docs**: `../src/lbp_package/core/README.md`
 - **Main README**: `../README.md`
 - **Tests**: `../tests/`
 
 ---
 
-All documents are up-to-date as of **November 28, 2025** and reflect the **Phase 10 API** (dimensional prediction architecture).
+All documents are up-to-date as of **December 9, 2025** and reflect the **Schema-First API**.

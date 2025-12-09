@@ -37,22 +37,25 @@ class DatasetSchema:
     
     def __init__(
             self, 
+            name: str,
             parameters: Parameters,
             performance: PerformanceAttributes,
             features: Features,
             default_round_digits: int = 3
             ):
         """Initialize schema from DataBlocks."""
+        self.name = name
         self.parameters = parameters
         self.performance = performance
         self.features = features
         self.predicted_features = self._return_copy_with_suffix(features, "pred_")
         self.default_round_digits = default_round_digits
-        self.schema_id: Optional[str] = None  # Assigned via SchemaRegistry
+        self.schema_id: str = name  # Assigned via SchemaRegistry
 
     @classmethod
     def from_list(
         cls, 
+        name: str,
         parameters: List[Parameter],
         performance_attrs: List[PerformanceAttribute],
         features: List[Feature],
@@ -62,7 +65,7 @@ class DatasetSchema:
         parameter_block = Parameters.from_list(parameters)
         performance_block = PerformanceAttributes.from_list(performance_attrs)
         feature_block = Features.from_list(features)
-        return cls(parameter_block, performance_block, feature_block, default_round_digits)
+        return cls(name, parameter_block, performance_block, feature_block, default_round_digits)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DatasetSchema':
@@ -71,9 +74,8 @@ class DatasetSchema:
         performance_block = PerformanceAttributes.from_dict(data["performance_attrs"])
         feature_block = Features.from_dict(data["features"])
         
-        schema = cls(parameter_block, performance_block, feature_block, data.get("default_round_digits", 3))
-        schema_id = data.get("schema_id", None)
-        schema.schema_id = schema_id
+        name = data.get("schema_id", "unknown_schema")
+        schema = cls(name, parameter_block, performance_block, feature_block, data.get("default_round_digits", 3))
         return schema
     
     def initialize(self, registry: 'SchemaRegistry', feature_models: List[Any]) -> str:
@@ -85,13 +87,14 @@ class DatasetSchema:
         self.parameters.validate_dimensions()
         schema_hash = self._compute_schema_hash()
         schema_struct = self.to_dict()
-        new_schema_id = registry.get_or_create_schema_id(schema_hash, schema_struct)
-        self.set_schema_id(new_schema_id)
-        return new_schema_id
+        
+        registry.register_schema(self.name, schema_hash, schema_struct)
+        return self.name
 
     def set_schema_id(self, schema_id: str) -> None:
         """Set the schema ID."""
         self.schema_id = schema_id
+        self.name = schema_id
 
     def _set_dim_codes_for_arrays(self, feature_models: List[Any]) -> None:
         """Set dimension codes for all metric arrays based on dataset parameters."""
@@ -111,8 +114,8 @@ class DatasetSchema:
             "parameters": self._block_to_hash_structure(self.parameters),
             "performance": self._block_to_hash_structure(self.performance),
             "features": self._block_to_hash_structure(self.features),
-            "default_round_digits": self.default_round_digits,
-            "calibration_weights": self.performance.calibration_weights
+            # "default_round_digits": self.default_round_digits,
+            # "calibration_weights": self.performance.calibration_weights
         }
         
         # Sort keys for determinism
@@ -133,7 +136,7 @@ class DatasetSchema:
             "performance_attrs": self.performance.to_dict(),
             "features": self.features.to_dict(),
             "default_round_digits": self.default_round_digits,
-            # "schema_id": self.schema_id,
+            "schema_id": self.name,
             # "schema_hash": self._compute_schema_hash()
         }
     
@@ -203,32 +206,39 @@ class SchemaRegistry:
         with open(self.registry_path, 'w') as f:
             json.dump(self.registry, f, indent=2)
     
-    def get_or_create_schema_id(
-        self, 
-        schema_hash: str, 
-        schema_struct: Dict[str, Any],
-        preferred_name: Optional[str] = None
-    ) -> str:
-        """Get existing schema_id or create new one deterministically based on schema hash."""
-        # Check if hash already registered
+    def register_schema(self, name: str, schema_hash: str, schema_struct: Dict[str, Any]) -> None:
+        """Register schema with a specific name, validating against existing entries."""
+        
+        # 1. Check if name already exists
+        existing_hash_for_name = self.get_hash_by_id(name)
+        
+        if existing_hash_for_name:
+            # Name exists. Check if hash matches.
+            if existing_hash_for_name != schema_hash:
+                raise ValueError(
+                    f"Schema name '{name}' is already registered with a different structure. "
+                    f"Existing hash: {existing_hash_for_name}, New hash: {schema_hash}. "
+                    "Please use a different name or ensure the schema structure is identical."
+                )
+            # If matches, we are good. Ensure registry is consistent (it should be).
+            return
+
+        # 2. Check if hash already exists (under a different name)
         if schema_hash in self.registry:
-            return self.registry[schema_hash]["schema_id"]
+            existing_name = self.registry[schema_hash]["schema_id"]
+            if existing_name != name:
+                 raise ValueError(
+                    f"This schema structure is already registered under the name '{existing_name}'. "
+                    f"Cannot register the same structure as '{name}' to avoid ambiguity."
+                )
         
-        # Generate new ID
-        if preferred_name and not self._id_exists(preferred_name):
-            schema_id = preferred_name
-        else:
-            schema_id = self._generate_next_id()
-        
-        # Register
+        # 3. Register new
         self.registry[schema_hash] = {
-            "schema_id": schema_id,
+            "schema_id": name,
             "created": datetime.now().isoformat(),
             "structure": schema_struct
         }
-        
         self._save_registry()
-        return schema_id
     
     def _id_exists(self, schema_id: str) -> bool:
         """Check if schema_id is already used."""

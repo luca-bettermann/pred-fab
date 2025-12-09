@@ -6,7 +6,7 @@ from scipy.optimize import minimize
 import warnings
 import functools
 
-from ..core import Dataset, ExperimentData, PerformanceAttributes, DataModule
+from ..core import Dataset, ExperimentData, PerformanceAttributes, DataModule, DatasetSchema
 from ..utils import LBPLogger, SplitType, Mode
 from ..interfaces.calibration import IExplorationModel, GaussianProcessExploration
 from .base_system import BaseOrchestrationSystem
@@ -27,24 +27,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def __init__(
         self, 
         logger: LBPLogger, 
-        dataset: Dataset, 
+        schema: DatasetSchema, 
         predict_fn: Callable, 
         evaluate_fn: Callable, 
         random_seed: Optional[int] = None,
         model: Optional[IExplorationModel] = None
     ):
         super().__init__(logger)
-        self.dataset = dataset
+        # self.schema = schema
         self.predict_fn = predict_fn
         self.evaluate_fn = evaluate_fn
         self.random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
         
         # Configuration
-        self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in dataset.schema.performance.keys()}
         self.param_bounds: Dict[str, Tuple[float, float]] = {}
         self.trust_regions: Dict[str, float] = {}
         self.fixed_params: Dict[str, Any] = {}
+
+        # Set ordered weights
+        self.perf_names_order = list(schema.performance.keys())
+        self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         
         # Initialize Surrogate Model
         if model:
@@ -54,7 +57,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
-        self.performance_weights = weights
+        # set according to order in perf_names_order
+        for name, value in weights.items():
+            if name in self.performance_weights:
+                self.performance_weights[name] = value
+            else:
+                self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
         
     def configure_param_bounds(
         self, 
@@ -84,8 +92,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         total_weight = 0.0
 
         # make sure to order performance weights by the performance names in dataset
-        perf_names = list(self.dataset.schema.performance.keys())
-        ordered_weights = [self.performance_weights.get(name, 0.0) for name in perf_names]
+        ordered_weights = [self.performance_weights.get(name, 0.0) for name in self.perf_names_order]
 
         for i, weight in enumerate(ordered_weights):
             # Assume performance metrics are [0, 1]
@@ -122,7 +129,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         y_train = []
 
         for code in datamodule.get_split_codes(split=SplitType.TRAIN):
-            exp = self.dataset.get_experiment(code)
+            exp = datamodule.dataset.get_experiment(code)
             if exp.performance:
                 params = exp.parameters.get_values_dict()
                 x_arr = datamodule.params_to_array(params)
@@ -135,13 +142,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(X_train), np.array(y_train)
     
-    def train_exploration_model(
+    def _train_exploration_model(
         self,
         datamodule: DataModule
     ) -> None:
         """Train surrogate model on existing experiment data. We assume the datamodule is fitted."""
         X_train, y_train = self._get_train_arrays(datamodule)
-        
         if len(X_train) > 0:
             self.model.fit(X_train, y_train)
         else:
@@ -153,68 +159,41 @@ class CalibrationSystem(BaseOrchestrationSystem):
         pred_performance = self.evaluate_fn(pred_features)
         pred_sys_performance = self.compute_system_performance(list(pred_performance.values()))
         return -pred_sys_performance
-
-    def propose_params_offline(
+    
+    def propose_params(
         self,
         datamodule: DataModule,
+        mode: Mode,
         current_params: Dict[str, Any],
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
     ) -> Dict[str, Any]:
-        """Propose next parameter set using Global (Offline) Bayesian Optimization."""
-        # 1. Fit Surrogate on latest data
-        self._fit_surrogate(datamodule)
+        # 1. Fit Surrogate on latest data (only in offline mode)
+        if mode == Mode.OFFLINE:
+            self._train_exploration_model(datamodule)
 
         # 2. Get Bounds
-        bounds = self._get_bounds_for_step(datamodule, current_params, Mode.OFFLINE)
+        bounds = self._get_bounds_for_step(datamodule, current_params, mode)
+
+        # 3 Define objective function for optimization
+        if mode == Mode.OFFLINE:
+            # retrieve exploration function and fix arguments
+            objective_func = functools.partial(
+                self.model.exploration_func, 
+                sys_perf=self.compute_system_performance,
+                w_explore=w_explore
+            )
+        else:
+            objective_func = self._exploitation_func
         
         # 3. Run Optimization (use exploration function from IExplorationModel)
         return self._run_optimization(
             datamodule, 
             current_params,
             bounds, 
-            functools.partial(
-                self.model.exploration_func, 
-                sys_perf=self.compute_system_performance,
-                w_explore=w_explore
-            ),
+            objective_func,
             n_optimization_rounds, 
             )
-
-    def propose_params_online(
-        self,
-        datamodule: DataModule,
-        current_params: Dict[str, Any],
-        n_optimization_rounds: int = 10
-    ) -> Dict[str, Any]:
-        """
-        Propose next parameter set using Trust Region (Online) Bayesian Optimization.
-        
-        Args:
-            datamodule: Fitted DataModule for normalization
-            current_params: Current parameters (required for trust region)
-            n_optimization_rounds: Number of random restarts for acquisition optimization
-        """
-        # 1. Fit Surrogate on latest data
-        self._fit_surrogate(datamodule)
-
-        # 2. Get Bounds
-        bounds = self._get_bounds_for_step(datamodule, current_params, Mode.ONLINE)
-        
-        # 3. Run Optimization (Force Exploitation)
-        return self._run_optimization(
-            datamodule, 
-            current_params,
-            bounds, 
-            self._exploitation_func, 
-            n_optimization_rounds, 
-            )
-
-    def _fit_surrogate(self, datamodule: DataModule) -> None:
-        """Fit the surrogate model on all available training data."""
-        X_train, y_train = self._get_train_arrays(datamodule)
-        if len(X_train) > 0:
-            self.model.fit(X_train, y_train)
 
     def _get_bounds_for_step(
         self, 
@@ -279,8 +258,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         schema_min, schema_max = -np.inf, np.inf
         
         # If it's a direct parameter in schema
-        if self.dataset.schema.parameters.has(col):
-            data_obj = self.dataset.schema.parameters.get(col)
+        if datamodule.dataset.schema.parameters.has(col):
+            data_obj = datamodule.dataset.schema.parameters.get(col)
             schema_min = data_obj.constraints.get("min", -np.inf)
             schema_max = data_obj.constraints.get("max", np.inf)
         elif parent_param:

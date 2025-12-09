@@ -1,7 +1,7 @@
 # Quick Start Guide
 
-**Last Updated**: November 28, 2025  
-**Status**: Phase 10 - Dimensional Prediction Architecture
+**Last Updated**: December 9, 2025  
+**Status**: Current (PFAB Release)
 
 ---
 
@@ -20,644 +20,189 @@ pip install -e .
 
 ## 5-Minute Workflow
 
-### 1. Define Your Models
+### 1. Define Your Schema
 
-Create evaluation and feature models by implementing the interfaces:
+First, define the structure of your dataset using `DatasetSchema`. This acts as the contract for your data.
 
 ```python
-from lbp_package.interfaces import IEvaluationModel, IFeatureModel
-from lbp_package.core import Parameter, Performance, Dimension, Dataset
+from lbp_package.core import DatasetSchema
+from lbp_package.core.data_objects import Parameter, Feature, PerformanceAttribute
+from lbp_package.core.data_blocks import Parameters, PerformanceAttributes, Features
+
+# Define Parameters (Inputs)
+p1 = Parameter.real("print_speed", min_val=10.0, max_val=200.0)
+p2 = Parameter.real("layer_height", min_val=0.1, max_val=0.4)
+p3 = Parameter.dimension("n_layers", iterator_code="layer_idx", level=1)
+
+# Define Features (Intermediate Arrays)
+f1 = Feature.array("energy_trace")
+f2 = Feature.array("path_deviation")
+
+# Define Performance Attributes (Scalar Outputs)
+perf1 = PerformanceAttribute.score("energy_efficiency")
+perf2 = PerformanceAttribute.score("geometric_accuracy")
+
+# Create Blocks
+param_block = Parameters.from_list([p1, p2, p3])
+feat_block = Features.from_list([f1, f2])
+perf_block = PerformanceAttributes.from_list([perf1, perf2])
+
+# Initialize Schema
+schema = DatasetSchema(
+    name="my_schema_v1",
+    parameters=param_block,
+    features=feat_block,
+    performance=perf_block,
+)
+```
+
+---
+
+### 2. Define Your Models
+
+Implement the interfaces for Feature Extraction and Evaluation.
+
+```python
+from lbp_package.interfaces import IFeatureModel, IEvaluationModel
 from lbp_package.utils import LBPLogger
-from dataclasses import dataclass, field
-from typing import Any
+from typing import List, Dict, Any
 
-@dataclass
 class EnergyFeatureModel(IFeatureModel):
-    """Compute energy consumption features."""
+    """Extract energy trace from raw sensor data."""
     
-    dataset: Dataset  # Required for memoization
-    logger: LBPLogger  # Required for logging
-    
-    def _load_data(self, **param_values) -> Any:
-        """Load raw data for these parameters."""
-        # Use param_values to locate/load unstructured data
-        # (CAD files, sensor data, etc.)
-        return raw_data  # Your custom data format
-    
-    def _compute_features(self, data: Any) -> float:
-        """Extract feature value from loaded data."""
-        # Your feature computation here
-        return 123.45
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
+        
+    @property
+    def input_parameters(self) -> List[str]:
+        return ["print_speed", "n_layers"]
+        
+    @property
+    def input_features(self) -> List[str]:
+        return []
+        
+    @property
+    def outputs(self) -> List[str]:
+        return ["energy_trace"]
 
-@dataclass
+    def _load_data(self, params: Dict, **dimensions) -> Any:
+        # Load raw sensor data (e.g., from CSV or DB)
+        return [0.1, 0.2, 0.3] # Mock data
+
+    def _compute_feature_logic(self, data: Any, params: Dict, visualize: bool = False, **dimensions) -> Dict[str, float]:
+        # Compute feature value for specific dimension index
+        return {"energy_trace": sum(data) * params["print_speed"]}
+
 class EnergyEvaluationModel(IEvaluationModel):
-    """Evaluate energy consumption."""
+    """Calculate energy efficiency score."""
     
-    # Declare parameters as dataclass fields
-    print_speed: Parameter = field(
-        default_factory=lambda: Parameter.real(min_val=10.0, max_val=200.0, round_digits=2)
-    )
-    layer_height: Parameter = field(
-        default_factory=lambda: Parameter.real(min_val=0.1, max_val=0.4, round_digits=3)
-    )
-    n_layers: Dimension = field(
-        default_factory=lambda: Dimension.integer(
-            param_name="n_layers",
-            dim_name="layers", 
-            iterator_name="layer_idx",
-            min_val=1,
-            max_val=1000
-        )
-    )
-    
+    def __init__(self, logger: LBPLogger):
+        super().__init__(logger)
+        
     @property
-    def feature_model_type(self):
-        return EnergyFeatureModel
-    
+    def input_parameters(self) -> List[str]:
+        return []
+        
     @property
-    def dim_names(self):
-        return ["layers"]
-    
+    def input_features(self) -> List[str]:
+        return ["energy_trace"]
+        
     @property
-    def dim_param_names(self):
-        return ["n_layers"]
-    
-    @property
-    def dim_iterator_names(self):
-        return ["layer_idx"]
-    
-    @property
-    def target_value(self):
-        return 0.0  # Minimize energy
-    
-    @property
-    def scaling_factor(self):
-        return 1.0
-    
-    def evaluate(self, dataset, exp_code, indices, features):
-        # Your evaluation logic here
-        return 100.0  # Energy value
+    def outputs(self) -> List[str]:
+        return ["energy_efficiency"]
+        
+    def _evaluate_logic(self, features: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, float]:
+        # Calculate score (0-1)
+        energy = features["energy_trace"]
+        score = 1.0 / (1.0 + energy)
+        return {"energy_efficiency": score}
 ```
 
 ---
 
-### 2. Initialize Agent
+### 3. Initialize Agent & Register Models
 
 ```python
-from lbp_package.core import LBPAgent
+from lbp_package.orchestration.agent import LBPAgent
 
-# Create agent (no round_digits - that's in DataObjects now)
+# Create Agent
 agent = LBPAgent(
-    root_folder="/path/to/project",
-    local_folder="/path/to/local",
-    log_folder="/path/to/logs",
-    debug_flag=True  # Skip external database operations
-)
-```
-
----
-
-### 3. Register Models
-
-```python
-# Register evaluation models (no weight, no round_digits)
-agent.register_evaluation_model(
-    performance_code="energy_consumption",
-    evaluation_model_class=EnergyEvaluationModel
-)
-
-agent.register_evaluation_model(
-    performance_code="path_deviation",
-    evaluation_model_class=PathDeviationEvaluationModel
-)
-
-# Register prediction models (optional)
-agent.register_prediction_model(
-    performance_code="energy_consumption",
-    prediction_model_class=EnergyPredictionModel
-)
-```
-
-**Key Changes in Phase 7:**
-- Use `register_evaluation_model()` (not `add_evaluation_model`)
-- No `weight` parameter (that's for calibration, not evaluation)
-- No `round_digits` parameter (configured in DataObjects)
-
----
-
-### 4. Initialize Dataset
-
-```python
-# Define static parameters (study-level, shared across experiments)
-static_params = {
-    "material": "PLA",
-    "printer_type": "FDM",
-    "nozzle_diameter": 0.4
-}
-
-# Agent returns Dataset - user owns it
-dataset = agent.initialize(static_params=static_params)
-
-print(f"Dataset initialized: {dataset.schema_id}")
-print(f"Parameters: {len(dataset.schema.parameters.data_objects)}")
-print(f"Dimensions: {len(dataset.schema.dimensions.data_objects)}")
-```
-
-**Key Changes in Phase 7:**
-- `initialize()` returns Dataset without storing it
-- User owns and manages the dataset
-- No more `schema_id` parameter (use `populate()` to load existing)
-
----
-
-### 5. Run Experiments
-
-```python
-# Define experiment parameters
-exp_params = {
-    "print_speed": 50.0,      # Dynamic parameter
-    "layer_height": 0.2,      # Dynamic parameter
-    "n_layers": 100           # Dimensional parameter
-}
-
-exp_code = "test_001"
-
-# Add experiment to dataset (hierarchical: tries to load first, then creates)
-exp_data = dataset.add_experiment(exp_code, exp_params)
-
-print(f"Experiment {exp_code} created")
-
-# Evaluate experiment - mutates exp_data in place
-agent.evaluate_experiment(
-    dataset=dataset,
-    exp_data=exp_data,
-    visualize=True,
-    recompute=False
-)
-
-print(f"Experiment {exp_code} evaluated")
-
-# Access results from exp_data
-for perf_code in exp_data.performance:
-    metrics = exp_data.performance.get_value(perf_code)
-    print(f"{perf_code}: {metrics}")
-```
-
-**Key Changes in Phase 7:**
-- Add experiments via `dataset.add_experiment()` (not `agent.add_experiment()`)
-- `evaluate_experiment()` takes `dataset` and `exp_data` parameters
-- Results stored in `exp_data` (mutated in place), not returned
-- No more initialization step before evaluation
-
----
-
-### 6. Save Data
-
-```python
-# Save single experiment to local storage
-dataset.save_experiment(exp_code, local=True, external=False, recompute=False)
-
-print(f"Saved {exp_code} to local storage")
-
-# Or save all experiments at once
-dataset.save(local=True, external=False, recompute=False)
-
-print(f"Saved all experiments + schema")
-```
-
-**Key Changes in Phase 7:**
-- Save via `dataset.save()` or `dataset.save_experiment()` (not `agent.save_experiments_hierarchical()`)
-- Clear control over local vs external storage
-
----
-
-### 7. Load Existing Data
-
-```python
-# In a new session, create agent and dataset
-agent2 = LBPAgent(
-    root_folder="/path/to/project",
-    local_folder="/path/to/local",
-    log_folder="/path/to/logs",
+    root_folder="./my_project",
     debug_flag=True
 )
 
-# Register same models (required for schema compatibility)
-agent2.register_evaluation_model(
-    performance_code="energy_consumption",
-    evaluation_model_class=EnergyEvaluationModel
-)
+# Register Models
+agent.register_feature_model(EnergyFeatureModel)
+agent.register_evaluation_model(EnergyEvaluationModel)
 
-# Initialize with same static params (creates same schema)
-dataset2 = agent2.initialize(static_params=static_params)
+# Initialize Dataset (Validates models against schema)
+dataset = agent.initialize(schema)
 
-# Load all experiments from local storage
-dataset2.populate(source="local")
-
-print(f"Loaded dataset: {dataset2.schema_id}")
-
-# Check what was loaded
-all_exp_codes = dataset2.get_experiment_codes()
-print(f"Found {len(all_exp_codes)} experiments")
-
-for code in all_exp_codes:
-    params = dataset2.get_experiment_params(code)
-    print(f"{code}: {params}")
+print(f"Dataset initialized with ID: {dataset.schema_id}")
 ```
-
-**Key Changes in Phase 7:**
-- Use `dataset.populate()` to load all experiments (not `agent.load_existing_dataset()`)
-- No `schema_id` parameter in `initialize()` - it's generated from models
-- Hierarchical loading built into `add_experiment()` and `populate()`
 
 ---
 
-### 8. Train Prediction Models (Optional)
+### 4. Run Experiments
 
-If you have prediction models registered, you can train and validate them:
+```python
+from lbp_package.utils import StepType
+
+# Load or Create Experiment
+dataset.load_experiments(["test_001"]) # Tries to load from disk
+exp_data = dataset.get_experiment("test_001")
+
+# If new, set parameters
+if not exp_data.parameters.has_value("print_speed"):
+    exp_data.parameters.set_value("print_speed", 50.0)
+    exp_data.parameters.set_value("layer_height", 0.2)
+    exp_data.parameters.set_value("n_layers", 100)
+
+# Run Offline Step (Feature Extraction -> Evaluation)
+agent.step_offline(
+    exp_data=exp_data,
+    step_type=StepType.EVAL, # Only evaluate, don't train
+    recompute=True
+)
+
+# Access Results
+score = exp_data.performance.get_value("energy_efficiency")
+print(f"Energy Efficiency: {score}")
+```
+
+---
+
+### 5. Train Prediction Models
 
 ```python
 from lbp_package.core import DataModule
 
-# Configure DataModule with train/val/test splits
-datamodule = DataModule(
-    dataset,
-    test_size=0.2,      # 20% for test set
-    val_size=0.1,       # 10% of remaining for validation
-    random_seed=42,     # Reproducible splits
-    normalize='standard'  # Z-score normalization
+# Create DataModule for ML
+datamodule = DataModule(dataset)
+
+# Run Full Step (Evaluation + Training)
+agent.step_offline(
+    exp_data=exp_data,
+    datamodule=datamodule,
+    step_type=StepType.FULL # Evaluate AND Train
 )
-
-# Check split sizes
-sizes = datamodule.get_split_sizes()
-print(f"Train: {sizes['train']}, Val: {sizes['val']}, Test: {sizes['test']}")
-
-# Train models on training set
-agent.train(datamodule, epochs=100, learning_rate=0.001)
-
-# Validate on validation set
-val_results = agent.validate(use_test=False)
-for feature, metrics in val_results.items():
-    print(f"{feature}: MAE={metrics['mae']:.4f}, R²={metrics['r2']:.4f}")
-
-# Final evaluation on test set
-test_results = agent.validate(use_test=True)
-for feature, metrics in test_results.items():
-    print(f"{feature} (test): MAE={metrics['mae']:.4f}, R²={metrics['r2']:.4f}")
-
-# Make predictions on new data
-import pandas as pd
-X_new = pd.DataFrame({
-    "print_speed": [50.0, 75.0],
-    "layer_height": [0.2, 0.3],
-    "n_layers": [100, 150]
-})
-
-predictions = agent.predict(X_new)
-print(predictions)  # DataFrame with predicted features (auto-denormalized)
 ```
-
----
-
-### 9. Calibration (Optional)
-
-Optimize process parameters using Active Learning.
-
-```python
-# 1. Configure Calibration Goals
-# Define weights for performance metrics (higher is better)
-agent.configure_calibration(
-    performance_weights={
-        "energy_consumption": 0.7,  # 70% importance
-        "surface_quality": 0.3      # 30% importance
-    }
-)
-
-# 2. Generate Baseline Experiments
-# Create initial random design (Latin Hypercube Sampling)
-baseline_exps = agent.calibration_system.generate_baseline_experiments(
-    n_samples=5,
-    param_ranges={
-        "print_speed": (10.0, 100.0),
-        "temperature": (190.0, 220.0)
-    }
-)
-
-# Run baseline experiments...
-for params in baseline_exps:
-    # ... run experiment ...
-    pass
-
-# 3. Active Learning Loop
-for i in range(10):
-    # Propose next experiment(s)
-    next_exps = agent.propose_next_experiments(
-        param_ranges={
-            "print_speed": (10.0, 100.0),
-            "temperature": (190.0, 220.0)
-        },
-        n_points=1,
-        mode='exploration'  # 'exploration' (uncertainty) or 'optimization' (performance)
-    )
-    
-    # Run proposed experiment
-    params = next_exps[0]
-    # ... run experiment and add to dataset ...
-```
-
----
-
-## Alternative: Load Specific Experiments
-```
-
-**Split Configuration:**
-- `test_size`: Fraction for test set (default: 0.2)
-- `val_size`: Fraction of remaining for validation (default: 0.1)
-- `random_seed`: Reproducibility (default: 42)
-- `normalize`: Normalization method - `'standard'` (z-score), `'minmax'`, `'robust'`, or `None`
-
-**Normalization Methods:**
-DataModule automatically normalizes both parameters (X) and features (y) based on schema metadata:
-
-```python
-# Normalization is auto-detected from DataObject types:
-# - DataReal/DataInt: Uses DataModule default (e.g., 'standard')
-# - DataDimension: Always uses 'minmax' (preserves ordinal structure)
-# - DataBool: No normalization (already 0/1)
-# - DataCategorical: One-hot encoding
-
-# Manual normalization (advanced)
-X, y = datamodule.get_split('train')
-datamodule.fit_normalize(X, y)  # Fit on training data
-
-# Normalize parameters and features separately
-X_norm = datamodule.normalize_parameters(X)
-y_norm = datamodule.normalize_features(y)
-
-# Denormalize
-X_orig = datamodule.denormalize_parameters(X_norm)
-y_orig = datamodule.denormalize_features(y_norm)
-
-# Override normalization for specific columns
-datamodule.set_parameter_normalize('temp', 'minmax')  # Force minmax for temp
-datamodule.set_feature_normalize('loss', 'robust')    # Force robust for loss
-```
-
-**One-Hot Encoding:**
-Categorical parameters are automatically one-hot encoded during normalization:
-
-```python
-# Original: ['optimizer'] → ['adam', 'sgd', 'rmsprop']
-# Normalized: ['optimizer_adam', 'optimizer_sgd', 'optimizer_rmsprop'] → [1, 0, 0]
-# Denormalized: [1, 0, 0] → 'adam'
-```**
-- `test_size=0.0, val_size=0.0` - Use all data for training (no validation)
-- `test_size=0.2, val_size=0.0` - 80/20 train/test split (no validation)
-- `test_size=0.2, val_size=0.1` - Approximately 70/10/20 train/val/test
-
-**Validation Metrics:**
-- `mae`: Mean Absolute Error
-- `rmse`: Root Mean Squared Error
-- `r2`: Coefficient of Determination (R²)
-- `n_samples`: Number of samples in the split
-
----
-
-## Alternative: Load Specific Experiments
-
-```python
-# Load (or create) specific experiment with hierarchical pattern
-exp_data = dataset.add_experiment("test_002")  # No params = try to load
-
-# Hierarchical loading pattern:
-# 1. Check memory (already loaded?)
-# 2. Try local storage
-# 3. Try external storage
-# 4. Create new if not found
-
-if exp_data.parameters.has_value("print_speed"):
-    print(f"Loaded existing experiment")
-else:
-    print(f"Created new experiment")
-    # Set parameters...
-    exp_data.parameters.set_value("print_speed", 60.0)
-```
-
----
-
-## Complete Example
-
-See `examples/aixd_example.py` for a complete working example demonstrating:
-- Model definition with dataclass fields
-- Agent initialization
-- Dataset creation and ownership
-- Experiment evaluation with mutation pattern
-- Hierarchical save/load operations
 
 ---
 
 ## Key Concepts
 
-### 1. Dataset-Centric Architecture
+### 1. Schema-First Design
+You explicitly define the `DatasetSchema` (Parameters, Features, Performance) before doing anything else. This acts as a contract. The Agent validates that your registered models fulfill this contract (i.e., they produce the required outputs using the available inputs).
 
-**You own the dataset**, not the agent. Agent is a stateless orchestration layer.
+### 2. Stateless Agent
+The `LBPAgent` orchestrates the workflow but does not own the data. It returns a `Dataset` object that you manage.
 
-```python
-dataset = agent.initialize(...)  # Agent returns dataset, doesn't store it
-# You manage dataset lifecycle
-```
+### 3. Explicit Interfaces
+Models must implement `IFeatureModel` or `IEvaluationModel` and explicitly declare their `input_parameters`, `input_features`, and `outputs`.
 
-### 2. Hierarchical Load/Save Pattern
-
-Pattern: **Memory → Local → External → Compute**
-
-```python
-# Try to load first, create if not found
-exp_data = dataset.add_experiment("test_001")  # Smart loading
-
-# Or explicitly create new
-exp_data = dataset.add_experiment_manual("test_001", {...})  # Always create
-```
-
-### 3. Mutation Pattern
-
-`evaluate_experiment()` mutates `exp_data` in place, doesn't return results.
-
-```python
-agent.evaluate_experiment(dataset, exp_data)  # Mutates exp_data
-# Results now in exp_data.performance
-```
-
-### 4. Declarative Rounding
-
-Configure rounding in DataObjects, not in agent or models.
-
-```python
-# In model definition
-print_speed: Parameter = field(
-    default_factory=lambda: Parameter.real(min_val=10, max_val=200, round_digits=2)
-)
-
-# Or in schema
-schema = DatasetSchema(default_round_digits=3)
-```
-
-### 5. Schema Generation
-
-Schema is generated from model dataclass fields, not decorators.
-
-```python
-@dataclass
-class MyModel(IEvaluationModel):
-    # These fields become parameters in schema
-    param1: Parameter = field(default_factory=lambda: Parameter.real(...))
-    param2: Parameter = field(default_factory=lambda: Parameter.integer(...))
-```
-
----
-
-## Common Operations
-
-### Access Experiment Data
-
-```python
-# Get all experiment codes
-codes = dataset.get_experiment_codes()
-
-# Get parameters for experiment
-params = dataset.get_experiment_params("test_001")
-
-# Get complete ExperimentData
-exp_data = dataset.get_experiment_data("test_001")
-
-# Access values
-speed = exp_data.parameters.get_value("print_speed")
-energy = exp_data.performance.get_value("energy_consumption")
-```
-
-### Check if Experiment Exists
-
-```python
-if "test_001" in dataset.get_experiment_codes():
-    print("Experiment exists in memory")
-
-# Or try to load
-exp_data = dataset.add_experiment("test_001")  # Loads if exists, creates if not
-```
-
-### Iterate Over Experiments
-
-```python
-for exp_code in dataset.get_experiment_codes():
-    exp_data = dataset.get_experiment_data(exp_code)
-    params = {name: exp_data.parameters.get_value(name) 
-              for name in exp_data.parameters.data_objects.keys()}
-    print(f"{exp_code}: {params}")
-```
-
----
-
-## Key API Patterns
-
-**Important**: This guide shows the current Phase 7 API. If you see references to old patterns like `agent.add_experiment()` or `agent.save_experiments_hierarchical()`, those are outdated.
-
-**Current patterns:**
-- ✅ `dataset.add_experiment()` - experiments belong to dataset
-- ✅ `agent.evaluate_experiment(dataset, exp_data)` - explicit dataset parameter, mutates exp_data
-- ✅ `dataset.save()` or `dataset.save_experiment()` - dataset handles persistence
-- ✅ `dataset.populate()` - dataset loads its own data
-- ✅ No `weight` or `round_digits` in model registration
-
----
-
-## Production Deployment
-
-### Export Trained Models for Production
-
-After training prediction models, export them for production inference:
-
-```python
-from lbp_package.orchestration import PredictionSystem, InferenceBundle
-from lbp_package.core import DataModule
-
-# Train models (research environment)
-system = PredictionSystem(dataset=dataset, logger=logger)
-system.add_prediction_model(MyPredictionModel())
-
-datamodule = DataModule(dataset, normalize="standard")
-system.train(datamodule)
-
-# Export bundle with validation
-system.export_inference_bundle("models/production_v1.pkl")
-```
-
-### Load and Use in Production
-
-In production environment (no Dataset/training dependencies needed):
-
-```python
-from lbp_package import InferenceBundle
-import pandas as pd
-
-# Load trained bundle
-bundle = InferenceBundle.load("models/production_v1.pkl")
-
-# Predict for new parameters
-X_new = pd.DataFrame({
-    "temperature": [25.0, 30.0, 35.0],
-    "pressure": [1.0, 1.2, 1.4]
-})
-
-predictions = bundle.predict(X_new)  # Automatic validation + denormalization
-print(predictions)  # DataFrame with predicted features
-```
-
-### Implement Model Export Support
-
-Prediction models must implement export methods:
-
-```python
-from typing import Dict, Any
-
-@dataclass
-class MyPredictionModel(IPredictionModel):
-    # ... model definition ...
-    
-    def _get_model_artifacts(self) -> Dict[str, Any]:
-        """Serialize trained model state."""
-        if not self.is_trained:
-            raise RuntimeError("Cannot export untrained model")
-        return {
-            "sklearn_model": self.model,  # Must be picklable
-            "config": self.config
-        }
-    
-    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
-        """Restore trained model state."""
-        self.model = artifacts["sklearn_model"]
-        self.config = artifacts["config"]
-```
-
-**Key Features**:
-- Round-trip validation ensures export correctness
-- Automatic denormalization of predictions
-- Input validation against schema
-- No Dataset/training dependencies in production
-
----
-
-## Next Steps
-
-1. **Define your models**: Implement `IEvaluationModel` and `IFeatureModel`
-2. **Set up agent**: Create and configure `LBPAgent`
-3. **Register models**: Call `register_evaluation_model()` for each metric
-4. **Create dataset**: Call `agent.initialize()` with static params
-5. **Run experiments**: Add experiments and evaluate them
-6. **Save results**: Use `dataset.save()` for persistence
-7. **Load data**: Use `dataset.populate()` to reload
-8. **Deploy models**: Export with `export_inference_bundle()` for production
-
-For detailed architecture information, see:
-- `docs/SEPARATION_OF_CONCERNS.md` - Component responsibilities
-- `docs/CORE_DATA_STRUCTURES.md` - Data model details
-- `docs/IMPLEMENTATION_SUMMARY.md` - Full implementation history
+### 4. Offline Stepping
+The `agent.step_offline()` method is the main entry point for processing experiments. It handles the dependency chain:
+1.  **Feature Extraction**: Computes arrays from raw data.
+2.  **Evaluation**: Computes scores from features.
+3.  **Training**: (Optional) Updates prediction models using `DataModule`.

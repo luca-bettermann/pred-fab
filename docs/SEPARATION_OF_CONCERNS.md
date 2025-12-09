@@ -1,7 +1,7 @@
-# Architecture: Separation of Concerns
+# PFAB Architecture: Separation of Concerns
 
-**Last Updated**: November 28, 2025  
-**Status**: Current (Phase 10 Complete)
+**Last Updated**: December 9, 2025  
+**Status**: Current (PFAB Release)
 
 ---
 
@@ -23,14 +23,14 @@
 ┌─────────────────────────────────────────────────────┐
 │                   Orchestration                      │
 │     BaseOrchestrationSystem (abstract base)         │
-│   EvaluationSystem, PredictionSystem,               │
+│   FeatureSystem, EvaluationSystem, PredictionSystem,│
 │           CalibrationSystem (concrete)              │
 │            Manage Model Execution                    │
 └─────────────────────────────────────────────────────┘
                          │
 ┌─────────────────────────────────────────────────────┐
 │                    Interfaces                        │
-│  (IEvaluationModel, IFeatureModel, IPredictionModel,│
+│  (IFeatureModel, IEvaluationModel, IPredictionModel,│
 │             ICalibrationStrategy)                   │
 │              User-Defined Models                     │
 └─────────────────────────────────────────────────────┘
@@ -43,8 +43,8 @@
                          │
 ┌─────────────────────────────────────────────────────┐
 │                     Utilities                        │
-│          (Logger, LocalData, IExternalData)         │
-│             Storage & Persistence                    │
+│      (Logger, LocalData, DataModule, IExternalData) │
+│             Storage & ML Support                     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -100,16 +100,17 @@
 - `Parameters`: All experiment parameters (unified)
 - `Dimensions`: Dimensional metadata
 - `PerformanceAttributes`: Performance metrics
-- `MetricArrays`: Array-valued metrics
+- `Features`: Multi-dimensional feature arrays (e.g., sensor data)
+- `PredictedFeatures`: Features predicted by models
 
 ---
 
 #### 1.3 DatasetSchema (`schema.py`)
 
-**Responsibility:** Define dataset structure with deterministic hashing.
+**Responsibility:** Define dataset structure with deterministic hashing. **(Single Source of Truth)**
 
 **Does:**
-- Define structure: parameters, dimensions, performance attributes
+- Define structure: parameters, dimensions, performance attributes, features
 - Compute deterministic SHA256 hash (types + constraints)
 - Store default rounding configuration (`default_round_digits`)
 - Check structural compatibility between schemas
@@ -189,7 +190,8 @@
 - Store experiment code
 - Store parameter values (`DataBlock`)
 - Store performance metrics (`DataBlock`)
-- Store metric arrays (`DataBlock`)
+- Store feature arrays (`DataBlock`)
+- Store predicted features (`DataBlock`)
 - Provide computed property for dimensions
 - Validate completeness
 
@@ -206,7 +208,7 @@ class ExperimentData:
     parameters: DataBlock              # All param values  
     features: Optional[DataBlock]       # Raw feature measurements
     performance: Optional[DataBlock]    # Aggregated performance (0-1)
-    metric_arrays: Optional[DataBlock]  # Multi-dimensional arrays
+    predicted_features: Optional[DataBlock] # Predicted feature values
     
     @property
     def dimensions(self) -> Dict[str, Any]:
@@ -219,19 +221,16 @@ class ExperimentData:
 
 #### 2.1 LBPAgent (`agent.py`)
 
-**Responsibility:** Stateless orchestration - register models and coordinate execution.
-
-#### 2.1 LBPAgent (`orchestration/agent.py`)
-
-**Responsibility:** High-level workflow orchestration and dataset initialization.
+**Responsibility:** High-level workflow orchestration and dataset initialization. (The "PFAB Agent")
 
 **Does:**
 - Register model classes (store specs for later instantiation)
-- Generate schema from registered models (via systems)
+- Validate registered models against user-provided schema
 - Initialize dataset and orchestration systems
-- Coordinate two-phase initialization:
-  1. Schema generation: instantiate models → extract specs → build schema
-  2. Dataset attachment: attach dataset → connect feature models → setup mappings
+- Coordinate initialization:
+  1. Model instantiation: create instances from registered classes
+  2. Schema validation: ensure models match the provided schema
+  3. Dataset attachment: attach dataset → connect feature models → setup mappings
 - Coordinate experiment evaluation (delegate to EvaluationSystem)
 - Coordinate prediction training/inference (delegate to PredictionSystem)
 - Provide high-level workflow API
@@ -245,37 +244,29 @@ class ExperimentData:
 
 **Key Change in Phase 7:** Agent is now stateless - returns Dataset without storing it.
 
-**Schema Generation Workflow:**
+**Schema Validation Workflow:**
 ```python
-1. User: agent.register_evaluation_model(perf_code, ModelClass, **kwargs)
-   → Stores (class, kwargs) in _evaluation_model_specs
+1. User: Define DatasetSchema (Parameters, Features, Performance)
+   → Explicitly defines the structure of the dataset
 
-2. User: agent.initialize(static_params)
+2. User: agent.register_model(ModelClass, **kwargs)
+   → Stores (class, kwargs) in model_specs
+
+3. User: agent.initialize(schema)
    ↓
-3. generate_schema_from_registered_models()
-   ↓
-4. _instantiate_models() (if not already done)
-   → Creates EvaluationSystem and PredictionSystem (dataset=None)
+4. _instantiate_models()
    → Instantiates model instances from registered classes
    → Stores instances in systems
    ↓
-5. systems.get_model_specs()
-   → BaseOrchestrationSystem extracts DataObjects from model fields
-   → EvaluationSystem adds performance outputs
-   → PredictionSystem adds predicted features
+5. _validate_systems_against_schema(schema)
+   → Extracts input/output requirements from all models
+   → Verifies all inputs exist in schema.parameters/features
+   → Verifies all outputs exist in schema.features/performance
+   → Verifies all required input features are produced by a feature model
    ↓
-6. DatasetSchema.from_model_specs(eval_specs, pred_specs)
-   → Merges parameter inputs from both systems
-   → Validates no conflicting definitions
-   → Separates dimensions from parameters
-   → Adds performance attributes
-   → Returns schema
+6. Create Dataset with schema
    ↓
-7. Create Dataset with schema
-   ↓
-8. Attach dataset to systems
-   ↓
-9. Connect feature models (require dataset for memoization)
+7. Attach dataset to systems
 ```
 
 **Methods:**
@@ -289,7 +280,34 @@ class ExperimentData:
 
 ---
 
-#### 2.2 EvaluationSystem (`orchestration/evaluation.py`)
+#### 2.2 FeatureSystem (`orchestration/features.py`)
+
+**Responsibility:** Orchestrate feature extraction from raw data.
+
+**Inherits:** `BaseOrchestrationSystem`
+
+**Does:**
+- Manage feature model instances (list: [IFeatureModel, ...])
+- Execute feature models to compute arrays from parameters
+- Store computed features in `exp_data.features` DataBlock
+- Handle recompute logic (clear feature cache)
+- Coordinate visualization requests
+
+**Does NOT:**
+- Compute scalar performance metrics (that's EvaluationSystem)
+- Train models (that's PredictionSystem)
+
+**Workflow:**
+```
+compute_exp_features() →
+  for each feature model:
+    IFeatureModel.compute_features() → returns array
+    store in exp_data.features
+```
+
+---
+
+#### 2.3 EvaluationSystem (`orchestration/evaluation.py`)
 
 **Responsibility:** Execute evaluation models and store results.
 
@@ -298,14 +316,9 @@ class ExperimentData:
 **Does:**
 - Manage evaluation model instances (dict: perf_code → IEvaluationModel)
 - Execute evaluation models in correct order
-- Compute features via feature models
-- Store feature values in `exp_data.features` DataBlock
+- Compute performance values from features
 - Store performance values in `exp_data.performance` DataBlock
-- Store metric arrays in `exp_data.metric_arrays` DataBlock
-- Pass visualization flags to feature models
-- Handle recompute logic (clear feature cache)
 - Override `get_model_specs()` to add performance outputs
-- Implement `get_models()` to return evaluation_models dict
 
 **Does NOT:**
 - Own dataset (references it via base class)
@@ -317,14 +330,12 @@ class ExperimentData:
 evaluate_experiment() →
   for each performance code:
     IEvaluationModel.run() →
-      IFeatureModel.run() → compute feature → store in exp_data.features
-      compute performance → store in exp_data.performance
-      store metric_arrays
+      compute performance from features → store in exp_data.performance
 ```
 
 ---
 
-#### 2.3 PredictionSystem (`orchestration/prediction.py`)
+#### 2.4 PredictionSystem (`orchestration/prediction.py`)
 
 **Responsibility:** Train and execute prediction models with DataModule integration.
 
@@ -344,7 +355,6 @@ evaluate_experiment() →
 - Return prediction results (DataFrames)
 - Export models to InferenceBundle with validation
 - Override `get_model_specs()` to add predicted features
-- Implement `get_models()` to return prediction_models list
 
 **Does NOT:**
 - Own dataset (uses it for training data extraction via base class)
@@ -397,9 +407,6 @@ predict(X_new) →
     y_pred = datamodule.denormalize(y_norm)
   return DataFrame with all features
 ```
-predict(feature_name, X: DataFrame) →
-  model.predict(X) → returns DataFrame with feature columns
-```
 
 **Export Flow:**
 ```
@@ -417,7 +424,7 @@ export_inference_bundle(filepath) →
 
 ---
 
-#### 2.4 InferenceBundle (`orchestration/inference_bundle.py`)
+#### 2.5 InferenceBundle (`orchestration/inference_bundle.py`)
 
 **Responsibility:** Lightweight production inference without Dataset/training dependencies.
 
@@ -460,7 +467,7 @@ bundle.predict(X) →
 
 ---
 
-#### 2.5 CalibrationSystem (`orchestration/calibration.py`)
+#### 2.6 CalibrationSystem (`orchestration/calibration.py`)
 
 **Responsibility:** Orchestrate active learning and process optimization.
 
@@ -492,23 +499,7 @@ propose_new_experiments() →
 
 ### 3. Interface Layer (`src/lbp_package/interfaces/`)
 
-#### 3.1 IEvaluationModel (`interfaces/evaluation.py`)
-
-**Responsibility:** Define contract for evaluation models.
-
-**Does:**
-- Declare required properties (feature_model_type, dim_names, target_value, etc.)
-- Declare `evaluate()` method signature
-- Use dataclass fields to declare parameters
-
-**Does NOT:**
-- Implement evaluation logic (user does)
-- Store data
-- Manage execution
-
----
-
-#### 3.2 IFeatureModel (`interfaces/features.py`)
+#### 3.1 IFeatureModel (`interfaces/features.py`)
 
 **Responsibility:** Load unstructured data and extract features with memoization.
 
@@ -531,26 +522,19 @@ propose_new_experiments() →
 
 ---
 
-#### 3.3 ICalibrationStrategy (`interfaces/calibration.py`)
+#### 3.2 IEvaluationModel (`interfaces/evaluation.py`)
 
-**Responsibility:** Define optimization algorithm for calibration.
+**Responsibility:** Define contract for evaluation models.
 
 **Does:**
-- Declare `propose_next_points()` method
-- Implement specific optimization logic (e.g., Bayesian Optimization)
-- Manage internal state of the optimizer (e.g., GP model)
+- Declare required properties (feature_model_type, dim_names, target_value, etc.)
+- Declare `evaluate()` method signature
+- Use dataclass fields to declare parameters
 
 **Does NOT:**
-- Manage the optimization loop (that's `CalibrationSystem`)
-- Access the dataset directly
-- Define system performance
-
----
-
-### 4. Utilities Layer (`src/lbp_package/utils/`)
-
-**Returns:**
-- Feature values as floats (physical measurements)
+- Implement evaluation logic (user does)
+- Store data
+- Manage execution
 
 ---
 
@@ -618,7 +602,23 @@ Parameters → PredictionModel.predict() → Features → EvaluationModel → Pe
 
 ---
 
-#### 3.4 IExternalData (`interfaces/external_data.py`)
+#### 3.4 ICalibrationStrategy (`interfaces/calibration.py`)
+
+**Responsibility:** Define optimization algorithm for calibration.
+
+**Does:**
+- Declare `propose_next_points()` method
+- Implement specific optimization logic (e.g., Bayesian Optimization)
+- Manage internal state of the optimizer (e.g., GP model)
+
+**Does NOT:**
+- Manage the optimization loop (that's `CalibrationSystem`)
+- Access the dataset directly
+- Define system performance
+
+---
+
+#### 3.5 IExternalData (`interfaces/external_data.py`)
 
 **Responsibility:** Define contract for external data storage.
 
@@ -661,7 +661,7 @@ Parameters → PredictionModel.predict() → Features → EvaluationModel → Pe
 
 ---
 
-#### 4.2 DataModule (`datamodule.py`)
+#### 4.2 DataModule (`core/datamodule.py`)
 
 **Responsibility:** ML preprocessing for train/val/test splitting, batching, and normalization.
 

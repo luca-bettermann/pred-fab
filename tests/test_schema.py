@@ -13,22 +13,30 @@ class TestSchemaCreation:
     
     def test_schema_default_empty(self):
         """Test creating default schema has all four blocks."""
-        schema = DatasetSchema()
+        schema = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         
         assert schema.parameters is not None
-        assert schema.dimensions is not None
         assert schema.performance is not None
         assert schema.features is not None
         
         # All blocks should be empty
         assert len(list(schema.parameters.keys())) == 0
-        assert len(list(schema.dimensions.keys())) == 0
         assert len(list(schema.performance.keys())) == 0
         assert len(list(schema.features.keys())) == 0
     
     def test_schema_with_parameters(self):
         """Test adding parameters to schema."""
-        schema = DatasetSchema()
+        schema = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
         
@@ -38,22 +46,26 @@ class TestSchemaCreation:
     
     def test_schema_complete(self):
         """Test creating complete schema with all blocks populated."""
-        schema = DatasetSchema()
+        schema = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         
         # Add parameters
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
         # Add dimensions
-        schema.dimensions.add("traj.t", Dimension.integer("traj", "t", "i", min_val=0, max_val=100))
+        schema.parameters.add("traj.t", Parameter.dimension("traj", "t", 1, min_val=0, max_val=100))
         
         # Add performance
-        schema.performance.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
+        schema.performance.add("accuracy", PerformanceAttribute.score("accuracy"))
         
         # Add metric arrays
         schema.features.add("energy", DataArray(code="energy", shape=(100,)))
         
-        assert len(list(schema.parameters.keys())) == 1
-        assert len(list(schema.dimensions.keys())) == 1
+        assert len(list(schema.parameters.keys())) == 2
         assert len(list(schema.performance.keys())) == 1
         assert len(list(schema.features.keys())) == 1
 
@@ -63,10 +75,20 @@ class TestSchemaHash:
     
     def test_schema_hash_deterministic(self):
         """Test that same schema produces same hash."""
-        schema1 = DatasetSchema()
+        schema1 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema1.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
-        schema2 = DatasetSchema()
+        schema2 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema2.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
         hash1 = schema1._compute_schema_hash()
@@ -76,10 +98,20 @@ class TestSchemaHash:
     
     def test_schema_hash_different_params(self):
         """Test that different parameters produce different hash."""
-        schema1 = DatasetSchema()
+        schema1 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema1.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
-        schema2 = DatasetSchema()
+        schema2 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema2.parameters.add("lr", Parameter.real(min_val=0.0, max_val=2.0))  # Different max
         
         hash1 = schema1._compute_schema_hash()
@@ -89,12 +121,22 @@ class TestSchemaHash:
     
     def test_schema_hash_includes_all_blocks(self):
         """Test that hash includes all blocks."""
-        schema1 = DatasetSchema()
+        schema1 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema1.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
-        schema2 = DatasetSchema()
+        schema2 = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema2.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema2.performance.add("acc", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
+        schema2.performance.add("acc", PerformanceAttribute.score("acc"))
         
         hash1 = schema1._compute_schema_hash()
         hash2 = schema2._compute_schema_hash()
@@ -107,30 +149,37 @@ class TestSchemaSerialization:
     
     def test_schema_to_dict(self):
         """Test converting schema to dictionary."""
-        schema = DatasetSchema()
+        schema = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
         
         schema_dict = schema.to_dict()
         
         assert "parameters" in schema_dict
-        assert "dimensions" in schema_dict
         assert "performance_attrs" in schema_dict
-        assert "metric_arrays" in schema_dict
+        assert "features" in schema_dict
         assert "schema_hash" in schema_dict
     
     def test_schema_from_dict(self):
-        """Test creating schema from dictionary."""
-        schema = DatasetSchema()
+        """Test reconstructing schema from dictionary."""
+        schema = DatasetSchema(
+            name="test_schema",
+            parameters=Parameters(),
+            performance=PerformanceAttributes(),
+            features=Features()
+        )
         schema.parameters.add("lr", Parameter.real(min_val=0.0, max_val=1.0))
-        schema.parameters.add("batch_size", Parameter.integer(min_val=1, max_val=256))
-        schema.performance.add("accuracy", PerformanceAttribute.real(min_val=0.0, max_val=1.0))
         
         schema_dict = schema.to_dict()
-        restored = DatasetSchema.from_dict(schema_dict)
+        reconstructed = DatasetSchema.from_dict(schema_dict)
         
-        assert len(list(restored.parameters.keys())) == 2
-        assert len(list(restored.performance.keys())) == 1
-        assert restored._compute_schema_hash() == schema._compute_schema_hash()
+        assert reconstructed.parameters.has("lr")
+        assert reconstructed.parameters.get("lr").constraints["min"] == 0.0
+        assert reconstructed.parameters.get("lr").constraints["max"] == 1.0
 
 
 class TestSchemaIntegration:

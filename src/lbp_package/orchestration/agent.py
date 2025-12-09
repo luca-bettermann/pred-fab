@@ -8,6 +8,8 @@ manages schema generation and dataset initialization.
 
 import numpy as np
 from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
+
+from lbp_package.utils.enum import Mode
 from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
@@ -167,9 +169,18 @@ class LBPAgent:
             "prediction"
         )
 
+        # Calibration system requires prediction, evaluation and schema to be set
+        self.calibration_system = CalibrationSystem(
+            schema=schema,
+            logger=self.logger, 
+            predict_fn=self.pred_system._predict_from_params,
+            evaluate_fn=self.eval_system._evaluate_feature_dict
+            )
+
         # validate against schema
         self._validate_systems_against_schema(schema)
-                
+        self._initialized = True
+
         # Step 3: Create dataset with storage interfaces
         dataset = Dataset(
             schema=schema,
@@ -179,17 +190,6 @@ class LBPAgent:
             logger=self.logger,
             debug_mode=self.debug_flag,
         )
-
-        # Calibration system requires prediction and evaluation systems to be set
-        self.calibration_system = CalibrationSystem(
-            dataset=dataset,
-            logger=self.logger, 
-            predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict
-            )
-                    
-        # Mark as initialized
-        self._initialized = True
 
         # Display summary
         summary_lines = [
@@ -201,7 +201,6 @@ class LBPAgent:
         ]
         self.logger.console_summary("\n".join(summary_lines))
         self.logger.console_success(f"Successfully initialized dataset '{new_schema_id}'.")
-        
         return dataset        
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
@@ -269,16 +268,17 @@ class LBPAgent:
         self.active_exp = exp_data
         self.logger.info(f"Active experiment set to: {exp_data.exp_code}")
 
-    # === FULL STEP OPERATIONS ===
+    # === FULL STEP OPERATIONS ==
+
     def step_offline(
-            self,
-            exp_data: ExperimentData,
-            datamodule: DataModule,
-            step_type: StepType = StepType.FULL,
-            w_explore: float = 0.5,
-            n_optimization_rounds: int = 10,
-            recompute: bool = False,
-            visualize: bool = False,
+        self,
+        exp_data: ExperimentData,
+        datamodule: Optional[DataModule] = None,
+        step_type: StepType = StepType.FULL,
+        w_explore: float = 0.5,
+        n_optimization_rounds: int = 10,
+        recompute: bool = False,
+        visualize: bool = False,
     ) -> Optional[ExperimentData]:
         """Perform a full offline step of all active systems."""
         self._check_systems(step_type)
@@ -299,39 +299,40 @@ class LBPAgent:
             return
         
         # 3. Train Prediction Model
+        if datamodule is None:
+            raise ValueError("DataModule must be provided for training in offline step.")
         datamodule.prepare()
         self.pred_system.train(datamodule)
         self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
 
-        # 4. Train Exploration Model and propose new parameters 
+        # 4. Train Exploration Model and calibrate new experiment
         current_params = exp_data.parameters.get_values_dict()
-        self.calibration_system.train_exploration_model(datamodule)
-        new_params = self.calibration_system.propose_params_offline(
-            datamodule, current_params, w_explore, n_optimization_rounds)
-        
-        # 5. Create new ExpData with new params and predict features
+        new_params = self.calibration_system.propose_params(
+            datamodule, Mode.OFFLINE, current_params, w_explore, n_optimization_rounds)
         new_exp_data = datamodule.dataset.create_experiment("new_exp", new_params)
-        self._log_step_completion(new_exp_data.exp_code, start, end, action="created")
+        self._log_step_completion(exp_data.exp_code, start, end, action="calibrated")
+        
+        # 5. Predict features of new experiment
         self.pred_system.predict_experiment(new_exp_data)
+        self._log_step_completion(new_exp_data.exp_code, start, end, action="predicted features")
         return new_exp_data
         
-
-    def step(
-            self,
-            exp_data: Optional[ExperimentData],
-            dimension: Optional[str] = None,
-            step_index: Optional[int] = None,
-            datamodule: Optional[DataModule] = None,
-            batch_size: Optional[int] = None,
-            recompute: bool = False,
-            visualize: bool = False,
-            online: bool = False,
-            **kwargs
-            ) -> None:
-        """Perform a full offline step of all active systems."""
+    def step_online(
+        self,
+        exp_data: Optional[ExperimentData] = None,
+        step_type: StepType = StepType.FULL,
+        dimension: Optional[str] = None,
+        step_index: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        n_optimization_rounds: int = 10,
+        recompute: bool = False,
+        visualize: bool = False,
+        **kwargs
+        ) -> Optional[Dict[str, Any]]:
+        """Perform a full online step of all active systems."""
         
         # Run validations whether systems are initialized and active
-        self._check_systems(ste)
+        self._check_systems(step_type)
 
         # Retrieve experiment data
         exp_data, start, end = self._step_config(exp_data, dimension, step_index)
@@ -344,30 +345,21 @@ class LBPAgent:
         self.eval_system.compute_exp_evaluation(exp_data, start, end, recompute=recompute)
         self._log_step_completion(exp_data.exp_code, start, end, action="evaluated")
 
-        # 3. Train or Tune Prediction Model
-        if not online and datamodule is not None:
-            # train takes datamodule as input
-            datamodule.prepare()
-            self.pred_system.train(datamodule, **kwargs)
-            self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
-        elif online:
-            # tune automatically computes datamodule from exp_data
-            self.pred_system.tune(exp_data, start, end, batch_size, **kwargs)
-            self._log_step_completion(exp_data.exp_code, start, end, action="used for tuning")
-        else:
-            raise ValueError("Either datamodule must be provided for offline training or online must be True for tuning.")
+        if step_type == StepType.EVAL:
+            return
+        
+        # 3. Tune Prediction Model
+        temp_datamodule = self.pred_system.tune(exp_data, start, end, batch_size, **kwargs)
+        self._log_step_completion(exp_data.exp_code, start, end, action="used for tuning")
 
-        # 4. Calibration (Propose next)
-        if not online:
-            self.calibration_system.train
-        # self.logger.info(f"Step Online: Processing {dimension} {step_index} [{start}:{end}]")
-        
-        # 4. Calibration (Propose next)
-        # In offline mode, we typically propose new experiments after analysis
-        # But here we just ensure the flow is complete.
-        self.logger.info("Step Offline: Calibration/Proposal step (placeholder)")
-        
-        # No counter update needed for offline step
+        # TODO: How are we handling if a feature does not contain the dimension we are stepping over?
+
+        # 4. Train Exploration Model and calibrate process parameters
+        current_params = exp_data.parameters.get_values_dict()
+        new_params = self.calibration_system.propose_params(
+            temp_datamodule, Mode.OFFLINE, current_params, n_optimization_rounds)
+        self._log_step_completion(exp_data.exp_code, start, end, action="calibrated")
+        return new_params
 
 
     # === PARTIAL STEP OPERATIONS ===
