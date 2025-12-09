@@ -418,7 +418,7 @@ class Dataset:
         ]
         
         self.logger.console_info("\n".join(summary))
-
+        self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
         return missing_params
     
     def save_all(self, recompute: bool = False) -> None:

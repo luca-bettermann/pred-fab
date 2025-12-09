@@ -122,7 +122,7 @@ class TestNormalization:
         """Test fitting standard normalization."""
         dm = DataModule(sample_dataset, normalize='standard', test_size=0.0, val_size=0.0)
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         
         assert dm._is_fitted is True
         assert 'feature_1' in dm._feature_stats
@@ -143,7 +143,7 @@ class TestNormalization:
         """Test applying standard normalization via get_batches."""
         dm = DataModule(sample_dataset, normalize='standard', test_size=0.0, val_size=0.0)
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         batches = dm.get_batches('train')
         X_batch, y_batch = batches[0]
         
@@ -156,7 +156,7 @@ class TestNormalization:
         """Test denormalization."""
         dm = DataModule(sample_dataset, normalize='standard', test_size=0.0, val_size=0.0)
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         batches = dm.get_batches('train')
         _, y_batch = batches[0]
         
@@ -169,7 +169,7 @@ class TestNormalization:
         """Test fitting minmax normalization."""
         dm = DataModule(sample_dataset, normalize='minmax', test_size=0.0, val_size=0.0)
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         batches = dm.get_batches('train')
         _, y_batch = batches[0]
         
@@ -182,7 +182,7 @@ class TestNormalization:
         """Test no normalization."""
         dm = DataModule(sample_dataset, normalize='none', test_size=0.0, val_size=0.0)
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         batches = dm.get_batches('train')
         _, y_batch = batches[0]
         
@@ -207,7 +207,7 @@ class TestPerFeatureOverrides:
         dm = DataModule(sample_dataset, normalize='standard', test_size=0.0, val_size=0.0)
         dm.set_feature_normalize('feature_1', 'minmax')
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         batches = dm.get_batches('train')
         _, y_batch = batches[0]
         
@@ -231,7 +231,7 @@ class TestDataModuleCopy:
         dm = DataModule(sample_dataset, batch_size=8, normalize='standard', test_size=0.0, val_size=0.0)
         dm.set_feature_normalize('feature_1', 'minmax')
         
-        dm.fit_normalize('train')
+        dm._fit_normalize('train')
         
         # Create copy
         dm_copy = dm.copy()

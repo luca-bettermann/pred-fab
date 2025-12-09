@@ -9,6 +9,7 @@ from lbp_package.core.data_objects import Parameter, Feature, PerformanceAttribu
 from lbp_package.core.data_blocks import Parameters, PerformanceAttributes, Features
 from lbp_package.orchestration.agent import LBPAgent
 from lbp_package.core.dataset import ExperimentData
+from lbp_package.core import DataModule
 
 # Import mock interfaces
 from interfaces import (
@@ -74,14 +75,17 @@ def main():
     # 5. Initialize Dataset (Schema Validation & Hashing)
     dataset = agent.initialize(schema)
     dataset.load_experiments(["exp_001", "exp_002", "exp_003"])
-    
-    # Set active experiment (e.g., the last one)
+    exp_1 = dataset.get_experiment("exp_001")
+    exp_2 = dataset.get_experiment("exp_002")
+
+    # 6. Run Feature Extraction Step
+    agent.evaluation_step(exp_1)
+    agent.evaluation_step(exp_2)
+
     last_exp = dataset.get_experiment("exp_003")
-    agent.set_active_experiment(last_exp)
-    
+
     # Run full step (Feature Extraction -> Evaluation -> Training)
     # We need to create a DataModule for training
-    from lbp_package.core import DataModule
     datamodule = DataModule(dataset)
     
     agent.step(

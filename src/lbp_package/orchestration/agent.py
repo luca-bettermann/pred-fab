@@ -19,8 +19,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExternalData
-from ..interfaces.calibration import CalibrationModes
-from ..utils import LocalData, LBPLogger
+from ..utils import LocalData, LBPLogger, StepType
 
 SystemNames = Literal['feature', 'evaluation', 'prediction', 'calibration']
 
@@ -167,20 +166,9 @@ class LBPAgent:
             self.pred_system.models,
             "prediction"
         )
-        
-        # Calibration system requires prediction and evaluation systems to be set
-        self.calibration_system = CalibrationSystem(
-            dataset=None,
-            logger=self.logger, 
-            predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict
-            )
 
-        # Step 2: Instantiate models from registered classes and validate against schema
+        # validate against schema
         self._validate_systems_against_schema(schema)
-                
-        # Mark as initialized
-        self._initialized = True
                 
         # Step 3: Create dataset with storage interfaces
         dataset = Dataset(
@@ -191,6 +179,17 @@ class LBPAgent:
             logger=self.logger,
             debug_mode=self.debug_flag,
         )
+
+        # Calibration system requires prediction and evaluation systems to be set
+        self.calibration_system = CalibrationSystem(
+            dataset=dataset,
+            logger=self.logger, 
+            predict_fn=self.pred_system._predict_from_params,
+            evaluate_fn=self.eval_system._evaluate_feature_dict
+            )
+                    
+        # Mark as initialized
+        self._initialized = True
 
         # Display summary
         summary_lines = [
@@ -271,7 +270,52 @@ class LBPAgent:
         self.logger.info(f"Active experiment set to: {exp_data.exp_code}")
 
     # === FULL STEP OPERATIONS ===
-    
+    def step_offline(
+            self,
+            exp_data: ExperimentData,
+            datamodule: DataModule,
+            step_type: StepType = StepType.FULL,
+            w_explore: float = 0.5,
+            n_optimization_rounds: int = 10,
+            recompute: bool = False,
+            visualize: bool = False,
+    ) -> Optional[ExperimentData]:
+        """Perform a full offline step of all active systems."""
+        self._check_systems(step_type)
+
+        # Set start and end values
+        start, end = 0, None
+        
+        # 1. Extract Features
+        self.feature_system.compute_exp_features(exp_data, start, end, recompute=recompute, visualize=visualize)
+        self._log_step_completion(exp_data.exp_code, start, end, action="had features extracted")
+        
+        # 2. Evaluate Performance
+        self.eval_system.compute_exp_evaluation(exp_data, start, end, recompute=recompute)
+        self._log_step_completion(exp_data.exp_code, start, end, action="evaluated")
+
+        # End step here if only evaluation is requested
+        if step_type == StepType.EVAL:
+            return
+        
+        # 3. Train Prediction Model
+        datamodule.prepare()
+        self.pred_system.train(datamodule)
+        self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
+
+        # 4. Train Exploration Model and propose new parameters 
+        current_params = exp_data.parameters.get_values_dict()
+        self.calibration_system.train_exploration_model(datamodule)
+        new_params = self.calibration_system.propose_params_offline(
+            datamodule, current_params, w_explore, n_optimization_rounds)
+        
+        # 5. Create new ExpData with new params and predict features
+        new_exp_data = datamodule.dataset.create_experiment("new_exp", new_params)
+        self._log_step_completion(new_exp_data.exp_code, start, end, action="created")
+        self.pred_system.predict_experiment(new_exp_data)
+        return new_exp_data
+        
+
     def step(
             self,
             exp_data: Optional[ExperimentData],
@@ -287,7 +331,7 @@ class LBPAgent:
         """Perform a full offline step of all active systems."""
         
         # Run validations whether systems are initialized and active
-        self._check_systems_all_active()
+        self._check_systems(ste)
 
         # Retrieve experiment data
         exp_data, start, end = self._step_config(exp_data, dimension, step_index)
@@ -301,14 +345,17 @@ class LBPAgent:
         self._log_step_completion(exp_data.exp_code, start, end, action="evaluated")
 
         # 3. Train or Tune Prediction Model
-        if not online:
+        if not online and datamodule is not None:
             # train takes datamodule as input
-            self.pred_system.train(datamodule, **kwargs) # type: ignore
+            datamodule.prepare()
+            self.pred_system.train(datamodule, **kwargs)
             self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
-        else:
+        elif online:
             # tune automatically computes datamodule from exp_data
             self.pred_system.tune(exp_data, start, end, batch_size, **kwargs)
-        self._log_step_completion(exp_data.exp_code, start, end, action="used for tuning")
+            self._log_step_completion(exp_data.exp_code, start, end, action="used for tuning")
+        else:
+            raise ValueError("Either datamodule must be provided for offline training or online must be True for tuning.")
 
         # 4. Calibration (Propose next)
         if not online:
@@ -465,10 +512,10 @@ class LBPAgent:
             self.calibration_system.set_performance_weights(performance_weights)
             
         if offline_bounds:
-            self.calibration_system.configure_offline_ranges(offline_bounds, fixed_params)
+            self.calibration_system.configure_param_bounds(offline_bounds, fixed_params)
             
         if online_deltas:
-            self.calibration_system.configure_online_deltas(online_deltas, fixed_params)
+            self.calibration_system.configure_trust_regions(online_deltas, fixed_params)
             
         self.logger.info("Configured calibration system.")
 
@@ -496,13 +543,13 @@ class LBPAgent:
             # Create temp datamodule
             self.logger.info("Creating temporary DataModule for calibration...")
             dm = DataModule(self.calibration_system.dataset)
-            dm.fit_normalize()
+            dm._fit_normalize()
             
         return self.calibration_system.propose_new_parameters(
             datamodule=dm,
             current_params=current_params,
             online=online,
-            exploration_weight=exploration_weight
+            w_explore=exploration_weight
         )
 
     # === Helper Functions ===
@@ -566,21 +613,26 @@ class LBPAgent:
         
         return system
     
-    def _check_systems_all_active(self) -> None:
+    def _check_systems(self, step: StepType) -> None:
         """Validate that all systems are initialized and active for a full step."""
         if not self._initialized:
             raise RuntimeError("Cannot perform step before initialize() is called.")
         
-        if not all([
-            self.feature_system.active,
-            self.eval_system.active,
-            self.pred_system.active,
-            self.calibration_system.active
-            ]):
-            raise RuntimeError(
-                "All systems must be active to perform a full step. "
-                "Use activate_system() to activate any inactive systems."
-            )
+        if step == StepType.EVAL:
+            rel_systems = [self.feature_system, self.eval_system]
+        elif step == StepType.FULL:
+            rel_systems = [
+                self.feature_system,
+                self.eval_system,
+                self.pred_system,
+                self.calibration_system
+            ]
+        else:
+            raise ValueError(f"Unknown step type: {step}")
+        
+        # Validate that all required systems are active
+        if not all([rel_systems]):
+            raise RuntimeError(f"One or more required systems not initialized for {step.value} step.")
         
     def _step_config(
             self, 

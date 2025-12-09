@@ -14,7 +14,7 @@ import pickle
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
-from ..utils import LBPLogger, Metrics, LocalData
+from ..utils import LBPLogger, Metrics, LocalData, SplitType
 from .base_system import BaseOrchestrationSystem
 
 
@@ -61,11 +61,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
-        self.datamodule.fit_normalize('train')
+        self.datamodule._fit_normalize(SplitType.TRAIN)
         
         # Get batches
-        train_batches = self.datamodule.get_batches('train')
-        val_batches = self.datamodule.get_batches('val')
+        train_batches = self.datamodule.get_batches(SplitType.TRAIN)
+        val_batches = self.datamodule.get_batches(SplitType.VAL)
         
         # Train each registered model
         trained_count = 0
@@ -137,7 +137,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         temp_datamodule.output_columns = self.datamodule.output_columns
 
         # Get tuning batches
-        tune_batches = temp_datamodule.get_batches('train')
+        tune_batches = temp_datamodule.get_batches(SplitType.TRAIN)
         
         if not tune_batches:
             raise ValueError("Tuning datamodule has no data in 'train' split.")
@@ -178,7 +178,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "PredictionSystem not trained yet. Call train(datamodule) first."
             )
         
-        split = 'test' if use_test else 'val'
+        split =  SplitType.TEST if use_test else SplitType.VAL
         
         # Check if split is empty before trying to extract
         split_sizes = self.datamodule.get_split_sizes()
@@ -328,7 +328,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Store prediction arrays in exp_data.predicted_metric_arrays."""
         for feature_name, pred_array in predictions.items():
             if feature_name not in exp_data.predicted_features.keys():
-                arr = DataArray(code=feature_name, shape=pred_array.shape)
+                arr = DataArray(code=feature_name)
                 exp_data.predicted_features.add(feature_name, arr)
             exp_data.predicted_features.set_value(feature_name, pred_array)
     

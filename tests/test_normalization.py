@@ -109,7 +109,7 @@ class TestCategoricalOneHot:
         """Test that categorical parameters are detected correctly."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         # Should detect 'optimizer' as categorical
         assert 'optimizer' in dm._categorical_mappings
@@ -119,7 +119,7 @@ class TestCategoricalOneHot:
         """Test that categorical values are one-hot encoded."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -141,7 +141,7 @@ class TestCategoricalOneHot:
         """Test that one-hot encoding produces correct values."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -164,7 +164,7 @@ class TestCategoricalOneHot:
         """Test that one-hot encoded values can be decoded back."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         X_denorm = dm.denormalize_parameters(X_norm)
@@ -180,7 +180,7 @@ class TestCategoricalOneHot:
         """Test complete round-trip: categorical → one-hot → categorical."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         X_denorm = dm.denormalize_parameters(X_norm)
@@ -236,7 +236,7 @@ class TestDimensionalNormalization:
         """Dimensional indices should be normalized with minmax."""
         dm = DataModule(dimensional_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         # 'layer' should use minmax (from DataDimension.normalize_strategy)
         assert dm.get_parameter_normalize_method('layer') == 'minmax'
@@ -248,7 +248,7 @@ class TestDimensionalNormalization:
         """Test that dimensional indices are normalized to [0, 1]."""
         dm = DataModule(dimensional_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -264,7 +264,7 @@ class TestMixedParameterTypes:
         """Test normalization with real, bool, categorical, and int parameters."""
         dm = DataModule(mixed_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -286,7 +286,7 @@ class TestMixedParameterTypes:
         """Test round-trip with mixed parameter types."""
         dm = DataModule(mixed_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         X_denorm = dm.denormalize_parameters(X_norm)
@@ -313,7 +313,7 @@ class TestNormalizationOverrides:
         dm.set_parameter_normalize('temp', 'minmax')
         
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         # Check that temp uses minmax
         assert dm.get_parameter_normalize_method('temp') == 'minmax'
@@ -328,7 +328,7 @@ class TestNormalizationOverrides:
         dm.set_feature_normalize('quality', 'robust')
         
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         # Check that quality uses robust
         assert dm.get_normalize_method('quality') == 'robust'
@@ -342,7 +342,7 @@ class TestNormalizationOverrides:
         dm.set_parameter_normalize('learning_rate', 'none')
         
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -357,7 +357,7 @@ class TestSeparateNormalizeMethods:
         """Test normalizing only parameters."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         
@@ -369,7 +369,7 @@ class TestSeparateNormalizeMethods:
         """Test normalizing only features."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         y_norm = dm.normalize_features(y)
         
@@ -380,7 +380,7 @@ class TestSeparateNormalizeMethods:
         """Test denormalizing only parameters."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         X_norm = dm.normalize_parameters(X)
         X_denorm = dm.denormalize_parameters(X_norm)
@@ -393,7 +393,7 @@ class TestSeparateNormalizeMethods:
         """Test denormalizing only features."""
         dm = DataModule(categorical_dataset, test_size=0.0, val_size=0.0, normalize='standard')
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         y_norm = dm.normalize_features(y)
         y_denorm = dm.denormalize_features(y_norm)
@@ -409,7 +409,7 @@ class TestEdgeCases:
         """Test normalization when no categorical parameters exist."""
         dm = DataModule(dimensional_dataset, test_size=0.0, val_size=0.0)
         X, y = dm.get_split('train')
-        dm.fit_normalize(X, y)
+        dm._fit_normalize(X, y)
         
         # Should have no categorical mappings
         assert len(dm._categorical_mappings) == 0

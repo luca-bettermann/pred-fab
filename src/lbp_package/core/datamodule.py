@@ -5,7 +5,7 @@ Manages batching and normalization for machine learning workflows.
 Stores normalization parameters, not normalized data (memory efficient).
 """
 
-from typing import Optional, Dict, List, Tuple, Literal, Any, cast
+from typing import Optional, Dict, List, Tuple, Any, cast
 import pandas as pd
 import numpy as np
 import copy
@@ -13,8 +13,7 @@ from sklearn.model_selection import train_test_split
 
 from .data_objects import DataDimension
 from .dataset import Dataset
-
-NormalizeMethod = Literal['standard', 'minmax', 'robust', 'none']
+from ..utils import NormMethod, SplitType
 
 
 class DataModule:
@@ -29,18 +28,18 @@ class DataModule:
     
     def __init__(
         self,
-        dataset: Optional[Dataset] = None,
+        dataset: Dataset,
+        val_size: float = 0.2,
+        test_size: float = 0.1,
         batch_size: Optional[int] = None,
-        normalize: NormalizeMethod = 'none',
-        test_size: float = 0.2,
-        val_size: float = 0.1,
+        normalize: NormMethod = NormMethod.STANDARD,
         random_seed: Optional[int] = 42
     ):
         """
         Initialize DataModule.
         
         Args:
-            dataset: Dataset instance (optional, required for training)
+            dataset: Dataset instance
             batch_size: Number of experiments per batch (None = single batch)
             normalize: Default normalization method for features and parameters
             test_size: Fraction of data for test set (0.0-1.0)
@@ -55,8 +54,8 @@ class DataModule:
         self.random_seed = random_seed
         
         # Per-feature/parameter normalization overrides
-        self._feature_overrides: Dict[str, NormalizeMethod] = {}
-        self._parameter_overrides: Dict[str, NormalizeMethod] = {}
+        self._feature_overrides: Dict[str, NormMethod] = {}
+        self._parameter_overrides: Dict[str, NormMethod] = {}
         
         # Fitted normalization parameters
         self._feature_stats: Dict[str, Dict[str, Any]] = {}
@@ -70,42 +69,27 @@ class DataModule:
         self.original_input_columns: List[str] = []  # Before one-hot
         
         # Column normalization methods map (for X)
-        self._col_norm_methods: Dict[str, NormalizeMethod] = {}
+        self._col_norm_methods: Dict[str, NormMethod] = {}
         
         # Create splits (stores experiment codes)
         self._split_codes: Dict[str, List[str]] = {}
         
-        # Load schema and create splits immediately if dataset provided
-        if self.dataset:
-            self._scan_schema()
-            self.create_splits()
+        # Load schema
+        self._scan_schema()
     
     def _scan_schema(self) -> None:
         """
         Scan dataset schema to determine columns and categories.
         Sets input_columns, output_columns, categorical_mappings.
         """
-        if self.dataset is None or self.dataset.schema is None:
-            return
-
         schema = self.dataset.schema
         
         # 1. Determine Columns from Schema
         # Parameter columns
-        param_keys = [
-            name for name, obj in schema.parameters.data_objects.items()
-            if not isinstance(obj, DataDimension)
-        ]
-        dim_keys = [
-            name for name, obj in schema.parameters.data_objects.items()
-            if isinstance(obj, DataDimension)
-        ]
-        # For dimensions, we use the iterator code
-        dim_iterators = []
-        for name in dim_keys:
-            obj = schema.parameters.data_objects[name]
-            if isinstance(obj, DataDimension):
-                dim_iterators.append(obj.iterator_code)
+        param_all_keys = list(schema.parameters.keys())
+        dim_keys = list(schema.parameters.get_dim_names())
+        param_keys = [k for k in param_all_keys if k not in dim_keys]
+        dim_iterators = list(schema.parameters.get_dim_iterator_names())
         
         self.original_input_columns = param_keys + dim_iterators
         self.output_columns = list(schema.features.keys())
@@ -116,8 +100,7 @@ class DataModule:
         
         for col in self.original_input_columns:
             method = self.get_parameter_normalize_method(col)
-            
-            if method == 'categorical':
+            if method == NormMethod.CATEGORICAL:
                 # Try to find categories in schema constraints
                 categories = []
                 
@@ -141,28 +124,29 @@ class DataModule:
                 for category in categories:
                     col_name = f"{col}_{category}"
                     self.input_columns.append(col_name)
-                    self._col_norm_methods[col_name] = 'none'
+                    self._col_norm_methods[col_name] = NormMethod.NONE
             else:
                 self.input_columns.append(col)
 
-    def refresh(self) -> None:
-        """Reload schema from dataset."""
-        self._scan_schema()
-        self.create_splits()
+    # === DATAMODULE OPERATIONS ===
 
-    def create_splits(self) -> None:
+    def prepare(self) -> None:
+        """
+        Prepare DataModule for use: create splits and fit normalization.
+        Call after initialization and after dataset changes.
+        """
+        self._create_splits()
+        self._fit_normalize()
+
+    def _create_splits(self) -> None:
         """Creates split codes based on dataset."""
-        if self.dataset is None:
-            self._split_codes = {'train': [], 'val': [], 'test': []}
-            return
-            
         exp_codes = [
             code for code in self.dataset.get_experiment_codes()
             if self.dataset.get_experiment(code).features is not None
         ]
         
         if not exp_codes:
-            self._split_codes = {'train': [], 'val': [], 'test': []}
+            self._split_codes = {SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []}
             return
             
         # Sort for deterministic split
@@ -172,9 +156,9 @@ class DataModule:
         
         if self.test_size == 0.0 and self.val_size == 0.0:
             self._split_codes = {
-                'train': exp_codes,
-                'val': [],
-                'test': []
+                SplitType.TRAIN: exp_codes,
+                SplitType.VAL: [],
+                SplitType.TEST: []
             }
             return
         
@@ -201,62 +185,191 @@ class DataModule:
             val_idx = np.array([], dtype=int)
         
         self._split_codes = {
-            'train': [exp_codes[i] for i in train_idx],
-            'val': [exp_codes[i] for i in val_idx],
-            'test': [exp_codes[i] for i in test_idx]
+            SplitType.TRAIN: [exp_codes[i] for i in train_idx],
+            SplitType.VAL: [exp_codes[i] for i in val_idx],
+            SplitType.TEST: [exp_codes[i] for i in test_idx]
         }
     
-    # === DATA EXTRACTION ===
+    def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
+        """Fit normalization parameters on the specified split."""
+        if split not in self._split_codes:
+            raise ValueError(f"Unknown split: {split}")
+            
+        codes = self._split_codes[split]
+        if not codes:
+            return
+            
+        X_df, y_df = self.dataset.export_to_dataframe(codes)
+        if X_df.empty:
+            return
+            
+        # Process X (One-hot)
+        X_arr = self._one_hot_encode(X_df)
+        y_arr = y_df.values.astype(np.float32)
+        
+        # Fit X
+        self._parameter_stats = {}
+        for i, col in enumerate(self.input_columns):
+            method = self._col_norm_methods.get(col, NormMethod.NONE)
+            if method != NormMethod.NONE:
+                self._parameter_stats[col] = self._compute_normalization_stats(X_arr[:, i], method)
+        
+        # Fit y
+        self._feature_stats = {}
+        for i, col in enumerate(self.output_columns):
+            method = self.get_normalize_method(col)
+            if method != NormMethod.NONE:
+                self._feature_stats[col] = self._compute_normalization_stats(y_arr[:, i], method)
+        
+        self._is_fitted = True
     
-    def set_feature_normalize(self, feature_name: str, method: NormalizeMethod) -> None:
+    def get_batches(self, split: SplitType = SplitType.TRAIN) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Get batched, normalized data for a split.
+        Returns list of (X_batch, y_batch) tuples.
+        """
+        codes = self._split_codes.get(split, [])
+        if not codes:
+            return []
+            
+        X_df, y_df = self.dataset.export_to_dataframe(codes)
+        if X_df.empty:
+            return []
+            
+        X = self._one_hot_encode(X_df)
+        y = y_df.values.astype(np.float32)
+        
+        # Normalize
+        if self._is_fitted:
+            self._normalize_batch(X, self.input_columns, self._parameter_stats)
+            self._normalize_batch(y, self.output_columns, self._feature_stats)
+        
+        # Batch
+        if self.batch_size is None:
+            return [(X, y)]
+            
+        batches = []
+        for i in range(0, len(X), self.batch_size):
+            batches.append((X[i:i+self.batch_size], y[i:i+self.batch_size]))
+            
+        return batches
+    
+    def prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
+        """Prepare input DataFrame for inference (one-hot + normalize)."""
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+            
+        X_arr = self._one_hot_encode(X_df)
+        
+        # Normalize
+        self._normalize_batch(X_arr, self.input_columns, self._parameter_stats)
+                
+        return X_arr
+
+    def denormalize_output(self, y_norm: np.ndarray) -> np.ndarray:
+        """Reverse normalization for target features (y)."""
+        return self.denormalize_values(y_norm, self.output_columns)
+
+    def denormalize_values(self, values: np.ndarray, feature_names: List[str]) -> np.ndarray:
+        """Reverse normalization for specific features."""
+        if not self._is_fitted:
+            return values.copy()
+            
+        y = values.copy()
+        if y.ndim == 1:
+            for i, name in enumerate(feature_names):
+                if name in self._feature_stats:
+                    y[i] = self._reverse_normalization(y[i], self._feature_stats[name])
+        else:
+            for i, name in enumerate(feature_names):
+                if name in self._feature_stats:
+                    y[:, i] = self._reverse_normalization(y[:, i], self._feature_stats[name])
+        return y
+
+
+    # === NORMALIZATION STATE ===
+    
+    def set_feature_normalize(self, feature_name: str, method: NormMethod) -> None:
         """Override normalization method for a specific feature."""
         self._feature_overrides[feature_name] = method
     
-    def set_parameter_normalize(self, parameter_name: str, method: NormalizeMethod) -> None:
+    def set_parameter_normalize(self, parameter_name: str, method: NormMethod) -> None:
         """Override normalization method for a specific parameter."""
         self._parameter_overrides[parameter_name] = method
     
-    def get_normalize_method(self, feature_name: str) -> NormalizeMethod:
+    def get_normalize_method(self, feature_name: str) -> NormMethod:
         """Get normalization method for a feature (override or default)."""
-        return cast(NormalizeMethod, self._feature_overrides.get(feature_name, self._default_normalize))
+        return cast(NormMethod, self._feature_overrides.get(feature_name, self._default_normalize))
     
-    def get_parameter_normalize_method(self, parameter_name: str) -> NormalizeMethod:
+    def get_parameter_normalize_method(self, parameter_name: str) -> NormMethod:
         """Get normalization method for a parameter using schema metadata."""
         if parameter_name in self._parameter_overrides:
             return self._parameter_overrides[parameter_name]
         
-        if self.dataset and self.dataset.schema:
-            if parameter_name in self.dataset.schema.parameters.data_objects:
-                data_obj = self.dataset.schema.parameters.data_objects[parameter_name]
-                strategy = data_obj.normalize_strategy
-                return cast(NormalizeMethod, self._default_normalize if strategy == 'default' else strategy)
-            
-            for dim_obj in self.dataset.schema.parameters.data_objects.values():
-                if isinstance(dim_obj, DataDimension) and dim_obj.iterator_code == parameter_name:
-                    strategy = dim_obj.normalize_strategy
-                    return cast(NormalizeMethod, self._default_normalize if strategy == 'default' else strategy)
+        if parameter_name in self.dataset.schema.parameters.data_objects:
+            data_obj = self.dataset.schema.parameters.data_objects[parameter_name]
+            strategy = data_obj.normalize_strategy
+            return cast(NormMethod, self._default_normalize if strategy == NormMethod.DEFAULT else strategy)
         
-        return cast(NormalizeMethod, self._default_normalize)
+        for dim_obj in self.dataset.schema.parameters.data_objects.values():
+            if isinstance(dim_obj, DataDimension) and dim_obj.iterator_code == parameter_name:
+                strategy = dim_obj.normalize_strategy
+                return cast(NormMethod, self._default_normalize if strategy == NormMethod.DEFAULT else strategy)
+    
+        return cast(NormMethod, self._default_normalize)
+    
+    def get_normalization_state(self) -> Dict[str, Any]:
+        """Export normalization state for inference bundle."""
+        if not self._is_fitted:
+            return {
+                'method': self._default_normalize,
+                'is_fitted': False,
+                'feature_stats': {},
+                'parameter_stats': {},
+                'categorical_mappings': {},
+                'input_columns': [],
+                'output_columns': []
+            }
+        
+        return {
+            'method': self._default_normalize,
+            'is_fitted': True,
+            'feature_stats': copy.deepcopy(self._feature_stats),
+            'parameter_stats': copy.deepcopy(self._parameter_stats),
+            'categorical_mappings': copy.deepcopy(self._categorical_mappings),
+            'input_columns': copy.deepcopy(self.input_columns),
+            'output_columns': copy.deepcopy(self.output_columns)
+        }
+    
+    def set_normalization_state(self, state: Dict[str, Any]) -> None:
+        """Restore normalization state from exported bundle."""
+        self._default_normalize = state['method']
+        self._is_fitted = state['is_fitted']
+        self._feature_stats = copy.deepcopy(state.get('feature_stats', {}))
+        self._parameter_stats = copy.deepcopy(state.get('parameter_stats', {}))
+        self._categorical_mappings = copy.deepcopy(state.get('categorical_mappings', {}))
+        self.input_columns = copy.deepcopy(state.get('input_columns', []))
+        self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
     # === SHARED NORMALIZATION HELPERS ===
     
-    def _compute_normalization_stats(self, data: np.ndarray, method: NormalizeMethod) -> Dict[str, Any]:
+    def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> Dict[str, Any]:
         """Compute normalization statistics for a data array."""
-        if method == 'none':
-            return {'method': 'none'}
-        elif method == 'standard':
+        if method == NormMethod.NONE:
+            return {'method': NormMethod.NONE}
+        elif method == NormMethod.STANDARD:
             return {
                 'method': method,
                 'mean': float(np.mean(data)),
                 'std': float(np.std(data))
             }
-        elif method == 'minmax':
+        elif method == NormMethod.MIN_MAX:
             return {
                 'method': method,
                 'min': float(np.min(data)),
                 'max': float(np.max(data))
             }
-        elif method == 'robust':
+        elif method == NormMethod.ROBUST:
             return {
                 'method': method,
                 'median': float(np.median(data)),
@@ -270,29 +383,29 @@ class DataModule:
         """Apply normalization to data array using pre-computed stats."""
         method = stats['method']
         
-        if method == 'none':
+        if method == NormMethod.NONE:
             return data
-        elif method == 'standard':
+        elif method == NormMethod.STANDARD:
             return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == 'minmax':
+        elif method == NormMethod.MIN_MAX:
             return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
-        elif method == 'robust':
+        elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
             return (data - stats['median']) / (iqr + 1e-8)
         else:
-            raise ValueError(f"Unknown normalization method: {method}")
+            raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
     
     def _reverse_normalization(self, data_norm: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
         """Reverse normalization for data array."""
         method = stats['method']
         
-        if method == 'none':
+        if method == NormMethod.NONE:
             return data_norm
-        elif method == 'standard':
+        elif method == NormMethod.STANDARD:
             return data_norm * stats['std'] + stats['mean']
-        elif method == 'minmax':
+        elif method == NormMethod.MIN_MAX:
             return data_norm * (stats['max'] - stats['min']) + stats['min']
-        elif method == 'robust':
+        elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
             return data_norm * iqr + stats['median']
         else:
@@ -310,10 +423,7 @@ class DataModule:
     # === DATA EXTRACTION ===
     
     def _extract_raw_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Extract all dimensional training data from metric_arrays as DataFrames."""
-        if self.dataset is None:
-            return pd.DataFrame(), pd.DataFrame()
-            
+        """Extract all dimensional training data from metric_arrays as DataFrames."""            
         exp_codes = [
             code for code in self.dataset.get_experiment_codes()
             if self.dataset.get_experiment(code).features is not None
@@ -416,116 +526,6 @@ class DataModule:
         X = X[self.input_columns]
         return X.values.astype(np.float32)
 
-    def fit_normalize(self, split: str = 'train') -> None:
-        """Fit normalization parameters on the specified split."""
-        if split not in self._split_codes:
-            raise ValueError(f"Unknown split: {split}")
-            
-        codes = self._split_codes[split]
-        if not codes or self.dataset is None:
-            return
-            
-        X_df, y_df = self.dataset.export_to_dataframe(codes)
-        if X_df.empty:
-            return
-            
-        # Process X (One-hot)
-        X_arr = self._one_hot_encode(X_df)
-        y_arr = y_df.values.astype(np.float32)
-        
-        # Fit X
-        self._parameter_stats = {}
-        for i, col in enumerate(self.input_columns):
-            method = self._col_norm_methods.get(col, 'none')
-            if method != 'none':
-                self._parameter_stats[col] = self._compute_normalization_stats(X_arr[:, i], method)
-        
-        # Fit y
-        self._feature_stats = {}
-        for i, col in enumerate(self.output_columns):
-            method = self.get_normalize_method(col)
-            if method != 'none':
-                self._feature_stats[col] = self._compute_normalization_stats(y_arr[:, i], method)
-        
-        self._is_fitted = True
-    
-    def get_batches(self, split: str = 'train') -> List[Tuple[np.ndarray, np.ndarray]]:
-        """
-        Get batched, normalized data for a split.
-        Returns list of (X_batch, y_batch) tuples.
-        """
-        codes = self._split_codes.get(split, [])
-        if not codes or self.dataset is None:
-            return []
-            
-        X_df, y_df = self.dataset.export_to_dataframe(codes)
-        if X_df.empty:
-            return []
-            
-        X = self._one_hot_encode(X_df)
-        y = y_df.values.astype(np.float32)
-        
-        # Normalize
-        if self._is_fitted:
-            self._normalize_batch(X, self.input_columns, self._parameter_stats)
-            self._normalize_batch(y, self.output_columns, self._feature_stats)
-        
-        # Batch
-        if self.batch_size is None:
-            return [(X, y)]
-            
-        batches = []
-        for i in range(0, len(X), self.batch_size):
-            batches.append((X[i:i+self.batch_size], y[i:i+self.batch_size]))
-            
-        return batches
-    
-    def prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Prepare input DataFrame for inference (one-hot + normalize)."""
-        if not self._is_fitted:
-            raise RuntimeError("DataModule not fitted.")
-            
-        X_arr = self._one_hot_encode(X_df)
-        
-        # Normalize
-        self._normalize_batch(X_arr, self.input_columns, self._parameter_stats)
-                
-        return X_arr
-
-    def denormalize_output(self, y_norm: np.ndarray) -> np.ndarray:
-        """Reverse normalization for target features (y)."""
-        return self.denormalize_values(y_norm, self.output_columns)
-
-    def denormalize_values(self, values: np.ndarray, feature_names: List[str]) -> np.ndarray:
-        """Reverse normalization for specific features."""
-        if not self._is_fitted:
-            return values.copy()
-            
-        y = values.copy()
-        if y.ndim == 1:
-            for i, name in enumerate(feature_names):
-                if name in self._feature_stats:
-                    y[i] = self._reverse_normalization(y[i], self._feature_stats[name])
-        else:
-            for i, name in enumerate(feature_names):
-                if name in self._feature_stats:
-                    y[:, i] = self._reverse_normalization(y[:, i], self._feature_stats[name])
-        return y
-
-    # === CALIBRATION HELPERS ===
-
-    def params_to_array(self, params: Dict[str, Any]) -> np.ndarray:
-        """
-        Convert parameter dictionary to normalized 1D array.
-        Wraps prepare_input for single sample.
-        """
-        if not self._is_fitted:
-            raise RuntimeError("DataModule not fitted.")
-            
-        df = pd.DataFrame([params])
-        arr = self.prepare_input(df)
-        return arr[0]
-
     def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> Dict[str, Any]:
         """Decode one-hot encoded categories from array."""
         params = {}
@@ -556,6 +556,20 @@ class DataModule:
                     for idx in indices:
                         consumed_cols.add(self.input_columns[idx])
         return params
+
+    # === CALIBRATION HELPERS ===
+
+    def params_to_array(self, params: Dict[str, Any]) -> np.ndarray:
+        """
+        Convert parameter dictionary to normalized 1D array.
+        Wraps prepare_input for single sample.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+            
+        df = pd.DataFrame([params])
+        arr = self.prepare_input(df)
+        return arr[0]
 
     def array_to_params(self, array: np.ndarray) -> Dict[str, Any]:
         """
@@ -590,46 +604,16 @@ class DataModule:
         """Create a deep copy of this DataModule."""
         return copy.deepcopy(self)
     
+    def get_split_codes(self, split: SplitType = SplitType.TRAIN) -> List[str]:
+        return self._split_codes[split]
+    
     def get_split_sizes(self) -> Dict[str, int]:
         """Get the sizes of each split as dict with train/val/test keys."""
         return {
-            'train': len(self._split_codes['train']),
-            'val': len(self._split_codes['val']),
-            'test': len(self._split_codes['test'])
+            SplitType.TRAIN: len(self._split_codes[SplitType.TRAIN]),
+            SplitType.VAL: len(self._split_codes[SplitType.VAL]),
+            SplitType.TEST: len(self._split_codes[SplitType.TEST])
         }
-    
-    def get_normalization_state(self) -> Dict[str, Any]:
-        """Export normalization state for inference bundle."""
-        if not self._is_fitted:
-            return {
-                'method': self._default_normalize,
-                'is_fitted': False,
-                'feature_stats': {},
-                'parameter_stats': {},
-                'categorical_mappings': {},
-                'input_columns': [],
-                'output_columns': []
-            }
-        
-        return {
-            'method': self._default_normalize,
-            'is_fitted': True,
-            'feature_stats': copy.deepcopy(self._feature_stats),
-            'parameter_stats': copy.deepcopy(self._parameter_stats),
-            'categorical_mappings': copy.deepcopy(self._categorical_mappings),
-            'input_columns': copy.deepcopy(self.input_columns),
-            'output_columns': copy.deepcopy(self.output_columns)
-        }
-    
-    def set_normalization_state(self, state: Dict[str, Any]) -> None:
-        """Restore normalization state from exported bundle."""
-        self._default_normalize = state['method']
-        self._is_fitted = state['is_fitted']
-        self._feature_stats = copy.deepcopy(state.get('feature_stats', {}))
-        self._parameter_stats = copy.deepcopy(state.get('parameter_stats', {}))
-        self._categorical_mappings = copy.deepcopy(state.get('categorical_mappings', {}))
-        self.input_columns = copy.deepcopy(state.get('input_columns', []))
-        self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
     def __repr__(self) -> str:
         """String representation."""
