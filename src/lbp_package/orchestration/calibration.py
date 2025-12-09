@@ -169,14 +169,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_optimization_rounds: int = 10,
     ) -> Dict[str, Any]:
         # 1. Fit Surrogate on latest data (only in offline mode)
-        if mode == Mode.OFFLINE:
+        if mode == Mode.EXPLORATION:
             self._train_exploration_model(datamodule)
 
         # 2. Get Bounds
         bounds = self._get_bounds_for_step(datamodule, current_params, mode)
 
         # 3 Define objective function for optimization
-        if mode == Mode.OFFLINE:
+        if mode == Mode.EXPLORATION:
             # retrieve exploration function and fix arguments
             objective_func = functools.partial(
                 self.model.exploration_func, 
@@ -199,7 +199,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self, 
         datamodule: DataModule, 
         current_params: Dict[str, Any],
-        mode: Mode = Mode.OFFLINE, 
+        mode: Mode = Mode.EXPLORATION, 
     ) -> np.ndarray:
         """Calculate optimization bounds based on mode, fixed params, and config."""
         bounds_list = []
@@ -289,7 +289,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # "take curr_param as fixed params"
                 low = high = curr
                 
-        elif mode == Mode.OFFLINE:
+        elif mode == Mode.EXPLORATION:
             # Offline Hierarchy
             # 2. Param Bounds
             if col in self.param_bounds:
