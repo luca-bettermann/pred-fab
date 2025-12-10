@@ -176,9 +176,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Calculate residuals (Target - Base Prediction)
         residuals = y_tune - y_pred_base
         
+        # Prepare inputs for residual model: [X, BasePredictions]
+        # This allows the residual model to learn state-dependent errors (e.g. "high prediction -> high error")
+        X_residual_input = np.hstack([X_tune, y_pred_base])
+        
         # Train residual model
         self.logger.info(f"Training residual model on {len(X_tune)} samples...")
-        self.residual_model.fit(X_tune, residuals)
+        self.residual_model.fit(X_residual_input, residuals)
         self.logger.console_success("✓ Residual model updated")
 
         return temp_datamodule

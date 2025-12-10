@@ -144,7 +144,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Apply residual correction if available (Online Adaptation)
         # TODO: make this cleaner
         if self.residual_predict_fn is not None:
-            residuals = self.residual_predict_fn(X_reshaped)
+            # Prepare inputs for residual model: [X, BasePredictions]
+            X_residual_input = np.hstack([X_reshaped, pred_features])
+            residuals = self.residual_predict_fn(X_residual_input)
             pred_features = pred_features + residuals
             
         pred_performance = self.evaluate_fn(pred_features)
