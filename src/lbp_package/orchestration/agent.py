@@ -21,7 +21,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExternalData
-from ..utils import LocalData, LBPLogger, StepType
+from ..utils import LocalData, LBPLogger, StepType, Phase
 
 SystemNames = Literal['feature', 'evaluation', 'prediction', 'calibration']
 
@@ -275,6 +275,7 @@ class LBPAgent:
         exp_data: ExperimentData,
         datamodule: Optional[DataModule] = None,
         step_type: StepType = StepType.FULL,
+        phase: Phase = Phase.INFERENCE,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
         recompute: bool = False,
@@ -298,17 +299,22 @@ class LBPAgent:
         if step_type == StepType.EVAL:
             return
         
-        # 3. Train Prediction Model
+        # TODO: figure out when datamodule is needed, and when not
         if datamodule is None:
             raise ValueError("DataModule must be provided for training in offline step.")
-        datamodule.prepare()
-        self.pred_system.train(datamodule)
-        self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
+        
+        # 3. Train Prediction Model, only in LEARNING phase
+        # TODO: Here, we actually should be training surrogate model, first and foremost
+        # TODO: Do we even want to train prediction model in learning mode?
+        if phase == Phase.LEARNING:
+            datamodule.prepare()
+            self.pred_system.train(datamodule)
+            self._log_step_completion(exp_data.exp_code, start, end, action="included in training")
 
         # 4. Train Exploration Model and calibrate new experiment
         current_params = exp_data.parameters.get_values_dict()
         new_params = self.calibration_system.propose_params(
-            datamodule, Mode.OFFLINE, current_params, w_explore, n_optimization_rounds)
+            datamodule, Mode.OFFLINE, phase, current_params, w_explore, n_optimization_rounds)
         new_exp_data = datamodule.dataset.create_experiment("new_exp", new_params)
         self._log_step_completion(exp_data.exp_code, start, end, action="calibrated")
         

@@ -3,12 +3,16 @@ from typing import Dict, List, Optional, Any, Literal, Tuple, Callable
 import numpy as np
 from scipy.stats import qmc
 from scipy.optimize import minimize
+
+from skopt import Optimizer
+from skopt.space import Real
+
 import warnings
 import functools
 
 from ..core import Dataset, ExperimentData, PerformanceAttributes, DataModule, DatasetSchema
-from ..utils import LBPLogger, SplitType, Mode
-from ..interfaces.calibration import IExplorationModel, GaussianProcessExploration
+from ..utils import LBPLogger, SplitType, Mode, Phase
+from ..interfaces.calibration import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
 
 # Suppress sklearn warnings
@@ -31,7 +35,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         predict_fn: Callable, 
         evaluate_fn: Callable, 
         random_seed: Optional[int] = None,
-        model: Optional[IExplorationModel] = None
+        model: Optional[ISurrogateModel] = None
     ):
         super().__init__(logger)
         # self.schema = schema
@@ -53,7 +57,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if model:
             self.model = model
         else:
-            self.model = GaussianProcessExploration(logger, random_seed or 42)
+            self.model = GaussianProcessSurrogate(logger, random_seed or 42)
         
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
@@ -123,6 +127,46 @@ class CalibrationSystem(BaseOrchestrationSystem):
             
         return experiments
     
+    # === OBJECTIVE FUNCTIONS ===
+
+    def _inference_func(self, X: np.ndarray) -> float:
+        """
+        Objective for INFERENCE: Maximize predicted performance.
+        Returns negative performance for minimization.
+        """
+        # X is (n_features,)
+        # predict_fn expects (n_samples, n_features)
+        pred_features = self.predict_fn(X.reshape(1, -1))
+        pred_performance = self.evaluate_fn(pred_features)
+        
+        # Extract values from dict and compute score
+        # Note: evaluate_fn returns dict of arrays/scalars. 
+        # We assume single sample here.
+        perf_values = [float(val) if np.isscalar(val) else float(val[0]) for val in pred_performance.values()] # type: ignore
+        
+        sys_perf = self.compute_system_performance(perf_values)
+        return -sys_perf
+    
+    def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
+        """
+        Objective for LEARNING: Maximize Weighted Score.
+        Score = (1 - w) * Mean + w * Std
+        Returns negative Score for minimization.
+        """
+        # Predict mean and std from surrogate
+        mean, std = self.model.predict(X.reshape(1, -1))
+        
+        mu = mean[0]
+        sigma = std[0]
+        
+        # Weighted Blend
+        # w=0 -> Pure Mean (Exploitation)
+        # w=1 -> Pure Std (Exploration)
+        score = (1.0 - w_explore) * mu + w_explore * sigma
+        return -score 
+    
+    # === SURROGATE TRAINING ===
+
     def _get_train_arrays(self, datamodule: DataModule) -> Tuple[np.ndarray, np.ndarray]:
         """Get train arrays of X for the parameters and y for the performance attributes."""
         X_train = []
@@ -142,7 +186,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(X_train), np.array(y_train)
     
-    def _train_exploration_model(
+    def _train_surrogate_model(
         self,
         datamodule: DataModule
     ) -> None:
@@ -152,54 +196,108 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.model.fit(X_train, y_train)
         else:
             self.logger.warning("No valid data to train surrogate model.")
-    
-    def _exploitation_func(self, X: np.ndarray) -> float:
-        """Exploitation function using prediction and evaluation functions."""
-        pred_features = self.predict_fn(X)
-        pred_performance = self.evaluate_fn(pred_features)
-        pred_sys_performance = self.compute_system_performance(list(pred_performance.values()))
-        return -pred_sys_performance
+
+    # === OPTIMIZATION WORKFLOW ===
     
     def propose_params(
         self,
         datamodule: DataModule,
         mode: Mode,
+        phase: Phase,
         current_params: Dict[str, Any],
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
     ) -> Dict[str, Any]:
-        # 1. Fit Surrogate on latest data (only in offline mode)
-        if mode == Mode.OFFLINE:
-            self._train_exploration_model(datamodule)
-
-        # 2. Get Bounds
-        bounds = self._get_bounds_for_step(datamodule, current_params, mode)
-
-        # 3 Define objective function for optimization
-        if mode == Mode.OFFLINE:
-            # retrieve exploration function and fix arguments
-            objective_func = functools.partial(
-                self.model.exploration_func, 
-                sys_perf=self.compute_system_performance,
-                w_explore=w_explore
-            )
-        else:
-            objective_func = self._exploitation_func
+        """
+        Propose new parameters using a unified optimization strategy.
         
-        # 3. Run Optimization (use exploration function from IExplorationModel)
+        - Phase.LEARNING: Optimizes Acquisition Function (Surrogate Model)
+        - Phase.INFERENCE: Optimizes Prediction Function (Prediction Model)
+        """
+        
+        # 1. Get Bounds
+        bounds_array = self._get_bounds_for_step(datamodule, current_params, mode)
+        
+        # 2. Select Objective Function
+        if phase == Phase.LEARNING:
+            # Train the surrogate on latest data
+            self._train_surrogate_model(datamodule)
+            
+            # Create partial function with fixed w_explore
+            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
+            
+        elif phase == Phase.INFERENCE:
+            # Direct optimization of the prediction model
+            objective_func = self._inference_func
+            
+        else:
+            raise ValueError(f"Unknown phase: {phase}")
+
+        # 3. Run Unified Optimization
         return self._run_optimization(
             datamodule, 
             current_params,
-            bounds, 
+            bounds_array, 
             objective_func,
             n_optimization_rounds, 
-            )
+        )
+    
+    def _run_optimization(
+        self, 
+        datamodule: DataModule, 
+        current_params: Dict[str, Any],
+        bounds: np.ndarray, 
+        objective_func: Callable,
+        n_rounds: int, 
+    ) -> Dict[str, Any]:
+        """Run the acquisition function optimization."""
+        # Start from current params if available
+        x0_list = [datamodule.params_to_array(current_params)]
+        
+        # Random restarts
+        for _ in range(n_rounds):
+            x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
+        
+        # Run optimization from each starting point
+        best_x, best_val = None, np.inf
+        for x0 in x0_list:
+            try:
+                res = minimize(
+                    fun=objective_func,
+                    x0=x0,
+                    bounds=bounds,
+                    method='L-BFGS-B'
+                )
+                if res.fun < best_val:
+                    best_val = res.fun
+                    best_x = res.x
+                self.logger.debug(f"Optimization round result: val={res.fun}, x={res.x}")
+            except Exception as e:
+                self.logger.warning(f"Optimization round failed with error: {e}")
+                continue
+        
+        # Handle failure
+        if best_x is None:
+            self.logger.warning("Optimization failed, returning fallback parameters.")
+            if current_params:
+                return current_params
+            else:
+                raise RuntimeError("No valid parameters could be proposed.")
+        else:
+            self.logger.info(f"Optimization succeeded: best_val={best_val}, best_x={best_x}")
+                
+        # Convert result back
+        proposed_params = datamodule.array_to_params(best_x)
+        proposed_params.update(self.fixed_params)
+        return proposed_params
+
+    # === BOUNDS FOR OPTIMIZATION ===
 
     def _get_bounds_for_step(
         self, 
         datamodule: DataModule, 
         current_params: Dict[str, Any],
-        mode: Mode = Mode.OFFLINE, 
+        mode: Mode = Mode.OFFLINE
     ) -> np.ndarray:
         """Calculate optimization bounds based on mode, fixed params, and config."""
         bounds_list = []
@@ -242,6 +340,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if parent_param: break
         
         # === FIXED PARAMS CHECK (Priority 1) ===
+        
         # Handle Continuous Fixed
         if col in self.fixed_params:
             val = self.fixed_params[col]
@@ -307,55 +406,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
              raise ValueError(f"Could not determine finite bounds for parameter '{col}'. Please configure bounds or fixed parameters.")
              
         return low, high
-
-    def _run_optimization(
-        self, 
-        datamodule: DataModule, 
-        current_params: Dict[str, Any],
-        bounds: np.ndarray, 
-        objective_func: Callable,
-        n_rounds: int, 
-    ) -> Dict[str, Any]:
-        """Run the acquisition function optimization."""
-        # Start from current params if available
-        x0_list = [datamodule.params_to_array(current_params)]
-        
-        # Random restarts
-        for _ in range(n_rounds):
-            x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
-        
-        # Run optimization from each starting point
-        best_x, best_val = None, np.inf
-        for x0 in x0_list:
-            try:
-                res = minimize(
-                    fun=objective_func,
-                    x0=x0,
-                    bounds=bounds,
-                    method='L-BFGS-B'
-                )
-                if res.fun < best_val:
-                    best_val = res.fun
-                    best_x = res.x
-                self.logger.debug(f"Optimization round result: val={res.fun}, x={res.x}")
-            except Exception as e:
-                self.logger.warning(f"Optimization round failed with error: {e}")
-                continue
-        
-        # Handle failure
-        if best_x is None:
-            self.logger.warning("Optimization failed, returning fallback parameters.")
-            if current_params:
-                return current_params
-            else:
-                raise RuntimeError("No valid parameters could be proposed.")
-        else:
-            self.logger.info(f"Optimization succeeded: best_val={best_val}, best_x={best_x}")
-                
-        # Convert result back
-        proposed_params = datamodule.array_to_params(best_x)
-        proposed_params.update(self.fixed_params)
-        return proposed_params
 
     # === WRAPPERS ===
 

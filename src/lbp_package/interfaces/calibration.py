@@ -5,13 +5,12 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from ..utils import LBPLogger
 
-# Should we call this IActiveLearningModel?
-class IExplorationModel(ABC):
+class ISurrogateModel(ABC):
     """
-    Interface for exploration mode used in calibration. 
-    Explores the solution space for active learning.
+    Interface for surrogate models used in active learning (calibration).
     
-    Provides performance predictions and uncertainty estimates.
+    Provides performance predictions and uncertainty estimates to guide
+    the acquisition function.
     """
     
     def __init__(self, logger: LBPLogger, random_seed: int = 42):
@@ -33,41 +32,18 @@ class IExplorationModel(ABC):
     def predict(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Predict performance attributes and the uncertainty of the predictions.
-        Make sure the uncertainty is normalized to be comparable across different features.
-
-        Performance attributes -> exploitation
-        Uncertainty -> exploration
         
         Args:
             X: Input array (n_samples, n_params)
             
         Returns:
-            Tuple of (prediction, uncertainty) arrays with shape (n_samples, n_performance)
+            Tuple of (mean, std) arrays with shape (n_samples, n_performance)
         """
         pass
 
-    @final
-    def exploration_func(self, X: np.ndarray, sys_perf: Callable, w_explore: float) -> float:
-
-        # Predict with Surrogate
-        pred_perf, uncertainty = self.predict(X.reshape(1, -1))
-
-        # Compute system performance for the exploitation term
-        perf_term = sys_perf(list(pred_perf.flatten()))
-
-        # Exploration term from the weighted uncertainty
-        uncertainty_term = sys_perf(list(uncertainty.flatten()))
-        
-        # Weighted combination
-        acquisition = (1 - w_explore) * perf_term + w_explore * uncertainty_term
-        
-        # Return negative because minimize seeks minima
-        return -acquisition
-
-
-class GaussianProcessExploration(IExplorationModel):
+class GaussianProcessSurrogate(ISurrogateModel):
     """
-    Default Gaussian Process implementation of IExplorationModel.
+    Default Gaussian Process implementation of ISurrogateModel.
     Uses Matern kernel + WhiteKernel for noise handling.
     """
     

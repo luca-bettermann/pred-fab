@@ -6,7 +6,8 @@ from .enum import (
     SplitType, 
     BlockType, 
     Mode,
-    StepType
+    StepType,
+    Phase
 )
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "SplitType",
     "BlockType",
     "Mode",
-    "StepType"
+    "StepType",
+    "Phase",
 ]
     
