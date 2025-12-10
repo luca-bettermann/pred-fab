@@ -24,8 +24,8 @@ class BlockType(str, enum.Enum):
 
 class Mode(str, enum.Enum):
     """Enumeration of workflow step types."""
-    OFFLINE = 'offline'
-    ONLINE = 'online'
+    EXPLORATION = 'exploration'
+    EXPLOITATION = 'exploitation'
 
 class Phase(str, enum.Enum):
     """Enumeration of workflow stages."""

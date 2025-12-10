@@ -210,7 +210,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> Dict[str, Any]:
         """
         Propose new parameters using a unified optimization strategy.
-        
+
         - Phase.LEARNING: Optimizes Acquisition Function (Surrogate Model)
         - Phase.INFERENCE: Optimizes Prediction Function (Prediction Model)
         """
