@@ -174,7 +174,8 @@ class LBPAgent:
             schema=schema,
             logger=self.logger, 
             predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict
+            evaluate_fn=self.eval_system._evaluate_feature_dict,
+            residual_predict_fn=self.pred_system.residual_model.predict
             )
 
         # validate against schema
@@ -327,6 +328,7 @@ class LBPAgent:
         self,
         exp_data: Optional[ExperimentData] = None,
         step_type: StepType = StepType.FULL,
+        phase: Phase = Phase.INFERENCE,
         dimension: Optional[str] = None,
         step_index: Optional[int] = None,
         batch_size: Optional[int] = None,
@@ -363,7 +365,7 @@ class LBPAgent:
         # 4. Train Exploration Model and calibrate process parameters
         current_params = exp_data.parameters.get_values_dict()
         new_params = self.calibration_system.propose_params(
-            temp_datamodule, Mode.OFFLINE, current_params, n_optimization_rounds)
+            temp_datamodule, Mode.OFFLINE, phase, current_params, n_optimization_rounds)
         self._log_step_completion(exp_data.exp_code, start, end, action="calibrated")
         return new_params
 

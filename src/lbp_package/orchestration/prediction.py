@@ -14,6 +14,7 @@ import pickle
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
+from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import LBPLogger, Metrics, LocalData, SplitType
 from .base_system import BaseOrchestrationSystem
 
@@ -27,10 +28,11 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, logger: LBPLogger, schema: DatasetSchema, local_data: LocalData):
+    def __init__(self, logger: LBPLogger, schema: DatasetSchema, local_data: LocalData, res_model: Optional[IResidualModel] = None):
         """Initialize prediction system."""
         super().__init__(logger)
         self.models: List[IPredictionModel] = []
+        self.residual_model: IResidualModel = MLPResidualModel(logger) if res_model is None else res_model
 
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
@@ -145,34 +147,39 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not tune_batches:
             raise ValueError("Tuning datamodule has no data in 'train' split.")
         
-        # Tune each registered model
-        tuned_count = 0
-        skipped_count = 0
+        # Concatenate batches for residual learning
+        X_list, y_list = zip(*tune_batches)
+        X_tune = np.concatenate(X_list, axis=0)
+        y_tune = np.concatenate(y_list, axis=0)
         
-        self.logger.info("Starting prediction model online tuning...")
+        # Initialize base predictions array
+        y_pred_base = np.zeros_like(y_tune)
+        
+        # Get predictions from all base models
+        self.logger.info("Generating base predictions for residual learning...")
         for model in self.models:
-            model_tune_batches = self._filter_batches_for_model(tune_batches, model)
+            # Get indices for this model's outputs
+            output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
             
-            # Try to tune model
-            try:
-                self.logger.info(f"Tuning {model.__class__.__name__}...")
-                model.tuning(model_tune_batches, **kwargs)
-                tuned_count += 1
-                self.logger.console_success(f"Tuned {model.__class__.__name__}")
-            except NotImplementedError:
-                # Model doesn't implement tuning
-                skipped_count += 1
-                self.logger.console_info(f"⊘ Skipped {model.__class__.__name__} (tuning not implemented)")
+            # Get model inputs (filter X columns)
+            input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
+            X_model = X_tune[:, input_indices]
+            
+            # Predict (normalized)
+            y_pred_model = model.forward_pass(X_model)
+            
+            # Place in aggregate array
+            y_pred_base[:, output_indices] = y_pred_model
+
+        # TODO: Store predicted features in exp_data.predicted_features. do we need another array?
+            
+        # Calculate residuals (Target - Base Prediction)
+        residuals = y_tune - y_pred_base
         
-        if tuned_count > 0:
-            self.logger.console_success(
-                f"Tuning complete: {tuned_count}/{len(self.models)} models tuned"
-            )
-        else:
-            self.logger.console_warning(
-                f"Tuning called but no models implement tuning(). "
-                f"Models skipped: {skipped_count}/{len(self.models)}"
-            )
+        # Train residual model
+        self.logger.info(f"Training residual model on {len(X_tune)} samples...")
+        self.residual_model.fit(X_tune, residuals)
+        self.logger.console_success("✓ Residual model updated")
 
         return temp_datamodule
     

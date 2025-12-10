@@ -35,12 +35,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         predict_fn: Callable, 
         evaluate_fn: Callable, 
         random_seed: Optional[int] = None,
-        model: Optional[ISurrogateModel] = None
+        model: Optional[ISurrogateModel] = None,
+        residual_predict_fn: Optional[Callable] = None
     ):
         super().__init__(logger)
         # self.schema = schema
         self.predict_fn = predict_fn
         self.evaluate_fn = evaluate_fn
+        self.residual_predict_fn = residual_predict_fn
         self.random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
         
@@ -136,7 +138,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         # X is (n_features,)
         # predict_fn expects (n_samples, n_features)
-        pred_features = self.predict_fn(X.reshape(1, -1))
+        X_reshaped = X.reshape(1, -1)
+        pred_features = self.predict_fn(X_reshaped)
+        
+        # Apply residual correction if available (Online Adaptation)
+        # TODO: make this cleaner
+        if self.residual_predict_fn is not None:
+            residuals = self.residual_predict_fn(X_reshaped)
+            pred_features = pred_features + residuals
+            
         pred_performance = self.evaluate_fn(pred_features)
         
         # Extract values from dict and compute score
