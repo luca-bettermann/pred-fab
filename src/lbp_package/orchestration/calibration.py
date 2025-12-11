@@ -4,9 +4,6 @@ import numpy as np
 from scipy.stats import qmc
 from scipy.optimize import minimize
 
-from skopt import Optimizer
-from skopt.space import Real
-
 import warnings
 import functools
 
@@ -33,10 +30,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         logger: LBPLogger, 
         schema: DatasetSchema, 
         predict_fn: Callable, 
+        residual_predict_fn: Callable,
         evaluate_fn: Callable, 
         random_seed: Optional[int] = None,
         model: Optional[ISurrogateModel] = None,
-        residual_predict_fn: Optional[Callable] = None
     ):
         super().__init__(logger)
         # self.schema = schema
@@ -198,7 +195,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(X_train), np.array(y_train)
     
-    def _train_surrogate_model(
+    def train_surrogate_model(
         self,
         datamodule: DataModule
     ) -> None:
@@ -233,7 +230,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # 2. Select Objective Function
         if phase == Phase.LEARNING:
             # Train the surrogate on latest data
-            self._train_surrogate_model(datamodule)
+            self.train_surrogate_model(datamodule)
             
             # Create partial function with fixed w_explore
             objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
