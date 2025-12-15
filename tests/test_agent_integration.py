@@ -11,7 +11,7 @@ from lbp_package.core.data_objects import DataReal, DataInt
 from lbp_package.interfaces.evaluation import IEvaluationModel
 from lbp_package.interfaces.features import IFeatureModel
 from lbp_package.interfaces.prediction import IPredictionModel
-from lbp_package.orchestration.agent import LBPAgent
+from lbp_package.orchestration.agent import PfabAgent
 from lbp_package.utils.logger import LBPLogger
 
 
@@ -95,7 +95,7 @@ def agent(tmp_path, logger):
     local_folder = str(tmp_path / "local")
     log_folder = str(tmp_path / "logs")
     
-    agent = LBPAgent(
+    agent = PfabAgent(
         root_folder=root_folder,
         local_folder=local_folder,
         log_folder=log_folder,

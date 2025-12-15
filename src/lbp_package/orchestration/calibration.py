@@ -165,13 +165,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Predict mean and std from surrogate
         mean, std = self.model.predict(X.reshape(1, -1))
         
-        mu = mean[0]
-        sigma = std[0]
+        weighted_mu = self.compute_system_performance(mean[0].tolist())
+        weighted_sigma = self.compute_system_performance(std[0].tolist())
         
         # Weighted Blend
         # w=0 -> Pure Mean (Exploitation)
         # w=1 -> Pure Std (Exploration)
-        score = (1.0 - w_explore) * mu + w_explore * sigma
+        score = (1.0 - w_explore) * weighted_mu + w_explore * weighted_sigma
         return -score 
     
     # === SURROGATE TRAINING ===

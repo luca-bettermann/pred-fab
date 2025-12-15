@@ -25,7 +25,7 @@ from ..utils import LocalData, LBPLogger, StepType, Phase
 
 SystemNames = Literal['feature', 'evaluation', 'prediction', 'calibration']
 
-class LBPAgent:
+class PfabAgent:
     """
     Main orchestration class for AIXD-based LBP framework.
     

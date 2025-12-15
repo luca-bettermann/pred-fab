@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from lbp_package.orchestration.agent import LBPAgent
+from lbp_package.orchestration.agent import PfabAgent
 from lbp_package.orchestration.calibration import CalibrationSystem
 
 @pytest.fixture
@@ -9,7 +9,7 @@ def agent(tmp_path):
     local_folder = str(tmp_path / "local")
     log_folder = str(tmp_path / "logs")
     
-    agent = LBPAgent(
+    agent = PfabAgent(
         root_folder=root_folder,
         local_folder=local_folder,
         log_folder=log_folder,

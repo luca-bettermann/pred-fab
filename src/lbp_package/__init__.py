@@ -1,8 +1,8 @@
 from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, IExplorationModel
-from .orchestration import LBPAgent, InferenceBundle
+from .orchestration import PfabAgent, InferenceBundle
 
 __all__ = [
-    "LBPAgent",
+    "PfabAgent",
     "InferenceBundle",
     "IExternalData",
     "IFeatureModel", 

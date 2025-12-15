@@ -6,7 +6,7 @@ import os
 from lbp_package.core import DatasetSchema
 from lbp_package.core.data_objects import Parameter, Feature, PerformanceAttribute
 from lbp_package.core.data_blocks import Parameters, PerformanceAttributes, Features
-from lbp_package.orchestration.agent import LBPAgent
+from lbp_package.orchestration.agent import PfabAgent
 from lbp_package.core.dataset import ExperimentData
 from lbp_package.core import DataModule
 
@@ -58,7 +58,7 @@ def main():
     # 3. Initialize Agent
     # We need to assert external_data is not None for type checker if we use it later
     ext_data = MockExternalData()
-    agent = LBPAgent(
+    agent = PfabAgent(
         root_folder=root_folder,
         external_data=ext_data,
         debug_flag=False, # Use local data only (mock external data is used via interface)
