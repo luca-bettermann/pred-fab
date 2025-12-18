@@ -1,14 +1,15 @@
 Metadata-Version: 2.4
-Name: lbp-package
-Version: 1.0.0
-Summary: Add your description here
+Name: pred-fab
+Version: 0.1.0
+Summary: PFAB: A Predictive Layer for Digital Fabrication Systems
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
 Requires-Dist: numpy>=2.0.2
 Requires-Dist: pandas>=2.3.1
-Requires-Dist: pytest>=8.4.1
 Requires-Dist: scikit-learn>=1.6.1
 Requires-Dist: scikit-optimize>=0.10.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.4.1; extra == "dev"
 
 # Learning by Printing (LbP) Framework
 

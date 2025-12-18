@@ -9,7 +9,7 @@ manages schema generation and dataset initialization.
 import numpy as np
 from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
 
-from lbp_package.utils.enum import Mode
+from pred_fab.utils.enum import Mode
 from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule

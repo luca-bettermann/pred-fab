@@ -7,7 +7,7 @@ Provides shared functionality for EvaluationSystem and PredictionSystem.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Optional
 
-from lbp_package.core.data_objects import DataObject
+from pred_fab.core.data_objects import DataObject
 
 from ..core.dataset import Dataset, ExperimentData
 from ..interfaces import BaseInterface

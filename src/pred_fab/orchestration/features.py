@@ -1,7 +1,7 @@
 from typing import Any, Dict, Tuple, Type, Optional, List
 import numpy as np
 
-from lbp_package.interfaces.features import IFeatureModel
+from pred_fab.interfaces.features import IFeatureModel
 
 
 from ..utils import LBPLogger

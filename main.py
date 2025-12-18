@@ -1,5 +1,5 @@
 def main():
-    print("Welcome to lbp-package!")
+    print("Welcome to pred-fab!")
 
 
 if __name__ == "__main__":
