@@ -1,0 +1,184 @@
+@startuml UML_diagram
+' Interface-focused UML diagram for LBP Package
+' Generate PNG: plantuml -tpng "UML_diagram.puml"
+
+!define ABSTRACT_CLASS abstract class
+
+' === COLOR SCHEMES ===
+' Uncomment the block of your choice to switch themes
+
+' SCHEME 1: Uniform Greenish-Teal (Current)
+' !define COL_AGENT      #D1F2EB
+' !define COL_SYS_FEAT   #48C9B055
+' !define COL_SYS_EVAL   #48C9B055
+' !define COL_SYS_PRED   #48C9B055
+' !define COL_SYS_CALIB  #48C9B055
+' !define COL_IFACE_FEAT #76D7C455
+' !define COL_IFACE_EVAL #76D7C455
+' !define COL_IFACE_PRED #76D7C455
+' !define COL_IFACE_EXT  #76D7C455
+
+' SCHEME 2: Soft Pastels (Distinct)
+' !define COL_AGENT      #FADBD8
+' !define COL_SYS_FEAT   #F9E79F
+' !define COL_SYS_EVAL   #ABEBC6
+' !define COL_SYS_PRED   #AED6F1
+' !define COL_SYS_CALIB  #F5CBA7
+' !define COL_IFACE_FEAT #D5F5E355
+' !define COL_IFACE_EVAL #D6EAF855
+' !define COL_IFACE_PRED #FCF3CF55
+' !define COL_IFACE_EXT  #EBDEF055
+
+' SCHEME 3: Professional Blue (Uniform)
+' !define COL_AGENT      #D6EAF8
+' !define COL_SYS_FEAT   #5DADE255
+' !define COL_SYS_EVAL   #5DADE255
+' !define COL_SYS_PRED   #5DADE255
+' !define COL_SYS_CALIB  #5DADE255
+' !define COL_IFACE_FEAT #AED6F155
+' !define COL_IFACE_EVAL #AED6F155
+' !define COL_IFACE_PRED #AED6F155
+' !define COL_IFACE_EXT  #AED6F155
+
+' SCHEME 4: Minimalist Gray (Uniform)
+!define COL_AGENT      #fcfcfcff
+!define COL_SYS_FEAT   #e2e7e955
+!define COL_SYS_EVAL   #e2e7e955
+!define COL_SYS_PRED   #e2e7e955
+!define COL_SYS_CALIB  #e2e7e955
+' !define COL_IFACE_FEAT #E5E8E855
+' !define COL_IFACE_EVAL #E5E8E855
+' !define COL_IFACE_PRED #E5E8E855
+' !define COL_IFACE_EXT  #E5E8E855
+
+!define COL_GPS        #bcbcbc55
+!define COL_MLP        #bcbcbc55
+
+!define COL_IFACE_FEAT #ffeda455
+!define COL_IFACE_EVAL #ffeda455
+!define COL_IFACE_PRED #ffeda455
+!define COL_IFACE_EXT  #ffeda455
+
+' === STYLING - ORTHOGONAL LINES & SPACING ===
+skinparam linetype ortho
+skinparam ranksep 20
+skinparam nodesep 65
+skinparam minlen 2
+skinparam packagePadding 10
+
+skinparam classAttributeIconSize 1
+skinparam shadowing false
+skinparam roundcorner 14
+hide empty fields
+
+' === TOP LAYER: AGENT ===
+class PfabAgent COL_AGENT {
+    + initialize()
+    + configure()
+    + step_functions() 
+}
+
+' === UTILITY PACKAGE ===
+note as utils #F8F8F820
+  **utils**
+  class Logger
+  class LocalData
+  class Metrics
+  class Enum
+end note
+
+' === MIDDLE LAYER: ORCHESTRATION ===
+class FeatureSystem COL_SYS_FEAT {
+    + compute_features()
+}
+
+class EvaluationSystem COL_SYS_EVAL {
+    + run_evaluation()
+}
+
+class PredictionSystem COL_SYS_PRED {
+    + train_models()
+    + predict()
+}
+
+class CalibrationSystem COL_SYS_CALIB {
+    + system_performance()
+    + propose_parameters()
+}
+
+' === BOTTOM LAYER: LOGIC / INTERFACES ===
+ABSTRACT_CLASS IFeatureModel COL_IFACE_FEAT {
+    + {abstract} load_data()
+    + {abstract} compute_feature()
+}
+
+ABSTRACT_CLASS IEvaluationModel COL_IFACE_EVAL {
+    + {abstract} evaluate_feature()
+}
+
+ABSTRACT_CLASS IPredictionModel COL_IFACE_PRED {
+    + {abstract} train()
+    + {abstract} forward_pass()
+}
+
+class GPSurrogateModel COL_GPS {
+    + train()
+    + forward_pass()
+}
+
+class MLPResidualModel COL_MLP {
+    + train()
+    + forward_pass()
+}
+
+' ABSTRACT_CLASS IExternalData COL_IFACE_EXT {
+'    + {abstract} pull_exp()
+'    + {abstract} push_exp()
+' }
+
+' === LAYOUT CONTROL ===
+' Top -> Middle
+PfabAgent -[hidden]down- FeatureSystem
+PfabAgent -[hidden]down- EvaluationSystem
+PfabAgent -[hidden]down- PredictionSystem
+PfabAgent -[hidden]down- CalibrationSystem
+
+' Middle -> Bottom
+FeatureSystem -[hidden]down- IFeatureModel
+EvaluationSystem -[hidden]down- IEvaluationModel
+PredictionSystem -[hidden]down- IPredictionModel
+CalibrationSystem -[hidden]down- GPSurrogateModel
+
+' Horizontal ordering Middle
+FeatureSystem -[hidden]right- EvaluationSystem
+EvaluationSystem -[hidden]right- PredictionSystem
+PredictionSystem -[hidden]right- CalibrationSystem
+' utils -[hidden]right- CalibrationSystem
+
+' Horizontal ordering Bottom
+' IExternalData -[hidden]right- IFeatureModel
+IFeatureModel -[hidden]right- IEvaluationModel
+IEvaluationModel -[hidden]right- IPredictionModel
+IPredictionModel -[hidden]right- MLPResidualModel
+MLPResidualModel -[hidden]right- GPSurrogateModel
+
+' === RELATIONSHIPS ===
+
+' Agent to Systems
+PfabAgent *-- FeatureSystem
+PfabAgent *-- EvaluationSystem
+PfabAgent *-- PredictionSystem
+PfabAgent *-- CalibrationSystem
+
+' Agent to Utils/External
+PfabAgent *-- utils
+' PfabAgent o-- IExternalData
+
+' Systems to Models
+FeatureSystem *-- IFeatureModel
+EvaluationSystem *-- IEvaluationModel
+PredictionSystem *-- IPredictionModel
+PredictionSystem *-- MLPResidualModel
+CalibrationSystem *-- GPSurrogateModel
+
+@enduml
