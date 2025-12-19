@@ -1,4 +1,4 @@
-# Learning by Printing (LbP) Framework
+# PFAB: A Predictive Layer for Digital Fabrication Systems
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 
