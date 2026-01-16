@@ -9,7 +9,8 @@ manages schema generation and dataset initialization.
 import numpy as np
 from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
 
-from pred_fab.utils.enum import Mode
+from pred_fab.core.data_objects import DataArray
+from pred_fab.utils.enum import Mode, SystemName
 from ..core.schema import DatasetSchema, SchemaRegistry
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
@@ -21,9 +22,10 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExternalData
-from ..utils import LocalData, LBPLogger, StepType, Phase
+from ..utils import LocalData, PfabLogger, StepType, Phase
 
-SystemNames = Literal['feature', 'evaluation', 'prediction', 'calibration']
+print("\n===== Welcome to PFAB - Predictive Fabrication =====\n")
+
 
 class PfabAgent:
     """
@@ -38,7 +40,6 @@ class PfabAgent:
     def __init__(
         self,
         root_folder: str,
-        external_data: Optional[IExternalData] = None,
         debug_flag: bool = False,
         recompute_flag: bool = False,
         visualize_flag: bool = True,
@@ -59,17 +60,8 @@ class PfabAgent:
         self.local_data = LocalData(root_folder)
 
         # Initialize logger
-        self.logger_name = "LBPAgent"
-        self.logger = LBPLogger(self.logger_name, self.local_data.get_log_folder('logs'))
-        self.logger.info("Initializing LBP Agent")
-        
-        # Initialize external data interface
-        self.external_data = external_data
-        if external_data is None:
-            self.logger.console_warning(
-                "No external data interface provided: "
-                "Experiments need to be available as local JSON files."
-            )
+        self.logger = PfabLogger.get_logger(self.local_data.get_log_folder('logs'))
+        self.logger.info("Initializing PfabAgent")
         
         # Flag settings
         self.debug_flag = debug_flag
@@ -93,8 +85,6 @@ class PfabAgent:
         # Progress tracking
         self.active_exp: Optional[ExperimentData] = None
         
-        self.logger.console_info("\n===== Welcome to PFAB - Predictive Fabrication =====\n")
-
     # === MODEL REGISTRATION ===
 
     def _register_model(
@@ -128,17 +118,14 @@ class PfabAgent:
     
     # === MODEL INITIALIZATION & VALIDATION ===
 
-    def initialize(self, schema: DatasetSchema) -> Dataset:
+    def initialize_systems(self, schema: DatasetSchema) -> None:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
-
-        self.logger.console_info("\n===== Initializing Dataset =====")
                 
         # Step 1: Initialize systems (dataset will be set later)
         self.logger.info("Instantiating models from registered classes...")
         if not self._feature_model_specs:
             raise ValueError("No feature models registered. Call register_feature_model() first.")
 
-        
         # Instantiate feature models
         self.feature_system = FeatureSystem(logger=self.logger)
         self._instantiate_model_group(
@@ -146,6 +133,7 @@ class PfabAgent:
             self.feature_system.models,
             "feature"
         )
+        self.feature_system.set_dim_codes_for_arrays(schema)
 
         # Instantiate evaluation models
         self.eval_system = EvaluationSystem(logger=self.logger)
@@ -154,12 +142,6 @@ class PfabAgent:
             self.eval_system.models,
             "evaluation"
         )
-
-        # Initialize schema: it requires feature models to set dimension codes
-        registry = SchemaRegistry(self.local_data.local_folder)
-        new_schema_id = schema.initialize(registry, self.feature_system.models)
-        self.local_data.set_schema(new_schema_id)
-        self.logger.info(f"\nUsing schema ID: {new_schema_id}")
 
         # Prediction system requires schema to be set
         self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
@@ -181,28 +163,7 @@ class PfabAgent:
         # validate against schema
         self._validate_systems_against_schema(schema)
         self._initialized = True
-
-        # Step 3: Create dataset with storage interfaces
-        dataset = Dataset(
-            schema=schema,
-            schema_id=new_schema_id,
-            local_data=self.local_data,
-            external_data=self.external_data,
-            logger=self.logger,
-            debug_mode=self.debug_flag,
-        )
-
-        # Display summary
-        summary_lines = [
-            "\nDataset:",
-            f"  - Schema ID: {new_schema_id}",
-            f"  - Parameters: {len(schema.parameters.data_objects)} ({len(schema.parameters.get_dim_names())} dims)",
-            f"  - Features: {len(schema.features.data_objects)}",
-            f"  - Performance Attributes: {len(schema.performance.data_objects)}",
-        ]
-        self.logger.console_summary("\n".join(summary_lines))
-        self.logger.console_success(f"Successfully initialized dataset '{new_schema_id}'.")
-        return dataset        
+        self.logger.console_success(f"Successfully initialized agentic systems.")
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
         """Validate all orchestration systems against the provided schema."""
@@ -249,13 +210,13 @@ class PfabAgent:
                 f"{unpredicted_features}"
             )
         
-    def activate_system(self, system_name: SystemNames) -> None:
+    def activate_system(self, system_name: SystemName) -> None:
         """Activate a specific orchestration system."""
         if not self._initialized:
             raise RuntimeError("Cannot activate systems before initialize() is called.")
         self._toggle_system(system_name, activate=True)
 
-    def deactivate_system(self, system_name: SystemNames) -> None:
+    def deactivate_system(self, system_name: SystemName) -> None:
         """Deactivate a specific orchestration system."""
         if not self._initialized:
             raise RuntimeError("Cannot deactivate systems before initialize() is called.")
@@ -446,7 +407,7 @@ class PfabAgent:
         if validate or test:
             self.pred_system.validate(use_test=test)
 
-    def tuning_step(
+    def adaptation_step(
         self,
         dimension: str,
         step_index: int,
@@ -584,7 +545,7 @@ class PfabAgent:
                 f"{unused}"
             )        
 
-    def _toggle_system(self, system_name: SystemNames, activate: bool) -> None:
+    def _toggle_system(self, system_name: SystemName, activate: bool) -> None:
         """Toggle a system on or off."""
         system = self._get_system(system_name)
         action = "Activated" if activate else "Deactivated"
@@ -594,14 +555,14 @@ class PfabAgent:
         else:
             system.deactivate()
         
-        self.logger.info(f"{action} {system_name.capitalize()} System.")
+        self.logger.info(f"{action} {system_name.value.capitalize()} System.")
 
-    def _get_system(self, system_name: SystemNames) -> Any:
+    def _get_system(self, system_name: SystemName) -> Any:
         """Get a system by name, raising an error if not initialized."""
         systems = {
-            'evaluation': self.eval_system,
-            'prediction': self.pred_system,
-            'calibration': self.calibration_system,
+            SystemName.EVALUATION: self.eval_system,
+            SystemName.PREDICTION: self.pred_system,
+            SystemName.CALIBRATION: self.calibration_system,
         }
         
         if system_name not in systems:
@@ -609,7 +570,7 @@ class PfabAgent:
         
         system = systems[system_name]
         if system is None:
-            raise RuntimeError(f"{system_name.capitalize()} System not initialized. Call initialize() first.")
+            raise RuntimeError(f"{system_name.value.capitalize()} System not initialized. Call initialize() first.")
         
         return system
     

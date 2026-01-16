@@ -1,7 +1,7 @@
 from typing import Any, Dict, Tuple, Type, Optional, List
 import numpy as np
 
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 from ..core import Dataset, ExperimentData, DataReal, Parameters
 from ..interfaces import IEvaluationModel
 from .base_system import BaseOrchestrationSystem
@@ -14,7 +14,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
     Manages evaluation model execution and stores results in ExperimentData.
     """
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize evaluation system."""
         super().__init__(logger)
         self.models: List[IEvaluationModel] = []

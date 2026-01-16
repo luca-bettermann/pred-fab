@@ -5,7 +5,7 @@ from numpy.typing import NDArray
 
 from .base_interface import BaseInterface
 from ..core import Parameters, Dataset
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 
 
 class IEvaluationModel(BaseInterface):
@@ -16,7 +16,7 @@ class IEvaluationModel(BaseInterface):
     Stores results directly in ExperimentData.
     """
 
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize evaluation system."""
         super().__init__(logger)
     

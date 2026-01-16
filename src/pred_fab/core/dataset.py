@@ -15,7 +15,7 @@ from .schema import DatasetSchema
 from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDimension
 
 from ..interfaces.external_data import IExternalData
-from ..utils import LocalData, LBPLogger
+from ..utils import LocalData, PfabLogger
 
 BlockType = Literal['parameters', 'performance', 'feature', 'predicted_feature']
 
@@ -133,28 +133,25 @@ class Dataset:
     - Feature memoization cache for IFeatureModel efficiency
     """
     
-    def __init__(self, schema: DatasetSchema, schema_id: str,
-                 local_data: LocalData, 
-                 logger: LBPLogger,
+    def __init__(self, 
+                 schema: DatasetSchema, 
                  external_data: Optional[IExternalData] = None,
-                 debug_mode: bool = False):
+                 debug_flag: bool = False):
         """
         Initialize Dataset.
         
         Args:
             schema: DatasetSchema defining structure
-            schema_id: Schema ID from SchemaRegistry
-            local_data: LocalData instance for file operations
             external_data: IExternalData instance for external storage
-            logger: LBPLogger for progress tracking
-            debug_mode: Skip external operations if True (local-only mode)
+            debug_flag: Skip external operations if True (local-only mode)
         """
         self.schema = schema
-        self.schema_id = schema_id
-        self.local_data = local_data
-        self.logger = logger
+        self.local_data = schema.local_data
         self.external_data = external_data
-        self.debug_mode = debug_mode
+        self.debug_flag = debug_flag
+
+        # Initialize local data handler and logger
+        self.logger = PfabLogger.get_logger(schema.local_data.get_log_folder('logs'))
         
         # Master storage using ExperimentData
         self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
@@ -364,18 +361,7 @@ class Dataset:
             exp_data.features.initialize_arrays(exp_data.parameters)
             exp_data.predicted_features.initialize_arrays(exp_data.parameters)
         
-        # 3. Load Performance Metrics
-        missing_performance = self._hierarchical_load(
-            "performance metrics",
-            exp_codes,
-            loader=self.local_data.load_performance,
-            setter=functools.partial(self._set_exp_data, block_type="performance"),
-            in_memory=functools.partial(self._has_exp_data, block_type="performance"),
-            external_loader=self.external_data.pull_performance if self.external_data else None,
-            recompute=recompute
-        )
-        
-        # 4. Load Features
+        # 3. Load Features
         missing_features_union = set()
         for metric_name in self.schema.features.keys():
             missing_features = self._hierarchical_load(
@@ -389,6 +375,17 @@ class Dataset:
                 feature_name=metric_name # Passed to kwargs
             )
             missing_features_union.update(missing_features)
+        
+        # 4. Load Performance Metrics
+        missing_performance = self._hierarchical_load(
+            "performance metrics",
+            exp_codes,
+            loader=self.local_data.load_performance,
+            setter=functools.partial(self._set_exp_data, block_type="performance"),
+            in_memory=functools.partial(self._has_exp_data, block_type="performance"),
+            external_loader=self.external_data.pull_performance if self.external_data else None,
+            recompute=recompute
+        )
 
         # 5. Load Predicted Features
         missing_pred_features_union = set()
@@ -409,15 +406,16 @@ class Dataset:
         # Summary
         total = len(exp_codes)
         summary = [
-            "\n===== Loading Experiments =====",
-            f"\nExperiments: {total}",
-            f"  - Parameters: {total - len(missing_params)}/{total}",
-            f"  - Performance: {total - len(missing_performance)}/{total}",
-            f"  - Features: {total - len(missing_features_union)}/{total}",
+            "\n===== Populate Dataset =====",
+            f"\nExperiments: \t\t{total}",
+            f"  - Parameters: \t{total - len(missing_params)}/{total}",
+            f"  - Features: \t\t{total - len(missing_features_union)}/{total}",
+            f"  - Performance: \t{total - len(missing_performance)}/{total}",
             f"  - Predicted Features: {total - len(missing_pred_features_union)}/{total}",
         ]
         
         self.logger.console_info("\n".join(summary))
+        self.logger.console_new_line()
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
         return missing_params
     
@@ -429,7 +427,7 @@ class Dataset:
     def save_experiments(self, exp_codes: List[str], recompute: bool = False) -> None:
         """Save multiple experiments hierarchically with progress tracking."""
         # Override external flag if in debug mode
-        if self.debug_mode:
+        if self.debug_flag:
             external = False
         
         # Filter to experiments that exist in dataset
@@ -480,10 +478,10 @@ class Dataset:
         """Save schema hierarchically."""        
         # 1. Save locally
         if self.local_data.save_schema(self.schema.to_dict(), recompute=recompute):
-            self.logger.console_info(f"Saved dataset schema '{self.schema_id}' as local file.")
+            self.logger.console_info(f"Saved dataset schema '{self.schema.name}' as local file.")
         # 2. Save externally
-        if self.external_data and not self.debug_mode:
-             self.external_data.push_schema(self.schema_id, self.schema.to_dict())
+        if self.external_data and not self.debug_flag:
+             self.external_data.push_schema(self.schema.name, self.schema.to_dict())
 
     def _infer_column_names(self, array_name: str) -> Optional[List[str]]:
         """Infer column names for metric array based on dimensions."""
@@ -535,13 +533,13 @@ class Dataset:
             return []
 
         # 3. Load from external sources
-        if not self.debug_mode and external_loader:
+        if not self.debug_flag and external_loader:
             missing_external, external_data = external_loader(missing_local, **kwargs)
             # directly store retrieved data in ExpData object
             for code, data in external_data.items():
                 setter(code, data)
             self._check_for_retrieved_codes(missing_local, missing_external, dtype, "external source", console_output=console_output)
-        elif self.debug_mode:
+        elif self.debug_flag:
             missing_external = missing_local 
             self.logger.info(f"Debug mode: Skipping loading {dtype} from external source")
         else:
@@ -580,13 +578,13 @@ class Dataset:
             self.logger.info(f"{dtype.capitalize()} {codes_to_save} already exist as local files.")
 
         # 3. Save to external source (skip if in debug mode)
-        if not self.debug_mode and external_saver:
+        if not self.debug_flag and external_saver:
             pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
             if pushed:
                 self.logger.console_info(f"Pushed {dtype} {codes_to_save} to external source.")
             else:
                 self.logger.info(f"{dtype} {codes_to_save} already exists in external source.")
-        elif self.debug_mode:
+        elif self.debug_flag:
             self.logger.info(f"Debug mode: Skipped pushing {dtype} {codes_to_save} to external source.")
         else:
             self.logger.warning(f"No external data interface provided: Skipped pushing {dtype} {codes_to_save} to external source.")
@@ -667,7 +665,7 @@ class Dataset:
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"Dataset(schema_id='{self.schema_id}', "
+            f"Dataset(schema_id='{self.schema.name}', "
             f"experiments={len(self._experiments)})"
         )
 

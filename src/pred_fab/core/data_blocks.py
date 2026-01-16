@@ -5,37 +5,40 @@ DataBlocks group DataObjects into logical collections and store their values.
 They provide both schema structure and data storage.
 """
 
-from abc import abstractmethod
+from abc import abstractmethod, ABC
 import itertools
 from typing import Dict, Any, List, Optional, Tuple, Type
 import numpy as np
 from .data_objects import DataObject, DataDimension, DataArray, DataReal
 from .data_objects import Parameter, Feature, PerformanceAttribute
+from ..utils.enum import Roles
 
 
-class DataBlock:
+class DataBlock(ABC):
     """
     Container for DataObjects with value storage.
     
     Provides validation, access methods, and value management for typed parameter collections.
     """
     
-    def __init__(self, data_object_type: Type[Any], allowed_role: Optional[str] = None):
+    def __init__(self):
         """Initialize empty DataBlock."""
-        self.data_object_type = data_object_type
-        self.allowed_role = allowed_role
-
         self.data_objects: Dict[str, DataObject] = {}  # Schema structure
         self.values: Dict[str, Any] = {}  # Actual values
         self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized
+
+    @property
+    @abstractmethod
+    def role(self) -> Roles:
+        ...
     
     def add(self, name: str, data_obj: DataObject) -> None:
         """Add a DataObject to the block."""
-        if not isinstance(data_obj, self.data_object_type):
-            raise TypeError(f"Expected data object of type {self.data_object_type.__name__}, got {type(data_obj).__name__}")
-        
-        if self.allowed_role and data_obj.role != self.allowed_role:
-            raise ValueError(f"Expected data object with role '{self.allowed_role}', got '{data_obj.role}'")
+        if not issubclass(type(data_obj), DataObject):
+            raise TypeError(f"data_obj must be a DataObject, got {type(data_obj)}")
+            
+        if self.role and data_obj.role != self.role:
+            raise ValueError(f"Expected data object with role '{self.role}', got '{data_obj.role}'")
             
         self.data_objects[name] = data_obj
     
@@ -119,6 +122,14 @@ class DataBlock:
         """Extract all set values as a simple dictionary."""
         return dict(self.values)
     
+    def is_compatible(self, other_block) -> bool:
+        """Helper function to check compatibility between two data blocks."""
+        self_objects = set(self.data_objects)
+        other_objects = set(other_block.data_objects)
+        if self_objects != other_objects:
+            return False
+        return True
+    
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for schema storage."""
         return {
@@ -128,24 +139,19 @@ class DataBlock:
                 for name, obj in self.data_objects.items()
             },
             "values": self.values  # Include current values
-            
         }
     
-    def is_compatible(self, other_block) -> bool:
-        """Helper function to check compatibility between two data blocks."""
-        self_objects = set(self.data_objects)
-        other_objects = set(other_block.data_objects)
-        if self_objects != other_objects:
-            return False
-        return True
-    
     @classmethod
-    def from_dict(cls, data_object_type: Type[Any], data: Dict[str, Any]) -> Any:
+    def from_dict(cls, data: Dict[str, Any]) -> Any:
         """Reconstruct from dictionary."""
-        block = cls(data_object_type)
+        # Create instance (subclass sets its own types)
+        block = cls()
+
+        # Restore DataObjects
         for name, obj_data in data.get("data_objects", {}).items():
             data_obj = DataObject.from_dict(obj_data)
             block.add(name, data_obj)
+
         # Restore values if present
         for name, value in data.get("values", {}).items():
             if name in block.data_objects:
@@ -153,11 +159,14 @@ class DataBlock:
         return block
     
     @classmethod
-    def from_list(cls, data_object_type: Type[Any], data_objs: List[Any]) -> Any:
+    def from_list(cls, data_objs: List[Any]) -> Any:
         """Reconstruct from list."""
-        block = cls(data_object_type)
+        # Create instance (subclass sets its own types)
+        block = cls()
+
+        # Add DataObjects
         for data_obj in data_objs:
-            block.add(data_obj.name, data_obj)
+            block.add(data_obj.code, data_obj)
         return block
 
 
@@ -173,7 +182,11 @@ class Parameters(DataBlock):
     
     def __init__(self):
         """Initialize Parameters block."""
-        super().__init__(DataObject, allowed_role="parameter")
+        super().__init__()
+    
+    @property
+    def role(self) -> Roles:
+        return Roles.PARAMETER
 
     def get_dim_objects(self, codes: Optional[List[str]] = None) -> Dict[str, DataDimension]:
         """Get view of dimension DataObjects from parameters."""
@@ -278,74 +291,7 @@ class Parameters(DataBlock):
     def filter_for_dims(self, dim_codes: List[str]) -> List[str]:
         """Create new Parameters block containing only specified dimensions."""
         return [name for name, obj in self.data_objects.items() if name in dim_codes and isinstance(obj, DataDimension)]
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Parameters':
-        """Reconstruct from dictionary including weights."""
-        return super().from_dict(Parameters, data)
     
-    @classmethod
-    def from_list(cls, data_objs: List[Any]) -> 'Parameters':
-        """Reconstruct from list including weights."""
-        block = cls()
-        for data_obj in data_objs:
-            block.add(data_obj.code, data_obj)
-        return block
-
-class PerformanceAttributes(DataBlock):
-    """
-    Evaluation outputs (performance metrics).
-    
-    Includes calibration weights for multi-objective optimization.
-    Examples: temperature deviation, path accuracy, energy consumption.
-    """
-    
-    def __init__(self):
-        """Initialize PerformanceAttributes block."""
-        super().__init__(DataObject, allowed_role="performance")
-        self.calibration_weights: Dict[str, float] = {}
-    
-    def set_weight(self, perf_code: str, weight: float) -> None:
-        """Set calibration weight for a performance attribute."""
-        if perf_code not in self.data_objects:
-            raise KeyError(f"Performance code '{perf_code}' not defined")
-        
-        if weight < 0:
-            raise ValueError(f"Calibration weight must be non-negative, got {weight}")
-        
-        self.calibration_weights[perf_code] = weight
-    
-    def get_weight(self, perf_code: str) -> Optional[float]:
-        """Get calibration weight for a performance attribute."""
-        return self.calibration_weights.get(perf_code)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize including calibration weights."""
-        data = super().to_dict()
-        data["calibration_weights"] = self.calibration_weights
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'PerformanceAttributes':
-        """Reconstruct from dictionary including weights."""
-        block = cls()
-        for name, obj_data in data.get("data_objects", {}).items():
-            data_obj = DataReal.from_dict(obj_data)
-            block.add(name, data_obj)
-        block.calibration_weights = data.get("calibration_weights", {})
-        # Restore values if present
-        for name, value in data.get("values", {}).items():
-            if name in block.data_objects:
-                block.set_value(name, value)
-        return block
-    
-    @classmethod
-    def from_list(cls, data_objs: List[Any]) -> 'PerformanceAttributes':
-        """Reconstruct from list including weights."""
-        block = cls()
-        for data_obj in data_objs:
-            block.add(data_obj.code, data_obj)
-        return block
 
 class Features(DataBlock):
     """
@@ -357,8 +303,12 @@ class Features(DataBlock):
     
     def __init__(self):
         """Initialize MetricArrays block."""
-        super().__init__(DataObject, allowed_role="feature")
-
+        super().__init__()
+    
+    @property
+    def role(self) -> Roles:
+        return Roles.FEATURE
+    
     def initialize_array(self, metric_code: str, shape: Tuple[int, ...]):
         """Initialize numpy array for a given metric code."""
         if metric_code not in self.data_objects:
@@ -388,15 +338,49 @@ class Features(DataBlock):
             # Initialize array with computed shape
             self.initialize_array(metric_code, shape)
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Features':
-        """Reconstruct from dictionary including weights."""
-        return super().from_dict(Features, data)
+
+class PerformanceAttributes(DataBlock):
+    """
+    Evaluation outputs (performance metrics).
     
-    @classmethod
-    def from_list(cls, data_objs: List[Any]) -> 'Features':
-        """Reconstruct from list including weights."""
-        block = cls()
-        for data_obj in data_objs:
-            block.add(data_obj.code, data_obj)
-        return block
+    Includes calibration weights for multi-objective optimization.
+    Examples: temperature deviation, path accuracy, energy consumption.
+    """
+    
+    def __init__(self):
+        """Initialize PerformanceAttributes block."""
+        super().__init__()
+    
+    @property
+    def role(self) -> Roles:
+        return Roles.PERFORMANCE
+    
+    #     self.calibration_weights: Dict[str, float] = {}
+    
+    # def set_weight(self, perf_code: str, weight: float) -> None:
+    #     """Set calibration weight for a performance attribute."""
+    #     if perf_code not in self.data_objects:
+    #         raise KeyError(f"Performance code '{perf_code}' not defined")
+        
+    #     if weight < 0:
+    #         raise ValueError(f"Calibration weight must be non-negative, got {weight}")
+        
+    #     self.calibration_weights[perf_code] = weight
+    
+    # def get_weight(self, perf_code: str) -> Optional[float]:
+    #     """Get calibration weight for a performance attribute."""
+    #     return self.calibration_weights.get(perf_code)
+    
+    # def to_dict(self) -> Dict[str, Any]:
+    #     """Serialize including calibration weights."""
+    #     data = super().to_dict()
+    #     data["calibration_weights"] = self.calibration_weights
+    #     return data
+    
+    # @classmethod
+    # def from_dict(cls, data: Dict[str, Any]) -> 'PerformanceAttributes':
+    #     """Reconstruct from dictionary including weights."""
+    #     block = super().from_dict(data)
+    #     block.calibration_weights = data.get("calibration_weights", {})
+    #     return block
+    

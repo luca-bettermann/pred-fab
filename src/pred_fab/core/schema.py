@@ -14,6 +14,8 @@ import hashlib
 from datetime import datetime
 from typing import Dict, Any, Set, Optional, List
 
+from pred_fab.utils import LocalData, PfabLogger
+
 from .data_objects import DataArray, DataDimension, Feature, Parameter, PerformanceAttribute
 import copy
 from .data_blocks import (
@@ -37,92 +39,68 @@ class DatasetSchema:
     
     def __init__(
             self, 
+            root_folder: str, 
             name: str,
             parameters: Parameters,
-            performance: PerformanceAttributes,
             features: Features,
-            default_round_digits: int = 3
+            performance: PerformanceAttributes
             ):
         """Initialize schema from DataBlocks."""
+        
         self.name = name
         self.parameters = parameters
-        self.performance = performance
         self.features = features
+        self.performance = performance
         self.predicted_features = self._return_copy_with_suffix(features, "pred_")
-        self.default_round_digits = default_round_digits
-        self.schema_id: str = name  # Assigned via SchemaRegistry
+
+        # Initialize local data handler and logger
+        self.local_data = LocalData(root_folder)
+        self.logger = PfabLogger.get_logger(self.local_data.get_log_folder('logs'))
+
+        # Initialize schema
+        self._initialize()
 
     @classmethod
-    def from_list(
-        cls, 
-        name: str,
-        parameters: List[Parameter],
-        performance_attrs: List[PerformanceAttribute],
-        features: List[Feature],
-        default_round_digits: int = 3
-        ) -> 'DatasetSchema':
-        """Reconstruct schema from dictionary."""
-        parameter_block = Parameters.from_list(parameters)
-        performance_block = PerformanceAttributes.from_list(performance_attrs)
-        feature_block = Features.from_list(features)
-        return cls(name, parameter_block, performance_block, feature_block, default_round_digits)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DatasetSchema':
+    def from_dict(cls, data: Dict[str, Any], root_folder: str) -> 'DatasetSchema':
         """Reconstruct schema from dictionary."""
         parameter_block = Parameters.from_dict(data["parameters"])
-        performance_block = PerformanceAttributes.from_dict(data["performance_attrs"])
         feature_block = Features.from_dict(data["features"])
+        performance_block = PerformanceAttributes.from_dict(data["performance_attrs"])
         
-        name = data.get("schema_id", "unknown_schema")
-        schema = cls(name, parameter_block, performance_block, feature_block, data.get("default_round_digits", 3))
+        name = data.get("schema_id")
+        if name is None:
+            raise ValueError("Schema dictionary must contain 'schema_id' field.")
+        
+        schema = cls(root_folder, name, parameter_block, feature_block, performance_block)
         return schema
     
-    def initialize(self, registry: 'SchemaRegistry', feature_models: List[Any]) -> str:
+    def _initialize(self) -> None:
         """Initialize schema by computing hash and registering with SchemaRegistry."""
-        # First, set dimension codes for metric arrays
-        self._set_dim_codes_for_arrays(feature_models)
+        self.registry = SchemaRegistry(self.local_data.local_folder)
 
         # Validate dimensions before hashing
         self.parameters.validate_dimensions()
         schema_hash = self._compute_schema_hash()
         schema_struct = self.to_dict()
         
-        registry.register_schema(self.name, schema_hash, schema_struct)
-        return self.name
+        self.registry.register_schema(self.name, schema_hash, schema_struct)
+        self.local_data.set_schema(self.name)
+        self.logger.console_success(f"Successfully initialized schema with ID: {self.name}.")
 
-    def set_schema_id(self, schema_id: str) -> None:
-        """Set the schema ID."""
-        self.schema_id = schema_id
-        self.name = schema_id
-
-    def _set_dim_codes_for_arrays(self, feature_models: List[Any]) -> None:
-        """Set dimension codes for all metric arrays based on dataset parameters."""
-        dim_codes = self.parameters.get_dim_names()
-        
-        # Iterate over all feature models to set dim codes
-        for model in feature_models:
-            for output_code in model.outputs:
-                data_array = self.features.data_objects[output_code]
-                if isinstance(data_array, DataArray):
-                    model_dim_codes = [code for code in model.input_parameters if code in dim_codes]
-                    data_array.set_dim_codes(model_dim_codes)
 
     def _compute_schema_hash(self) -> str:
         """Compute deterministic hash from schema structure."""
         structure = {
             "parameters": self._block_to_hash_structure(self.parameters),
             "performance": self._block_to_hash_structure(self.performance),
-            "features": self._block_to_hash_structure(self.features),
-            # "default_round_digits": self.default_round_digits,
-            # "calibration_weights": self.performance.calibration_weights
+            "features": self._block_to_hash_structure(self.features)
         }
         
         # Sort keys for determinism
         hash_str = json.dumps(structure, sort_keys=True)
         return hashlib.sha256(hash_str.encode()).hexdigest()
     
-    def _block_to_hash_structure(self, block) -> Dict[str, Any]:
+    def _block_to_hash_structure(self, block: DataBlock) -> Dict[str, Any]:
         """Convert DataBlock to hashable structure using full object serialization."""
         return {
             name: obj.to_dict()
@@ -133,10 +111,9 @@ class DatasetSchema:
         """Serialize schema to dictionary for storage."""
         return {
             "parameters": self.parameters.to_dict(),
-            "performance_attrs": self.performance.to_dict(),
             "features": self.features.to_dict(),
-            "default_round_digits": self.default_round_digits,
-            "schema_id": self.name,
+            "performance_attrs": self.performance.to_dict(),
+            "schema_id": self.name
             # "schema_hash": self._compute_schema_hash()
         }
     
@@ -247,31 +224,6 @@ class SchemaRegistry:
             for entry in self.registry.values()
         )
     
-    def _generate_next_id(self) -> str:
-        """Generate next sequential schema ID (schema_001, schema_002, ...)."""
-        if not self.registry:
-            return "schema_001"
-        
-        # Find max existing number
-        max_num = 0
-        for entry in self.registry.values():
-            schema_id = entry["schema_id"]
-            if schema_id.startswith("schema_"):
-                try:
-                    num = int(schema_id.split("_")[1])
-                    max_num = max(max_num, num)
-                except (IndexError, ValueError):
-                    continue
-        
-        return f"schema_{(max_num + 1):03d}"
-    
-    def get_schema_by_id(self, schema_id: str) -> Optional[Dict[str, Any]]:
-        """Get schema structure by schema_id."""
-        for entry in self.registry.values():
-            if entry["schema_id"] == schema_id:
-                return entry["structure"]
-        return None
-    
     def get_hash_by_id(self, schema_id: str) -> Optional[str]:
         """Get schema hash by schema_id."""
         for schema_hash, entry in self.registry.items():
@@ -279,18 +231,43 @@ class SchemaRegistry:
                 return schema_hash
         return None
     
-    def list_schemas(self) -> Dict[str, str]:
-        """List all registered schemas as dict mapping schema_id to creation timestamp."""
-        return {
-            entry["schema_id"]: entry["created"]
-            for entry in self.registry.values()
-        }
+    # def _generate_next_id(self) -> str:
+    #     """Generate next sequential schema ID (schema_001, schema_002, ...)."""
+    #     if not self.registry:
+    #         return "schema_001"
+        
+    #     # Find max existing number
+    #     max_num = 0
+    #     for entry in self.registry.values():
+    #         schema_id = entry["schema_id"]
+    #         if schema_id.startswith("schema_"):
+    #             try:
+    #                 num = int(schema_id.split("_")[1])
+    #                 max_num = max(max_num, num)
+    #             except (IndexError, ValueError):
+    #                 continue
+        
+    #     return f"schema_{(max_num + 1):03d}"
     
-    def export(self) -> Dict[str, Any]:
-        """Export complete registry dictionary for portability."""
-        return self.registry.copy()
+    # def get_schema_by_id(self, schema_id: str) -> Optional[Dict[str, Any]]:
+    #     """Get schema structure by schema_id."""
+    #     for entry in self.registry.values():
+    #         if entry["schema_id"] == schema_id:
+    #             return entry["structure"]
+    #     return None
     
-    def import_registry(self, data: Dict[str, Any]) -> None:
-        """Import and merge registry data with existing entries."""
-        self.registry.update(data)
-        self._save_registry()
+    # def list_schemas(self) -> Dict[str, str]:
+    #     """List all registered schemas as dict mapping schema_id to creation timestamp."""
+    #     return {
+    #         entry["schema_id"]: entry["created"]
+    #         for entry in self.registry.values()
+    #     }
+    
+    # def export(self) -> Dict[str, Any]:
+    #     """Export complete registry dictionary for portability."""
+    #     return self.registry.copy()
+    
+    # def import_registry(self, data: Dict[str, Any]) -> None:
+    #     """Import and merge registry data with existing entries."""
+    #     self.registry.update(data)
+    #     self._save_registry()

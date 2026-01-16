@@ -15,7 +15,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import LBPLogger, Metrics, LocalData, SplitType
+from ..utils import PfabLogger, Metrics, LocalData, SplitType
 from .base_system import BaseOrchestrationSystem
 
 
@@ -28,7 +28,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, logger: LBPLogger, schema: DatasetSchema, local_data: LocalData, res_model: Optional[IResidualModel] = None):
+    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: Optional[IResidualModel] = None):
         """Initialize prediction system."""
         super().__init__(logger)
         self.models: List[IPredictionModel] = []
@@ -121,7 +121,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info(f"Preparing tuning data from positions {start} to {end}...")
         temp_dataset = Dataset(
             schema=self.schema, 
-            schema_id=self.schema.schema_id, # type: ignore
+            schema_id=self.schema.name, # type: ignore
             local_data=self.local_data,
             logger=self.logger)
         temp_dataset.add_experiment(exp_data)

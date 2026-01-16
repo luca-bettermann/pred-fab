@@ -1,25 +1,38 @@
 from typing import Any, Dict, Tuple, Type, Optional, List
 import numpy as np
 
+from pred_fab.core.data_objects import DataArray
 from pred_fab.interfaces.features import IFeatureModel
 
 
-from ..utils import LBPLogger
-from ..core import Dataset, ExperimentData, Parameters
+from ..utils import PfabLogger
+from ..core import DatasetSchema, ExperimentData, Parameters
 from .base_system import BaseOrchestrationSystem
 
 
 class FeatureSystem(BaseOrchestrationSystem):
     """
-    Orchestrates multiple evaluation models using Dataset.
+    Orchestrates multiple feature models.
     
     Manages evaluation model execution and stores results in ExperimentData.
     """
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize evaluation system."""
         super().__init__(logger)
         self.models: List[IFeatureModel] = []
+
+    def set_dim_codes_for_arrays(self, schema: DatasetSchema) -> None:
+        """Set dimension codes for all metric arrays based on dataset parameters."""
+        dim_codes = schema.parameters.get_dim_names()
+        
+        # Iterate over all feature models to set dim codes
+        for model in self.models:
+            for output_code in model.outputs:
+                data_array = schema.features.data_objects[output_code]
+                if isinstance(data_array, DataArray):
+                    model_dim_codes = [code for code in model.input_parameters if code in dim_codes]
+                    data_array.set_dim_codes(model_dim_codes)
 
     # === FEATURE EXTRACTION ===
 

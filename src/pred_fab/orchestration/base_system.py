@@ -11,7 +11,7 @@ from pred_fab.core.data_objects import DataObject
 
 from ..core.dataset import Dataset, ExperimentData
 from ..interfaces import BaseInterface
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 
 
 class BaseOrchestrationSystem(ABC):
@@ -24,9 +24,9 @@ class BaseOrchestrationSystem(ABC):
     - Parameter extraction from ExperimentData
     """
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize orchestration system with dataset and logger."""
-        self.logger: LBPLogger = logger
+        self.logger: PfabLogger = logger
         self.active: bool = True
         self.models: List[Any] = []
     

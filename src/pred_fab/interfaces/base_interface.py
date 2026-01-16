@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Type, final
 
 from ..core import Dataset, DataObject, DataDimension, Parameter, Feature, PerformanceAttribute
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 
 
 class BaseInterface(ABC):
@@ -15,7 +15,7 @@ class BaseInterface(ABC):
     - Parameter extraction from ExperimentData
     """
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize interface model with dataset and logger."""
         self.logger = logger
 

@@ -5,21 +5,21 @@ Mockup interfaces for the example workflow.
 import numpy as np
 from typing import Any, Dict, List, Tuple, Optional
 
-from lbp_package.interfaces import (
+from pred_fab.interfaces import (
     IFeatureModel, 
     IEvaluationModel, 
     IPredictionModel, 
     IExternalData
 )
-from lbp_package.core import DataObject, DataReal, DataInt, DataDimension, DataArray, Dataset
-from lbp_package.utils import LBPLogger
+from pred_fab.core import DataObject, DataReal, DataInt, DataDimension, DataArray, Dataset
+from pred_fab.utils import PfabLogger
 
 # --- Feature Models ---
 
 class MockFeatureModelA(IFeatureModel):
     """Mock feature model A."""
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         
     @property
@@ -60,7 +60,7 @@ class MockFeatureModelA(IFeatureModel):
 class MockFeatureModelB(IFeatureModel):
     """Mock feature model B."""
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         
     @property
@@ -96,7 +96,7 @@ class MockFeatureModelB(IFeatureModel):
 class MockEvaluationModelA(IEvaluationModel):
     """Mock evaluation model A."""
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         
     @property
@@ -123,7 +123,7 @@ class MockEvaluationModelA(IEvaluationModel):
 class MockEvaluationModelB(IEvaluationModel):
     """Mock evaluation model B."""
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         
     @property
@@ -152,7 +152,7 @@ class MockEvaluationModelB(IEvaluationModel):
 class MockPredictionModel(IPredictionModel):
     """Mock prediction model."""
     
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         # Inputs: param_1, param_2, dim_1, dim_2, feature_3
         # Outputs: feature_1, feature_2

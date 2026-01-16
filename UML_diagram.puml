@@ -82,7 +82,7 @@ class PfabAgent COL_AGENT {
 note as utils #F8F8F820
   **utils**
   class Logger
-  class LocalData
+'   class LocalData
   class Metrics
   class Enum
 end note
@@ -98,7 +98,7 @@ class EvaluationSystem COL_SYS_EVAL {
 
 class PredictionSystem COL_SYS_PRED {
     + train_models()
-    + predict()
+    + predict_features()
 }
 
 class CalibrationSystem COL_SYS_CALIB {
@@ -126,10 +126,10 @@ class GPSurrogateModel COL_GPS {
     + forward_pass()
 }
 
-class MLPResidualModel COL_MLP {
-    + train()
-    + forward_pass()
-}
+' class MLPResidualModel COL_MLP {
+'     + train()
+'     + forward_pass()
+' }
 
 ' ABSTRACT_CLASS IExternalData COL_IFACE_EXT {
 '    + {abstract} pull_exp()
@@ -159,8 +159,9 @@ PredictionSystem -[hidden]right- CalibrationSystem
 ' IExternalData -[hidden]right- IFeatureModel
 IFeatureModel -[hidden]right- IEvaluationModel
 IEvaluationModel -[hidden]right- IPredictionModel
-IPredictionModel -[hidden]right- MLPResidualModel
-MLPResidualModel -[hidden]right- GPSurrogateModel
+IPredictionModel -[hidden]right- GPSurrogateModel
+' IPredictionModel -[hidden]right- MLPResidualModel
+' MLPResidualModel -[hidden]right- GPSurrogateModel
 
 ' === RELATIONSHIPS ===
 
@@ -178,7 +179,7 @@ PfabAgent *-- utils
 FeatureSystem *-- IFeatureModel
 EvaluationSystem *-- IEvaluationModel
 PredictionSystem *-- IPredictionModel
-PredictionSystem *-- MLPResidualModel
+' PredictionSystem *-- MLPResidualModel
 CalibrationSystem *-- GPSurrogateModel
 
 @enduml

@@ -1,5 +1,5 @@
 from .local_data import LocalData
-from .logger import LBPLogger
+from .logger import PfabLogger
 from .metrics import Metrics
 from .enum import (
     NormMethod, 
@@ -12,7 +12,7 @@ from .enum import (
 
 __all__ = [
     "LocalData",
-    "LBPLogger",
+    "PfabLogger",
     "Metrics",
 
     "NormMethod",

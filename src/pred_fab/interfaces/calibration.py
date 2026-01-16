@@ -3,7 +3,7 @@ from typing import Tuple, Type, Any, final, Callable
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 
 class ISurrogateModel(ABC):
     """
@@ -13,7 +13,7 @@ class ISurrogateModel(ABC):
     the acquisition function.
     """
     
-    def __init__(self, logger: LBPLogger, random_seed: int = 42):
+    def __init__(self, logger: PfabLogger, random_seed: int = 42):
         self.logger = logger
         self.random_seed = random_seed
 
@@ -47,7 +47,7 @@ class GaussianProcessSurrogate(ISurrogateModel):
     Uses Matern kernel + WhiteKernel for noise handling.
     """
     
-    def __init__(self, logger: LBPLogger, random_seed: int = 42, **kwargs):
+    def __init__(self, logger: PfabLogger, random_seed: int = 42, **kwargs):
         super().__init__(logger, random_seed)
         kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-5)
         self.surrogate_model = GaussianProcessRegressor(

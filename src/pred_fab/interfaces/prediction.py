@@ -11,7 +11,7 @@ from typing import List, Dict, Type, Optional, Any, final, Tuple
 import numpy as np
 
 from .base_interface import BaseInterface
-from ..utils.logger import LBPLogger
+from ..utils.logger import PfabLogger
 from ..core import DataObject, Dataset
 
 
@@ -26,7 +26,7 @@ class IPredictionModel(BaseInterface):
     - Must be dataclasses with DataObject fields for parameters (schema generation)
     """
 
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize evaluation system."""
         super().__init__(logger)
     

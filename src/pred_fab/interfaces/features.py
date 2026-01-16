@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from .base_interface import BaseInterface
 from ..core import Dataset, Parameters
-from ..utils import LBPLogger
+from ..utils import PfabLogger
 
 
 class IFeatureModel(BaseInterface):
@@ -17,7 +17,7 @@ class IFeatureModel(BaseInterface):
     Models declare their parameters as dataclass fields (DataObjects).
     """
 
-    def __init__(self, logger: LBPLogger):
+    def __init__(self, logger: PfabLogger):
         """Initialize evaluation system."""
         super().__init__(logger)
     

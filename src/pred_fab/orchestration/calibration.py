@@ -8,8 +8,8 @@ import warnings
 import functools
 
 from ..core import Dataset, ExperimentData, PerformanceAttributes, DataModule, DatasetSchema
-from ..utils import LBPLogger, SplitType, Mode, Phase
-from ..interfaces.calibration import ISurrogateModel, GaussianProcessSurrogate
+from ..utils import PfabLogger, SplitType, Mode, Phase
+from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
 
 # Suppress sklearn warnings
@@ -27,7 +27,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     
     def __init__(
         self, 
-        logger: LBPLogger, 
+        logger: PfabLogger, 
         schema: DatasetSchema, 
         predict_fn: Callable, 
         residual_predict_fn: Callable,

@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.neural_network import MLPRegressor
 
 from .base_interface import BaseInterface
-from ..utils.logger import LBPLogger
+from ..utils.logger import PfabLogger
 
 
 class IResidualModel(BaseInterface):
@@ -57,7 +57,7 @@ class MLPResidualModel(IResidualModel):
     
     def __init__(
         self, 
-        logger: LBPLogger,
+        logger: PfabLogger,
         hidden_layer_sizes: Tuple[int, ...] = (64, 32),
         activation: Literal['relu', 'identity', 'logistic', 'tanh'] = 'relu',
         learning_rate_init: float = 0.001,

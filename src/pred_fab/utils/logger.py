@@ -4,17 +4,31 @@ import re
 from datetime import datetime
 
 
-class LBPLogger:
+from typing import Optional
+
+class PfabLogger:
     """
     Enhanced logger with integrated console output.
     
     - Dual logging to file and console with different formatting
     - Debug mode switching
     - ANSI code stripping for clean log files
+    - Singleton pattern to share instance across classes
     """
     
-    def __init__(self, name: str, log_folder: str) -> None:
+    _instance: Optional['PfabLogger'] = None
+    
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(PfabLogger, cls).__new__(cls)
+        return cls._instance
+    
+    def __init__(self, name: str = "pred_fab", log_folder: str = "./logs") -> None:
         """Initialize logger with file and console handlers."""
+        # Prevent re-initialization
+        if getattr(self, "_initialized", False):
+            return
+            
         self.name = name
         self.log_folder = log_folder
         self.debug_mode = False
@@ -32,6 +46,16 @@ class LBPLogger:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         session_log_file = f"{name}_session_{timestamp}.log"
         self._setup_file_handler(session_log_file)
+        
+        self._initialized = True
+    
+    @classmethod
+    def get_logger(cls, log_folder: str) -> 'PfabLogger':
+        """Get the singleton logger instance, creating default if undefined."""
+        if cls._instance is None:
+            # Create default instance if none exists
+            return cls(log_folder=log_folder)
+        return cls._instance
 
     # === PUBLIC API METHODS ===
     def debug(self, message: str) -> None:
@@ -57,12 +81,12 @@ class LBPLogger:
     
     def console_success(self, message: str) -> None:
         """Print success message to console and log."""
-        print(f"\n✅ {message}")
+        print(f"✅ {message}")
         self.logger.info(f"CONSOLE SUCCESS: \n\n{message}\n")
     
     def console_warning(self, message: str) -> None:
         """Print warning to console and log."""
-        print(f"\n⚠️  {message}")
+        print(f"⚠️  {message}")
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
 
     def console_summary(self, message: str) -> None:
@@ -73,6 +97,10 @@ class LBPLogger:
         # Log clean version without ANSI codes
         clean_message = self._strip_ansi_codes(message)  
         self.logger.info(f"CONSOLE SUMMARY:\n\n{clean_message}")
+
+    def console_new_line(self) -> None:
+        """Print a new line to console."""
+        print("")
 
     # === PRIVATE METHODS ===
     def _setup_file_handler(self, log_file: str) -> None:

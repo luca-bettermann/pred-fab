@@ -32,13 +32,16 @@ __all__ = [
     'DataCategorical',
     'DataDimension',
     'DataArray',
+
     'Parameter',
     'Feature',
     'PerformanceAttribute',
+
     'DataBlock',
     'Parameters',
     'PerformanceAttributes',
     'Features',
+    
     'DatasetSchema',
     'SchemaRegistry',
     'Dataset',
