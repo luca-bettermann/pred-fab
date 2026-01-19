@@ -16,6 +16,7 @@ from pred_fab.utils import StepType
 from interfaces import (
     MockFeatureModelA,
     MockFeatureModelB,
+    MockFeatureModelC,
     MockEvaluationModelA,
     MockEvaluationModelB,
     MockPredictionModel, 
@@ -37,12 +38,13 @@ def main():
     feat1 = Feature.array("feature_1")
     feat2 = Feature.array("feature_2")
     feat3 = Feature.array("feature_3")
+    feat4 = Feature.array("feature_4")
 
     perf1 = PerformanceAttribute.score("performance_1")
     perf2 = PerformanceAttribute.score("performance_2")
 
     param_block = Parameters.from_list([p1, p2, p3, p4])
-    feat_block = Features.from_list([feat1, feat2, feat3])
+    feat_block = Features.from_list([feat1, feat2, feat3, feat4])
     perf_block = PerformanceAttributes.from_list([perf1, perf2])
     
     # Initialize Schema and Dataset
@@ -70,13 +72,19 @@ def main():
     # 4. Register Models and Initialize Systems
     agent.register_feature_model(MockFeatureModelA)
     agent.register_feature_model(MockFeatureModelB)
+    agent.register_feature_model(MockFeatureModelC)
     agent.register_evaluation_model(MockEvaluationModelA)
     agent.register_evaluation_model(MockEvaluationModelB)
     agent.register_prediction_model(MockPredictionModel)
     agent.initialize_systems(schema)
 
     # 5. Load Experiments
+    dataset.load_experiments(["exp_001"])
     dataset.load_experiments(["exp_001", "exp_002", "exp_003"])
+
+    dataset.state_report()
+    agent.state_report()
+    
     exp_1 = dataset.get_experiment("exp_001")
     exp_2 = dataset.get_experiment("exp_002")
 

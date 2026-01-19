@@ -36,7 +36,7 @@ class ExperimentData:
                  features: Features, 
                  predicted_features: Features
                  ):
-        self.exp_code = exp_code
+        self.code = exp_code
         self.parameters = parameters
         self.performance = performance
         self.features = features
@@ -65,7 +65,7 @@ class ExperimentData:
     def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: Optional[int]) -> bool:
         """Check if feature array is non-empty in specified range."""
         if not self.features.has(feature_code):
-            raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.exp_code}'")
+            raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.code}'")
 
         array = self.features.get_value(feature_code)
         end_index = evaluate_to if evaluate_to is not None else array.shape[0]
@@ -259,14 +259,14 @@ class Dataset:
     def add_experiment(self, exp_data: ExperimentData, recompute: bool = False) -> None:
         """Manually add an existing ExperimentData to the dataset."""        
         # Check memory
-        if exp_data.exp_code in self._experiments and not recompute:
-            raise ValueError(f"Experiment {exp_data.exp_code} already exists in memory")
+        if exp_data.code in self._experiments and not recompute:
+            raise ValueError(f"Experiment {exp_data.code} already exists in memory")
         
         # Validate against schema
         exp_data.is_valid(self.schema)
         
         # Store
-        self._experiments[exp_data.exp_code] = exp_data
+        self._experiments[exp_data.code] = exp_data
     
     def get_experiment_codes(self) -> List[str]:
         """Get list of all experiment codes in dataset."""
@@ -284,6 +284,53 @@ class Dataset:
     def has_experiment(self, exp_code: str) -> bool:
         """Check if experiment exists in dataset."""
         return exp_code in self._experiments
+
+    def get_populated_experiment_codes(self) -> List[str]:
+        """Get list of experiments that have all features in schema populated."""
+        feature_names = list(self.schema.features.keys())
+        return [
+            code for code in self.get_experiment_codes()
+            if all(self.get_experiment(code).is_feature_populated(f) for f in feature_names)
+        ]
+
+    def state_report(self) -> None:
+        """Log an overview of the current dataset to the console."""
+        exp_codes = self.get_experiment_codes()
+        total = len(exp_codes)
+        
+        # 1. Parameters
+        count_params = sum(1 for code in exp_codes if self.get_experiment(code).has_data("parameters"))
+        
+        # 2. Features (All schema features must be present)
+        count_features = 0
+        feature_names = list(self.schema.features.keys())
+        populated_codes = set(self.get_populated_experiment_codes())
+        
+        for code in exp_codes:
+            if code in populated_codes:
+                count_features += 1
+
+        # 3. Performance
+        count_perf = sum(1 for code in exp_codes if self.get_experiment(code).has_data("performance"))
+        
+        # 4. Predicted Features (All schema features must be present)
+        count_pred = 0
+        for code in exp_codes:
+            exp = self.get_experiment(code)
+            # Check if all predicted features in schema are populated
+            # Note: We iterate original feature names as the API method handles mapping/logic
+            if all(exp.is_predicted_feature_populated(name) for name in feature_names):
+                count_pred += 1
+
+        summary = self.prep_summary_report(
+            'Dataset State Report',
+            total,
+            count_params,
+            count_features,
+            count_perf,
+            count_pred
+        )
+        print("\n".join(summary))
     
     # === Helper Methods for Hierarchical Loading/Saving ===
 
@@ -330,7 +377,7 @@ class Dataset:
         
         return self.get_experiment(exp_code)
     
-    def load_experiments(self, exp_codes: List[str], recompute: bool = False) -> List[str]:
+    def load_experiments(self, exp_codes: List[str], recompute_flag: bool = False) -> List[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
         
         # 1. Ensure shells exist
@@ -346,7 +393,7 @@ class Dataset:
             setter=functools.partial(self._set_exp_data, block_type="parameters"),
             in_memory=functools.partial(self._has_exp_data, block_type="parameters"),
             external_loader=self.external_data.pull_parameters if self.external_data else None,
-            recompute=recompute
+            recompute_flag=recompute_flag
         )
         
         if missing_params and len(self.schema.parameters.data_objects):
@@ -358,8 +405,8 @@ class Dataset:
             exp_data.is_valid(self.schema)
 
             # Initialize feature arrays based on loaded parameters
-            exp_data.features.initialize_arrays(exp_data.parameters)
-            exp_data.predicted_features.initialize_arrays(exp_data.parameters)
+            exp_data.features.initialize_arrays(exp_data.parameters, recompute_flag)
+            exp_data.predicted_features.initialize_arrays(exp_data.parameters, recompute_flag)
         
         # 3. Load Features
         missing_features_union = set()
@@ -371,7 +418,7 @@ class Dataset:
                 setter=functools.partial(self._set_exp_data, block_type="feature"),
                 in_memory=lambda code: self.get_experiment(code).is_feature_populated(metric_name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
-                recompute=recompute,
+                recompute_flag=recompute_flag,
                 feature_name=metric_name # Passed to kwargs
             )
             missing_features_union.update(missing_features)
@@ -384,7 +431,7 @@ class Dataset:
             setter=functools.partial(self._set_exp_data, block_type="performance"),
             in_memory=functools.partial(self._has_exp_data, block_type="performance"),
             external_loader=self.external_data.pull_performance if self.external_data else None,
-            recompute=recompute
+            recompute_flag=recompute_flag
         )
 
         # 5. Load Predicted Features
@@ -398,22 +445,21 @@ class Dataset:
                 setter=functools.partial(self._set_exp_data, block_type="predicted_feature"),
                 in_memory=lambda code: self.get_experiment(code).is_predicted_feature_populated(metric_name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
-                recompute=recompute,
+                recompute_flag=recompute_flag,
                 feature_name=pred_name # Passed to kwargs
             )
             missing_pred_features_union.update(missing_pred_features)
 
         # Summary
         total = len(exp_codes)
-        summary = [
-            "\n===== Populate Dataset =====",
-            f"\nExperiments: \t\t{total}",
-            f"  - Parameters: \t{total - len(missing_params)}/{total}",
-            f"  - Features: \t\t{total - len(missing_features_union)}/{total}",
-            f"  - Performance: \t{total - len(missing_performance)}/{total}",
-            f"  - Predicted Features: {total - len(missing_pred_features_union)}/{total}",
-        ]
-        
+        summary = self.prep_summary_report(
+            'Populate Dataset',
+            total,
+            total - len(missing_params),
+            total - len(missing_features_union),
+            total - len(missing_performance),
+            total - len(missing_pred_features_union)
+        )
         self.logger.console_info("\n".join(summary))
         self.logger.console_new_line()
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
@@ -507,7 +553,7 @@ class Dataset:
                         setter: Callable[[str, Any], None],
                         in_memory: Callable[[str], bool],
                         external_loader: Optional[Callable[..., Tuple[List[str], Any]]] = None,
-                        recompute: bool = False,
+                        recompute_flag: bool = False,
                         console_output: bool = False,
                         **kwargs) -> List[str]:
         """Universal hierarchical data loading: Memory → Local Files → External Source"""
@@ -519,7 +565,7 @@ class Dataset:
             return []
         
         # 2. Load from local files
-        if not recompute:
+        if not recompute_flag:
             missing_local, local_data = loader(missing_memory, **kwargs)
             # directly store retrieved data in ExpData object
             for code, data in local_data.items():
@@ -662,10 +708,15 @@ class Dataset:
         
         return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
 
-    def __repr__(self) -> str:
-        """String representation."""
-        return (
-            f"Dataset(schema_id='{self.schema.name}', "
-            f"experiments={len(self._experiments)})"
-        )
+    def prep_summary_report(self, title: str, total: int, n_params: int, n_feat: int, n_perf: int, n_pred_feat: int) -> List[str]:
+        """Prepare and log a summary report of the dataset state."""
+        return [
+            f"\n===== {title} =====",
+            f"\nSchema: \t\t{self.schema.name}",
+            f"Experiments: \t\t{total}",
+            f"  - Parameters: \t{n_params}/{total}",
+            f"  - Features: \t\t{n_feat}/{total}",
+            f"  - Performance: \t{n_perf}/{total}",
+            f"  - Predicted Features: {n_pred_feat}/{total}",
+        ]        
 

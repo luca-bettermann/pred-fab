@@ -7,6 +7,12 @@ class SystemName(str, Enum):
     PREDICTION = 'prediction'
     CALIBRATION = 'calibration'
 
+class Roles(Enum):
+    PARAMETER = 'parameter'
+    DIMENSION = 'dimension'
+    PERFORMANCE = 'performance'
+    FEATURE = 'feature'
+
 class NormMethod(str, Enum):
     """Enumeration of normalization methods for data preprocessing."""
     NONE = 'none'
@@ -29,14 +35,14 @@ class BlockType(str, Enum):
     FEATURES = 'features'
     FEATURES_PRED = 'features_pred'
 
-class Mode(str, Enum):
-    """Enumeration of workflow step types."""
+class Domain(str, Enum):
+    """Enumeration of workflow step domain."""
     OFFLINE = 'offline'
     ONLINE = 'online'
 
-class Phase(str, Enum):
-    """Enumeration of workflow stages."""
-    LEARNING = 'learning'
+class Mode(str, Enum):
+    """Enumeration of workflow modes."""
+    EXPLORATION = 'exploration'
     INFERENCE = 'inference'
 
 class StepType(str, Enum):
@@ -52,9 +58,4 @@ class NormalizeStrategy(Enum):
     NONE = 'none'
     CATEGORICAL = 'categorical'
 
-class Roles(Enum):
-    PARAMETER = 'parameter'
-    DIMENSION = 'dimension'
-    PERFORMANCE = 'performance'
-    FEATURE = 'feature'
     

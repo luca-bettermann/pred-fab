@@ -22,7 +22,7 @@ class FeatureSystem(BaseOrchestrationSystem):
         super().__init__(logger)
         self.models: List[IFeatureModel] = []
 
-    def set_dim_codes_for_arrays(self, schema: DatasetSchema) -> None:
+    def _set_dim_codes_for_arrays(self, schema: DatasetSchema) -> None:
         """Set dimension codes for all metric arrays based on dataset parameters."""
         dim_codes = schema.parameters.get_dim_names()
         
@@ -36,7 +36,7 @@ class FeatureSystem(BaseOrchestrationSystem):
 
     # === FEATURE EXTRACTION ===
 
-    def compute_exp_features(
+    def run_feature_extraction(
         self,
         exp_data: ExperimentData,
         evaluate_from: int = 0,
@@ -44,16 +44,16 @@ class FeatureSystem(BaseOrchestrationSystem):
         visualize: bool = False,
         recompute: bool = False
     ) -> Dict[str, np.ndarray]:
-        """Execute all evaluations for an experiment and mutate exp_data with results."""
+        """Execute all feature extractions for an experiment and mutate exp_data with results."""
         # Handle recompute logic
         if recompute:
             self.logger.info(f"Recompute flag set - clearing cache")
 
-        # Check if the features and performance are already computed
+        # Check if the features are already computed
         skip_for_code = {code: exp_data.is_complete(code, evaluate_from, evaluate_to) 
                          for code in exp_data.features.keys() if not recompute}
 
-        # Get evaluation results from core logic
+        # Get feature extraction results from core logic
         feature_dict = self._compute_features_from_params(
             parameters=exp_data.parameters,
             evaluate_from=evaluate_from,

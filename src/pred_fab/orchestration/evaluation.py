@@ -21,7 +21,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     # === EVALUATION ===
 
-    def compute_exp_evaluation(
+    def run_evaluation(
         self,
         exp_data: ExperimentData,
         evaluate_from: int = 0,
@@ -75,16 +75,16 @@ class EvaluationSystem(BaseOrchestrationSystem):
         for eval_model in self.models:
             # Skip if already loaded
             if skip_for_code.get(eval_model.output_performance, False):
-                self.logger.info(f"Skipping evaluation for '{eval_model.outputs}' as performance already complete.")
+                self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' as performance already complete.")
                 continue
             # Skip if the feature array is incomplete -> we only evaluate on complete feature arrays
-            elif incomplete_features.get(eval_model.input_features, False):
-                self.logger.info(f"Skipping evaluation for '{eval_model.input_features}' as feature array incomplete.'")
+            elif incomplete_features.get(eval_model.input_feature, False):
+                self.logger.info(f"Skipping evaluation for '{eval_model.input_feature}' as feature array incomplete.'")
                 continue
 
             # Run evaluation (we only keep the average performance))
             avg_performance, _ = eval_model.compute_performance(
-                feature_array=features_dict[eval_model.input_features],
+                feature_array=features_dict[eval_model.input_feature],
                 parameters=parameters
                 )
 

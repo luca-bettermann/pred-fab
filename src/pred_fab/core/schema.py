@@ -194,8 +194,8 @@ class SchemaRegistry:
             if existing_hash_for_name != schema_hash:
                 raise ValueError(
                     f"Schema name '{name}' is already registered with a different structure. "
-                    f"Existing hash: {existing_hash_for_name}, New hash: {schema_hash}. "
                     "Please use a different name or ensure the schema structure is identical."
+                    "If you want to overwrite, please delete the existing entry in the schema_registry.json file."
                 )
             # If matches, we are good. Ensure registry is consistent (it should be).
             return

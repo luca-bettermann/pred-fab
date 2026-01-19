@@ -16,6 +16,7 @@ from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, Metrics, LocalData, SplitType
+from ..utils.enum import Roles
 from .base_system import BaseOrchestrationSystem
 
 
@@ -119,21 +120,13 @@ class PredictionSystem(BaseOrchestrationSystem):
                         
         # Create a temporary Dataset with only the tuning experiment
         self.logger.info(f"Preparing tuning data from positions {start} to {end}...")
-        temp_dataset = Dataset(
-            schema=self.schema, 
-            schema_id=self.schema.name, # type: ignore
-            local_data=self.local_data,
-            logger=self.logger)
+        temp_dataset = Dataset(schema=self.schema)
         temp_dataset.add_experiment(exp_data)
 
         # Create a temporary DataModule for tuning data
         batch_size = end - start if batch_size is None and end is not None else batch_size
-        temp_datamodule = DataModule(
-            dataset=temp_dataset,
-            batch_size=batch_size,
-            val_size=0.0,
-            test_size=0.0,
-        )
+        temp_datamodule = DataModule(dataset=temp_dataset, batch_size=batch_size)
+        temp_datamodule.prepare(val_size=0.0, test_size=0.0)
         
         # Copy normalization state
         temp_datamodule.set_normalization_state(self.datamodule.get_normalization_state())
@@ -238,7 +231,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             results.update(model_metrics)
             
             self.logger.console_info(f"  Model ({', '.join(model.outputs)}):")
-            
+            self.logger.console_info(f"    {'Feature':<20} | {'MAE':<10} | {'RMSE':<10} | {'R²':<10}")
+            self.logger.console_info(f"    {'-' * 60}")
+
             # Calculate and log metrics per feature
             for i, feature_name in enumerate(model.outputs):
                 # Extract single feature vectors
@@ -248,10 +243,10 @@ class PredictionSystem(BaseOrchestrationSystem):
                 feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
                 
                 self.logger.console_info(
-                    f"    • {feature_name:<20}: "
-                    f"MAE={feat_metrics['mae']:.4f}, "
-                    f"RMSE={feat_metrics['rmse']:.4f}, "
-                    f"R²={feat_metrics['r2']:.4f}"
+                    f"    {feature_name:<20} | "
+                    f"{feat_metrics['mae']:<10.4f} | "
+                    f"{feat_metrics['rmse']:<10.4f} | "
+                    f"{feat_metrics['r2']:<10.4f}"
                 )
         
         self.logger.console_success(
@@ -344,7 +339,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Store prediction arrays in exp_data.predicted_metric_arrays."""
         for feature_name, pred_array in predictions.items():
             if feature_name not in exp_data.predicted_features.keys():
-                arr = DataArray(code=feature_name)
+                arr = DataArray(code=feature_name, role=Roles.FEATURE)
                 exp_data.predicted_features.add(feature_name, arr)
             exp_data.predicted_features.set_value(feature_name, pred_array)
     

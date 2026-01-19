@@ -29,8 +29,6 @@ class DataModule:
     def __init__(
         self,
         dataset: Dataset,
-        val_size: float = 0.2,
-        test_size: float = 0.1,
         batch_size: Optional[int] = None,
         normalize: NormMethod = NormMethod.STANDARD,
         random_seed: Optional[int] = 42
@@ -42,15 +40,11 @@ class DataModule:
             dataset: Dataset instance
             batch_size: Number of experiments per batch (None = single batch)
             normalize: Default normalization method for features and parameters
-            test_size: Fraction of data for test set (0.0-1.0)
-            val_size: Fraction of remaining data for validation set (0.0-1.0)
             random_seed: Random seed for reproducible splits (None = random)
         """
         self.dataset = dataset
         self.batch_size = batch_size
         self._default_normalize = normalize
-        self.test_size = test_size
-        self.val_size = val_size
         self.random_seed = random_seed
         
         # Per-feature/parameter normalization overrides
@@ -130,20 +124,61 @@ class DataModule:
 
     # === DATAMODULE OPERATIONS ===
 
-    def prepare(self) -> None:
+    def prepare(self, val_size: float = 0.2, test_size: float = 0.1, recompute: bool = False) -> None:
         """
-        Prepare DataModule for use: create splits and fit normalization.
-        Call after initialization and after dataset changes.
+        Create initial splits and fit normalization.
+        
+        Args:
+            val_size: Fraction of data for validation set (0.0-1.0)
+            test_size: Fraction of data for test set (0.0-1.0)
+            recompute: If True, overwrite existing splits. If False, raises error if splits exist.
         """
-        self._create_splits()
+        has_splits = any(len(c) > 0 for c in self._split_codes.values())
+        
+        if has_splits and not recompute:
+             raise RuntimeError(
+                 "DataModule already has defined splits. "
+                 "Use update() to add new experiments to the training set, "
+                 "or set recompute=True to reshuffle and overwrite validation/test sets."
+             )
+        
+        self._create_splits(val_size, test_size)
         self._fit_normalize()
 
-    def _create_splits(self) -> None:
+    def update(self) -> int:
+        """
+        Update the training set with any new experiments found in the dataset.
+        Does not affect validation or test sets. Refits normalization.
+        
+        Returns:
+            Number of new experiments added to training set.
+        """
+        # Get all valid codes in dataset
+        valid_codes = set(self.dataset.get_populated_experiment_codes())
+        
+        # Get currently tracked codes
+        current_codes = set()
+        for codes in self._split_codes.values():
+            current_codes.update(codes)
+            
+        # Find new codes
+        new_codes = list(valid_codes - current_codes)
+        
+        if not new_codes:
+            return 0
+            
+        # Add to training set
+        new_codes.sort() # Deterministic order
+        self._split_codes[SplitType.TRAIN].extend(new_codes)
+        
+        # Refit normalization since train set changed
+        self._fit_normalize()
+        
+        return len(new_codes)
+
+    def _create_splits(self, val_size: float, test_size: float) -> None:
         """Creates split codes based on dataset."""
-        exp_codes = [
-            code for code in self.dataset.get_experiment_codes()
-            if self.dataset.get_experiment(code).features is not None
-        ]
+        exp_codes = self.dataset.get_populated_experiment_codes()
         
         if not exp_codes:
             self._split_codes = {SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []}
@@ -154,7 +189,7 @@ class DataModule:
         n_samples = len(exp_codes)
         indices = np.arange(n_samples)
         
-        if self.test_size == 0.0 and self.val_size == 0.0:
+        if test_size == 0.0 and val_size == 0.0:
             self._split_codes = {
                 SplitType.TRAIN: exp_codes,
                 SplitType.VAL: [],
@@ -163,10 +198,10 @@ class DataModule:
             return
         
         # Split off test set
-        if self.test_size > 0.0:
+        if test_size > 0.0:
             train_val_idx, test_idx = train_test_split(
                 indices,
-                test_size=self.test_size,
+                test_size=test_size,
                 random_state=self.random_seed
             )
         else:
@@ -174,10 +209,10 @@ class DataModule:
             test_idx = np.array([], dtype=int)
         
         # Split remaining into train/val
-        if self.val_size > 0.0 and len(train_val_idx) > 0:
+        if val_size > 0.0 and len(train_val_idx) > 0:
             train_idx, val_idx = train_test_split(
                 train_val_idx,
-                test_size=self.val_size,
+                test_size=val_size / (1.0 - test_size) if test_size < 1.0 else 0.0, # adjust val_size relative to remaining
                 random_state=self.random_seed
             )
         else:
@@ -424,10 +459,7 @@ class DataModule:
     
     def _extract_raw_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Extract all dimensional training data from metric_arrays as DataFrames."""            
-        exp_codes = [
-            code for code in self.dataset.get_experiment_codes()
-            if self.dataset.get_experiment(code).features is not None
-        ]
+        exp_codes = self.dataset.get_populated_experiment_codes()
         
         if not exp_codes:
             # Return empty DFs if no data
@@ -619,8 +651,11 @@ class DataModule:
         """String representation."""
         fitted_str = "fitted" if self._is_fitted else "not fitted"
         batch_str = f"batch_size={self.batch_size}" if self.batch_size else "no batching"
-        split_str = f"test={self.test_size}, val={self.val_size}"
+        
+        split_sizes = self.get_split_sizes()
+        size_str = f"train={split_sizes[SplitType.TRAIN]}, val={split_sizes[SplitType.VAL]}, test={split_sizes[SplitType.TEST]}"
+        
         return (
-            f"DataModule(normalize='{self._default_normalize}', {batch_str}, splits=({split_str}), "
+            f"DataModule(normalize='{self._default_normalize}', {batch_str}, splits=({size_str}), "
             f"{fitted_str}, overrides={len(self._feature_overrides)})"
         )

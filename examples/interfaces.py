@@ -88,7 +88,41 @@ class MockFeatureModelB(IFeatureModel):
         
         # Just random noise or constant
         return {
-            "feature_3": np.random.random()
+            "feature_3": 2 + np.random.random()
+        }
+
+class MockFeatureModelC(IFeatureModel):
+    """Mock feature model C."""
+    
+    def __init__(self, logger: PfabLogger):
+        super().__init__(logger)
+        
+    @property
+    def input_parameters(self) -> List[str]:
+        return []
+        
+    @property
+    def input_features(self) -> List[str]:
+        return []
+        
+    @property
+    def outputs(self) -> List[str]:
+        return ["feature_4"]
+
+    def _load_data(self, params: Dict, **dimensions) -> Any:
+        return {}
+
+    def _compute_feature_logic(
+        self, 
+        data: Any, 
+        params: Dict, 
+        visualize: bool = False,
+        **dimensions
+        ) -> Dict[str, float]:
+        
+        # Just random noise or constant
+        return {
+            "feature_4": 1 + np.random.random()
         }
 
 # --- Evaluation Models ---

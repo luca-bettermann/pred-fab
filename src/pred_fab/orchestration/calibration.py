@@ -1,5 +1,5 @@
 from os import name
-from typing import Dict, List, Optional, Any, Literal, Tuple, Callable
+from typing import Dict, List, Optional, Any, Literal, Tuple, Callable, Type
 import numpy as np
 from scipy.stats import qmc
 from scipy.optimize import minimize
@@ -7,8 +7,9 @@ from scipy.optimize import minimize
 import warnings
 import functools
 
-from ..core import Dataset, ExperimentData, PerformanceAttributes, DataModule, DatasetSchema
-from ..utils import PfabLogger, SplitType, Mode, Phase
+from ..core import DataModule, DatasetSchema
+from ..core import DataBool, DataCategorical, DataObject
+from ..utils import PfabLogger, SplitType, Domain, Mode
 from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
 
@@ -27,36 +28,61 @@ class CalibrationSystem(BaseOrchestrationSystem):
     
     def __init__(
         self, 
+        schema: DatasetSchema,
         logger: PfabLogger, 
-        schema: DatasetSchema, 
         predict_fn: Callable, 
         residual_predict_fn: Callable,
         evaluate_fn: Callable, 
         random_seed: Optional[int] = None,
-        model: Optional[ISurrogateModel] = None,
+        surrogate_model: Optional[ISurrogateModel] = None,
     ):
         super().__init__(logger)
-        # self.schema = schema
         self.predict_fn = predict_fn
         self.evaluate_fn = evaluate_fn
         self.residual_predict_fn = residual_predict_fn
         self.random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
-        
-        # Configuration
-        self.param_bounds: Dict[str, Tuple[float, float]] = {}
-        self.trust_regions: Dict[str, float] = {}
-        self.fixed_params: Dict[str, Any] = {}
+
+        # Initialize Surrogate Model
+        if surrogate_model:
+            self.model = surrogate_model
+        else:
+            self.model = GaussianProcessSurrogate(logger, random_seed or 42)
 
         # Set ordered weights
         self.perf_names_order = list(schema.performance.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         
-        # Initialize Surrogate Model
-        if model:
-            self.model = model
-        else:
-            self.model = GaussianProcessSurrogate(logger, random_seed or 42)
+        # Set static parameter constraints from schema
+        self.data_objects: Dict[str, DataObject] = {}
+        self.param_constraints: Dict[str, Tuple[float, float]] = {}
+
+        # Configure bounds and fixed params
+        self.param_bounds: Dict[str, Tuple[float, float]] = {}
+        self.fixed_params: Dict[str, Any] = {}
+        self.trust_regions: Dict[str, float] = {}
+
+        # Extract parameter constraints from schema
+        self._set_param_constraints_from_schema(schema)
+
+    def _set_param_constraints_from_schema(self, schema: DatasetSchema) -> None:
+        """Extract parameter constraints from dataset schema."""
+        for code, data_obj in schema.parameters.data_objects.items():
+            # Set the appropriate constraints for bool and one-hot encodings
+            if isinstance(data_obj, (DataBool, DataCategorical)):
+                min_val, max_val = 0.0, 1.0
+            # Get constraints for continuous parameters
+            elif issubclass(type(data_obj), DataObject):
+                min_val = data_obj.constraints.get("min", -np.inf)
+                max_val = data_obj.constraints.get("max", np.inf)
+            else:
+                raise TypeError(f"Expected DataObject type for parameter '{code}', got {type(data_obj).__name__}")
+            
+            # Store constraints
+            self.data_objects[code] = data_obj
+            self.param_constraints[code] = (min_val, max_val)
+
+    # === CONFIGURATION METHODS ===
         
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
@@ -67,65 +93,81 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
         
-    def configure_param_bounds(
-        self, 
-        bounds: Dict[str, Tuple[float, float]], 
-        fixed_params: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]]) -> None:
         """Configure parameter ranges for offline calibration."""
-        self.param_bounds = bounds
-        self.fixed_params = fixed_params or {}
+        # Validate the bounds
+        for code, (low, high) in bounds.items():
+            if code not in self.param_constraints:
+                raise ValueError(f"Object '{code}' not found in dataset schema.")
+            # elif isinstance(self.data_objects[code], (DataBool, DataCategorical)):
+            #     raise ValueError(f"Object '{code}' is categorical/bool and cannot have custom bounds.")
+            
+            schema_min, schema_max = self.param_constraints[code]
+            if low < schema_min or high > schema_max:
+                raise ValueError(
+                    f"Bounds for object '{code}' exceed schema constraints: "
+                    f"[{low}, {high}] vs schema [{schema_min}, {schema_max}]"
+                )
+            
+            # Passed all validations
+            else:
+                self.param_bounds[code] = (low, high)
+
+    def configure_fixed_params(self, fixed_params: Dict[str, Any]) -> None:
+        # Validate Fixed Params
+        for code, value in (fixed_params or {}).items():
+            if code in self.param_bounds or code in self.trust_regions:
+                raise ValueError(f"Object '{code}' cannot have both bounds and be fixed.")
+            
+            # Passed all validations
+            self.fixed_params[code] = value
         
-    def configure_trust_regions(
-        self, 
-        deltas: Dict[str, float]
-    ) -> None:
+    def configure_adaptation_delta(self, deltas: Dict[str, float]) -> None:
         """
         Configure trust region deltas for online calibration.
         Non-configured parameters have no trust region applied and are fixed.
         """
-        self.trust_regions = deltas
-
-    def compute_system_performance(self, performance: List[float]) -> float:
-        """Compute weighted system performance [0, 1]."""
-        if not performance:
-            return 0.0
+        # Validate Trust Region Inputs
+        for code, delta in deltas.items():
+            if code in self.fixed_params:
+                raise ValueError(f"Object '{code}' cannot have both trust region and be fixed.")
+            elif isinstance(self.data_objects[code], (DataBool, DataCategorical)):
+                raise ValueError(f"Object '{code}' is categorical/bool and cannot have trust regions.")
             
-        total_score = 0.0
-        total_weight = 0.0
+            # Passed all validations
+            self.trust_regions[code] = delta # type: ignore
 
-        # make sure to order performance weights by the performance names in dataset
-        ordered_weights = [self.performance_weights.get(name, 0.0) for name in self.perf_names_order]
+    def state_report(self) -> None:
+        """Log the current calibration configuration state."""
+        summary = ["\n===== Calibration System State ====="]
+        width = 20
+        # Columns: Input, Fixed, Bounds, Delta
+        header = f"{'Input':<{width}} | {'Fixed':<{8}} | {'Bounds':<{width}} | {'Delta':<{8}}"
+        summary.append(header)
+        summary.append("-" * len(header))
 
-        for i, weight in enumerate(ordered_weights):
-            # Assume performance metrics are [0, 1]
-            total_score += performance[i] * weight
-            total_weight += weight
-
-        return total_score / total_weight if total_weight > 0 else 0.0
-        
-    def generate_baseline_experiments(
-        self, 
-        n_samples: int, 
-        param_ranges: Dict[str, Tuple[float, float]]
-    ) -> List[Dict[str, Any]]:
-        """Generate initial design using Latin Hypercube Sampling."""
-        param_names = sorted(param_ranges.keys())
-        bounds = np.array([param_ranges[name] for name in param_names])
-        
-        sampler = qmc.LatinHypercube(d=len(param_names), seed=self.random_seed)
-        sample = sampler.random(n=n_samples)
-        
-        # Scale samples to bounds
-        scaled = qmc.scale(sample, bounds[:, 0], bounds[:, 1])
-        
-        experiments = []
-        for row in scaled:
-            params = {name: float(val) for name, val in zip(param_names, row)}
-            experiments.append(params)
+        for code, (s_min, s_max) in self.param_constraints.items():
+            # Determine Fixed
+            is_fixed = "x" if code in self.fixed_params else ""
             
-        return experiments
-    
+            # Determine Bounds
+            # Priority: Fixed -> Configured Bounds -> Schema Constraints
+            if code in self.fixed_params:
+                val = self.fixed_params[code]
+                bounds_str = f"fixed" # f"[{val}, {val}]" - user wants to see fixed
+            elif code in self.param_bounds:
+                low, high = self.param_bounds[code]
+                bounds_str = f"[{low}, {high}]"
+            else:
+                bounds_str = f"[{s_min}, {s_max}]"
+            
+            # Determine Delta
+            delta = self.trust_regions.get(code, "-")
+            
+            summary.append(f"{code:<{width}} | {is_fixed:<{8}} | {bounds_str:<{width}} | {delta:<{8}}")
+        
+        print("\n".join(summary))
+
     # === OBJECTIVE FUNCTIONS ===
 
     def _inference_func(self, X: np.ndarray) -> float:
@@ -153,26 +195,44 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # We assume single sample here.
         perf_values = [float(val) if np.isscalar(val) else float(val[0]) for val in pred_performance.values()] # type: ignore
         
-        sys_perf = self.compute_system_performance(perf_values)
+        sys_perf = self._compute_system_performance(perf_values)
         return -sys_perf
     
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
         """
-        Objective for LEARNING: Maximize Weighted Score.
+        Objective for exploration: Maximize Weighted Score.
         Score = (1 - w) * Mean + w * Std
         Returns negative Score for minimization.
         """
         # Predict mean and std from surrogate
         mean, std = self.model.predict(X.reshape(1, -1))
         
-        weighted_mu = self.compute_system_performance(mean[0].tolist())
-        weighted_sigma = self.compute_system_performance(std[0].tolist())
+        weighted_mu = self._compute_system_performance(mean[0].tolist())
+        weighted_sigma = self._compute_system_performance(std[0].tolist())
         
         # Weighted Blend
         # w=0 -> Pure Mean (Exploitation)
         # w=1 -> Pure Std (Exploration)
         score = (1.0 - w_explore) * weighted_mu + w_explore * weighted_sigma
         return -score 
+    
+    def _compute_system_performance(self, performance: List[float]) -> float:
+        """Compute weighted system performance [0, 1]."""
+        if not performance:
+            return 0.0
+            
+        total_score = 0.0
+        total_weight = 0.0
+
+        # make sure to order performance weights by the performance names in dataset
+        ordered_weights = [self.performance_weights.get(name, 0.0) for name in self.perf_names_order]
+
+        for i, weight in enumerate(ordered_weights):
+            # Assume performance metrics are [0, 1]
+            total_score += performance[i] * weight
+            total_weight += weight
+
+        return total_score / total_weight if total_weight > 0 else 0.0
     
     # === SURROGATE TRAINING ===
 
@@ -206,67 +266,137 @@ class CalibrationSystem(BaseOrchestrationSystem):
         else:
             self.logger.warning("No valid data to train surrogate model.")
 
+
+    # === BASELINE EXPERIMENT GENERATION ===
+
+    def generate_baseline_experiments(
+        self, 
+        n_samples: int, 
+        param_ranges: Dict[str, Tuple[float, float]]
+    ) -> List[Dict[str, Any]]:
+        """Generate initial design using Latin Hypercube Sampling."""
+        param_names = sorted(param_ranges.keys())
+        bounds = np.array([param_ranges[name] for name in param_names])
+        
+        sampler = qmc.LatinHypercube(d=len(param_names), seed=self.random_seed)
+        sample = sampler.random(n=n_samples)
+        
+        # Scale samples to bounds
+        scaled = qmc.scale(sample, bounds[:, 0], bounds[:, 1])
+        
+        experiments = []
+        for row in scaled:
+            params = {name: float(val) for name, val in zip(param_names, row)}
+            experiments.append(params)
+            
+        return experiments
+
     # === OPTIMIZATION WORKFLOW ===
-    
-    def propose_params(
+
+    def run_calibration(
         self,
         datamodule: DataModule,
         mode: Mode,
-        phase: Phase,
-        current_params: Dict[str, Any],
+        fixed_context: Optional[Dict[str, Any]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
     ) -> Dict[str, Any]:
         """
-        Propose new parameters using a unified optimization strategy.
-
-        - Phase.LEARNING: Optimizes Acquisition Function (Surrogate Model)
-        - Phase.INFERENCE: Optimizes Prediction Function (Prediction Model)
+        Run calibration (Offline) to propose new parameters.
+        Uses global parameter bounds and fixed context.
         """
-        
-        # 1. Get Bounds
-        bounds_array = self._get_bounds_for_step(datamodule, current_params, mode)
+        # Context Management:
+        # Start with default fixed_params
+        context = self.fixed_params.copy()
+        # Update with runtime fixed_context
+        if fixed_context:
+            context.update(fixed_context)
+            
+        # 1. Get Offline Bounds
+        bounds_array = self._get_offline_bounds(datamodule, context)
         
         # 2. Select Objective Function
-        if phase == Phase.LEARNING:
-            # Train the surrogate on latest data
+        if mode == Mode.EXPLORATION:
             self.train_surrogate_model(datamodule)
-            
-            # Create partial function with fixed w_explore
-            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
-            
-        elif phase == Phase.INFERENCE:
-            # Direct optimization of the prediction model
+            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore) 
+        elif mode == Mode.INFERENCE:
             objective_func = self._inference_func
-            
         else:
-            raise ValueError(f"Unknown phase: {phase}")
+            raise ValueError(f"Unknown phase: {mode}")
 
         # 3. Run Unified Optimization
         return self._run_optimization(
             datamodule, 
-            current_params,
-            bounds_array, 
-            objective_func,
-            n_optimization_rounds, 
+            x0_params=None, 
+            bounds=bounds_array, 
+            objective_func=objective_func,
+            n_rounds=n_optimization_rounds,
+            fixed_param_values=context
+        )
+
+    def run_adaptation(
+        self,
+        datamodule: DataModule,
+        mode: Mode,
+        current_params: Dict[str, Any],
+        w_explore: float = 0.5,
+    ) -> Dict[str, Any]:
+        """
+        Run adaptation (Online) to propose new parameters.
+        Uses trust regions around current_params.
+        """
+        
+        # 1. Get Online Bounds
+        bounds_array = self._get_online_bounds(datamodule, current_params)
+        
+        # 2. Select Objective Function
+        if mode == Mode.EXPLORATION:
+            self.train_surrogate_model(datamodule)
+            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
+        elif mode == Mode.INFERENCE:
+            objective_func = self._inference_func
+        else:
+            raise ValueError(f"Unknown phase: {mode}")
+
+        # 3. Prepare Fixed Parameters (parameters without trust regions are fixed to current)
+        fixed_subset = {
+            k: v for k, v in current_params.items() 
+            if k not in self.trust_regions
+        }
+
+        # 4. Run Unified Optimization
+        return self._run_optimization(
+            datamodule, 
+            x0_params=current_params, 
+            bounds=bounds_array, 
+            objective_func=objective_func,
+            n_rounds=0, # No random restarts for adaptation
+            fixed_param_values=fixed_subset
         )
     
     def _run_optimization(
         self, 
         datamodule: DataModule, 
-        current_params: Dict[str, Any],
+        x0_params: Optional[Dict[str, Any]],
         bounds: np.ndarray, 
         objective_func: Callable,
         n_rounds: int, 
+        fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Run the acquisition function optimization."""
         # Start from current params if available
-        x0_list = [datamodule.params_to_array(current_params)]
+        x0_list = []
+        if x0_params:
+            x0_list.append(datamodule.params_to_array(x0_params))
         
         # Random restarts
         for _ in range(n_rounds):
             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
         
+        if not x0_list:
+             # Fallback if no x0_params and n_rounds=0 (unlikely)
+             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
+
         # Run optimization from each starting point
         best_x, best_val = None, np.inf
         for x0 in x0_list:
@@ -288,8 +418,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Handle failure
         if best_x is None:
             self.logger.warning("Optimization failed, returning fallback parameters.")
-            if current_params:
-                return current_params
+            if x0_params:
+                return x0_params
             else:
                 raise RuntimeError("No valid parameters could be proposed.")
         else:
@@ -297,124 +427,131 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 
         # Convert result back
         proposed_params = datamodule.array_to_params(best_x)
-        proposed_params.update(self.fixed_params)
+        if fixed_param_values:
+            proposed_params.update(fixed_param_values)
         return proposed_params
 
     # === BOUNDS FOR OPTIMIZATION ===
 
-    def _get_bounds_for_step(
-        self, 
-        datamodule: DataModule, 
-        current_params: Dict[str, Any],
-        mode: Mode = Mode.OFFLINE
-    ) -> np.ndarray:
-        """Calculate optimization bounds based on mode, fixed params, and config."""
-        bounds_list = []
-        
-        for col in datamodule.input_columns:
-            # 1. Determine Physical Bounds
-            low, high = self._get_physical_bounds_for_col(col, current_params, mode, datamodule)
-            
-            # 2. Normalize
-            if col in datamodule._parameter_stats:
-                # Continuous variable with stats
-                n_low = datamodule._apply_normalization(np.array([low]), datamodule._parameter_stats[col])[0]
-                n_high = datamodule._apply_normalization(np.array([high]), datamodule._parameter_stats[col])[0]
-                bounds_list.append((min(n_low, n_high), max(n_low, n_high)))
-            else:
-                # Likely one-hot or no normalization (already [0, 1])
-                bounds_list.append((low, high))
-                
-        return np.array(bounds_list)
-
-    def _get_physical_bounds_for_col(
-        self, 
-        col: str, 
-        current_params: Dict[str, Any], 
-        mode: Mode, 
-        datamodule: DataModule
-    ) -> Tuple[float, float]:
-        """Determine physical (unnormalized) bounds for a single column."""
-        # 1. Identify if One-Hot
-        parent_param = None
-        cat_val = None
+    def _get_onehot_info(self, col: str, datamodule: DataModule) -> Tuple[Optional[str], Optional[Any]]:
+        """Identify if a column is part of a one-hot encoding component."""
         mappings = getattr(datamodule, '_categorical_mappings', {})
-        
         for p, cats in mappings.items():
             for cat in cats:
                 if col == f"{p}_{cat}":
-                    parent_param = p
-                    cat_val = cat
-                    break
-            if parent_param: break
-        
-        # === FIXED PARAMS CHECK (Priority 1) ===
-        
-        # Handle Continuous Fixed
-        if col in self.fixed_params:
-            val = self.fixed_params[col]
-            return val, val
+                    return p, cat
+        return None, None
+
+    def _get_offline_bounds(self, datamodule: DataModule, fixed_context: Dict[str, Any]) -> np.ndarray:
+        """Calculate optimization bounds for OFFLINE domain (Global + Fixed Context)."""
+        bounds_list = []
+        for col in datamodule.input_columns:
+            parent_param, cat_val = self._get_onehot_info(col, datamodule)
             
-        # Handle Categorical Fixed (One-Hot)
-        if parent_param and parent_param in self.fixed_params:
-            fixed_val = self.fixed_params[parent_param]
-            # If fixed to this category -> 1.0, else -> 0.0
-            val = 1.0 if fixed_val == cat_val else 0.0
-            return val, val
+            low, high = -np.inf, np.inf
+            
+            # 1. Check Fixed Context
+            if col in fixed_context:
+                val = fixed_context[col]
+                low, high = val, val
+            elif parent_param and parent_param in fixed_context:
+                # Fixed Categorical
+                val = 1.0 if fixed_context[parent_param] == cat_val else 0.0
+                low, high = val, val
+            # 2. Check Explicit Param Bounds
+            elif col in self.param_bounds:
+                low, high = self.param_bounds[col]
+            # 3. Check One-Hot (implicit [0, 1])
+            elif parent_param:
+                low, high = 0.0, 1.0
+            
+            # Process & Append
+            bounds_list.append(self._process_single_bound(col, low, high, datamodule, parent_param))
+            
+        return np.array(bounds_list)
 
-        # === SCHEMA CONSTRAINTS (Priority 3/Fallback) ===
-        schema_min, schema_max = -np.inf, np.inf
-        
-        # If it's a direct parameter in schema
-        if datamodule.dataset.schema.parameters.has(col):
-            data_obj = datamodule.dataset.schema.parameters.get(col)
-            schema_min = data_obj.constraints.get("min", -np.inf)
-            schema_max = data_obj.constraints.get("max", np.inf)
-        elif parent_param:
-            # One-hot columns are bounded [0, 1]
-            schema_min, schema_max = 0.0, 1.0
-
-        # === MODE SPECIFIC LOGIC ===
-        low, high = -np.inf, np.inf
-        
-        if mode == Mode.ONLINE:
-            # Online Hierarchy
-            # 1. Current Param as Center
+    def _get_online_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
+        """Calculate optimization bounds for ONLINE domain (Trust Regions around Current)."""
+        bounds_list = []
+        for col in datamodule.input_columns:
+            parent_param, cat_val = self._get_onehot_info(col, datamodule)
+            
+            # Determine Center (Current Value)
             curr = 0.0
             if current_params:
                 if col in current_params:
                     curr = current_params[col]
                 elif parent_param and parent_param in current_params:
-                    # One-hot from current params
                     curr = 1.0 if current_params[parent_param] == cat_val else 0.0
             
-            # 2. Trust Regions
+            # Determine Bounds from Trust Region
             if col in self.trust_regions:
                 delta = self.trust_regions[col]
-                low = curr - delta
-                high = curr + delta
+                low, high = curr - delta, curr + delta
             else:
-                # "take curr_param as fixed params"
-                low = high = curr
+                # No trust region -> Fixed to current
+                low, high = curr, curr
                 
-        elif mode == Mode.OFFLINE:
-            # Offline Hierarchy
-            # 2. Param Bounds
-            if col in self.param_bounds:
-                low, high = self.param_bounds[col]
-            else:
-                # Fallback to schema bounds if no explicit bounds
-                low, high = schema_min, schema_max
+            # Process & Append
+            bounds_list.append(self._process_single_bound(col, low, high, datamodule, parent_param))
+            
+        return np.array(bounds_list)
 
-        # === CLAMPING (Priority 3) ===
+    def _process_single_bound(
+        self, 
+        col: str, 
+        low: float, 
+        high: float, 
+        datamodule: DataModule,
+        parent_param: Optional[str] = None
+    ) -> Tuple[float, float]:
+        """
+        Helper to:
+        1. Fallback to Schema max/min if bounds are -inf/inf
+        2. Clamp bounds to Schema min/max
+        3. Normalize bounds
+        """
+        # === SCHEMA FALLBACK & CLAMPING ===
+        # 1. Retrieve Schema Constraints
+        # For one-hot columns, we use the parent parameter's constraints (which are 0.0, 1.0 for categorical)
+        lookup_key = parent_param if parent_param else col
+        
+        if lookup_key in self.param_constraints:
+             schema_min, schema_max = self.param_constraints[lookup_key]
+        else:
+            raise ValueError(f"Could not find schema constraints for parameter '{lookup_key}'.")
+
+
+        # TODO: fallback is already configured in the parameter constraints? -> adjust this function!
+        # Fallback if still infinite (e.g. offline mode with no bounds set)
+        if low == -np.inf: low = schema_min
+        if high == np.inf: high = schema_max
+            
+        # Clamp
+        orig_low, orig_high = low, high
         low = max(low, schema_min)
         high = min(high, schema_max)
         
-        # === VALIDATION (Priority 4) ===
+        if low != orig_low or high != orig_high:
+             self.logger.warning(
+                 f"Bounds for parameter '{col}' constrained to schema limits: "
+                 f"[{orig_low}, {orig_high}] -> [{low}, {high}]"
+            )
+        
         if low == -np.inf or high == np.inf:
              raise ValueError(f"Could not determine finite bounds for parameter '{col}'. Please configure bounds or fixed parameters.")
-             
-        return low, high
+
+        # === NORMALIZATION ===
+        if col in datamodule._parameter_stats:
+            # Continuous variable with stats
+            stats = datamodule._parameter_stats[col]
+            n_low = datamodule._apply_normalization(np.array([low]), stats)[0]
+            n_high = datamodule._apply_normalization(np.array([high]), stats)[0]
+            # Handle flipping if normalization (e.g. -1 factor?) - usually linear monotonic
+            return (min(n_low, n_high), max(n_low, n_high))
+        else:
+            # Maybe one-hot or not normalized
+            return (low, high)
 
     # === WRAPPERS ===
 

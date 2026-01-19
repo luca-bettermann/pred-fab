@@ -25,6 +25,7 @@ class IEvaluationModel(BaseInterface):
     # abstract methods from BaseInterface:
     # - input_parameters
     
+    @property
     @abstractmethod
     def input_feature(self) -> str:
         """
@@ -35,6 +36,7 @@ class IEvaluationModel(BaseInterface):
         """
         ...
 
+    @property
     @abstractmethod
     def output_performance(self) -> str:
         """
@@ -157,7 +159,7 @@ class IEvaluationModel(BaseInterface):
     @property
     def input_features(self) -> List[str]:
         """Wrapper for input property."""
-        input_feat = self.input_feature()
+        input_feat = self.input_feature
         if not isinstance(input_feat, str):
             raise TypeError(f"input_feature() must return str, got {type(input_feat).__name__}")
         return [input_feat]
@@ -166,7 +168,7 @@ class IEvaluationModel(BaseInterface):
     @property
     def outputs(self) -> List[str]:
         """Wrapper for output property."""
-        perf_code = self.output_performance()
+        perf_code = self.output_performance
         if not isinstance(perf_code, str):
             raise TypeError(f"performance_code() must return str, got {type(perf_code).__name__}")
         return [perf_code]

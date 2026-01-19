@@ -309,19 +309,19 @@ class Features(DataBlock):
     def role(self) -> Roles:
         return Roles.FEATURE
     
-    def initialize_array(self, metric_code: str, shape: Tuple[int, ...]):
+    def _initialize_array(self, metric_code: str, shape: Tuple[int, ...], recompute_flag: bool) -> None:
         """Initialize numpy array for a given metric code."""
         if metric_code not in self.data_objects:
             raise KeyError(f"Metric array code '{metric_code}' not defined")
         
-        if metric_code in self.values:
-            raise ValueError(f"Metric array '{metric_code}' already initialized")
+        # Skip if already initialized and not recomputing
+        if metric_code in self.values and not recompute_flag:
+            return
         
         # Create array filled with NaNs
         self.set_value(metric_code, np.full(shape, np.nan), as_populated=False)
-        # self.data_objects[metric_code].set_shape_constraint(shape) # type: ignore
 
-    def initialize_arrays(self, parameters: Parameters) -> None:
+    def initialize_arrays(self, parameters: Parameters, recompute_flag: bool = False) -> None:
         """Initialize all metric arrays with the respective shape."""
         for metric_code in self.data_objects.keys():
             data_array = self.data_objects[metric_code]
@@ -336,7 +336,7 @@ class Features(DataBlock):
             shape = (int(np.prod(filtered_dim_values)), len(filtered_dim_values) + 1)
 
             # Initialize array with computed shape
-            self.initialize_array(metric_code, shape)
+            self._initialize_array(metric_code, shape, recompute_flag)
 
 
 class PerformanceAttributes(DataBlock):
