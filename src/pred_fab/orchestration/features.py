@@ -95,9 +95,11 @@ class FeatureSystem(BaseOrchestrationSystem):
                 visualize=visualize
             )
 
-            # Collect results
+            # Collect results (dim + feature value)
+            num_dims = len(feature_model.get_input_dimensions())
             for i, code in enumerate(feature_model.outputs):
-                feature_dict[code] = feature_array[i]
+                # Directly slice [rows, (dims columns + specific feature column)]
+                feature_dict[code] = feature_array[:, list(range(num_dims)) + [num_dims+i]]
 
         return feature_dict
 

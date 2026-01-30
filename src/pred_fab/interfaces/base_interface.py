@@ -20,12 +20,12 @@ class BaseInterface(ABC):
         self.logger = logger
 
         # reference to DataObjects from schema
-        self.ref_parameters: List[Parameter] = []
-        self.ref_features: List[Feature] = []
-        self.ref_performance_attrs: List[DataObject] = []
+        self._ref_parameters: Dict[str, Parameter] = {}
+        self._ref_features: Dict[str, Feature] = {}
+        self._ref_performance_attrs: Dict[str, DataObject] = {}
 
         # Validate user implemented properties
-        self.validate_properties()
+        self._validate_properties()
 
     @property
     @abstractmethod
@@ -64,7 +64,7 @@ class BaseInterface(ABC):
         ...
 
     @final
-    def validate_properties(self) -> None:
+    def _validate_properties(self) -> None:
         """Validate user implemented properties."""
         if not isinstance(self.input_parameters, list):
             raise TypeError(f"input_parameters of model {self} must be List[str], got {type(self.input_parameters).__name__}")
@@ -76,32 +76,27 @@ class BaseInterface(ABC):
     @final
     def set_ref_parameters(self, parameters: List[Parameter]) -> None:
         """Set reference to Parameter DataObjects used by this model."""
-        self.set_reference(parameters, Parameter, self.ref_parameters)
+        self.set_reference(parameters, self.input_parameters, self._ref_parameters)
 
     @final
     def set_ref_features(self, features: List[Feature]) -> None:
         """Set reference to Feature DataObjects used by this model."""
-        self.set_reference(features, Feature, self.ref_features)
+        self.set_reference(features, self.input_features + self.outputs, self._ref_features)
 
     @final
     def set_ref_performance_attrs(self, performance_attrs: List[DataObject]) -> None:
         """Set reference to performance attribute DataObjects used by this model."""
-        self.set_reference(performance_attrs, PerformanceAttribute, self.ref_performance_attrs)
+        self.set_reference(performance_attrs, self.outputs, self._ref_performance_attrs)
 
     @final
-    def set_reference(self, parameters: List[Any], data_object_type: Type[Any], location: List[Any]) -> None:
+    def set_reference(self, parameters: List[Any], ref_property: List[str], location: Dict[str, Any]) -> None:
         """Set reference to Parameter DataObjects used by this model."""
         for param in parameters:
-            if not isinstance(param, data_object_type):
-                raise TypeError(f"Expected {data_object_type.__name__}, got {type(param).__name__}")
-            # Avoid duplicates
-            if param.code in [p.code for p in location]: # type: ignore
-                raise ValueError(f"Duplicate Parameter code '{param.code}' in ref_parameters.")  # type: ignore
-            else:
-                location.append(param)
+            if param.code in ref_property:
+                location[param.code] = param
                 
     @final
     def get_input_dimensions(self) -> List[DataDimension]:
         """Get list of required dimension names from input_parameters."""
-        return [obj for obj in self.ref_parameters if isinstance(obj, DataDimension)]
+        return [obj for obj in self._ref_parameters if isinstance(obj, DataDimension)]
     

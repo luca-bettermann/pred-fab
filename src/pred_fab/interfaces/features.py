@@ -91,8 +91,8 @@ class IFeatureModel(BaseInterface):
             evaluate_to=evaluate_to
             )
         
-        # Initialize 3D-array
-        shape = (len(dim_combinations), num_dims + 1, len(self.outputs))
+        # Initialize 2D-array
+        shape = (len(dim_combinations), num_dims + len(self.outputs))
         feature_array = np.empty(shape)
 
         # Unpack DataBlocks
@@ -115,10 +115,10 @@ class IFeatureModel(BaseInterface):
                 )
 
             # Store in array
-            feature_array[i][:num_dims][:] = current_dim
-            feature_array[i][num_dims][:] = feature_values
+            feature_array[i, :num_dims] = current_dim
+            feature_array[i, num_dims:] = feature_values
     
-        # return 3d array
+        # return 2d array
         return feature_array
 
     @final

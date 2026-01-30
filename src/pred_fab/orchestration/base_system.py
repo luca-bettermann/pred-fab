@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple, Optional
 
 from pred_fab.core.data_objects import DataObject
 
-from ..core.dataset import Dataset, ExperimentData
+from ..core.dataset import Dataset, ExperimentData, DatasetSchema
 from ..interfaces import BaseInterface
 from ..utils import PfabLogger
 
@@ -55,6 +55,12 @@ class BaseOrchestrationSystem(ABC):
                         f"Output '{output}' is produced by multiple models."
                     )
         return specs
+    
+    def set_ref_objects(self, schema: DatasetSchema) -> None:
+        for model in self.get_models():
+            model.set_ref_parameters(schema.parameters.data_objects.values())
+            model.set_ref_features(schema.features.data_objects.values())
+            model.set_ref_performance_attrs(schema.performance_attrs.data_objects.values())
     
     def deactivate(self) -> None:
         """Deactivate the orchestration system."""

@@ -136,18 +136,12 @@ class MockEvaluationModelA(IEvaluationModel):
     @property
     def input_parameters(self) -> List[str]:
         return ["param_1"]
-        
-    @property
-    def input_features(self) -> List[str]:
-        return ["feature_1"]
-        
-    @property
-    def outputs(self) -> List[str]:
-        return ["performance_1"]
 
+    @property
     def input_feature(self) -> str:
         return "feature_1"
 
+    @property
     def output_performance(self) -> str:
         return "performance_1"
 
@@ -163,18 +157,12 @@ class MockEvaluationModelB(IEvaluationModel):
     @property
     def input_parameters(self) -> List[str]:
         return []
-        
-    @property
-    def input_features(self) -> List[str]:
-        return ["feature_2"]
-        
-    @property
-    def outputs(self) -> List[str]:
-        return ["performance_2"]
 
+    @property
     def input_feature(self) -> str:
         return "feature_2"
 
+    @property
     def output_performance(self) -> str:
         return "performance_2"
 

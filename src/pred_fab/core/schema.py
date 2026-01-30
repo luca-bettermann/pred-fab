@@ -50,7 +50,7 @@ class DatasetSchema:
         self.name = name
         self.parameters = parameters
         self.features = features
-        self.performance = performance
+        self.performance_attrs = performance
         self.predicted_features = self._return_copy_with_suffix(features, "pred_")
 
         # Initialize local data handler and logger
@@ -92,7 +92,7 @@ class DatasetSchema:
         """Compute deterministic hash from schema structure."""
         structure = {
             "parameters": self._block_to_hash_structure(self.parameters),
-            "performance": self._block_to_hash_structure(self.performance),
+            "performance": self._block_to_hash_structure(self.performance_attrs),
             "features": self._block_to_hash_structure(self.features)
         }
         
@@ -112,7 +112,7 @@ class DatasetSchema:
         return {
             "parameters": self.parameters.to_dict(),
             "features": self.features.to_dict(),
-            "performance_attrs": self.performance.to_dict(),
+            "performance_attrs": self.performance_attrs.to_dict(),
             "schema_id": self.name
             # "schema_hash": self._compute_schema_hash()
         }
@@ -123,7 +123,7 @@ class DatasetSchema:
         block_checks = [
             (self.parameters, other.parameters),
             # (self.dimensions, other.dimensions),
-            (self.performance, other.performance),
+            (self.performance_attrs, other.performance_attrs),
             (self.features, other.features)
         ]
         

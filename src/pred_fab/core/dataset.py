@@ -49,7 +49,7 @@ class ExperimentData:
         # Check all blocks using helper function
         block_checks = [
             (self.parameters, schema.parameters),
-            (self.performance, schema.performance),
+            (self.performance, schema.performance_attrs),
             (self.features, schema.features),
             (self.predicted_features, schema.predicted_features)
         ]
@@ -161,6 +161,10 @@ class Dataset:
         if exp_code not in self._experiments:
             raise KeyError(f"Experiment {exp_code} not found")
         return self._experiments[exp_code]
+
+    def get_all_experiments(self) -> List[ExperimentData]:
+        """Get list of all ExperimentData objects."""
+        return list(self._experiments.values())
     
     # === Create ExperimentData Objects ===
 
@@ -173,7 +177,7 @@ class Dataset:
     def _create_experiment_shell(self, exp_code: str) -> ExperimentData:
         """Create new empty experiment shell with all blocks initialized."""
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
-        perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance)
+        perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance_attrs)
         arrays_block = self._init_from_schema(Features, self.schema.features)
         pred_block = self._init_from_schema(Features, self.schema.features, suffix='pred_')
         
@@ -322,7 +326,7 @@ class Dataset:
             if all(exp.is_predicted_feature_populated(name) for name in feature_names):
                 count_pred += 1
 
-        summary = self.prep_summary_report(
+        summary = self._prep_summary_report(
             'Dataset State Report',
             total,
             count_params,
@@ -330,7 +334,7 @@ class Dataset:
             count_perf,
             count_pred
         )
-        print("\n".join(summary))
+        print("\n" + "\n".join(summary))
     
     # === Helper Methods for Hierarchical Loading/Saving ===
 
@@ -353,7 +357,7 @@ class Dataset:
     
     # === Hierarchical Load/Save Methods ===
     
-    def populate(self, source: str = "local") -> int:
+    def populate(self, source: str = "local", verbose: bool = False) -> int:
         """Load all experiments from storage hierarchically by scanning dataset folder."""
         if source != "local":
             raise NotImplementedError("Only 'local' source is currently supported")
@@ -362,22 +366,22 @@ class Dataset:
         exp_codes = self.local_data.list_experiments()
         
         # Use batch loading
-        missing = self.load_experiments(exp_codes)
+        missing = self.load_experiments(exp_codes, verbose=verbose)
         loaded_count = len(exp_codes) - len(missing)
         
         return loaded_count
 
-    def load_experiment(self, exp_code: str) -> ExperimentData:
+    def load_experiment(self, exp_code: str, verbose: bool = False) -> ExperimentData:
         """Add experiment by loading it hierarchically."""
         # 1. Hierarchical load
-        missing = self.load_experiments([exp_code])
+        missing = self.load_experiments([exp_code], verbose=verbose)
         
         if exp_code in missing:
             raise KeyError(f"Experiment {exp_code} could not be loaded")
         
         return self.get_experiment(exp_code)
     
-    def load_experiments(self, exp_codes: List[str], recompute_flag: bool = False) -> List[str]:
+    def load_experiments(self, exp_codes: List[str], recompute_flag: bool = False, verbose: bool = False) -> List[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
         
         # 1. Ensure shells exist
@@ -451,18 +455,22 @@ class Dataset:
             missing_pred_features_union.update(missing_pred_features)
 
         # Summary
-        total = len(exp_codes)
-        summary = self.prep_summary_report(
-            'Populate Dataset',
-            total,
-            total - len(missing_params),
-            total - len(missing_features_union),
-            total - len(missing_performance),
-            total - len(missing_pred_features_union)
-        )
-        self.logger.console_info("\n".join(summary))
-        self.logger.console_new_line()
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
+
+        if verbose:
+            self.logger.console_new_line()
+            total = len(exp_codes)
+            summary = self._prep_summary_report(
+                'Populate Dataset',
+                total,
+                total - len(missing_params),
+                total - len(missing_features_union),
+                total - len(missing_performance),
+                total - len(missing_pred_features_union)
+            )
+
+            self.logger.console_info("\n".join(summary))
+            self.logger.console_new_line()
         return missing_params
     
     def save_all(self, recompute: bool = False) -> None:
@@ -708,10 +716,10 @@ class Dataset:
         
         return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
 
-    def prep_summary_report(self, title: str, total: int, n_params: int, n_feat: int, n_perf: int, n_pred_feat: int) -> List[str]:
+    def _prep_summary_report(self, title: str, total: int, n_params: int, n_feat: int, n_perf: int, n_pred_feat: int) -> List[str]:
         """Prepare and log a summary report of the dataset state."""
         return [
-            f"\n===== {title} =====",
+            f"===== {title} =====",
             f"\nSchema: \t\t{self.schema.name}",
             f"Experiments: \t\t{total}",
             f"  - Parameters: \t{n_params}/{total}",

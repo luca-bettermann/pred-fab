@@ -76,32 +76,24 @@ def main():
     agent.register_evaluation_model(MockEvaluationModelA)
     agent.register_evaluation_model(MockEvaluationModelB)
     agent.register_prediction_model(MockPredictionModel)
-    agent.initialize_systems(schema)
+    agent.initialize_systems(schema, verbose=True)
+    # agent.state_report()
 
     # 5. Load Experiments
-    dataset.load_experiments(["exp_001"])
-    dataset.load_experiments(["exp_001", "exp_002", "exp_003"])
+    dataset.populate(verbose=False)
+    dataset.load_experiments(["exp_001"], verbose=False)
+    dataset.load_experiments(["exp_001", "exp_002", "exp_003"], verbose=False)
 
+    # evlauate all loaded experiments (if needed)
     dataset.state_report()
-    agent.state_report()
-    
-    exp_1 = dataset.get_experiment("exp_001")
-    exp_2 = dataset.get_experiment("exp_002")
+    exps = dataset.get_all_experiments()
+    for exp in exps:
+        agent.evaluation_step(exp)
+    dataset.state_report()
 
-    # 6. Run Feature Extraction Step
-    agent.step_offline(exp_1, step_type=StepType.EVAL)
-    agent.step_offline(exp_2, step_type=StepType.EVAL)
-
-    last_exp = dataset.get_experiment("exp_003")
-
-    # Run full step (Feature Extraction -> Evaluation -> Training)
-    # We need to create a DataModule for training
     datamodule = DataModule(dataset)
-    
-    agent.step_offline(
-        exp_data=last_exp,
-        datamodule=datamodule
-    )
+    new_params = agent.exploration_step(datamodule)
+
 
 if __name__ == "__main__":
     main()

@@ -50,7 +50,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.model = GaussianProcessSurrogate(logger, random_seed or 42)
 
         # Set ordered weights
-        self.perf_names_order = list(schema.performance.keys())
+        self.perf_names_order = list(schema.performance_attrs.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         
         # Set static parameter constraints from schema

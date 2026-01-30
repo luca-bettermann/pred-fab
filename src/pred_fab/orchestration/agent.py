@@ -6,7 +6,6 @@ existing workflow patterns. Wraps EvaluationSystem, PredictionSystem, and
 manages schema generation and dataset initialization.
 """
 
-from os import name
 import numpy as np
 import textwrap
 from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
@@ -123,7 +122,7 @@ class PfabAgent:
     
     # === MODEL INITIALIZATION & VALIDATION ===
 
-    def initialize_systems(self, schema: DatasetSchema) -> None:
+    def initialize_systems(self, schema: DatasetSchema, verbose: bool = False) -> None:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
                 
         # Step 1: Initialize systems (dataset will be set later)
@@ -139,6 +138,7 @@ class PfabAgent:
             "feature"
         )
         self.feature_system._set_dim_codes_for_arrays(schema)
+        self.feature_system.set_ref_objects(schema)
 
         # Instantiate evaluation models
         self.eval_system = EvaluationSystem(logger=self.logger)
@@ -147,14 +147,16 @@ class PfabAgent:
             self.eval_system.models,
             "evaluation"
         )
+        self.eval_system.set_ref_objects(schema)
 
-        # Prediction system requires schema to be set
+        # Instantiate prediction models
         self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
         self._instantiate_model_group(
             self._prediction_model_specs,
             self.pred_system.models,
             "prediction"
         )
+        self.pred_system.set_ref_objects(schema)
 
         # Calibration system requires prediction, evaluation and schema to be set
         self.calibration_system = CalibrationSystem(
@@ -168,7 +170,11 @@ class PfabAgent:
         # validate against schema
         self._validate_systems_against_schema(schema)
         self._initialized = True
+
         self.logger.console_success(f"Successfully initialized agentic systems.")
+        if verbose:
+            self.state_report()
+            self.logger.console_new_line()
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
         """Validate all orchestration systems against the provided schema."""
@@ -197,7 +203,7 @@ class PfabAgent:
         self._check_sets_against_keys(set(input_params), schema.parameters.keys())
         self._check_sets_against_keys(set(input_features), schema.features.keys())
         self._check_sets_against_keys(set(output_features), schema.features.keys())
-        self._check_sets_against_keys(set(output_performance_attrs), schema.performance.keys())
+        self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
         # Validate that all input features are represented as outputs features
         uncomputed_inputs = set(input_features) - set(output_features)
@@ -308,7 +314,6 @@ class PfabAgent:
     
     def exploration_step(
         self,
-        exp_data: ExperimentData,
         datamodule: DataModule,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10
@@ -664,7 +669,7 @@ class PfabAgent:
             model_type: str
         ) -> None:
         """Instantiate a group of models and add to system."""
-        # Instanticate feature model instances from registered classes
+        # Instanticate model instances from registered classes
         for _class, _kwargs in model_specs:
             self.logger.info(f"Instantiating {model_type} model: {_class.__name__}")
             model = _class(logger=self.logger, **_kwargs)
