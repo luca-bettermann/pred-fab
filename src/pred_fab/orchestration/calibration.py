@@ -8,7 +8,7 @@ import warnings
 import functools
 
 from ..core import DataModule, DatasetSchema
-from ..core import DataBool, DataCategorical, DataObject
+from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical
 from ..utils import PfabLogger, SplitType, Domain, Mode
 from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
@@ -82,60 +82,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.data_objects[code] = data_obj
             self.param_constraints[code] = (min_val, max_val)
 
-    # === CONFIGURATION METHODS ===
-        
-    def set_performance_weights(self, weights: Dict[str, float]) -> None:
-        """Set weights for system performance calculation. Default is 1.0 for all."""
-        # set according to order in perf_names_order
-        for name, value in weights.items():
-            if name in self.performance_weights:
-                self.performance_weights[name] = value
-            else:
-                self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
-        
-    def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]]) -> None:
-        """Configure parameter ranges for offline calibration."""
-        # Validate the bounds
-        for code, (low, high) in bounds.items():
-            if code not in self.param_constraints:
-                raise ValueError(f"Object '{code}' not found in dataset schema.")
-            # elif isinstance(self.data_objects[code], (DataBool, DataCategorical)):
-            #     raise ValueError(f"Object '{code}' is categorical/bool and cannot have custom bounds.")
-            
-            schema_min, schema_max = self.param_constraints[code]
-            if low < schema_min or high > schema_max:
-                raise ValueError(
-                    f"Bounds for object '{code}' exceed schema constraints: "
-                    f"[{low}, {high}] vs schema [{schema_min}, {schema_max}]"
-                )
-            
-            # Passed all validations
-            else:
-                self.param_bounds[code] = (low, high)
-
-    def configure_fixed_params(self, fixed_params: Dict[str, Any]) -> None:
-        # Validate Fixed Params
-        for code, value in (fixed_params or {}).items():
-            if code in self.param_bounds or code in self.trust_regions:
-                raise ValueError(f"Object '{code}' cannot have both bounds and be fixed.")
-            
-            # Passed all validations
-            self.fixed_params[code] = value
-        
-    def configure_adaptation_delta(self, deltas: Dict[str, float]) -> None:
-        """
-        Configure trust region deltas for online calibration.
-        Non-configured parameters have no trust region applied and are fixed.
-        """
-        # Validate Trust Region Inputs
-        for code, delta in deltas.items():
-            if code in self.fixed_params:
-                raise ValueError(f"Object '{code}' cannot have both trust region and be fixed.")
-            elif isinstance(self.data_objects[code], (DataBool, DataCategorical)):
-                raise ValueError(f"Object '{code}' is categorical/bool and cannot have trust regions.")
-            
-            # Passed all validations
-            self.trust_regions[code] = delta # type: ignore
 
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
@@ -167,6 +113,121 @@ class CalibrationSystem(BaseOrchestrationSystem):
             summary.append(f"{code:<{width}} | {is_fixed:<{8}} | {bounds_str:<{width}} | {delta:<{8}}")
         
         print("\n".join(summary))
+
+    # === CONFIGURATION METHODS ===
+        
+    def set_performance_weights(self, weights: Dict[str, float]) -> None:
+        """Set weights for system performance calculation. Default is 1.0 for all."""
+        # set according to order in perf_names_order
+        for name, value in weights.items():
+            if name in self.performance_weights:
+                self.performance_weights[name] = value
+                self.logger.debug(f"Set performance weight: {name} -> {value}")
+            else:
+                self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
+        
+    def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]], force: bool = False) -> None:
+        """Configure parameter ranges for offline calibration."""
+        for code, (low, high) in bounds.items():
+            
+            # Helper Validation
+            if not self._validate_and_clean_config(
+                code, 
+                (DataReal, DataInt), 
+                ['fixed_params'], 
+                force
+            ):
+                continue
+
+            # Method-Specific Validation: Check vs Schema
+            schema_min, schema_max = self.param_constraints[code]
+            if low < schema_min or high > schema_max:
+                raise ValueError(
+                    f"Bounds for object '{code}' exceed schema constraints: "
+                    f"[{low}, {high}] vs schema [{schema_min}, {schema_max}]"
+                )
+            
+            self.param_bounds[code] = (low, high)
+            self.logger.debug(f"Set parameter bounds: {code} -> [{low}, {high}]")
+
+    def configure_fixed_params(self, fixed_params: Dict[str, Any], force: bool = False) -> None:
+        """Configure fixed parameter values."""
+        for code, value in (fixed_params or {}).items():
+            
+            # Helper Validation
+            if not self._validate_and_clean_config(
+                code, 
+                None,  # All types allow fixing
+                ['param_bounds', 'trust_regions'], 
+                force
+            ):
+                continue
+            
+            self.fixed_params[code] = value
+            self.logger.debug(f"Set fixed parameter: {code} -> {value}")
+        
+    def configure_adaptation_delta(self, deltas: Dict[str, float], force: bool = False) -> None:
+        """Configure trust region deltas for online calibration."""
+        for code, delta in deltas.items():
+            
+            # Helper Validation
+            if not self._validate_and_clean_config(
+                code, 
+                (DataReal, DataInt), 
+                ['fixed_params'], 
+                force
+            ):
+                continue
+            
+            self.trust_regions[code] = delta
+
+
+    def _validate_and_clean_config(
+        self, 
+        code: str, 
+        allowed_types: Optional[Tuple[type, ...]], 
+        conflicting_collections: List[str], 
+        force: bool
+    ) -> bool:
+        """
+        Validate parameter against schema and conflicting configurations.
+        
+        Args:
+            code: Parameter code
+            allowed_types: Tuple of allowed DataObject types
+            conflicting_collections: Names of dict attributes to check for conflicts
+            force: If True, remove conflicts. If False, return False on conflict.
+            
+        Returns:
+            bool: True if validation passed (and conflicts resolved), False if execution should stop.
+        """
+        # 1. Schema Existence
+        if code not in self.data_objects:
+            self.logger.console_warning(f"Object '{code}' not found in schema; ignoring.")
+            return False
+
+        # 2. Type Check
+        if allowed_types:
+            obj = self.data_objects[code]
+            if not isinstance(obj, allowed_types):
+                 self.logger.console_warning(
+                     f"Object '{code}' type {type(obj).__name__} not supported for this configuration; ignoring."
+                )
+                 return False
+
+        # 3. Conflict Resolution
+        for collection_name in conflicting_collections:
+            collection = getattr(self, collection_name)
+            if code in collection:
+                if force:
+                    del collection[code]
+                    self.logger.debug(f"Removed '{code}' from {collection_name} due to force=True.")
+                else:
+                    self.logger.console_warning(
+                        f"Object '{code}' is already configured in {collection_name}; ignoring. Use force=True to overwrite."
+                    )
+                    return False
+        return True
 
     # === OBJECTIVE FUNCTIONS ===
 

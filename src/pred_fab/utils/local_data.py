@@ -1,6 +1,6 @@
 # folder_navigator.py
 import os
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Callable
 import shutil
 import json
 import pandas as pd
@@ -193,12 +193,17 @@ class LocalData:
             subdirs=["{code}"], filename="performance", recompute=recompute,
             file_format="json"
         )
-
+    
     def save_features(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
-                      recompute: bool, feature_name: str, column_names: Optional[List[str]], **kwargs) -> bool:
+                      recompute: bool, feature_name: str, column_names: List[str], **kwargs) -> bool:
         """Save feature arrays to local files."""
         if not feature_name:
             raise ValueError("feature_name required in kwargs for save_features")
+        
+        # Compute column names for 
+        if not column_names:
+            raise ValueError("column_names_getter function must be provided for saving feature arrays")
+
         return self._save_files_generic(
             codes=exp_codes, data=data,
             subdirs=["{code}"], filename=feature_name, 
@@ -281,18 +286,12 @@ class LocalData:
             if not os.path.exists(file_path) or recompute:
                 code_data = data[code]
 
+                # Save as CSV
                 if file_type == "csv":
-                    if column_names is not None:
-                        if len(code_data) > 1 and len(code_data.shape) > 1:
-                             # Ensure dimensions match
-                             pass
-                        df = pd.DataFrame(code_data, columns=column_names)
-                        df.to_csv(file_path, index=False)
-                    else:
-                        df = pd.DataFrame(code_data)
-                        df.to_csv(file_path, index=False, header=False)
+                    df = pd.DataFrame(code_data, columns=column_names)
+                    df.to_csv(file_path, index=False)
+                # Save as JSON
                 else:
-                    # Save as JSON
                     with open(file_path, 'w') as f:
                         json.dump(code_data, f, indent=2)
 

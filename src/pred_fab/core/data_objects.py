@@ -286,7 +286,7 @@ class DataArray(DataObject):
     def __init__(self, code: str, role: Roles, dtype: Optional[np.dtype] = None):
         """Initialize DataArray with optional shape and dtype constraints."""
         self.dtype_constraint = dtype or np.float64
-        self.dim_codes: Optional[List[str]] = None
+        self.dim_codes: List[str] = []
         
         constraints: Dict[str, Any] = {
             "dtype": str(dtype) if dtype else "float64",

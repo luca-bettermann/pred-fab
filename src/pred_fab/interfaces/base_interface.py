@@ -98,5 +98,5 @@ class BaseInterface(ABC):
     @final
     def get_input_dimensions(self) -> List[DataDimension]:
         """Get list of required dimension names from input_parameters."""
-        return [obj for obj in self._ref_parameters if isinstance(obj, DataDimension)]
+        return [obj for obj in self._ref_parameters.values() if isinstance(obj, DataDimension)]
     

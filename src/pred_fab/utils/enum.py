@@ -1,5 +1,7 @@
 from enum import Enum
 
+PRED_SUFFIX = 'pred_'
+
 class SystemName(str, Enum):
     """Enumeration of system names in PFAB."""
     FEATURE = 'feature'
@@ -31,9 +33,9 @@ class SplitType(str, Enum):
 class BlockType(str, Enum):
     """Enumeration of block types in a neural network."""
     PARAMETERS = 'parameters'
-    PERFORMANCE = 'performance_attrs'
+    PERF_ATTRS = 'performance_attrs'
     FEATURES = 'features'
-    FEATURES_PRED = 'features_pred'
+    FEATURES_PRED = 'features' + PRED_SUFFIX
 
 class Domain(str, Enum):
     """Enumeration of workflow step domain."""

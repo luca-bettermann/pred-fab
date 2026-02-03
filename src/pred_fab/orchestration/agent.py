@@ -293,13 +293,16 @@ class PfabAgent:
             
         print("\n".join(summary))
 
+    def calibration_state_report(self) -> None:
+        self.calibration_system.state_report()
+
     # === OFFLINE STEP OPERATIONS ==
 
     def evaluation_step(
         self,
         exp_data: ExperimentData,
         recompute: bool = False,
-        visualize: bool = False,
+        visualize: bool = False
     ) -> None:
         """Perform a exploration step of all active systems."""
         self._check_systems(StepType.EVAL)
@@ -599,6 +602,7 @@ class PfabAgent:
         bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         fixed_params: Optional[Dict[str, Any]] = None,
         adaptation_delta: Optional[Dict[str, float]] = None,
+        force: bool = False
     ) -> None:
         """Configure calibration system parameters."""
         if not self._initialized:
@@ -608,13 +612,13 @@ class PfabAgent:
             self.calibration_system.set_performance_weights(performance_weights)
             self.logger.info("Configured performance weights for calibration system.")
         if bounds:
-            self.calibration_system.configure_param_bounds(bounds)
+            self.calibration_system.configure_param_bounds(bounds, force=force)
             self.logger.info("Configured parameter bounds for calibration system.")
         if fixed_params:
-            self.calibration_system.configure_fixed_params(fixed_params)
+            self.calibration_system.configure_fixed_params(fixed_params, force=force)
             self.logger.info("Configured fixed parameters for calibration system.")
         if adaptation_delta:
-            self.calibration_system.configure_adaptation_delta(adaptation_delta)
+            self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
 
     # def propose_new_parameters(

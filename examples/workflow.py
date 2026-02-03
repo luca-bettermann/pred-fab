@@ -43,7 +43,7 @@ def main():
     perf1 = PerformanceAttribute.score("performance_1")
     perf2 = PerformanceAttribute.score("performance_2")
 
-    param_block = Parameters.from_list([p1, p2, p3, p4])
+    param_block = Parameters.from_list([p1, p2, p3, p4, p5])
     feat_block = Features.from_list([feat1, feat2, feat3, feat4])
     perf_block = PerformanceAttributes.from_list([perf1, perf2])
     
@@ -80,7 +80,7 @@ def main():
     # agent.state_report()
 
     # 5. Load Experiments
-    dataset.populate(verbose=False)
+    dataset.populate(verbose=True)
     dataset.load_experiments(["exp_001"], verbose=False)
     dataset.load_experiments(["exp_001", "exp_002", "exp_003"], verbose=False)
 
@@ -88,8 +88,36 @@ def main():
     dataset.state_report()
     exps = dataset.get_all_experiments()
     for exp in exps:
+        # evaluate features and performance attributes
         agent.evaluation_step(exp)
+
+    # save all experiments
+    dataset.save_experiments([exp.code for exp in exps])
+    dataset.save_all(recompute=True)
+
+    # FIX SAVE HIERARCHICAL LOGGING
     dataset.state_report()
+
+    # configure calibration settings
+    agent.configure_calibration(
+        performance_weights={
+            "performance_1": 2.0,
+            "performance_2": 1.3
+        },
+        bounds={
+            "param_1": (0.0, 10.0), # same as before
+            "param_2": (1, 4)       # narrower range
+        },
+        fixed_params={
+            "param_3": "B"          # fix categorical parameter
+        },
+        adaptation_delta={
+            "param_1": 0.1,
+            "param_2": 0.5
+        }
+    )
+
+    agent.calibration_state_report()
 
     datamodule = DataModule(dataset)
     new_params = agent.exploration_step(datamodule)

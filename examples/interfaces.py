@@ -65,7 +65,7 @@ class MockFeatureModelB(IFeatureModel):
         
     @property
     def input_parameters(self) -> List[str]:
-        return ["param_2"]
+        return ["param_2", "param_3"]
         
     @property
     def input_features(self) -> List[str]:

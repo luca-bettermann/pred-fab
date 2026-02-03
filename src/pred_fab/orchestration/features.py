@@ -102,4 +102,3 @@ class FeatureSystem(BaseOrchestrationSystem):
                 feature_dict[code] = feature_array[:, list(range(num_dims)) + [num_dims+i]]
 
         return feature_dict
-

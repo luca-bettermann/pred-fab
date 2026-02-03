@@ -16,7 +16,6 @@ from typing import Dict, Any, Set, Optional, List
 
 from pred_fab.utils import LocalData, PfabLogger
 
-from .data_objects import DataArray, DataDimension, Feature, Parameter, PerformanceAttribute
 import copy
 from .data_blocks import (
     DataBlock,
@@ -24,6 +23,7 @@ from .data_blocks import (
     PerformanceAttributes,
     Features
 )
+from ..utils.enum import PRED_SUFFIX
 
 class DatasetSchema:
     """
@@ -51,7 +51,7 @@ class DatasetSchema:
         self.parameters = parameters
         self.features = features
         self.performance_attrs = performance
-        self.predicted_features = self._return_copy_with_suffix(features, "pred_")
+        self.predicted_features = self._return_copy_with_suffix(features, PRED_SUFFIX)
 
         # Initialize local data handler and logger
         self.local_data = LocalData(root_folder)
