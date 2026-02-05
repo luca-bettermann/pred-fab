@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict, Tuple, Literal, Type
 import numpy as np
 
-from ..utils.enum import NormalizeStrategy, Roles
+from ..utils.enum import NormMethod, Roles
 
 class DataObject(ABC):
     """
@@ -34,7 +34,7 @@ class DataObject(ABC):
         self.role = role
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """
         Get normalization strategy for this data type.
         
@@ -46,7 +46,7 @@ class DataObject(ABC):
             - 'none': No normalization
             - 'categorical': One-hot encoding (for categorical data)
         """
-        return NormalizeStrategy.DEFAULT
+        return NormMethod.DEFAULT
     
     @abstractmethod
     def validate(self, value: Any) -> bool:
@@ -128,9 +128,9 @@ class DataReal(DataObject):
         super().__init__(code, float, role, constraints, round_digits)
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """Use DataModule default normalization (typically 'standard')."""
-        return NormalizeStrategy.DEFAULT
+        return NormMethod.DEFAULT
     
     def validate(self, value: Any) -> bool:
         """Validate float value against constraints."""
@@ -164,9 +164,9 @@ class DataInt(DataObject):
         super().__init__(code, int, role, constraints, round_digits)
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """Use DataModule default normalization (typically 'standard')."""
-        return NormalizeStrategy.DEFAULT
+        return NormMethod.DEFAULT
     
     def validate(self, value: Any) -> bool:
         """Validate integer value against constraints."""
@@ -194,9 +194,9 @@ class DataBool(DataObject):
         super().__init__(code, bool, role, {})
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """No normalization needed - already 0/1."""
-        return NormalizeStrategy.NONE
+        return NormMethod.NONE
     
     def validate(self, value: Any) -> bool:
         """Validate boolean value."""
@@ -218,9 +218,9 @@ class DataCategorical(DataObject):
         super().__init__(code, str, role, {"categories": categories})
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """Categorical data requires one-hot encoding."""
-        return NormalizeStrategy.CATEGORICAL
+        return NormMethod.CATEGORICAL
     
     def validate(self, value: Any) -> bool:
         """Validate value is in allowed categories."""
@@ -260,9 +260,9 @@ class DataDimension(DataInt):
         self.constraints["dim_iterator_code"] = iterator_code
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """Dimensional indices use minmax to preserve ordinal structure."""
-        return NormalizeStrategy.MINMAX
+        return NormMethod.MIN_MAX
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataDimension':
@@ -296,9 +296,9 @@ class DataArray(DataObject):
         super().__init__(code, np.ndarray, role, constraints)
     
     @property
-    def normalize_strategy(self) -> NormalizeStrategy:
+    def normalize_strategy(self) -> NormMethod:
         """Use DataModule default normalization (typically 'standard')."""
-        return NormalizeStrategy.DEFAULT
+        return NormMethod.DEFAULT
     
     def set_columns(self, columns: List[str]) -> None:
         """Set associated dimension codes for this DataArray."""

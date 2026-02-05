@@ -52,14 +52,6 @@ class StepType(str, Enum):
     EVAL = 'evaluation_only'
     FULL = 'full_step'
 
-class NormalizeStrategy(Enum):
-    DEFAULT = 'default'
-    STANDARD = 'standard'
-    MINMAX = 'minmax'
-    ROBUST = 'robust'
-    NONE = 'none'
-    CATEGORICAL = 'categorical'
-
 class Loaders(Enum):
     MEMORY = 'memory'
     LOCAL = 'local files'

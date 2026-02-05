@@ -11,7 +11,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 
-from .data_objects import DataDimension
+from .data_objects import DataDimension, DataCategorical
 from .dataset import Dataset
 from ..utils import NormMethod, SplitType
 
@@ -46,6 +46,7 @@ class DataModule:
         self.batch_size = batch_size
         self._default_normalize = normalize
         self.random_seed = random_seed
+        self._initialized = False
         
         # Per-feature/parameter normalization overrides
         self._feature_overrides: Dict[str, NormMethod] = {}
@@ -57,70 +58,61 @@ class DataModule:
         self._categorical_mappings: Dict[str, List[str]] = {}
         self._is_fitted = False
         
-        # Schema metadata (no data storage)
+        # Feature system metadata (no data storage)
         self.input_columns: List[str] = []  # Processed columns (after one-hot)
         self.output_columns: List[str] = []
-        self.original_input_columns: List[str] = []  # Before one-hot
+        # self.original_input_columns: List[str] = []  # Before one-hot
         
         # Column normalization methods map (for X)
         self._col_norm_methods: Dict[str, NormMethod] = {}
         
         # Create splits (stores experiment codes)
         self._split_codes: Dict[str, List[str]] = {}
+
+    def initialize(
+            self, 
+            input_parameters: List[str], 
+            input_features: List[str],
+            output_columns: List[str]
+            ) -> None:
+        self._set_input_columns(input_parameters, input_features)
+        self.output_columns = output_columns
+        self._initialized = True
         
-        # Load schema
-        self._scan_schema()
-    
-    def _scan_schema(self) -> None:
-        """
-        Scan dataset schema to determine columns and categories.
-        Sets input_columns, output_columns, categorical_mappings.
-        """
-        schema = self.dataset.schema
-        
-        # 1. Determine Columns from Schema
-        # Parameter columns
-        param_all_keys = list(schema.parameters.keys())
-        dim_keys = list(schema.parameters.get_dim_names())
-        param_keys = [k for k in param_all_keys if k not in dim_keys]
-        dim_iterators = list(schema.parameters.get_dim_iterator_codes())
-        
-        self.original_input_columns = param_keys + dim_iterators
-        self.output_columns = list(schema.features.keys())
-        
-        # 2. Scan for Categories (One-Hot) from Schema Constraints
-        self._categorical_mappings = {}
-        self._col_norm_methods = {}
-        
-        for col in self.original_input_columns:
-            method = self.get_parameter_normalize_method(col)
+    def _set_input_columns(self, input_parameters: List[str], input_features: List[str]):
+        # Store parameter methods
+        for col in input_parameters:
+            method = self._get_parameter_normalize_method(col)
+            self._col_norm_methods[col] = method
+
+            # If categorical, store categories as well
             if method == NormMethod.CATEGORICAL:
                 # Try to find categories in schema constraints
                 categories = []
                 
                 # Check regular parameters
-                if col in schema.parameters.data_objects:
-                    obj = schema.parameters.data_objects[col]
-                    if "categories" in obj.constraints:
-                        categories = sorted(obj.constraints["categories"])
-                
-                # If found, store mapping
-                if categories:
-                    self._categorical_mappings[col] = categories
-            else:
-                self._col_norm_methods[col] = method
-
-        # Finalize categories and input_columns
-        self.input_columns = []
-        for col in self.original_input_columns:
-            if col in self._categorical_mappings:
-                categories = self._categorical_mappings[col]
+                if not self.dataset.schema.parameters.has(col):
+                    raise KeyError(f"Parameter '{col}' can not be retrieved from schema.")
+                obj = self.dataset.schema.parameters.get(col)
+                if not isinstance(obj, DataCategorical):
+                    raise ValueError(f"Obj expected to be of type 'DataCategorical', got {obj.__class__} instead.")
+                # If categorical, store mapping
+                categories = sorted(obj.constraints["categories"])                
+                self._categorical_mappings[col] = categories
+                # Store one hot encodings as inputs
                 for category in categories:
                     col_name = f"{col}_{category}"
                     self.input_columns.append(col_name)
                     self._col_norm_methods[col_name] = NormMethod.NONE
             else:
                 self.input_columns.append(col)
+
+        # Store feature methods
+        for col in input_features:
+            method = self._get_feature_normalize_method(col)
+            self._col_norm_methods[col] = method
+            self.input_columns.append(col)
+                
 
     # === DATAMODULE OPERATIONS ===
 
@@ -227,6 +219,9 @@ class DataModule:
     
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
+        if not self._initialized:
+            raise RuntimeError("Datamodule has not been initialized yet. Call agent_initialize_datamodule(datamodule).")
+
         if split not in self._split_codes:
             raise ValueError(f"Unknown split: {split}")
             
@@ -252,7 +247,7 @@ class DataModule:
         # Fit y
         self._feature_stats = {}
         for i, col in enumerate(self.output_columns):
-            method = self.get_normalize_method(col)
+            method = self._get_feature_normalize_method(col)
             if method != NormMethod.NONE:
                 self._feature_stats[col] = self._compute_normalization_stats(y_arr[:, i], method)
         
@@ -332,40 +327,25 @@ class DataModule:
         """Override normalization method for a specific parameter."""
         self._parameter_overrides[parameter_name] = method
     
-    def get_normalize_method(self, feature_name: str) -> NormMethod:
+    def _get_feature_normalize_method(self, feature_name: str) -> NormMethod:
         """Get normalization method for a feature (override or default)."""
         return cast(NormMethod, self._feature_overrides.get(feature_name, self._default_normalize))
     
-    def get_parameter_normalize_method(self, parameter_name: str) -> NormMethod:
+    def _get_parameter_normalize_method(self, param_name: str) -> NormMethod:
         """Get normalization method for a parameter using schema metadata."""
-        if parameter_name in self._parameter_overrides:
-            return self._parameter_overrides[parameter_name]
+        if param_name in self._parameter_overrides:
+            return self._parameter_overrides[param_name]
         
-        if parameter_name in self.dataset.schema.parameters.data_objects:
-            data_obj = self.dataset.schema.parameters.data_objects[parameter_name]
-            strategy = data_obj.normalize_strategy
-            return cast(NormMethod, self._default_normalize if strategy == NormMethod.DEFAULT else strategy)
-        
-        for dim_obj in self.dataset.schema.parameters.data_objects.values():
-            if isinstance(dim_obj, DataDimension) and dim_obj.iterator_code == parameter_name:
-                strategy = dim_obj.normalize_strategy
-                return cast(NormMethod, self._default_normalize if strategy == NormMethod.DEFAULT else strategy)
-    
-        return cast(NormMethod, self._default_normalize)
+        data_obj = self.dataset.schema.parameters.get(param_name)
+        if data_obj.normalize_strategy == NormMethod.DEFAULT:
+            return self._default_normalize
+        else:
+            return data_obj.normalize_strategy
     
     def get_normalization_state(self) -> Dict[str, Any]:
         """Export normalization state for inference bundle."""
         if not self._is_fitted:
-            return {
-                'method': self._default_normalize,
-                'is_fitted': False,
-                'feature_stats': {},
-                'parameter_stats': {},
-                'categorical_mappings': {},
-                'input_columns': [],
-                'output_columns': []
-            }
-        
+            raise RuntimeError("DataModule has not been fitted yet.")
         return {
             'method': self._default_normalize,
             'is_fitted': True,

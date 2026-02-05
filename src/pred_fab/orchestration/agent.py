@@ -175,6 +175,17 @@ class PfabAgent:
         if verbose_flag:
             self.state_report()
             self.logger.console_new_line()
+
+    def create_datamodule(self, dataset: Dataset) -> DataModule:
+        # Get the input and output columns
+        system_input_param = self.pred_system.get_system_input_parameters()
+        system_input_feats = self.pred_system.get_system_input_features()
+        system_outputs = self.pred_system.get_system_outputs()
+        
+        # Initialize datamodule
+        datamodule = DataModule(dataset)
+        datamodule.initialize(system_input_param, system_input_feats, system_outputs)
+        return datamodule
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
         """Validate all orchestration systems against the provided schema."""
@@ -220,18 +231,6 @@ class PfabAgent:
                 f"The following predicted features are not computed by any feature model: "
                 f"{unpredicted_features}"
             )
-        
-    def activate_system(self, system_name: SystemName) -> None:
-        """Activate a specific orchestration system."""
-        if not self._initialized:
-            raise RuntimeError("Cannot activate systems before initialize() is called.")
-        self._toggle_system(system_name, activate=True)
-
-    def deactivate_system(self, system_name: SystemName) -> None:
-        """Deactivate a specific orchestration system."""
-        if not self._initialized:
-            raise RuntimeError("Cannot deactivate systems before initialize() is called.")
-        self._toggle_system(system_name, activate=False)
 
     def set_active_experiment(self, exp_data: ExperimentData) -> None:
         """Set the active experiment for online operations."""
@@ -329,7 +328,6 @@ class PfabAgent:
         new_params = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
-            fixed_context=None,
             w_explore=w_explore,
             n_optimization_rounds=n_optimization_rounds
         )
@@ -696,18 +694,6 @@ class PfabAgent:
                 f"The following codes are defined in the schema but not used by any model: "
                 f"{unused}"
             )        
-
-    def _toggle_system(self, system_name: SystemName, activate: bool) -> None:
-        """Toggle a system on or off."""
-        system = self._get_system(system_name)
-        action = "Activated" if activate else "Deactivated"
-        
-        if activate:
-            system.activate()
-        else:
-            system.deactivate()
-        
-        self.logger.info(f"{action} {system_name.value.capitalize()} System.")
 
     def _get_system(self, system_name: SystemName) -> Any:
         """Get a system by name, raising an error if not initialized."""

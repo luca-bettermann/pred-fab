@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Type, Optional, List
+from typing import Any, Dict, Tuple, Type, Optional, List, Set
 import numpy as np
 
 from pred_fab.core.data_objects import DataArray

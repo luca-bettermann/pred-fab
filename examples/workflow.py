@@ -92,7 +92,6 @@ def main():
 
     # save all experiments
     dataset.save_all(recompute_flag=True, verbose_flag=False)
-
     dataset.state_report()
 
     # configure calibration settings
@@ -116,7 +115,7 @@ def main():
 
     agent.calibration_state_report()
 
-    datamodule = DataModule(dataset)
+    datamodule = agent.create_datamodule(dataset)
     new_params = agent.exploration_step(datamodule)
 
 

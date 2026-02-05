@@ -38,6 +38,27 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
         self.datamodule: Optional[DataModule] = None  # Stored after training
+
+    def get_system_input_parameters(self) -> List[str]:
+        """Get the parameter codes of all model inputs."""
+        return self._get_unique_values('input_parameters')
+
+    def get_system_input_features(self) -> List[str]:
+        """Get the feature codes of all model inputs."""
+        return self._get_unique_values('input_features')
+    
+    def get_system_outputs(self) -> List[str]:
+        """Get the model outputs."""
+        return self._get_unique_values('outputs')
+    
+    def _get_unique_values(self, attr: str) -> List[str]:
+        codes = []
+        for model in self.models:
+            for code in getattr(model, attr):
+                if code in codes:
+                    continue
+                codes.append(code)
+        return codes
     
     def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Filter batch targets to only include model outputs."""
@@ -288,7 +309,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         )
         
         # Store predictions in exp_data.predicted_metric_arrays
-        self._store_predictions_in_exp_data(exp_data, predictions)
+        # self._store_predictions_in_exp_data(exp_data, predictions)
         return predictions
     
     def _predict_from_params(
@@ -331,17 +352,17 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info(f"✓ Predicted {predict_to - predict_from} positions") # type: ignore
         return predictions
     
-    def _store_predictions_in_exp_data(
-        self, 
-        exp_data: ExperimentData, 
-        predictions: Dict[str, np.ndarray]
-    ) -> None:
-        """Store prediction arrays in exp_data.predicted_metric_arrays."""
-        for feature_name, pred_array in predictions.items():
-            if feature_name not in exp_data.predicted_features.keys():
-                arr = DataArray(code=feature_name, role=BlockType.FEATURE)
-                exp_data.predicted_features.add(feature_name, arr)
-            exp_data.predicted_features.set_value(feature_name, pred_array)
+    # def _store_predictions_in_exp_data(
+    #     self, 
+    #     exp_data: ExperimentData, 
+    #     predictions: Dict[str, np.ndarray]
+    # ) -> None:
+    #     """Store prediction arrays in exp_data.predicted_metric_arrays."""
+    #     for feature_name, pred_array in predictions.items():
+    #         if feature_name not in exp_data.predicted_features.keys():
+    #             arr = DataArray(code=feature_name, role=BlockType.FEATURE)
+    #             exp_data.predicted_features.add(feature_name, arr)
+    #         exp_data.predicted_features.set_value(feature_name, pred_array)
     
     def _extract_dimensional_structure_from_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Extract dimensional info (shape, params, positions) from schema and params dict."""

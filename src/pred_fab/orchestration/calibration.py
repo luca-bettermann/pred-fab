@@ -357,7 +357,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         datamodule: DataModule,
         mode: Mode,
-        fixed_context: Optional[Dict[str, Any]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
     ) -> Dict[str, Any]:
@@ -365,15 +364,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Run calibration (Offline) to propose new parameters.
         Uses global parameter bounds and fixed context.
         """
-        # Context Management:
-        # Start with default fixed_params
-        context = self.fixed_params.copy()
-        # Update with runtime fixed_context
-        if fixed_context:
-            context.update(fixed_context)
-            
         # 1. Get Offline Bounds
-        bounds_array = self._get_offline_bounds(datamodule, context)
+        bounds_array = self._get_offline_bounds(datamodule)
         
         # 2. Select Objective Function
         if mode == Mode.EXPLORATION:
@@ -502,7 +494,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     return p, cat
         return None, None
 
-    def _get_offline_bounds(self, datamodule: DataModule, fixed_context: Dict[str, Any]) -> np.ndarray:
+    def _get_offline_bounds(self, datamodule: DataModule) -> np.ndarray:
         """Calculate optimization bounds for OFFLINE domain (Global + Fixed Context)."""
         bounds_list = []
         for col in datamodule.input_columns:
@@ -511,12 +503,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             low, high = -np.inf, np.inf
             
             # 1. Check Fixed Context
-            if col in fixed_context:
-                val = fixed_context[col]
+            if col in self.fixed_params:
+                val = self.fixed_params[col]
                 low, high = val, val
-            elif parent_param and parent_param in fixed_context:
+            elif parent_param and parent_param in self.fixed_params:
                 # Fixed Categorical
-                val = 1.0 if fixed_context[parent_param] == cat_val else 0.0
+                val = 1.0 if self.fixed_params[parent_param] == cat_val else 0.0
                 low, high = val, val
             # 2. Check Explicit Param Bounds
             elif col in self.param_bounds:

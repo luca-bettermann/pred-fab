@@ -182,7 +182,7 @@ class MockPredictionModel(IPredictionModel):
         
     @property
     def input_parameters(self) -> List[str]:
-        return ["param_1", "param_2", "dim_1", "dim_2"]
+        return ["param_1", "param_2", "param_3", "dim_1", "dim_2"]
         
     @property
     def input_features(self) -> List[str]:
