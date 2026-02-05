@@ -249,7 +249,6 @@ class PfabAgent:
 
         summary = ["\n===== Agent State Report ====="]
         
-
         def _add_section(name: str, models: List[Any], width=25) -> None:
             if not models:
                 return
@@ -291,7 +290,9 @@ class PfabAgent:
         if self.pred_system:
             _add_section("Prediction System", self.pred_system.models)
             
-        print("\n".join(summary))
+        self.logger.console_new_line()
+        self.logger.console_info("\n".join(summary))
+        self.logger.console_new_line()
 
     def calibration_state_report(self) -> None:
         self.calibration_system.state_report()

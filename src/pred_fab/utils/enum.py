@@ -1,6 +1,6 @@
 from enum import Enum
 
-PRED_SUFFIX = 'pred_'
+# PRED_SUFFIX = 'pred_'
 
 class SystemName(str, Enum):
     """Enumeration of system names in PFAB."""
@@ -35,7 +35,7 @@ class BlockType(str, Enum):
     PARAMETERS = 'parameters'
     PERF_ATTRS = 'performance_attrs'
     FEATURES = 'features'
-    FEATURES_PRED = 'features' + PRED_SUFFIX
+    # FEATURES_PRED = 'features' + PRED_SUFFIX
 
 class Domain(str, Enum):
     """Enumeration of workflow step domain."""

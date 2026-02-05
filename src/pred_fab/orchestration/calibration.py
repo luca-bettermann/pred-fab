@@ -82,25 +82,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.data_objects[code] = data_obj
             self.param_constraints[code] = (min_val, max_val)
 
-
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
-        summary = ["\n===== Calibration System State ====="]
+        summary = ["===== Calibration System State =====\n"]
         width = 20
-        # Columns: Input, Fixed, Bounds, Delta
-        header = f"{'Input':<{width}} | {'Fixed':<{8}} | {'Bounds':<{width}} | {'Delta':<{8}}"
+        # Columns: Input, Bounds, Delta
+        header = f"{'Input':<{width}} | {'Bounds':<{width}} | {'Delta':<{8}}"
         summary.append(header)
         summary.append("-" * len(header))
 
         for code, (s_min, s_max) in self.param_constraints.items():
-            # Determine Fixed
-            is_fixed = "x" if code in self.fixed_params else ""
             
             # Determine Bounds
             # Priority: Fixed -> Configured Bounds -> Schema Constraints
             if code in self.fixed_params:
                 val = self.fixed_params[code]
-                bounds_str = f"fixed" # f"[{val}, {val}]" - user wants to see fixed
+                bounds_str = f"fixed = {val}"
             elif code in self.param_bounds:
                 low, high = self.param_bounds[code]
                 bounds_str = f"[{low}, {high}]"
@@ -110,9 +107,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Determine Delta
             delta = self.trust_regions.get(code, "-")
             
-            summary.append(f"{code:<{width}} | {is_fixed:<{8}} | {bounds_str:<{width}} | {delta:<{8}}")
+            summary.append(f"{code:<{width}} | {bounds_str:<{width}} | {delta:<{8}}")
         
-        print("\n".join(summary))
+        self.logger.console_new_line()
+        self.logger.console_info("\n".join(summary))
+        self.logger.console_new_line()
 
     # === CONFIGURATION METHODS ===
         

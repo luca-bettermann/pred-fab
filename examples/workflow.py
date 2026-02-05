@@ -93,7 +93,6 @@ def main():
     # save all experiments
     dataset.save_all(recompute_flag=True, verbose_flag=False)
 
-    # FIX SAVE HIERARCHICAL LOGGING
     dataset.state_report()
 
     # configure calibration settings

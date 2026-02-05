@@ -23,7 +23,7 @@ from .data_blocks import (
     PerformanceAttributes,
     Features
 )
-from ..utils.enum import PRED_SUFFIX
+# from ..utils.enum import PRED_SUFFIX
 
 class DatasetSchema:
     """
@@ -51,7 +51,7 @@ class DatasetSchema:
         self.parameters = parameters
         self.features = features
         self.performance_attrs = performance
-        self.predicted_features = self._return_copy_with_suffix(features, PRED_SUFFIX)
+        # self.predicted_features = self._return_copy_with_suffix(features, PRED_SUFFIX)
 
         # Initialize local data handler and logger
         self.local_data = LocalData(root_folder)
@@ -135,14 +135,14 @@ class DatasetSchema:
                 )        
         return True
     
-    def _return_copy_with_suffix(self, data_block: DataBlock, suffix: str) -> DataBlock:
-        data_block_suffix = Features()
-        for feat in data_block.data_objects.values():
-            # Create a new feature instance with the modified code
-            new_feat = copy.deepcopy(feat)
-            new_feat.code = f"{suffix}{feat.code}"
-            data_block_suffix.add(new_feat.code, new_feat)
-        return data_block_suffix
+    # def _return_copy_with_suffix(self, data_block: DataBlock, suffix: str) -> DataBlock:
+    #     data_block_suffix = Features()
+    #     for feat in data_block.data_objects.values():
+    #         # Create a new feature instance with the modified code
+    #         new_feat = copy.deepcopy(feat)
+    #         new_feat.code = f"{suffix}{feat.code}"
+    #         data_block_suffix.add(new_feat.code, new_feat)
+    #     return data_block_suffix
 
 class SchemaRegistry:
     """
