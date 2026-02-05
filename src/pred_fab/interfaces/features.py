@@ -82,7 +82,7 @@ class IFeatureModel(BaseInterface):
         self.logger.info(f"Starting evaluation for '{self.outputs}'")
         
         # Prepare dimension combinations
-        dim_objs = parameters.get_dim_objects(self.input_parameters).values()
+        dim_objs = parameters.get_dim_objects(self.input_parameters)
         num_dims = len(dim_objs)
         dim_iterator_codes = [dim.iterator_code for dim in dim_objs]
         dim_combinations = parameters.get_dim_combinations(

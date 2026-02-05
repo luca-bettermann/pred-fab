@@ -27,7 +27,6 @@ class BaseOrchestrationSystem(ABC):
     def __init__(self, logger: PfabLogger):
         """Initialize orchestration system with dataset and logger."""
         self.logger: PfabLogger = logger
-        self.active: bool = True
         self.models: List[Any] = []
     
     def get_models(self) -> List[Any]:
@@ -62,10 +61,3 @@ class BaseOrchestrationSystem(ABC):
             model.set_ref_features(schema.features.data_objects.values())
             model.set_ref_performance_attrs(schema.performance_attrs.data_objects.values())
     
-    def deactivate(self) -> None:
-        """Deactivate the orchestration system."""
-        self.active = False
-
-    def activate(self) -> None:
-        """Activate the orchestration system."""
-        self.active = True

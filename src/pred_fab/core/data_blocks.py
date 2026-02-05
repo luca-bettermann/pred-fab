@@ -69,7 +69,7 @@ class DataBlock(ABC):
         self.validate_value(name, value)  # Raises if invalid
         
         # Apply rounding for numeric types if configured
-        data_obj = self.data_objects[name]
+        data_obj = self.get(name)
         if data_obj.round_digits is not None and isinstance(value, (int, float)):
             value = round(float(value), data_obj.round_digits)
         
@@ -87,7 +87,6 @@ class DataBlock(ABC):
     def set_values_from_df(self, df: pd.DataFrame, logger: PfabLogger, as_populated: bool = True) -> None:
         columns: List[str] = df.columns # type: ignore
         name: str = columns[-1]
-        dims: List[str] = list(columns[:-1])
         array = df.values
 
         # set array
@@ -97,7 +96,7 @@ class DataBlock(ABC):
             # set dims
             obj = self.data_objects[name]
             if isinstance(obj, DataArray):
-                obj.set_dim_codes(dims)
+                obj.set_columns(list(columns))
             else:
                 raise ValueError(f"Object has wrong type. Expected 'DataArray', got {obj.__class__}.")
         else:
@@ -132,10 +131,6 @@ class DataBlock(ABC):
     def keys(self) -> Any:
         """Return iterator over parameter names."""
         return self.data_objects.keys()
-    
-    def values_iter(self) -> Any:
-        """Return iterator over DataObjects (renamed from values to avoid conflict)."""
-        return self.data_objects.values()
     
     def items(self) -> Any:
         """Return iterator over (name, DataObject) pairs."""
@@ -211,36 +206,30 @@ class Parameters(DataBlock):
     def role(self) -> Roles:
         return Roles.PARAMETER
 
-    def get_dim_objects(self, codes: Optional[List[str]] = None) -> Dict[str, DataDimension]:
+    def get_dim_objects(self, codes: Optional[List[str]] = None) -> List[DataDimension]:
         """Get view of dimension DataObjects from parameters."""
-        dim_objs = {
-            name: obj for name, obj in self.data_objects.items() 
+        return [
+            obj for name, obj in self.data_objects.items() 
             if isinstance(obj, DataDimension) and (codes is None or name in codes)
-        }
-        return dim_objs
+        ]
         
     def get_dim_names(self) -> List[str]:
         """Get list of dimension parameter names."""
-        dim_object_dict = self.get_dim_objects()
-        return list(dim_object_dict.keys())
+        return [name for name, obj in self.data_objects.items() if isinstance(obj, DataDimension)]
     
-    def get_dim_iterator_names(self) -> Dict[str, str]:
+    def get_dim_iterator_codes(self, codes: Optional[List[str]] = None) -> List[str]:
         """Get list of dimension iterator names."""
-        return {name: obj.iterator_code for name, obj in self.get_dim_objects().items()}
+        return [obj.iterator_code for obj in self.get_dim_objects(codes)]
 
-    def get_dim_values(self) -> Dict[str, int]:
+    def get_dim_values(self, codes: Optional[List[str]] = None) -> List[int]:
         """Get view of dimension DataObjects from parameters."""
-        return {name: self.get_value(name) for name in self.get_dim_names()}
+        return [self.get_value(dim.code) for dim in self.get_dim_objects(codes)]
 
     def validate_dimensions(self) -> None:
         """Validate dimension levels."""
-        dim_objs = self.get_dim_objects()
-        if not dim_objs:
-            return
-
         levels = []
-        for name, dim in dim_objs.items():
-            levels.append((dim.level, name))
+        for dim in self.get_dim_objects():
+            levels.append((dim.level, dim.code))
         levels.sort()
 
         for i, (level, name) in enumerate(levels, start=1):
@@ -250,18 +239,18 @@ class Parameters(DataBlock):
 
     def get_dim_by_level(self, level: int) -> Optional[DataDimension]:
         """Get dimension object by level."""
-        for dim in self.get_dim_objects().values():
+        for dim in self.get_dim_objects():
             if dim.level == level:
                 return dim
         return None
 
     def get_sorted_dimensions(self) -> List[DataDimension]:
         """Get dimensions sorted by level (ascending: 1, 2, ...)."""
-        dim_objs = list(self.get_dim_objects().values())
+        dim_objs = list(self.get_dim_objects())
         dim_objs.sort(key=lambda x: x.level)
         return dim_objs
 
-    def get_dimension_strides(self) -> Dict[str, int]:
+    def _get_dimension_strides(self) -> Dict[str, int]:
         """
         Calculate stride (block size) for each dimension level.
         
@@ -282,7 +271,7 @@ class Parameters(DataBlock):
     
     def get_start_and_end_indices(self, dimension: str, step_index: int) -> Tuple[int, int]:
         # Calculate range based on explicit step_index
-        strides = self.get_dimension_strides()
+        strides = self._get_dimension_strides()
         if dimension not in strides:
              raise ValueError(f"Dimension '{dimension}' not found in experiment parameters.")
              
@@ -294,8 +283,7 @@ class Parameters(DataBlock):
     def get_dim_combinations(self, dim_codes: List[str], evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
         """Get all combinations of dimension indices for specified dimensions and the respective iterator names."""
         # Extract dimension values
-        dim_values = self.get_dim_values()
-        dim_values = [dim_values[dim] for dim in dim_codes if dim in dim_values]
+        dim_values = self.get_dim_values(dim_codes)
         if len(dim_values) < len(dim_codes):
             missing_dims = [dim for dim in dim_codes if dim not in dim_values]
             raise KeyError(f"Missing dimensions: {', '.join(missing_dims)}")
@@ -310,11 +298,6 @@ class Parameters(DataBlock):
         else:
             dim_combinations = dim_combinations[evaluate_from:evaluate_to]
         return dim_combinations
-    
-    def filter_for_dims(self, dim_codes: List[str]) -> List[str]:
-        """Create new Parameters block containing only specified dimensions."""
-        return [name for name, obj in self.data_objects.items() if name in dim_codes and isinstance(obj, DataDimension)]
-    
 
 class Features(DataBlock):
     """
@@ -350,13 +333,13 @@ class Features(DataBlock):
             data_array = self.data_objects[metric_code]
             if not isinstance(data_array, DataArray):
                 raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
-            if data_array.dim_codes is None:
-                raise ValueError(f"Dimension codes not set for metric array '{metric_code}'")
-            
+            if len(data_array.columns) == 0:
+                raise ValueError(f"Columns not set for metric array '{metric_code}'")
+                        
             # compute shape based on parameter dimensions
-            dim_values = parameters.get_dim_values()
-            filtered_dim_values = [dim_values[dim] for dim in data_array.dim_codes]
-            shape = (int(np.prod(filtered_dim_values)), len(filtered_dim_values) + 1)
+            dim_codes = [obj.code for obj in parameters.get_dim_objects() if obj.iterator_code in data_array.columns]
+            dim_values = parameters.get_dim_values(dim_codes)
+            shape = (int(np.prod(dim_values)), len(dim_values) + 1)
 
             # Initialize array with computed shape
             self._initialize_array(metric_code, shape, recompute_flag)

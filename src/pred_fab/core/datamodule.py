@@ -83,7 +83,7 @@ class DataModule:
         param_all_keys = list(schema.parameters.keys())
         dim_keys = list(schema.parameters.get_dim_names())
         param_keys = [k for k in param_all_keys if k not in dim_keys]
-        dim_iterators = list(schema.parameters.get_dim_iterator_names())
+        dim_iterators = list(schema.parameters.get_dim_iterator_codes())
         
         self.original_input_columns = param_keys + dim_iterators
         self.output_columns = list(schema.features.keys())

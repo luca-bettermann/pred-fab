@@ -137,7 +137,7 @@ class PfabAgent:
             self.feature_system.models,
             "feature"
         )
-        self.feature_system._set_dim_codes_for_arrays(schema)
+        self.feature_system._set_feature_column_names(schema)
         self.feature_system.set_ref_objects(schema)
 
         # Instantiate evaluation models
@@ -301,7 +301,7 @@ class PfabAgent:
     def evaluation_step(
         self,
         exp_data: ExperimentData,
-        recompute: bool = False,
+        recompute_flag: bool = False,
         visualize: bool = False
     ) -> None:
         """Perform a exploration step of all active systems."""
@@ -311,8 +311,8 @@ class PfabAgent:
         start, end = 0, None
         
         # Extract Features and Evaluate Performance
-        self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute, visualize=visualize)
-        self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute)
+        self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute_flag, visualize=visualize)
+        self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute_flag)
         self.logger.console_success(f"Successfully evaluated experiment '{exp_data.code}'.")
     
     def exploration_step(

@@ -286,11 +286,11 @@ class DataArray(DataObject):
     def __init__(self, code: str, role: Roles, dtype: Optional[np.dtype] = None):
         """Initialize DataArray with optional shape and dtype constraints."""
         self.dtype_constraint = dtype or np.float64
-        self.dim_codes: List[str] = []
+        self.columns: List[str] = []
         
         constraints: Dict[str, Any] = {
             "dtype": str(dtype) if dtype else "float64",
-            "dim_codes": self.dim_codes
+            "columns": self.columns
         }
             
         super().__init__(code, np.ndarray, role, constraints)
@@ -300,10 +300,10 @@ class DataArray(DataObject):
         """Use DataModule default normalization (typically 'standard')."""
         return NormalizeStrategy.DEFAULT
     
-    def set_dim_codes(self, dim_codes: List[str]) -> None:
+    def set_columns(self, columns: List[str]) -> None:
         """Set associated dimension codes for this DataArray."""
-        self.dim_codes = dim_codes
-        self.constraints["dim_codes"] = dim_codes
+        self.columns = columns
+        self.constraints["columns"] = columns
     
     def validate(self, value: Any) -> bool:
         """Validate numpy array against shape and dtype constraints."""
@@ -323,8 +323,8 @@ class DataArray(DataObject):
         dtype_str = constraints.get("dtype", "float64")
         dtype = np.dtype(dtype_str) if dtype_str else None
         obj = cls(code, role, dtype)
-        if "dim_codes" in constraints:
-            obj.set_dim_codes(constraints["dim_codes"])
+        if "columns" in constraints:
+            obj.set_columns(constraints["columns"])
         return obj
 
 # -------- Factories for Parameter declaration -----------

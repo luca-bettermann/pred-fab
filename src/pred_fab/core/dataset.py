@@ -157,7 +157,7 @@ class Dataset:
         self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
         
         # Feature column names
-        self.feature_columns: Optional[Dict[str, List[str]]] = None
+        # self.feature_columns: Optional[Dict[str, List[str]]] = None
 
     def get_experiment(self, exp_code: str) -> ExperimentData:
         """Get complete ExperimentData for an exp_code."""
@@ -361,8 +361,8 @@ class Dataset:
         """Get column names for a specific feature array."""
         if feature_name not in self.schema.features.data_objects:
             raise KeyError(f"Feature '{feature_name}' not found in schema")
-        dims = self.schema.features.data_objects[feature_name].dim_codes # type: ignore
-        return dims + [feature_name]
+        
+        return self.schema.features.get(feature_name).columns # type: ignore
 
     # === Hierarchical Load/Save Methods ===
     
@@ -680,7 +680,7 @@ class Dataset:
 
     def export_to_dataframe(self, experiment_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Export experiment data to flattened DataFrames (X, y).
+        Export experiment data to DataFrames (X, y).
         Uses Parameters block logic for dimension iteration.
         """
         if not experiment_codes:
@@ -719,7 +719,7 @@ class Dataset:
             # Case 2: Multi-dimensional experiment
             # Get all index combinations
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
-            iterator_map = exp_data.parameters.get_dim_iterator_names()
+            iterator_map = exp_data.parameters.get_dim_iterator_codes()
             
             # Pre-fetch feature arrays
             feature_arrays = {
@@ -731,7 +731,7 @@ class Dataset:
                 # Build X row (Static + Iterators)
                 row_dict = static_params.copy()
                 for i, dim_name in enumerate(dim_names):
-                    iterator_name = iterator_map[dim_name]
+                    iterator_name = exp_data.parameters.get_dim_iterator_codes(codes=[dim_name])[0]
                     row_dict[iterator_name] = idx_tuple[i]
                 
                 X_rows.append(row_dict)

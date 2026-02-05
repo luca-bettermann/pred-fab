@@ -80,8 +80,8 @@ def main():
     # agent.state_report()
 
     # 5. Load Experiments
-    dataset.populate(verbose_flag=False)
-    # dataset.load_experiments(['exp_001', 'exp_002', 'exp_003'])
+    # dataset.populate(verbose_flag=False)
+    dataset.load_experiments(['exp_001', 'exp_002', 'exp_003'])
 
     # evlauate all loaded experiments (if needed)
     dataset.state_report()

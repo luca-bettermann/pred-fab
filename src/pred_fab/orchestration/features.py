@@ -6,7 +6,7 @@ from pred_fab.interfaces.features import IFeatureModel
 
 
 from ..utils import PfabLogger
-from ..core import DatasetSchema, ExperimentData, Parameters
+from ..core import DatasetSchema, ExperimentData, Parameters, DataDimension
 from .base_system import BaseOrchestrationSystem
 
 
@@ -22,17 +22,24 @@ class FeatureSystem(BaseOrchestrationSystem):
         super().__init__(logger)
         self.models: List[IFeatureModel] = []
 
-    def _set_dim_codes_for_arrays(self, schema: DatasetSchema) -> None:
-        """Set dimension codes for all metric arrays based on dataset parameters."""
-        dim_codes = schema.parameters.get_dim_names()
-        
+    def _set_feature_column_names(self, schema: DatasetSchema) -> None:
+        """Set dimension codes for all metric arrays based on dataset parameters."""        
         # Iterate over all feature models to set dim codes
         for model in self.models:
             for output_code in model.outputs:
+
+                # get data array
+                if not output_code in schema.features.data_objects:
+                    raise ValueError(f"Output '{output_code}' from model '{model.__class__}' is not in schema.")
                 data_array = schema.features.data_objects[output_code]
-                if isinstance(data_array, DataArray):
-                    model_dim_codes = [code for code in model.input_parameters if code in dim_codes]
-                    data_array.set_dim_codes(model_dim_codes)
+                if not isinstance(data_array, DataArray):
+                    raise ValueError(f"Expected obj of type 'DataArray', got {data_array.__class__} instead.")
+
+                # set column names in data array
+                dim_objs = schema.parameters.get_dim_objects(model.input_parameters)
+                model_column_names = [dim.iterator_code for dim in dim_objs]
+                model_column_names.append(output_code)
+                data_array.set_columns(model_column_names)
 
     # === FEATURE EXTRACTION ===
 
