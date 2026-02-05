@@ -63,7 +63,7 @@ class FeatureSystem(BaseOrchestrationSystem):
         )
 
         # Update exp_data with results
-        exp_data.features.set_values(feature_dict)
+        exp_data.features.set_values_from_dict(feature_dict, self.logger)
 
         return feature_dict
 

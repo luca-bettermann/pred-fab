@@ -16,7 +16,7 @@ from ..core.data_objects import DataDimension, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, Metrics, LocalData, SplitType
-from ..utils.enum import Roles
+from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
 
@@ -339,7 +339,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Store prediction arrays in exp_data.predicted_metric_arrays."""
         for feature_name, pred_array in predictions.items():
             if feature_name not in exp_data.predicted_features.keys():
-                arr = DataArray(code=feature_name, role=Roles.FEATURE)
+                arr = DataArray(code=feature_name, role=BlockType.FEATURE)
                 exp_data.predicted_features.add(feature_name, arr)
             exp_data.predicted_features.set_value(feature_name, pred_array)
     

@@ -4,7 +4,8 @@ from typing import List, Optional, Dict, Any, Tuple, Callable
 import shutil
 import json
 import pandas as pd
-import numpy as np
+
+from ..utils.enum import BlockType, FileFormat
 
 
 class LocalData:
@@ -131,18 +132,18 @@ class LocalData:
         """Load experiment parameters from local files."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.schema_id), "{code}"],
-            filename="parameters",
-            file_format="json"
+            subdirs=["{code}"],
+            filename=BlockType.PARAMETERS.value,
+            file_format=FileFormat.JSON
         )
         
     def load_performance(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Load performance metrics from local files."""
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.schema_id), "{code}"],
-            filename="performance",
-            file_format="json"
+            subdirs=["{code}"],
+            filename=BlockType.PERF_ATTRS.value,
+            file_format=FileFormat.JSON
         )
 
     def load_features(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
@@ -152,9 +153,9 @@ class LocalData:
             raise ValueError("feature_name required in kwargs for load_features")
         return self._load_files_generic(
             codes=exp_codes,
-            subdirs=[str(self.schema_id), "{code}"],
+            subdirs=["{code}"],
             filename=feature_name,
-            file_format="csv"
+            file_format=FileFormat.CSV
         )
 
     # === DATA SAVING METHODS ===
@@ -165,7 +166,7 @@ class LocalData:
             raise ValueError("Schema folder not configured")
         
         # Build path and ensure directory exists
-        schema_file = os.path.join(self.schema_folder, "schema.json")
+        schema_file = os.path.join(self.schema_folder, "schema." + FileFormat.JSON.value)
         os.makedirs(self.local_folder, exist_ok=True)
         os.makedirs(self.schema_folder, exist_ok=True)
         
@@ -180,18 +181,24 @@ class LocalData:
                         recompute: bool, **kwargs) -> bool:
         """Save experiment parameters to local files."""
         return self._save_files_generic(
-            codes=exp_codes, data=data,
-            subdirs=["{code}"], filename="parameters", recompute=recompute,
-            file_format="json"
+            codes=exp_codes, 
+            data=data,
+            subdirs=["{code}"], 
+            filename=BlockType.PARAMETERS.value, 
+            recompute=recompute,
+            file_format=FileFormat.JSON
         )
 
     def save_performance(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
                          recompute: bool, **kwargs) -> bool:
         """Save performance metrics to local files."""
         return self._save_files_generic(
-            codes=exp_codes, data=data,
-            subdirs=["{code}"], filename="performance", recompute=recompute,
-            file_format="json"
+            codes=exp_codes, 
+            data=data,
+            subdirs=["{code}"], 
+            filename=BlockType.PERF_ATTRS.value, 
+            recompute=recompute,
+            file_format=FileFormat.JSON
         )
     
     def save_features(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
@@ -205,17 +212,23 @@ class LocalData:
             raise ValueError("column_names_getter function must be provided for saving feature arrays")
 
         return self._save_files_generic(
-            codes=exp_codes, data=data,
-            subdirs=["{code}"], filename=feature_name, 
-            recompute=recompute, column_names=column_names,
-            file_format="csv"
+            codes=exp_codes, 
+            data=data,
+            subdirs=["{code}"], 
+            filename=feature_name, 
+            recompute=recompute, 
+            file_format=FileFormat.CSV,
+            column_names=column_names,
         )
     
     # === PRIVATE METHODS ===
 
     def _load_files_generic(
-        self, codes: List[str], subdirs: List[str], filename: str, 
-        contains_columns: bool = False, file_format: str = "json"
+            self, 
+            codes: List[str], 
+            subdirs: List[str], 
+            filename: str, 
+            file_format: FileFormat
     ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Generic file loader for JSON/CSV files."""
         if not self.schema_id:
@@ -225,9 +238,6 @@ class LocalData:
             
         missing_codes = []
         result_dict = {}
-        
-        # Determine file type
-        file_type = file_format
 
         for code in codes:
             try:
@@ -235,19 +245,21 @@ class LocalData:
                 path_parts = [self.schema_folder] + subdirs
                 path_parts = [part.replace("{code}", code) for part in path_parts]
                 file_name = filename.replace("{code}", code)
-                file_path = os.path.join(*path_parts, f"{file_name}.{file_type}")
+                file_path = os.path.join(*path_parts, f"{file_name}.{file_format.value}")
                 
                 # Check existence and load
                 if not os.path.exists(file_path):
                     missing_codes.append(code)
                     continue
 
-                if file_type == "csv":
+                if file_format == FileFormat.CSV:
                     df = pd.read_csv(file_path)
-                    result_dict[code] = df.values
-                else:
+                    result_dict[code] = df
+                elif file_format == FileFormat.JSON:
                     with open(file_path, 'r') as f:
                         result_dict[code] = json.load(f)
+                else:
+                    raise ValueError(f"Unknown file format {file_format.value}. Check enum.")
             except Exception as e:
                 print(f"Failed to load {code}: {e}")
                 missing_codes.append(code)
@@ -255,9 +267,14 @@ class LocalData:
         return missing_codes, result_dict
 
     def _save_files_generic(
-        self, codes: List[str], data: Dict[str, Any], subdirs: List[str], 
-        filename: str, recompute: bool, column_names: Optional[List[str]] = None,
-        file_format: str = "json"
+        self, 
+        codes: List[str], 
+        data: Dict[str, Any], 
+        subdirs: List[str], 
+        filename: str, 
+        recompute: bool, 
+        file_format: FileFormat,
+        column_names: Optional[List[str]] = None
     ) -> bool:
         """Generic file saver for JSON/CSV files."""
         if not self.schema_id:
@@ -265,9 +282,7 @@ class LocalData:
         if not self.schema_folder or not os.path.exists(self.schema_folder):
             raise ValueError("Schema folder must be set and exist")
             
-        saved = False
-        file_type = file_format
-        
+        saved = False        
         for code in codes:
             if code not in data:
                 raise ValueError(f"No data found for code: {code}")
@@ -280,21 +295,21 @@ class LocalData:
             
             # Build file path
             file_name = filename.replace("{code}", code)
-            file_path = os.path.join(dir_path, f"{file_name}.{file_type}")
+            file_path = os.path.join(dir_path, f"{file_name}.{file_format.value}")
 
             # Save if doesn't exist or recompute is True
             if not os.path.exists(file_path) or recompute:
                 code_data = data[code]
 
                 # Save as CSV
-                if file_type == "csv":
+                if file_format == FileFormat.CSV:
                     df = pd.DataFrame(code_data, columns=column_names)
                     df.to_csv(file_path, index=False)
                 # Save as JSON
-                else:
+                elif file_format == FileFormat.JSON:
                     with open(file_path, 'w') as f:
                         json.dump(code_data, f, indent=2)
-
+                else:
+                    raise ValueError(f"Unknown file format {file_format}. Check enum.")
                 saved = True
-                
         return saved

@@ -52,7 +52,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         # Update exp_data with results
         # We only set performance if the full experiment was evaluated
         if evaluate_from == 0 and evaluate_to is None:
-            exp_data.performance.set_values(performance_dict)
+            exp_data.performance.set_values_from_dict(performance_dict, self.logger)
         else:
             self.logger.info("Partial evaluation detected; not updating ExperimentData performance values.")
             self.logger.info(f"{performance_dict}")

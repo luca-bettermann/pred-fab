@@ -95,7 +95,7 @@ class DataObject(ABC):
             raise TypeError(f"Role must be a Roles enum member or None, got {type(role).__name__}")
         
         # Instantiate object using registry lookups implementation
-        obj = cls._registry[obj_type]._from_dict_impl(code, role, constraints, round_digits)
+        obj = cls._registry[obj_type]._from_json_impl(code, role, constraints, round_digits)
         
         # Restore role if present
         if role is not None:
@@ -109,7 +109,7 @@ class DataObject(ABC):
     
     @classmethod
     @abstractmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataObject':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataObject':
         """Implementation-specific reconstruction. Override in subclasses."""
         ...
 
@@ -148,7 +148,7 @@ class DataReal(DataObject):
         return True
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataReal':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataReal':
         return cls(code, role, constraints.get("min"), constraints.get("max"), round_digits)
 
 
@@ -182,7 +182,7 @@ class DataInt(DataObject):
         return True
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataInt':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataInt':
         return cls(code, role, constraints.get("min"), constraints.get("max"))
 
 
@@ -205,7 +205,7 @@ class DataBool(DataObject):
         return True
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataBool':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataBool':
         return cls(code, role)
 
 class DataCategorical(DataObject):
@@ -235,7 +235,7 @@ class DataCategorical(DataObject):
         return True
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataCategorical':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataCategorical':
         return cls(code, constraints["categories"], role)
 
 class DataDimension(DataInt):
@@ -265,7 +265,7 @@ class DataDimension(DataInt):
         return NormalizeStrategy.MINMAX
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataDimension':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataDimension':
         return cls(
             code,
             constraints["dim_iterator_code"],
@@ -318,7 +318,7 @@ class DataArray(DataObject):
         return True
     
     @classmethod
-    def _from_dict_impl(cls, code: str, role: Roles, constraints: Dict[str, Any],
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any],
                        round_digits: Optional[int] = None) -> 'DataArray':
         dtype_str = constraints.get("dtype", "float64")
         dtype = np.dtype(dtype_str) if dtype_str else None

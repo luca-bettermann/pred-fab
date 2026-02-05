@@ -60,4 +60,11 @@ class NormalizeStrategy(Enum):
     NONE = 'none'
     CATEGORICAL = 'categorical'
 
+class Loaders(Enum):
+    MEMORY = 'memory'
+    LOCAL = 'local files'
+    EXTERNAL = 'external sources'
     
+class FileFormat(Enum):
+    CSV = 'csv'
+    JSON = 'json'

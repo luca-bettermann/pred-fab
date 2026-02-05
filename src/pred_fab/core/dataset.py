@@ -16,7 +16,7 @@ from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataD
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
-from ..utils.enum import BlockType, PRED_SUFFIX
+from ..utils.enum import BlockType, PRED_SUFFIX, Loaders
 
 
 class ExperimentData:
@@ -77,16 +77,16 @@ class ExperimentData:
 
     # === Helper Methods for Data Access ===
 
-    def set_data(self, values: Dict[str, Any], block_type: BlockType) -> None:
+    def set_data(self, values: Any, block_type: BlockType, logger: PfabLogger) -> None:
         """Set values for a specific data type."""
-        if block_type == "parameters":
-            self.parameters.set_values(values)
-        elif block_type == "performance":
-            self.performance.set_values(values)
-        elif block_type == "feature":
-            self.features.set_values(values)
-        elif block_type == "predicted_feature":
-            self.predicted_features.set_values(values)
+        if block_type == BlockType.PARAMETERS:
+            self.parameters.set_values_from_dict(values, logger)
+        elif block_type == BlockType.FEATURES:
+            self.features.set_values_from_df(values, logger)
+        elif block_type == BlockType.PERF_ATTRS:
+            self.performance.set_values_from_dict(values, logger)
+        elif block_type == BlockType.FEATURES_PRED:
+            self.predicted_features.set_values_from_df(values, logger)
         else:
             raise ValueError(f"Unknown block type: {block_type}")
         
@@ -205,7 +205,7 @@ class Dataset:
         exp_data = self._create_experiment_shell(exp_code)
         
         # 2. Set parameters and dimensions
-        exp_data.parameters.set_values(parameters)
+        exp_data.parameters.set_values_from_dict(parameters, self.logger)
 
         # 3. Initialize feature arrays based on parameters
         exp_data.features.initialize_arrays(exp_data.parameters)
@@ -213,13 +213,13 @@ class Dataset:
         
         # 4. Set optional blocks
         if performance:
-            exp_data.set_data(performance, block_type=BlockType.PERF_ATTRS)
+            exp_data.set_data(performance, BlockType.PERF_ATTRS, self.logger)
 
         if metric_arrays:
-            exp_data.set_data(metric_arrays, block_type=BlockType.FEATURES)
+            exp_data.set_data(metric_arrays, BlockType.FEATURES, self.logger)
             
         if predicted_arrays:
-            exp_data.set_data(predicted_arrays, block_type=BlockType.FEATURES_PRED)
+            exp_data.set_data(predicted_arrays, BlockType.FEATURES_PRED, self.logger)
 
         # 5. Validate against schema
         exp_data.is_valid(self.schema)
@@ -318,15 +318,18 @@ class Dataset:
             self.get_experiment(c).is_predicted_feature_populated(name) for name in feature_names
         ))
 
-        summary = self._prep_summary_report(
-            'Dataset State Report',
-            total,
-            count_params,
-            count_features,
-            count_perf,
-            count_pred
-        )
-        print("\n" + "\n".join(summary))
+        summary = [
+            f"===== 'Dataset State Report' =====",
+            f"\nSchema: \t\t{self.schema.name}",
+            f"Experiments: \t\t{total}",
+            f"  - Parameters: \t{count_params}/{total}",
+            f"  - Features: \t\t{count_features}/{total}",
+            f"  - Performance: \t{count_perf}/{total}",
+            f"  - Predicted Features: {count_pred}/{total}",
+        ]
+
+        self.logger.console_new_line()
+        self.logger.console_info("\n".join(summary))
         self.logger.console_new_line()
     
     # === Helper Methods for Hierarchical Loading/Saving ===
@@ -334,7 +337,7 @@ class Dataset:
     def _set_exp_data(self, code: str, data: Any, block_type: BlockType) -> None:
         if code in self._experiments:
             exp = self._experiments[code]
-            exp.set_data(data, block_type)
+            exp.set_data(data, block_type, self.logger)
 
     def _has_exp_data(self, code: str, block_type: BlockType) -> bool:
         if code not in self._experiments:
@@ -363,16 +366,16 @@ class Dataset:
 
     # === Hierarchical Load/Save Methods ===
     
-    def populate(self, source: str = "local", verbose: bool = False) -> int:
+    def populate(self, source: Loaders = Loaders.LOCAL, verbose_flag: bool = False) -> int:
         """Load all experiments from storage hierarchically by scanning dataset folder."""
-        if source != "local":
-            raise NotImplementedError("Only 'local' source is currently supported")
+        if source != Loaders.LOCAL:
+            raise NotImplementedError(f"Only {source.value} source is currently supported")
         
         # Scan local folders for experiment codes
         exp_codes = self.local_data.list_experiments()
         
         # Use batch loading
-        missing = self.load_experiments(exp_codes, verbose=verbose)
+        missing = self.load_experiments(exp_codes, verbose=verbose_flag)
         loaded_count = len(exp_codes) - len(missing)
         
         return loaded_count
@@ -390,6 +393,9 @@ class Dataset:
     def load_experiments(self, exp_codes: List[str], recompute_flag: bool = False, verbose: bool = False) -> List[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
         
+        self.logger.console_new_line()
+        self._logging(f"Loading experiments {exp_codes}...", self.logger.console_execute, verbose)
+
         # 1. Ensure shells exist
         for code in exp_codes:
             if code not in self._experiments:
@@ -403,7 +409,8 @@ class Dataset:
             setter=functools.partial(self._set_exp_data, block_type=BlockType.PARAMETERS),
             in_memory=functools.partial(self._has_exp_data, block_type=BlockType.PARAMETERS),
             external_loader=self.external_data.pull_parameters if self.external_data else None,
-            recompute_flag=recompute_flag
+            recompute_flag=recompute_flag,
+            verbose=verbose
         )
         
         if missing_params and len(self.schema.parameters.data_objects):
@@ -417,8 +424,19 @@ class Dataset:
             # Initialize feature arrays based on loaded parameters
             exp_data.features.initialize_arrays(exp_data.parameters, recompute_flag)
             exp_data.predicted_features.initialize_arrays(exp_data.parameters, recompute_flag)
-        
-        # 3. Load Features
+
+        # 3. Load Performance Metrics
+        missing_performance = self._hierarchical_load(
+            BlockType.PERF_ATTRS, exp_codes,
+            loader=self.local_data.load_performance,
+            setter=functools.partial(self._set_exp_data, block_type=BlockType.PERF_ATTRS),
+            in_memory=functools.partial(self._has_exp_data, block_type=BlockType.PERF_ATTRS),
+            external_loader=self.external_data.pull_performance if self.external_data else None,
+            recompute_flag=recompute_flag,
+            verbose=verbose
+        )
+
+        # 4. Load Features
         missing_features_union = set()
         for name in self.schema.features.keys():
             missing_features = self._hierarchical_load(
@@ -428,19 +446,10 @@ class Dataset:
                 in_memory=lambda code: self.get_experiment(code).is_feature_populated(name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
                 recompute_flag=recompute_flag,
+                verbose=verbose,
                 feature_name=name # Passed to kwargs
             )
             missing_features_union.update(missing_features)
-        
-        # 4. Load Performance Metrics
-        missing_performance = self._hierarchical_load(
-            BlockType.PERF_ATTRS, exp_codes,
-            loader=self.local_data.load_performance,
-            setter=functools.partial(self._set_exp_data, block_type=BlockType.PERF_ATTRS),
-            in_memory=functools.partial(self._has_exp_data, block_type=BlockType.PERF_ATTRS),
-            external_loader=self.external_data.pull_performance if self.external_data else None,
-            recompute_flag=recompute_flag
-        )
 
         # 5. Load Predicted Features
         missing_pred_features_union = set()
@@ -452,57 +461,41 @@ class Dataset:
                 in_memory=lambda code: self.get_experiment(code).is_predicted_feature_populated(name),
                 external_loader=self.external_data.pull_features if self.external_data else None,
                 recompute_flag=recompute_flag,
+                verbose=verbose,
                 feature_name=PRED_SUFFIX + name # Passed to kwargs
             )
             missing_pred_features_union.update(missing_pred_features)
 
-        # Summary
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
-
-        if verbose:
-            self.logger.console_new_line()
-            total = len(exp_codes)
-            summary = self._prep_summary_report(
-                'Populate Dataset',
-                total,
-                total - len(missing_params),
-                total - len(missing_features_union),
-                total - len(missing_performance),
-                total - len(missing_pred_features_union)
-            )
-            self.logger.console_info("\n".join(summary))
-
         self.logger.console_new_line()
         return missing_params
     
-    def save_all(self, recompute: bool = False) -> None:
+    def save_all(self, recompute_flag: bool = False, verbose_flag: bool = False) -> None:
         """Save all experiments currently in memory."""
         exp_codes = list(self._experiments.keys())
-        self.save_experiments(exp_codes, recompute=recompute)
+        self.save_experiments(exp_codes, recompute=recompute_flag, verbose=verbose_flag)
 
-    def save_experiment(self, exp_code: str, recompute: bool = False) -> None:
+    def save_experiment(self, exp_code: str, recompute: bool = False, verbose: bool = False) -> None:
         """Save a single experiment hierarchically."""
-        self.save_experiments([exp_code], recompute=recompute)
+        self.save_experiments([exp_code], recompute=recompute, verbose=verbose)
     
-    def save_experiments(self, exp_codes: List[str], recompute: bool = False) -> None:
+    def save_experiments(self, exp_codes: List[str], recompute: bool = False, verbose=False) -> None:
         """Save multiple experiments hierarchically with progress tracking."""        
         # Filter to experiments that exist in dataset
         codes_to_save = [code for code in exp_codes if self.has_experiment(code)]
 
         self.logger.console_new_line()
-        self.logger.console_info(f"Saving experiments {codes_to_save}...")
+        self._logging(f"Saving experiments {codes_to_save}...", self.logger.console_execute, verbose)
         
         if not codes_to_save:
-            if self.logger:
-                self.logger.console_warning(f"None of {exp_codes} exist in dataset - skipping save operation")
+            self.logger.console_warning(f"None of {exp_codes} exist in dataset - skipping save operation")
             return
         elif exp_codes != codes_to_save:
-            if self.logger:
-                missing = set(exp_codes) - set(codes_to_save)
-                self.logger.console_warning(f"Experiments {missing} do not exist in dataset - skipping save for these")
+            missing = set(exp_codes) - set(codes_to_save)
+            self.logger.console_warning(f"Experiments {missing} do not exist in dataset - skipping save for these")
         
         # 1. Save Schema
-        self.save_schema(recompute=recompute)
+        self.save_schema(recompute=recompute, verbose=verbose)
         
         # 2. Save Parameters
         self._hierarchical_save(
@@ -510,10 +503,21 @@ class Dataset:
             getter=functools.partial(self._get_exp_data, block_type=BlockType.PARAMETERS),
             saver=self.local_data.save_parameters,
             external_saver=self.external_data.push_parameters if self.external_data else None,
-            recompute=recompute
+            recompute=recompute,
+            verbose=verbose
         )
-            
-        # 3. Save Features
+
+        # 3. Save Performance
+        self._hierarchical_save(
+            BlockType.PERF_ATTRS, codes_to_save,
+            getter=functools.partial(self._get_exp_data, block_type=BlockType.PERF_ATTRS),
+            saver=self.local_data.save_performance,
+            external_saver=self.external_data.push_performance if self.external_data else None,
+            recompute=recompute,
+            verbose=verbose
+        )
+
+        # 4. Save Features
         for name in self.schema.features.keys():
             self._hierarchical_save(
                 name, codes_to_save,
@@ -522,17 +526,9 @@ class Dataset:
                 external_saver=self.external_data.push_features if self.external_data else None,
                 recompute=recompute,
                 column_names=self._get_array_column_names(name),
-                feature_name=name
+                verbose=verbose,
+                feature_name=name # pass to kwargs
             )
-        
-        # 4. Save Performance
-        self._hierarchical_save(
-            BlockType.PERF_ATTRS, codes_to_save,
-            getter=functools.partial(self._get_exp_data, block_type=BlockType.PERF_ATTRS),
-            saver=self.local_data.save_performance,
-            external_saver=self.external_data.push_performance if self.external_data else None,
-            recompute=recompute
-        )
 
         # 5. Save Predicted Features
         for name in self.schema.features.keys():
@@ -543,38 +539,45 @@ class Dataset:
                 external_saver=self.external_data.push_features if self.external_data else None,
                 recompute=recompute,
                 column_names=self._get_array_column_names(name),
-                feature_name=PRED_SUFFIX + name
+                verbose=verbose,
+                feature_name=PRED_SUFFIX + name # pass to kwargs
             )
 
         self.logger.console_success(f"Successfully saved experiments {codes_to_save}.")
         self.logger.console_new_line()
         
-    def save_schema(self, recompute: bool = False) -> None:
+    def save_schema(self, recompute: bool = False, verbose: bool = True) -> None:
         """Save schema hierarchically."""        
         # 1. Save locally
-        if self.local_data.save_schema(self.schema.to_dict(), recompute=recompute):
-            self.logger.console_saved(f"Saved dataset schema '{self.schema.name}' as local file.")
+        saved = self.local_data.save_schema(self.schema.to_dict(), recompute=recompute)
+        if saved:
+            self._logging(f"Saved dataset schema '{self.schema.name}' as local file.", self.logger.console_saved, verbose)
         else:
             self.logger.info(f"Dataset schema '{self.schema.name}' already exists as local file.")
 
         # 2. Save externally
         if self.external_data and not self.debug_flag:
-             if self.external_data.push_schema(self.schema.name, self.schema.to_dict()):
-                self.logger.console_pushed(f"Pushed dataset schema '{self.schema.name}' to external source.")
-        else:
+            pushed = self.external_data.push_schema(self.schema.name, self.schema.to_dict())
+            if pushed:
+                self._logging(f"Pushed dataset schema '{self.schema.name}' to external source.", self.logger.console_pushed, verbose)
+            else:
+                self.logger.info(f"Skipped pushing schema to external source (check ExternalData logic).")
+        elif verbose:
             self.logger.info(f"Skipped external push for schema '{self.schema.name}' (debug={self.debug_flag}, has_ext_data={self.external_data is not None}).")
     
-    def _check_for_retrieved_codes(self, target_pre: List[str], target_post: List[str], dtype: str, source: str) -> List[str]:
+    def _check_for_retrieved_codes(self, target_pre: List[str], target_post: List[str], dtype: str, source: Loaders, verbose: bool) -> List[str]:
         """Check which codes were successfully retrieved and log to console."""
         retrieved_codes = [code for code in target_pre if code not in target_post]
-        if retrieved_codes and self.logger:
-            message = f"Retrieved {dtype} {retrieved_codes} from {source}."
-            if source == "local files":
-                self.logger.console_loaded(message)
-            elif source == "external source":
-                self.logger.console_pulled(message)
-            else:
+        if retrieved_codes:
+            message = f"Retrieved from {source.value}: {dtype} for {len(retrieved_codes)} experiments."
+            if source == Loaders.MEMORY:
                 self.logger.info(message)
+            elif source == Loaders.LOCAL:
+                self._logging(message, self.logger.console_loaded, verbose)
+            elif source == Loaders.EXTERNAL:
+                self._logging(message, self.logger.console_pulled, verbose)
+            else:
+                raise ValueError(f"Unknown Loaders source '{source}', check enum.")
         return retrieved_codes
     
     def _hierarchical_load(self, 
@@ -585,48 +588,45 @@ class Dataset:
                         in_memory: Callable[[str], bool],
                         external_loader: Optional[Callable[..., Tuple[List[str], Any]]] = None,
                         recompute_flag: bool = False,
+                        verbose: bool = False,
                         **kwargs) -> List[str]:
         """Universal hierarchical data loading: Memory → Local Files → External Source"""
         # 1. Check memory
-        missing_memory = [code for code in target_codes if not in_memory(code)]
-        loaded_memory = self._check_for_retrieved_codes(target_codes, missing_memory, dtype, "memory")
+        memory_missing = [code for code in target_codes if not in_memory(code)]
+        self._check_for_retrieved_codes(target_codes, memory_missing, dtype, Loaders.MEMORY, verbose)
 
-        if not missing_memory:
+        if not memory_missing:
             return []
         
         # 2. Load from local files
         if not recompute_flag:
-            missing_local, local_data = loader(missing_memory, **kwargs)
+            local_missing, local_data = loader(memory_missing, **kwargs)
             # directly store retrieved data in ExpData object
             for code, data in local_data.items():
                 setter(code, data)
-            loaded_local = self._check_for_retrieved_codes(missing_memory, missing_local, dtype, "local files")
-            if loaded_local:
-                self.logger.console_loaded(f"Loaded from local files: {dtype} for {len(loaded_local)} experiments")
+            self._check_for_retrieved_codes(memory_missing, local_missing, dtype, Loaders.LOCAL, verbose)
         else:
-            missing_local = missing_memory
+            local_missing = memory_missing
             self.logger.info(f"Recompute mode: Skipping loading {dtype} from local files")
 
-        if not missing_local:
+        if not local_missing:
             return []
 
         # 3. Load from external sources
         if not self.debug_flag and external_loader:
-            missing_external, external_data = external_loader(missing_local, **kwargs)
+            external_missing, external_data = external_loader(local_missing, **kwargs)
             # directly store retrieved data in ExpData object
             for code, data in external_data.items():
                 setter(code, data)
-            loaded_external = self._check_for_retrieved_codes(missing_local, missing_external, dtype, "external source")
-            if loaded_external:
-                self.logger.console_pulled(f"Pulled from external source: {dtype} for {len(loaded_external)} experiments")
+            self._check_for_retrieved_codes(local_missing, external_missing, dtype, Loaders.EXTERNAL, verbose)
         elif self.debug_flag:
-            missing_external = missing_local 
+            external_missing = local_missing 
             self.logger.info(f"Debug mode: Skipping loading {dtype} from external source")
         else:
-            missing_external = missing_local
+            external_missing = local_missing
             self.logger.warning(f"No external data interface provided: Skipping loading {dtype} from external source")
 
-        return missing_external
+        return external_missing
 
     def _hierarchical_save(self, 
                            dtype: str,
@@ -636,6 +636,7 @@ class Dataset:
                            external_saver: Optional[Callable[..., bool]] = None,
                            column_names: Optional[List[str]] = None,
                            recompute: bool = False,
+                           verbose: bool = True,
                            **kwargs) -> None:
         """Universal hierarchical data saving: Memory → Local Files → External Source"""
         # 1. Filter to codes that exist in memory (and have data)
@@ -654,7 +655,6 @@ class Dataset:
                     
         if not data_to_save:
             self.logger.console_warning(f"No data in memory ({len(target_codes)} exps): {dtype}")
-            # self.logger.console_new_line()
             return
         
         codes_to_save = list(data_to_save.keys())
@@ -662,7 +662,7 @@ class Dataset:
         # 2. Save to local files
         saved = saver(codes_to_save, data_to_save, recompute, column_names=column_names, **kwargs)
         if saved:
-            self.logger.console_saved(f"Saved to local files: {dtype}")
+            self._logging(f"Saved to local files: {dtype} for {len(codes_to_save)} experiments.", self.logger.console_saved, verbose)
         else:
             self.logger.info(f"{dtype.capitalize()} already exist as local files.")
 
@@ -670,13 +670,13 @@ class Dataset:
         if not self.debug_flag and external_saver:
             pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
             if pushed:
-                self.logger.console_pushed(f"Pushed to external source: {dtype}")
+                self._logging(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.", self.logger.console_pushed, verbose)
             else:
-                self.logger.info(f"Skipped pushing {dtype} to external source (check ExternalData logic).")
+                self.logger.info(f"Skipped pushing {dtype} to external source due to missing implementation in ExternalData.")
         elif self.debug_flag:
-            self.logger.info(f"Debug mode: Skipped pushing {dtype} to external source.")
+            self.logger.info(f"Skipped pushing {dtype} to external source due to debug mode.")
         else:
-            self.logger.warning(f"No external data interface provided: Skipped pushing {dtype} to external source.")
+            self.logger.warning(f"Skipped pushing {dtype} to external source due missing ExternalData source.")
 
     def export_to_dataframe(self, experiment_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -751,15 +751,9 @@ class Dataset:
         
         return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
 
-    def _prep_summary_report(self, title: str, total: int, n_params: int, n_feat: int, n_perf: int, n_pred_feat: int) -> List[str]:
-        """Prepare and log a summary report of the dataset state."""
-        return [
-            f"===== {title} =====",
-            f"\nSchema: \t\t{self.schema.name}",
-            f"Experiments: \t\t{total}",
-            f"  - Parameters: \t{n_params}/{total}",
-            f"  - Features: \t\t{n_feat}/{total}",
-            f"  - Performance: \t{n_perf}/{total}",
-            f"  - Predicted Features: {n_pred_feat}/{total}",
-        ]
+    def _logging(self, msg: str, verbose_func: Callable[[str], None], verbose: bool):
+        if verbose:
+            verbose_func(msg)
+        else:
+            self.logger.info(msg)
 

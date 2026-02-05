@@ -9,9 +9,11 @@ from abc import abstractmethod, ABC
 import itertools
 from typing import Dict, Any, List, Optional, Tuple, Type
 import numpy as np
+import pandas as pd
 from .data_objects import DataObject, DataDimension, DataArray, DataReal
 from .data_objects import Parameter, Feature, PerformanceAttribute
 from ..utils.enum import Roles
+from ..utils.logger import PfabLogger
 
 
 class DataBlock(ABC):
@@ -74,11 +76,32 @@ class DataBlock(ABC):
         self.values[name] = value
         self.populated_status[name] = as_populated
 
-    def set_values(self, values: Dict[str, Any], as_populated: bool = True) -> None:
+    def set_values_from_dict(self, values: Dict[str, Any], logger: PfabLogger, as_populated: bool = True) -> None:
         """Set multiple values at once, ignoring unknown parameters."""
         for name, value in values.items():
             if self.has(name):
                 self.set_value(name, value, as_populated=as_populated)
+            else:
+                logger.warning(f"Object '{name}' not found in {self.__class__}. Skip assigning value: {value}.")
+
+    def set_values_from_df(self, df: pd.DataFrame, logger: PfabLogger, as_populated: bool = True) -> None:
+        columns: List[str] = df.columns # type: ignore
+        name: str = columns[-1]
+        dims: List[str] = list(columns[:-1])
+        array = df.values
+
+        # set array
+        if self.has(name):
+            self.set_value(name, array, as_populated=as_populated)
+            
+            # set dims
+            obj = self.data_objects[name]
+            if isinstance(obj, DataArray):
+                obj.set_dim_codes(dims)
+            else:
+                raise ValueError(f"Object has wrong type. Expected 'DataArray', got {obj.__class__}.")
+        else:
+            logger.warning(f"Object '{name}' not found in {self.__class__}. Skip assigning array.")            
     
     def get_value(self, name: str) -> Any:
         """Get value for a parameter."""
@@ -354,33 +377,3 @@ class PerformanceAttributes(DataBlock):
     @property
     def role(self) -> Roles:
         return Roles.PERFORMANCE
-    
-    #     self.calibration_weights: Dict[str, float] = {}
-    
-    # def set_weight(self, perf_code: str, weight: float) -> None:
-    #     """Set calibration weight for a performance attribute."""
-    #     if perf_code not in self.data_objects:
-    #         raise KeyError(f"Performance code '{perf_code}' not defined")
-        
-    #     if weight < 0:
-    #         raise ValueError(f"Calibration weight must be non-negative, got {weight}")
-        
-    #     self.calibration_weights[perf_code] = weight
-    
-    # def get_weight(self, perf_code: str) -> Optional[float]:
-    #     """Get calibration weight for a performance attribute."""
-    #     return self.calibration_weights.get(perf_code)
-    
-    # def to_dict(self) -> Dict[str, Any]:
-    #     """Serialize including calibration weights."""
-    #     data = super().to_dict()
-    #     data["calibration_weights"] = self.calibration_weights
-    #     return data
-    
-    # @classmethod
-    # def from_dict(cls, data: Dict[str, Any]) -> 'PerformanceAttributes':
-    #     """Reconstruct from dictionary including weights."""
-    #     block = super().from_dict(data)
-    #     block.calibration_weights = data.get("calibration_weights", {})
-    #     return block
-    

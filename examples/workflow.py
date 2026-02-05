@@ -76,13 +76,12 @@ def main():
     agent.register_evaluation_model(MockEvaluationModelA)
     agent.register_evaluation_model(MockEvaluationModelB)
     agent.register_prediction_model(MockPredictionModel)
-    agent.initialize_systems(schema, verbose=True)
+    agent.initialize_systems(schema, verbose_flag=False)
     # agent.state_report()
 
     # 5. Load Experiments
-    dataset.populate(verbose=True)
-    dataset.load_experiments(["exp_001"], verbose=False)
-    dataset.load_experiments(["exp_001", "exp_002", "exp_003"], verbose=False)
+    dataset.populate(verbose_flag=False)
+    # dataset.load_experiments(['exp_001', 'exp_002', 'exp_003'])
 
     # evlauate all loaded experiments (if needed)
     dataset.state_report()
@@ -92,8 +91,7 @@ def main():
         agent.evaluation_step(exp)
 
     # save all experiments
-    dataset.save_experiments([exp.code for exp in exps])
-    dataset.save_all(recompute=True)
+    dataset.save_all(recompute_flag=True, verbose_flag=False)
 
     # FIX SAVE HIERARCHICAL LOGGING
     dataset.state_report()

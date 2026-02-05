@@ -122,7 +122,7 @@ class PfabAgent:
     
     # === MODEL INITIALIZATION & VALIDATION ===
 
-    def initialize_systems(self, schema: DatasetSchema, verbose: bool = False) -> None:
+    def initialize_systems(self, schema: DatasetSchema, verbose_flag: bool = False) -> None:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
                 
         # Step 1: Initialize systems (dataset will be set later)
@@ -172,7 +172,7 @@ class PfabAgent:
         self._initialized = True
 
         self.logger.console_success(f"Successfully initialized agentic systems.")
-        if verbose:
+        if verbose_flag:
             self.state_report()
             self.logger.console_new_line()
         
@@ -313,7 +313,7 @@ class PfabAgent:
         # Extract Features and Evaluate Performance
         self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute)
-        self.logger.console_success(f"Successfully evaluated exp {exp_data.code}.")
+        self.logger.console_success(f"Successfully evaluated experiment '{exp_data.code}'.")
     
     def exploration_step(
         self,

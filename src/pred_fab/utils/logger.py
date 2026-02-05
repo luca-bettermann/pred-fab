@@ -78,6 +78,7 @@ class PfabLogger:
     def console_info(self, message: str) -> None:
         """Print to console and log as info."""
         print(message)
+        self._console_new_line = False
         self.logger.info(f"CONSOLE: \n\n{message}\n")
     
     def console_success(self, message: str) -> None:
@@ -91,6 +92,12 @@ class PfabLogger:
         print(f"⚠️  {message}")
         self._console_new_line = False
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
+
+    def console_execute(self, message: str) -> None:
+        """Print warning to console and log."""
+        print(f"⏳ {message}")
+        self._console_new_line = False
+        self.logger.warning(f"CONSOLE EXECUTE: \n\n{message}\n")
 
     def console_loaded(self, message: str) -> None:
         """Print loaded message to console and log."""
