@@ -55,12 +55,12 @@ class DataModule:
         # Fitted normalization parameters
         self._feature_stats: Dict[str, Dict[str, Any]] = {}
         self._parameter_stats: Dict[str, Dict[str, Any]] = {}
-        self._categorical_mappings: Dict[str, List[str]] = {}
         self._is_fitted = False
         
         # Feature system metadata (no data storage)
         self.input_columns: List[str] = []  # Processed columns (after one-hot)
         self.output_columns: List[str] = []
+        self.categorical_mappings: Dict[str, List[str]] = {}
         # self.original_input_columns: List[str] = []  # Before one-hot
         
         # Column normalization methods map (for X)
@@ -98,7 +98,7 @@ class DataModule:
                     raise ValueError(f"Obj expected to be of type 'DataCategorical', got {obj.__class__} instead.")
                 # If categorical, store mapping
                 categories = sorted(obj.constraints["categories"])                
-                self._categorical_mappings[col] = categories
+                self.categorical_mappings[col] = categories
                 # Store one hot encodings as inputs
                 for category in categories:
                     col_name = f"{col}_{category}"
@@ -116,7 +116,7 @@ class DataModule:
 
     # === DATAMODULE OPERATIONS ===
 
-    def prepare(self, val_size: float = 0.2, test_size: float = 0.1, recompute: bool = False) -> None:
+    def prepare(self, val_size: float = 0.0, test_size: float = 0.0, recompute: bool = False) -> None:
         """
         Create initial splits and fit normalization.
         
@@ -351,7 +351,7 @@ class DataModule:
             'is_fitted': True,
             'feature_stats': copy.deepcopy(self._feature_stats),
             'parameter_stats': copy.deepcopy(self._parameter_stats),
-            'categorical_mappings': copy.deepcopy(self._categorical_mappings),
+            'categorical_mappings': copy.deepcopy(self.categorical_mappings),
             'input_columns': copy.deepcopy(self.input_columns),
             'output_columns': copy.deepcopy(self.output_columns)
         }
@@ -362,10 +362,24 @@ class DataModule:
         self._is_fitted = state['is_fitted']
         self._feature_stats = copy.deepcopy(state.get('feature_stats', {}))
         self._parameter_stats = copy.deepcopy(state.get('parameter_stats', {}))
-        self._categorical_mappings = copy.deepcopy(state.get('categorical_mappings', {}))
+        self.categorical_mappings = copy.deepcopy(state.get('categorical_mappings', {}))
         self.input_columns = copy.deepcopy(state.get('input_columns', []))
         self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
+    def get_onehot_column_map(self) -> Dict[str, Tuple[str, Any]]:
+        """
+        Build a lookup map for one-hot encoded columns.
+        
+        Returns:
+            Dict mapping 'column_name' -> ('parent_parameter_code', 'category_value')
+        """
+        col_map = {}
+        for parent, categories in self.categorical_mappings.items():
+            for cat in categories:
+                col_name = f"{parent}_{cat}" 
+                col_map[col_name] = (parent, cat)
+        return col_map
+
     # === SHARED NORMALIZATION HELPERS ===
     
     def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> Dict[str, Any]:
@@ -521,8 +535,8 @@ class DataModule:
         X = X_df.copy()
         
         # One-hot encode
-        if self._categorical_mappings:
-            for col, categories in self._categorical_mappings.items():
+        if self.categorical_mappings:
+            for col, categories in self.categorical_mappings.items():
                 if col not in X.columns:
                     continue
                 for category in categories:
@@ -541,7 +555,7 @@ class DataModule:
     def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> Dict[str, Any]:
         """Decode one-hot encoded categories from array."""
         params = {}
-        for original_col, categories in self._categorical_mappings.items():
+        for original_col, categories in self.categorical_mappings.items():
             # Find indices of one-hot columns
             one_hot_cols = [f"{original_col}_{cat}" for cat in categories]
             indices = []

@@ -27,10 +27,6 @@ class MockFeatureModelA(IFeatureModel):
         return ["param_1", "dim_1", "dim_2"]
         
     @property
-    def input_features(self) -> List[str]:
-        return []
-        
-    @property
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
@@ -68,10 +64,6 @@ class MockFeatureModelB(IFeatureModel):
         return ["param_2", "param_3"]
         
     @property
-    def input_features(self) -> List[str]:
-        return []
-        
-    @property
     def outputs(self) -> List[str]:
         return ["feature_3"]
 
@@ -99,10 +91,6 @@ class MockFeatureModelC(IFeatureModel):
         
     @property
     def input_parameters(self) -> List[str]:
-        return []
-        
-    @property
-    def input_features(self) -> List[str]:
         return []
         
     @property

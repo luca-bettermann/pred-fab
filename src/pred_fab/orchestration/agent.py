@@ -620,6 +620,20 @@ class PfabAgent:
             self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
 
+    def generate_baseline_experiments(
+        self, 
+        n_samples: int,
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None
+    ) -> List[Dict[str, Any]]:
+        """Generate baseline experiments using Latin Hypercube Sampling."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        
+        # Generate parameter sets using calibration system's method
+        param_dicts = self.calibration_system.generate_baseline_experiments(n_samples, param_bounds)
+                
+        return param_dicts
+
     # def propose_new_parameters(
     #     self,
     #     online: bool = False,

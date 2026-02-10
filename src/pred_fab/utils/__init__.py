@@ -2,12 +2,17 @@ from .local_data import LocalData
 from .logger import PfabLogger
 from .metrics import Metrics
 from .enum import (
+    SystemName,
+    Roles,
     NormMethod, 
     SplitType, 
     BlockType, 
     Domain,
     StepType,
-    Mode
+    Mode,
+    Loaders,
+    FileFormat,
+    SamplingStrategy
 )
 
 __all__ = [
@@ -15,11 +20,16 @@ __all__ = [
     "PfabLogger",
     "Metrics",
 
+    "SystemName",
+    "Roles",
     "NormMethod",
     "SplitType",
     "BlockType",
     "Domain",
     "StepType",
     "Mode",
+    "Loaders",
+    "FileFormat",
+    "SamplingStrategy",
 ]
     

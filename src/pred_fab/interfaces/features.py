@@ -57,7 +57,7 @@ class IFeatureModel(BaseInterface):
         Extract feature value(s) from loaded data.
         
         Args:
-            data: Data object from _load_data
+            data: Raw data object from _load_data (unstructured)
             params: Parameter name-value pairs
             visualize: Enable visualizations if True
             **dimensions: Additional dimension parameters
@@ -67,6 +67,11 @@ class IFeatureModel(BaseInterface):
         """
         ...
     
+    # Pre-define input features as empty. Features can not have other features as inputs.
+    @property
+    def input_features(self) -> List[str]:
+        return []
+        
     # === PUBLIC API ===
 
     @final
@@ -145,4 +150,3 @@ class IFeatureModel(BaseInterface):
         # Get the correct order of feature values
         feature_values = [feature_dict[code] for code in self.outputs] # type: ignore
         return feature_values
-

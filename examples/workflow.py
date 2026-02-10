@@ -31,7 +31,7 @@ def main():
     # 2. Define Schema
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     p2 = Parameter.integer("param_2", min_val=1, max_val=5)
-    p3 = Parameter.dimension("dim_1", iterator_code="d1", level=1)
+    p3 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=10)
     p4 = Parameter.dimension("dim_2", iterator_code="d2", level=2)
     p5 = Parameter.categorical("param_3", categories=["A", "B", "C"])
 
@@ -94,6 +94,8 @@ def main():
     dataset.save_all(recompute_flag=True, verbose_flag=False)
     dataset.state_report()
 
+    baseline_params = agent.generate_baseline_experiments(n_samples=5)
+
     # configure calibration settings
     agent.configure_calibration(
         performance_weights={
@@ -112,10 +114,13 @@ def main():
             "param_2": 0.5
         }
     )
-
     agent.calibration_state_report()
 
     datamodule = agent.create_datamodule(dataset)
+
+    # FIX FIT NORMALIZE
+    datamodule.prepare()
+
     new_params = agent.exploration_step(datamodule)
 
 

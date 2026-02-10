@@ -324,8 +324,12 @@ class Features(DataBlock):
         if metric_code in self.values and not recompute_flag:
             return
         
-        # Create array filled with NaNs
-        self.set_value(metric_code, np.full(shape, np.nan), as_populated=False)
+        # Get expected dtype from DataArray definition in constraints
+        data_obj = self.data_objects[metric_code]
+        dtype_str = data_obj.constraints.get("dtype", "float64")
+        
+        # Create array filled with NaNs using correct dtype
+        self.set_value(metric_code, np.full(shape, np.nan, dtype=np.dtype(dtype_str)), as_populated=False)
 
     def initialize_arrays(self, parameters: Parameters, recompute_flag: bool = False) -> None:
         """Initialize all metric arrays with the respective shape."""

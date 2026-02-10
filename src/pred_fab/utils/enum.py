@@ -60,3 +60,11 @@ class Loaders(Enum):
 class FileFormat(Enum):
     CSV = 'csv'
     JSON = 'json'
+
+class SamplingStrategy(str, Enum):
+    """Enumeration for sampling strategies in design of experiments."""
+    NUMERICAL = 'numerical'
+    CATEGORICAL = 'categorical'
+    BOOL = 'bool'
+
+    

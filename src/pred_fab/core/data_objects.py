@@ -6,7 +6,7 @@ They provide validation, type information, and value storage.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional, Dict, Tuple, Literal, Type
+from typing import Any, List, Optional, Dict, Tuple, Literal, Type, Union
 import numpy as np
 
 from ..utils.enum import NormMethod, Roles
@@ -283,13 +283,14 @@ class DataArray(DataObject):
     Used for metric_arrays storage in ExperimentData.
     """
     
-    def __init__(self, code: str, role: Roles, dtype: Optional[np.dtype] = None):
+    def __init__(self, code: str, role: Roles, dtype: Union[str, type, np.dtype]):
         """Initialize DataArray with optional shape and dtype constraints."""
-        self.dtype_constraint = dtype or np.float64
+        # Convert to dtype instance for consistent validation and serialization
+        resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: List[str] = []
         
         constraints: Dict[str, Any] = {
-            "dtype": str(dtype) if dtype else "float64",
+            "dtype": resolved_dtype.name,
             "columns": self.columns
         }
             
@@ -311,18 +312,19 @@ class DataArray(DataObject):
             raise TypeError(f"{self.code} must be np.ndarray, got {type(value).__name__}")
         
         # Validate dtype if specified
-        if self.dtype_constraint and value.dtype != self.dtype_constraint:
+        target_dtype = np.dtype(self.constraints.get("dtype"))
+        if value.dtype != target_dtype:
             raise ValueError(
-                f"{self.code} dtype mismatch: expected {self.dtype_constraint}, got {value.dtype}"
+                f"{self.code} dtype mismatch: expected {target_dtype}, got {value.dtype}"
             )
         return True
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any],
                        round_digits: Optional[int] = None) -> 'DataArray':
-        dtype_str = constraints.get("dtype", "float64")
-        dtype = np.dtype(dtype_str) if dtype_str else None
-        obj = cls(code, role, dtype)
+        # Pass dtype string/type directly to init, which handles conversion
+        obj = cls(code, role, dtype=constraints.get("dtype", np.float64))
+        obj.round_digits = round_digits
         if "columns" in constraints:
             obj.set_columns(constraints["columns"])
         return obj
@@ -333,13 +335,12 @@ class Parameter:
     """Factory for creating parameter DataObjects."""
 
     @staticmethod
-    def real(code: str, min_val: Optional[float] = None, max_val: Optional[float] = None,
-             round_digits: Optional[int] = None) -> DataReal:
+    def real(code: str, min_val: float, max_val: float, round_digits: int = 3) -> DataReal:
         """Create a real-valued parameter."""
         return DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
     
     @staticmethod
-    def integer(code: str, min_val: Optional[int] = None, max_val: Optional[int] = None) -> DataInt:
+    def integer(code: str, min_val: int, max_val: int) -> DataInt:
         """Create an integer parameter."""
         return DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
     
@@ -354,8 +355,7 @@ class Parameter:
         return DataBool(code=code, role=Roles.PARAMETER)
     
     @staticmethod
-    def dimension(code: str, iterator_code: str, level: int,
-                  min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
+    def dimension(code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
         """Create a dimensional parameter."""
         return DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
     
@@ -364,7 +364,7 @@ class Feature:
     """Factory for creating feature Feature objects."""
 
     @staticmethod
-    def array(code: str, dtype: Optional[np.dtype] = None) -> DataArray:
+    def array(code: str, dtype: Union[str, type, np.dtype] = np.float64) -> DataArray:
         """Create a metric_array DataObject."""
         return DataArray(code=code, dtype=dtype, role=Roles.FEATURE)
     
@@ -373,7 +373,7 @@ class PerformanceAttribute:
     """Factory for creating Performance objects."""
     
     @staticmethod
-    def score(code: str, round_digits: Optional[int] = None) -> DataReal:
+    def score(code: str, round_digits: int = 3) -> DataReal:
         """Create a normalized score (0-1) performance attribute."""
         return DataReal(code=code, min_val=0, max_val=1, round_digits=round_digits, role=Roles.PERFORMANCE)
     
