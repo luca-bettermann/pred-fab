@@ -260,8 +260,8 @@ class LocalData:
                         result_dict[code] = json.load(f)
                 else:
                     raise ValueError(f"Unknown file format {file_format.value}. Check enum.")
-            except Exception as e:
-                print(f"Failed to load {code}: {e}")
+            except Exception:
+                # Keep loading behavior non-fatal: failed items are reported via missing_codes.
                 missing_codes.append(code)
                 
         return missing_codes, result_dict

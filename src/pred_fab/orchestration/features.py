@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Type, Optional, List, Set
+from typing import Dict, Optional, List
 import numpy as np
 
 from pred_fab.core.data_objects import DataArray
@@ -6,7 +6,7 @@ from pred_fab.interfaces.features import IFeatureModel
 
 
 from ..utils import PfabLogger
-from ..core import DatasetSchema, ExperimentData, Parameters, DataDimension
+from ..core import DatasetSchema, ExperimentData, Parameters, Features
 from .base_system import BaseOrchestrationSystem
 
 
@@ -63,6 +63,7 @@ class FeatureSystem(BaseOrchestrationSystem):
         # Get feature extraction results from core logic
         feature_dict = self._compute_features_from_params(
             parameters=exp_data.parameters,
+            features=exp_data.features,
             evaluate_from=evaluate_from,
             evaluate_to=evaluate_to,
             visualize=visualize,
@@ -77,6 +78,7 @@ class FeatureSystem(BaseOrchestrationSystem):
     def _compute_features_from_params(
         self,
         parameters: Parameters,
+        features: Features,
         evaluate_from: int = 0,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
@@ -105,7 +107,9 @@ class FeatureSystem(BaseOrchestrationSystem):
             # Collect results (dim + feature value)
             num_dims = len(feature_model.get_input_dimensions())
             for i, code in enumerate(feature_model.outputs):
-                # Directly slice [rows, (dims columns + specific feature column)]
-                feature_dict[code] = feature_array[:, list(range(num_dims)) + [num_dims+i]]
+                # Slice [iterators..., selected-feature] from model output table.
+                table = feature_array[:, list(range(num_dims)) + [num_dims+i]]
+                # Convert to canonical tensor via shared Features transformation.
+                feature_dict[code] = features.table_to_tensor(code, table, parameters)
 
         return feature_dict

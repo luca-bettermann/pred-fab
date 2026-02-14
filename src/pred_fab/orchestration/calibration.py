@@ -1,5 +1,4 @@
-from os import name
-from typing import Dict, List, Optional, Any, Literal, Tuple, Callable, Type
+from typing import Dict, List, Optional, Any, Tuple, Callable
 import numpy as np
 from scipy.stats import qmc
 from scipy.optimize import minimize
@@ -9,7 +8,7 @@ import functools
 
 from ..core import DataModule, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical
-from ..utils import PfabLogger, SplitType, Domain, Mode, SamplingStrategy
+from ..utils import PfabLogger, Mode, SamplingStrategy
 from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
 
@@ -52,6 +51,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Set ordered weights
         self.perf_names_order = list(schema.performance_attrs.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
+        self.parameters = schema.parameters
         
         # Configure data_objects, bounds and fixed params
         self.data_objects: Dict[str, DataObject] = {}
@@ -288,31 +288,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
     
     # === SURROGATE TRAINING ===
 
-    def _get_train_arrays(self, datamodule: DataModule) -> Tuple[np.ndarray, np.ndarray]:
-        """Get train arrays of X for the parameters and y for the performance attributes."""
-        X_train = []
-        y_train = []
-
-        for code in datamodule.get_split_codes(split=SplitType.TRAIN):
-            exp = datamodule.dataset.get_experiment(code)
-            if exp.performance:
-                params = exp.parameters.get_values_dict()
-                x_arr = datamodule.params_to_array(params)
-                
-                X_train.append(x_arr)
-                y_train.append(exp.performance.values)
-            else:
-                self.logger.warning(f"Performance data missing for experiment {code}. Skipping.")
-                continue
-
-        return np.array(X_train), np.array(y_train)
-    
     def train_surrogate_model(
         self,
         datamodule: DataModule
     ) -> None:
         """Train surrogate model on existing experiment data. We assume the datamodule is fitted."""
-        X_train, y_train = self._get_train_arrays(datamodule)
+        X_train, y_train = datamodule.build_calibration_training_arrays(
+            performance_order=self.perf_names_order,
+            strict=False
+        )
         if len(X_train) > 0:
             self.model.fit(X_train, y_train)
         else:
@@ -396,8 +380,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                      'type': SamplingStrategy.NUMERICAL, 
                      'low': low, 
                      'high': high, 
-                     'dtype': dtype,
-                     'round': data_obj.round_digits
+                     'dtype': dtype
                 }
             
             self.logger.debug(f"Included '{code}' in baseline generation specs.")
@@ -414,7 +397,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # Scale: [0, 1] -> [low, high]
 
                 scaled_val = spec['low'] + val * (spec['high'] - spec['low'])
-                params[name] = round(spec['dtype'](scaled_val), spec.get('round', 5))
+                params[name] = spec['dtype'](scaled_val)
                 
             elif spec['type'] == SamplingStrategy.BOOL:
                 # Scale: [0, 1] -> {True, False}
@@ -427,7 +410,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 idx = min(idx, len(cats) - 1) # clip to be safe
                 params[name] = cats[idx]
         
-        return params
+        # Reuse canonical parameter coercion/rounding rules.
+        return self.parameters.sanitize_values(params, ignore_unknown=True)
 
 
     # === OPTIMIZATION WORKFLOW ===
@@ -559,7 +543,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         proposed_params = datamodule.array_to_params(best_x)
         if fixed_param_values:
             proposed_params.update(fixed_param_values)
-        return proposed_params
+        return datamodule.dataset.schema.parameters.sanitize_values(
+            proposed_params,
+            ignore_unknown=True
+        )
 
     # === BOUNDS FOR OPTIMIZATION ===
 
@@ -642,19 +629,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _normalize_bounds(self, col: str, low: float, high: float, datamodule: DataModule) -> Tuple[float, float]:
         """Normalize bounds to [0, 1] based on schema constraints."""
-        # === NORMALIZATION ===
-        if col in datamodule._parameter_stats:
-            # Continuous variable with stats
-            stats = datamodule._parameter_stats[col]
-            n_low = datamodule._apply_normalization(np.array([low]), stats)[0]
-            n_high = datamodule._apply_normalization(np.array([high]), stats)[0]
-            # Handle flipping if normalization (e.g. -1 factor?) - usually linear monotonic
+        n_low, n_high = datamodule.normalize_parameter_bounds(col, low, high)
+        if (n_low, n_high) != (low, high):
             self.logger.debug(f"Processed bounds for '{col}': raw [{low}, {high}] -> normalized [{n_low}, {n_high}]")
-            return (min(n_low, n_high), max(n_low, n_high))
         else:
-            # Maybe one-hot or not normalized
             self.logger.debug(f"No normalization stats for '{col}'. Using raw bounds [{low}, {high}].")
-            return (low, high)
+        return n_low, n_high
 
     # === WRAPPERS ===
 

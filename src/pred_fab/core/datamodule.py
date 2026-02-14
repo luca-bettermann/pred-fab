@@ -252,6 +252,10 @@ class DataModule:
                 self._feature_stats[col] = self._compute_normalization_stats(y_arr[:, i], method)
         
         self._is_fitted = True
+
+    def fit_normalization(self, split: SplitType = SplitType.TRAIN) -> None:
+        """Public wrapper for fitting normalization on a dataset split."""
+        self._fit_normalize(split)
     
     def get_batches(self, split: SplitType = SplitType.TRAIN) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
@@ -417,12 +421,25 @@ class DataModule:
         elif method == NormMethod.STANDARD:
             return (data - stats['mean']) / (stats['std'] + 1e-8)
         elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                # Degenerate range: keep normalized value at 0 to avoid exploding magnitudes.
+                return np.zeros_like(data, dtype=np.float64)
             return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
         elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
             return (data - stats['median']) / (iqr + 1e-8)
         else:
             raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
+
+    def normalize_parameter_bounds(self, col: str, low: float, high: float) -> Tuple[float, float]:
+        """Normalize raw parameter bounds if normalization stats exist for the column."""
+        if col not in self._parameter_stats:
+            return (low, high)
+        stats = self._parameter_stats[col]
+        n_low = self._apply_normalization(np.array([low]), stats)[0]
+        n_high = self._apply_normalization(np.array([high]), stats)[0]
+        return (min(n_low, n_high), max(n_low, n_high))
     
     def _reverse_normalization(self, data_norm: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
         """Reverse normalization for data array."""
@@ -433,6 +450,10 @@ class DataModule:
         elif method == NormMethod.STANDARD:
             return data_norm * stats['std'] + stats['mean']
         elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                # Degenerate range: value is fixed at min/max in original space.
+                return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
             return data_norm * (stats['max'] - stats['min']) + stats['min']
         elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
@@ -623,8 +644,66 @@ class DataModule:
         for i, col in enumerate(self.input_columns):
             if self.input_columns[i] not in consumed_cols:
                 params[col] = float(denorm_array[i])
-                
-        return params
+
+        # Apply canonical parameter coercion/rounding at the array->dict boundary.
+        return self.dataset.schema.parameters.sanitize_values(
+            params,
+            ignore_unknown=True
+        )
+
+    def build_calibration_training_arrays(
+        self,
+        performance_order: List[str],
+        split: SplitType = SplitType.TRAIN,
+        strict: bool = True
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Build (X, y) arrays for calibration/surrogate training from a dataset split.
+
+        Args:
+            performance_order: Ordered performance attribute codes for y columns.
+            split: Dataset split to extract from (default: train).
+            strict: If True, raise when required performance values are missing.
+                    If False, skip experiments with missing required values.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+        if split not in self._split_codes:
+            raise ValueError(f"Unknown split: {split}")
+        if not performance_order:
+            raise ValueError("performance_order must contain at least one performance code.")
+
+        X_rows: List[np.ndarray] = []
+        y_rows: List[List[float]] = []
+
+        for code in self._split_codes[split]:
+            exp = self.dataset.get_experiment(code)
+            perf = exp.performance.get_values_dict()
+
+            missing = [name for name in performance_order if name not in perf]
+            if missing:
+                if strict:
+                    raise ValueError(
+                        f"Missing performance values for experiment '{code}': {missing}"
+                    )
+                continue
+
+            x_arr = self.params_to_array(exp.parameters.get_values_dict())
+            y_arr = [float(perf[name]) for name in performance_order]
+
+            X_rows.append(x_arr)
+            y_rows.append(y_arr)
+
+        if not X_rows:
+            return (
+                np.empty((0, len(self.input_columns)), dtype=np.float64),
+                np.empty((0, len(performance_order)), dtype=np.float64),
+            )
+
+        return (
+            np.asarray(X_rows, dtype=np.float64),
+            np.asarray(y_rows, dtype=np.float64),
+        )
 
     def copy(self) -> 'DataModule':
         """Create a deep copy of this DataModule."""

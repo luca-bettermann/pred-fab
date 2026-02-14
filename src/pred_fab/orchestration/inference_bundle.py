@@ -166,7 +166,10 @@ class InferenceBundle:
         elif method == 'standard':
             return (data - stats['mean']) / (stats['std'] + 1e-8)
         elif method == 'minmax':
-            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return np.zeros_like(data, dtype=np.float64)
+            return (data - stats['min']) / (denom + 1e-8)
         elif method == 'robust':
             iqr = stats['q3'] - stats['q1']
             return (data - stats['median']) / (iqr + 1e-8)
@@ -182,7 +185,10 @@ class InferenceBundle:
         elif method == 'standard':
             return data_norm * stats['std'] + stats['mean']
         elif method == 'minmax':
-            return data_norm * (stats['max'] - stats['min']) + stats['min']
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
+            return data_norm * denom + stats['min']
         elif method == 'robust':
             iqr = stats['q3'] - stats['q1']
             return data_norm * iqr + stats['median']

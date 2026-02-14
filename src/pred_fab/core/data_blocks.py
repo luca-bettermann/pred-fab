@@ -10,7 +10,7 @@ import itertools
 from typing import Dict, Any, List, Optional, Tuple, Type
 import numpy as np
 import pandas as pd
-from .data_objects import DataObject, DataDimension, DataArray, DataReal
+from .data_objects import DataObject, DataDimension, DataArray
 from .data_objects import Parameter, Feature, PerformanceAttribute
 from ..utils.enum import Roles
 from ..utils.logger import PfabLogger
@@ -84,24 +84,6 @@ class DataBlock(ABC):
             else:
                 logger.warning(f"Object '{name}' not found in {self.__class__}. Skip assigning value: {value}.")
 
-    def set_values_from_df(self, df: pd.DataFrame, logger: PfabLogger, as_populated: bool = True) -> None:
-        columns: List[str] = df.columns # type: ignore
-        name: str = columns[-1]
-        array = df.values
-
-        # set array
-        if self.has(name):
-            self.set_value(name, array, as_populated=as_populated)
-            
-            # set dims
-            obj = self.data_objects[name]
-            if isinstance(obj, DataArray):
-                obj.set_columns(list(columns))
-            else:
-                raise ValueError(f"Object has wrong type. Expected 'DataArray', got {obj.__class__}.")
-        else:
-            logger.warning(f"Object '{name}' not found in {self.__class__}. Skip assigning array.")            
-    
     def get_value(self, name: str) -> Any:
         """Get value for a parameter."""
         if name not in self.values:
@@ -299,6 +281,25 @@ class Parameters(DataBlock):
             dim_combinations = dim_combinations[evaluate_from:evaluate_to]
         return dim_combinations
 
+    def sanitize_values(
+        self,
+        values: Dict[str, Any],
+        ignore_unknown: bool = False
+    ) -> Dict[str, Any]:
+        """Coerce and validate a parameter dictionary according to schema data objects."""
+        sanitized: Dict[str, Any] = {}
+        for code, value in values.items():
+            if not self.has(code):
+                if ignore_unknown:
+                    sanitized[code] = value
+                    continue
+                raise KeyError(f"Parameter '{code}' not defined in {self.__class__.__name__}")
+            obj = self.get(code)
+            coerced = obj.coerce(value)
+            obj.validate(coerced)
+            sanitized[code] = coerced
+        return sanitized
+
 class Features(DataBlock):
     """
     Multi-dimensional metric arrays using DataArray objects.
@@ -332,21 +333,151 @@ class Features(DataBlock):
         self.set_value(metric_code, np.full(shape, np.nan, dtype=np.dtype(dtype_str)), as_populated=False)
 
     def initialize_arrays(self, parameters: Parameters, recompute_flag: bool = False) -> None:
-        """Initialize all metric arrays with the respective shape."""
+        """Initialize all feature tensors with shapes derived from iterator columns."""
         for metric_code in self.data_objects.keys():
+            # Resolve feature schema object and required iterator columns.
             data_array = self.data_objects[metric_code]
             if not isinstance(data_array, DataArray):
                 raise TypeError(f"DataObject for code '{metric_code}' is not a DataArray")
             if len(data_array.columns) == 0:
                 raise ValueError(f"Columns not set for metric array '{metric_code}'")
                         
-            # compute shape based on parameter dimensions
-            dim_codes = [obj.code for obj in parameters.get_dim_objects() if obj.iterator_code in data_array.columns]
-            dim_values = parameters.get_dim_values(dim_codes)
-            shape = (int(np.prod(dim_values)), len(dim_values) + 1)
+            iterator_cols = data_array.columns[:-1]
+            if not iterator_cols:
+                shape: Tuple[int, ...] = ()
+            else:
+                # Translate iterator columns to canonical tensor shape.
+                dim_sizes = self._get_dim_sizes_from_iterators(parameters, iterator_cols)
+                shape = tuple(dim_sizes)
 
-            # Initialize array with computed shape
+            # Allocate tensor storage in canonical shape.
             self._initialize_array(metric_code, shape, recompute_flag)
+
+    def set_values_from_df(
+        self,
+        df: pd.DataFrame,
+        logger: PfabLogger,
+        as_populated: bool = True,
+        parameters: Optional[Parameters] = None
+    ) -> None:
+        """Set feature values from tabular format by transforming to canonical tensor format."""
+        columns: List[str] = list(df.columns)  # type: ignore
+        metric_code = columns[-1]
+        if not self.has(metric_code):
+            logger.warning(f"Object '{metric_code}' not found in {self.__class__}. Skip assigning array.")
+            return
+        if parameters is None:
+            raise ValueError("Parameters are required to convert tabular feature values to tensor representation.")
+
+        tensor = self.table_to_tensor(metric_code, df.values, parameters)
+        self.set_value(metric_code, tensor, as_populated=as_populated)
+
+    def table_to_tensor(self, feature_code: str, table: np.ndarray, parameters: Parameters) -> np.ndarray:
+        """Convert tabular feature representation [iterators..., value] to canonical tensor."""
+        # Read schema metadata to determine iterator columns and dtype.
+        data_obj = self.get(feature_code)
+        if not isinstance(data_obj, DataArray):
+            raise TypeError(f"Feature '{feature_code}' is not backed by DataArray.")
+
+        iterator_cols = data_obj.columns[:-1]
+        dtype = np.dtype(data_obj.constraints.get("dtype", "float64"))
+        arr = np.asarray(table, dtype=dtype)
+
+        if not iterator_cols:
+            # Handle scalar features represented without iterator columns.
+            if arr.ndim == 0:
+                return arr
+            if arr.ndim == 1:
+                if arr.size == 0:
+                    return np.array(np.nan, dtype=dtype)
+                return np.array(arr.flat[0], dtype=dtype)
+            if arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] > 0:
+                return np.array(arr[0, -1], dtype=dtype)
+            raise ValueError(f"Invalid table shape for scalar feature '{feature_code}': {arr.shape}")
+
+        dim_sizes = self._get_dim_sizes_from_iterators(parameters, iterator_cols)
+        tensor = np.full(tuple(dim_sizes), np.nan, dtype=dtype)
+
+        if arr.ndim != 2 or arr.shape[1] < len(iterator_cols) + 1:
+            raise ValueError(
+                f"Invalid table shape for feature '{feature_code}'. "
+                f"Expected [n_rows, {len(iterator_cols)+1}], got {arr.shape}."
+            )
+
+        # Fill tensor cells from tabular index/value rows.
+        for row in arr:
+            idx = tuple(int(round(row[i])) for i in range(len(iterator_cols)))
+            if any(dim < 0 or dim >= tensor.shape[i] for i, dim in enumerate(idx)):
+                raise ValueError(
+                    f"Row index {idx} out of bounds for feature '{feature_code}' with shape {tensor.shape}."
+                )
+            tensor[idx] = row[-1]
+
+        return tensor
+
+    def tensor_to_table(self, feature_code: str, tensor: np.ndarray, parameters: Parameters) -> np.ndarray:
+        """Convert canonical tensor feature representation to tabular [iterators..., value]."""
+        # Read schema metadata to determine iterator columns and dtype.
+        data_obj = self.get(feature_code)
+        if not isinstance(data_obj, DataArray):
+            raise TypeError(f"Feature '{feature_code}' is not backed by DataArray.")
+
+        iterator_cols = data_obj.columns[:-1]
+        dtype = np.dtype(data_obj.constraints.get("dtype", "float64"))
+        arr = np.asarray(tensor, dtype=dtype)
+
+        if not iterator_cols:
+            # Emit scalar feature as a single-row one-column table.
+            scalar = float(arr) if arr.ndim == 0 else float(arr.flat[0])
+            return np.array([[scalar]], dtype=dtype)
+
+        dim_codes = self._get_dim_codes_from_iterators(parameters, iterator_cols)
+        dim_combinations = parameters.get_dim_combinations(dim_codes)
+        table = np.empty((len(dim_combinations), len(iterator_cols) + 1), dtype=dtype)
+
+        # Flatten tensor into row-wise iterator/value pairs.
+        for i, idx in enumerate(dim_combinations):
+            table[i, :len(iterator_cols)] = idx
+            table[i, -1] = arr[idx]
+
+        return table
+
+    def value_at(self, feature_code: str, parameters: Parameters, iterator_values: Dict[str, Any]) -> Optional[float]:
+        """Read one feature value from canonical tensor for given iterator coordinates."""
+        # Fast-path for missing feature values.
+        if not self.has_value(feature_code):
+            return None
+        data_obj = self.get(feature_code)
+        if not isinstance(data_obj, DataArray):
+            raise TypeError(f"Feature '{feature_code}' is not backed by DataArray.")
+
+        iterator_cols = data_obj.columns[:-1]
+        arr = self.get_value(feature_code)
+
+        if not iterator_cols:
+            # Scalar features have no iterator index.
+            return float(arr) if np.asarray(arr).ndim == 0 else float(np.asarray(arr).flat[0])
+
+        idx = []
+        # Build tensor index from iterator column names.
+        for col in iterator_cols:
+            if col not in iterator_values:
+                return None
+            idx.append(int(iterator_values[col]))
+        return float(np.asarray(arr)[tuple(idx)])
+
+    def _get_dim_codes_from_iterators(self, parameters: Parameters, iterator_cols: List[str]) -> List[str]:
+        iterator_to_dim = {dim.iterator_code: dim.code for dim in parameters.get_dim_objects()}
+        dim_codes = []
+        for iterator in iterator_cols:
+            if iterator not in iterator_to_dim:
+                raise KeyError(f"Iterator '{iterator}' not found in Parameters dimensions.")
+            dim_codes.append(iterator_to_dim[iterator])
+        return dim_codes
+
+    def _get_dim_sizes_from_iterators(self, parameters: Parameters, iterator_cols: List[str]) -> List[int]:
+        dim_codes = self._get_dim_codes_from_iterators(parameters, iterator_cols)
+        return [int(parameters.get_value(code)) for code in dim_codes]
 
 
 class PerformanceAttributes(DataBlock):

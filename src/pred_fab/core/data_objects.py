@@ -64,6 +64,11 @@ class DataObject(ABC):
             ValueError: If value violates constraints
         """
         pass
+
+    @abstractmethod
+    def coerce(self, value: Any) -> Any:
+        """Coerce raw input to this object's canonical runtime dtype."""
+        ...
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for schema storage."""
@@ -146,6 +151,13 @@ class DataReal(DataObject):
             raise ValueError(f"{self.code}={value} above maximum {self.constraints['max']}")
         
         return True
+
+    def coerce(self, value: Any) -> float:
+        """Coerce numeric input to float and apply configured rounding."""
+        coerced = float(value)
+        if self.round_digits is not None:
+            coerced = round(coerced, self.round_digits)
+        return coerced
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataReal':
@@ -180,6 +192,10 @@ class DataInt(DataObject):
             raise ValueError(f"{self.code}={value} above maximum {self.constraints['max']}")
         
         return True
+
+    def coerce(self, value: Any) -> int:
+        """Coerce numeric input to int using round-to-nearest."""
+        return int(round(float(value)))
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataInt':
@@ -203,6 +219,14 @@ class DataBool(DataObject):
         if not isinstance(value, bool):
             raise TypeError(f"{self.code} must be bool, got {type(value).__name__}")
         return True
+
+    def coerce(self, value: Any) -> bool:
+        """Coerce bool-like input to bool using threshold semantics for numerics."""
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return float(value) >= 0.5
+        raise TypeError(f"{self.code} must be bool-like, got {type(value).__name__}")
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataBool':
@@ -233,6 +257,10 @@ class DataCategorical(DataObject):
             )
         
         return True
+
+    def coerce(self, value: Any) -> str:
+        """Coerce categorical input to string."""
+        return str(value)
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataCategorical':
@@ -318,6 +346,11 @@ class DataArray(DataObject):
                 f"{self.code} dtype mismatch: expected {target_dtype}, got {value.dtype}"
             )
         return True
+
+    def coerce(self, value: Any) -> np.ndarray:
+        """Coerce array-like input to ndarray with configured dtype."""
+        target_dtype = np.dtype(self.constraints.get("dtype"))
+        return np.asarray(value, dtype=target_dtype)
     
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any],

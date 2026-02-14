@@ -6,13 +6,12 @@ existing workflow patterns. Wraps EvaluationSystem, PredictionSystem, and
 manages schema generation and dataset initialization.
 """
 
-import numpy as np
 import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple, Literal
+from typing import Any, Dict, List, Set, Type, Optional, Tuple
+import numpy as np
 
-from pred_fab.core.data_objects import DataArray
-from pred_fab.utils.enum import Domain, SystemName
-from ..core.schema import DatasetSchema, SchemaRegistry
+from pred_fab.utils.enum import SystemName
+from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
 from ..orchestration import (
@@ -22,10 +21,8 @@ from ..orchestration import (
     CalibrationSystem
 )
 
-from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel, IExternalData
+from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, StepType, Mode
-
-print("\n===== Welcome to PFAB - Predictive Fabrication =====\n")
 
 
 class PfabAgent:
@@ -334,7 +331,7 @@ class PfabAgent:
 
         self.logger.console_success("Successfully completed exploration step. Proposed new parameters:")
         for key, value in new_params.items():
-            self.logger.console_success(f"  {key}: {value}")
+            self.logger.console_info(f"  {key}: {value}")
 
         return new_params
 
@@ -363,14 +360,13 @@ class PfabAgent:
         new_params = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
-            fixed_context=None,
             w_explore=w_explore,
             n_optimization_rounds=n_optimization_rounds
         )
 
-        self.logger.console_success("Successfully completed exploration step. Proposed new parameters:")
+        self.logger.console_success("Successfully completed inference step. Proposed new parameters:")
         for key, value in new_params.items():
-            self.logger.console_success(f"  {key}: {value}")
+            self.logger.console_info(f"  {key}: {value}")
 
         return new_params
 
@@ -410,7 +406,11 @@ class PfabAgent:
         # 4. Train Exploration Model and calibrate new experiment
         current_params = exp_data.parameters.get_values_dict()
         new_params = self.calibration_system.run_calibration(
-            datamodule, Domain.OFFLINE, phase, current_params, w_explore, n_optimization_rounds)
+            datamodule=datamodule,
+            mode=phase,
+            w_explore=w_explore,
+            n_optimization_rounds=n_optimization_rounds
+        )
         new_exp_data = datamodule.dataset.create_experiment("new_exp", new_params)
         self._log_step_completion(exp_data.code, start, end, action="calibrated")
         
@@ -744,7 +744,7 @@ class PfabAgent:
             raise ValueError(f"Unknown step type: {step}")
         
         # Validate that all required systems are active
-        if not all([rel_systems]):
+        if not all(rel_systems):
             raise RuntimeError(f"One or more required systems not initialized for {step.value} step.")
         
     def _step_config(

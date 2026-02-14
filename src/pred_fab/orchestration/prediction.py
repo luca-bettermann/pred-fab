@@ -85,7 +85,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
-        self.datamodule._fit_normalize(SplitType.TRAIN)
+        self.datamodule.fit_normalization(SplitType.TRAIN)
         
         # Get batches
         train_batches = self.datamodule.get_batches(SplitType.TRAIN)
@@ -237,14 +237,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         results = {}
         for model in self.models:
             # Get indices for this model
+            input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
             indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
             
             # Get ground truth (denormalized)
             y_true_norm = y_split[:, indices]
             y_true = self.datamodule.denormalize_values(y_true_norm, model.outputs)
             
-            # Predict
-            y_pred_norm = model.forward_pass(X_split)
+            # Predict from the model-specific input slice.
+            y_pred_norm = model.forward_pass(X_split[:, input_indices])
             y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
             
             # Calculate metrics and store
@@ -615,7 +616,5 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
         
         return bundle
-
-
 
 

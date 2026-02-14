@@ -128,7 +128,7 @@ class DatasetSchema:
         ]
         
         for self_block, other_block in block_checks:
-            if not self_block._is_identical(other_block):
+            if not self_block.is_compatible(other_block):
                 raise ValueError(
                     f"Schema block '{self_block.__class__.__name__}' is not identical "
                     f"to {other_block.__class__.__name__}."

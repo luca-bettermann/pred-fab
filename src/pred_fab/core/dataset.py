@@ -68,10 +68,11 @@ class ExperimentData:
             raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.code}'")
 
         array = self.features.get_value(feature_code)
-        end_index = evaluate_to if evaluate_to is not None else array.shape[0]
+        flat = np.asarray(array).reshape(-1)
+        end_index = evaluate_to if evaluate_to is not None else len(flat)
         
         # Check if all values in the specified range are NaN
-        if np.all(~np.isnan(array[evaluate_from:end_index])):
+        if np.all(~np.isnan(flat[evaluate_from:end_index])):
             return True
         return False
 
@@ -82,7 +83,7 @@ class ExperimentData:
         if block_type == BlockType.PARAMETERS:
             self.parameters.set_values_from_dict(values, logger)
         elif block_type == BlockType.FEATURES:
-            self.features.set_values_from_df(values, logger)
+            self.features.set_values_from_df(values, logger, parameters=self.parameters)
         elif block_type == BlockType.PERF_ATTRS:
             self.performance.set_values_from_dict(values, logger)
         # elif block_type == BlockType.FEATURES_PRED:
@@ -352,10 +353,10 @@ class Dataset:
         return exp.get_data_dict(block_type)
     
     def _get_exp_feature_array(self, code: str, feature_name: str, block_type: BlockType) -> Optional[np.ndarray]:
-        features = self._get_exp_data(code, block_type=block_type)
-        if feature_name not in features:
+        exp = self.get_experiment(code)
+        if feature_name not in exp.features.values:
             raise KeyError(f"{block_type} '{feature_name}' not found for experiment '{code}'")
-        return features[feature_name]
+        return exp.features.tensor_to_table(feature_name, exp.features.get_value(feature_name), exp.parameters)
     
     def _get_array_column_names(self, feature_name: str) -> List[str]:
         """Get column names for a specific feature array."""
@@ -698,8 +699,8 @@ class Dataset:
             all_params = exp_data.parameters.get_values_dict()
             dim_names = exp_data.parameters.get_dim_names()
             
-            # Static params (X base)
-            static_params = {k: v for k, v in all_params.items() if k not in dim_names}
+            # Base params include both static and dimension-size parameters.
+            static_params = all_params.copy()
             
             if not dim_names:
                 # Case 1: No dimensions (Scalar experiment)
@@ -719,13 +720,6 @@ class Dataset:
             # Case 2: Multi-dimensional experiment
             # Get all index combinations
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
-            iterator_map = exp_data.parameters.get_dim_iterator_codes()
-            
-            # Pre-fetch feature arrays
-            feature_arrays = {
-                name: exp_data.features.get_value(name) 
-                for name in exp_data.features.keys()
-            }
             
             for idx_tuple in dim_combinations:
                 # Build X row (Static + Iterators)
@@ -738,11 +732,11 @@ class Dataset:
                 
                 # Build y row (Features at index)
                 y_dict = {}
-                for feature_name, array in feature_arrays.items():
-                    if isinstance(array, np.ndarray):
-                        val = array[idx_tuple]
-                        if not np.isnan(val):
-                            y_dict[feature_name] = float(val)
+                # Read feature values consistently from canonical tensor storage.
+                for feature_name in exp_data.features.keys():
+                    val = exp_data.features.value_at(feature_name, exp_data.parameters, row_dict)
+                    if val is not None and not np.isnan(val):
+                        y_dict[feature_name] = val
                 
                 y_rows.append(y_dict)
         
@@ -756,4 +750,3 @@ class Dataset:
             verbose_func(msg)
         else:
             self.logger.info(msg)
-
