@@ -90,26 +90,32 @@ class DataObject(ABC):
         code = data["code"]
         constraints = data["constraints"]
         round_digits = data.get("round_digits")
-        role = data.get("role")
+        role_raw = data.get("role")
+
+        # Deserialize role from stored enum value string.
+        role: Optional[Roles]
+        if role_raw is None:
+            role = None
+        elif isinstance(role_raw, Roles):
+            role = role_raw
+        elif isinstance(role_raw, str):
+            try:
+                role = Roles(role_raw)
+            except ValueError as e:
+                raise TypeError(f"Invalid role value '{role_raw}' for DataObject '{code}'") from e
+        else:
+            raise TypeError(f"Role must be a Roles enum member, role string, or None, got {type(role_raw).__name__}")
         
         if obj_type not in cls._registry:
             raise ValueError(f"Unknown DataObject type: {obj_type}")
         if not issubclass(cls._registry[obj_type], DataObject):
             raise TypeError(f"Registered type {obj_type} is not a DataObject subclass")
-        if not isinstance(role, Roles) or role is None:
+        if role is None or not isinstance(role, Roles):
             raise TypeError(f"Role must be a Roles enum member or None, got {type(role).__name__}")
         
         # Instantiate object using registry lookups implementation
         obj = cls._registry[obj_type]._from_json_impl(code, role, constraints, round_digits)
-        
-        # Restore role if present
-        if role is not None:
-             # Find matching role enum member
-            for role in Roles:
-                if role.value == role:
-                    obj.role = role
-                    break
-        
+        obj.role = role
         return obj
     
     @classmethod
