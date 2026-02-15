@@ -1,59 +1,15 @@
 import numpy as np
 
 from pred_fab.core import DataModule
-from pred_fab.interfaces import IPredictionModel, ISurrogateModel
 from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.inference_bundle import InferenceBundle
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import PfabLogger, SplitType, LocalData
 from tests.utils.builders import build_dataset_with_single_experiment, sample_feature_tables, build_mixed_feature_schema
-
-
-class _ShapeCheckingPredictionModel(IPredictionModel):
-    def __init__(self, logger, in_params, outputs):
-        self._in_params = in_params
-        self._outputs = outputs
-        self.seen_widths = []
-        super().__init__(logger)
-
-    @property
-    def input_parameters(self):
-        return self._in_params
-
-    @property
-    def input_features(self):
-        return []
-
-    @property
-    def outputs(self):
-        return self._outputs
-
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        self.seen_widths.append(X.shape[1])
-        return np.zeros((X.shape[0], len(self._outputs)), dtype=np.float64)
-
-    def train(self, train_batches, val_batches, **kwargs):
-        return None
-
-    def _get_model_artifacts(self):
-        return {"dummy": True}
-
-    def _set_model_artifacts(self, artifacts):
-        return None
-
-
-class _DummySurrogate(ISurrogateModel):
-    def __init__(self, logger):
-        super().__init__(logger)
-        self.fit_calls = 0
-        self.last_shapes = None
-
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        self.fit_calls += 1
-        self.last_shapes = (X.shape, y.shape)
-
-    def predict(self, X: np.ndarray):
-        return np.zeros((X.shape[0], 1)), np.zeros((X.shape[0], 1))
+from tests.utils.dummies import (
+    ShapeCheckingPredictionModel,
+    DummySurrogateModel,
+)
 
 
 def _logger(tmp_path):
@@ -84,8 +40,8 @@ def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
 
     schema = dataset.schema
     pred_system = PredictionSystem(_logger(tmp_path), schema=schema, local_data=LocalData(str(tmp_path)))
-    m_a = _ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["param_1"], outputs=["feature_grid"])
-    m_b = _ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["dim_1", "dim_2"], outputs=["feature_d1"])
+    m_a = ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["param_1"], outputs=["feature_grid"])
+    m_b = ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["dim_1", "dim_2"], outputs=["feature_d1"])
     pred_system.models = [m_a, m_b]
     pred_system.datamodule = datamodule
 
@@ -103,7 +59,7 @@ def test_calibration_surrogate_training_skips_missing_performance_rows(tmp_path)
     datamodule._is_fitted = True
     datamodule._split_codes = {SplitType.TRAIN: ["exp_001"], SplitType.VAL: [], SplitType.TEST: []}
 
-    surrogate = _DummySurrogate(_logger(tmp_path))
+    surrogate = DummySurrogateModel(_logger(tmp_path))
     calibration = CalibrationSystem(
         schema=schema,
         logger=_logger(tmp_path),
@@ -133,3 +89,34 @@ def test_inference_bundle_handles_degenerate_minmax():
 
     assert np.allclose(x_norm, np.zeros_like(x))
     assert np.allclose(x_denorm, np.array([2.0, 2.0]))
+
+
+def test_prediction_tune_respects_requested_row_slice(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    _populate_single_experiment_features(dataset)
+    exp = dataset.get_experiment("exp_001")
+
+    datamodule = DataModule(dataset)
+    datamodule.initialize(
+        input_parameters=["param_1", "dim_1", "dim_2"],
+        input_features=[],
+        output_columns=["feature_grid", "feature_d1", "feature_scalar"],
+    )
+    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
+
+    pred_system = PredictionSystem(_logger(tmp_path), schema=dataset.schema, local_data=LocalData(str(tmp_path)))
+    model = ShapeCheckingPredictionModel(
+        _logger(tmp_path),
+        in_params=["param_1", "dim_1", "dim_2"],
+        outputs=["feature_grid", "feature_d1", "feature_scalar"],
+    )
+    pred_system.models = [model]
+    pred_system.datamodule = datamodule
+
+    pred_system.tune(exp_data=exp, start=3, end=6)
+
+    # The base model should see only the requested slice rows.
+    assert len(model.seen_batch_sizes) > 0
+    assert 3 in model.seen_batch_sizes
+    # Default residual model path should be active and fitted after tune.
+    assert getattr(pred_system.residual_model, "_is_fitted", False) is True

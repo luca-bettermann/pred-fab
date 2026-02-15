@@ -4,6 +4,7 @@ from .features import IFeatureModel
 from .evaluation import IEvaluationModel
 from .prediction import IPredictionModel
 from .calibration import ISurrogateModel, GaussianProcessSurrogate
+from .tuning import IResidualModel
 
 __all__ = [
     "BaseInterface",
@@ -12,5 +13,6 @@ __all__ = [
     "IEvaluationModel",
     "IPredictionModel",
     "ISurrogateModel",
-    "GaussianProcessSurrogate"
+    "GaussianProcessSurrogate",
+    "IResidualModel"
 ]

@@ -33,6 +33,7 @@ class SplitType(str, Enum):
 class BlockType(str, Enum):
     """Enumeration of block types in a neural network."""
     PARAMETERS = 'parameters'
+    PARAM_UPDATES = 'parameter_updates'
     PERF_ATTRS = 'performance_attrs'
     FEATURES = 'features'
     # FEATURES_PRED = 'features' + PRED_SUFFIX

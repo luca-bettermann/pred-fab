@@ -147,6 +147,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Create a temporary DataModule for tuning data
         batch_size = end - start if batch_size is None and end is not None else batch_size
         temp_datamodule = DataModule(dataset=temp_dataset, batch_size=batch_size)
+        temp_datamodule.initialize(
+            input_parameters=self.get_system_input_parameters(),
+            input_features=self.get_system_input_features(),
+            output_columns=self.get_system_outputs(),
+        )
         temp_datamodule.prepare(val_size=0.0, test_size=0.0)
         
         # Copy normalization state
@@ -155,16 +160,24 @@ class PredictionSystem(BaseOrchestrationSystem):
         temp_datamodule.input_columns = self.datamodule.input_columns
         temp_datamodule.output_columns = self.datamodule.output_columns
 
-        # Get tuning batches
-        tune_batches = temp_datamodule.get_batches(SplitType.TRAIN)
-        
-        if not tune_batches:
-            raise ValueError("Tuning datamodule has no data in 'train' split.")
-        
-        # Concatenate batches for residual learning
-        X_list, y_list = zip(*tune_batches)
-        X_tune = np.concatenate(X_list, axis=0)
-        y_tune = np.concatenate(y_list, axis=0)
+        # Export full row-wise table and enforce requested online slice.
+        X_df_all, y_df_all = temp_dataset.export_to_dataframe([exp_data.code])
+        if X_df_all.empty or y_df_all.empty:
+            raise ValueError("Tuning dataset has no feature rows available.")
+
+        end_index = end if end is not None else len(X_df_all)
+        if start < 0 or start >= len(X_df_all):
+            raise ValueError(f"Tuning start index {start} out of bounds for {len(X_df_all)} rows.")
+        if end_index <= start or end_index > len(X_df_all):
+            raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {len(X_df_all)} rows.")
+
+        X_df = X_df_all.iloc[start:end_index].copy()
+        y_df = y_df_all.iloc[start:end_index].copy()
+
+        # Prepare tune arrays with training-fitted normalization.
+        X_tune = temp_datamodule.prepare_input(X_df)
+        y_tune = y_df[temp_datamodule.output_columns].values.astype(np.float32)
+        temp_datamodule._normalize_batch(y_tune, temp_datamodule.output_columns, temp_datamodule._feature_stats)
         
         # Initialize base predictions array
         y_pred_base = np.zeros_like(y_tune)
@@ -616,5 +629,3 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
         
         return bundle
-
-

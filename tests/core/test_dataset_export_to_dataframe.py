@@ -14,16 +14,14 @@ def test_export_to_dataframe_handles_mixed_feature_dimensionality(tmp_path):
 
     assert len(X_df) == 6
     assert len(y_df) == 6
-    assert set(["param_1", "dim_1", "dim_2", "d1", "d2"]).issubset(set(X_df.columns))
+    assert set(["param_1", "dim_1", "dim_2"]).issubset(set(X_df.columns))
     assert set(["feature_grid", "feature_d1", "feature_scalar"]).issubset(set(y_df.columns))
 
     for i in range(len(X_df)):
-        d1_val = int(X_df.iloc[i]["d1"])
-        d2_val = int(X_df.iloc[i]["d2"])
+        d1_val = int(X_df.iloc[i]["dim_1"])
+        d2_val = int(X_df.iloc[i]["dim_2"])
 
         assert float(X_df.iloc[i]["param_1"]) == 2.5
-        assert int(X_df.iloc[i]["dim_1"]) == 2
-        assert int(X_df.iloc[i]["dim_2"]) == 3
         assert float(y_df.iloc[i]["feature_grid"]) == d1_val * 10 + d2_val
         assert float(y_df.iloc[i]["feature_d1"]) == 100 + d1_val
         assert float(y_df.iloc[i]["feature_scalar"]) == 7.0

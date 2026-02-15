@@ -28,6 +28,7 @@ Keep this file short, current, and aligned with implementation changes.
 
 4. `dataset.py`
 - `ExperimentData`: one experiment’s parameter/feature/performance values.
+- `ExperimentData` also tracks applied online parameter updates (`ParameterUpdateEvent`) for step-level provenance.
 - `Dataset`: experiment lifecycle and hierarchical load/save (`memory -> local -> external`).
 - Converts canonical tensors to/from tabular boundaries for persistence and dataframe export.
 
@@ -42,7 +43,17 @@ Keep this file short, current, and aligned with implementation changes.
 3. Features are initialized as tensors from parameter dimensions.
 4. Feature extraction writes tensors (canonical representation).
 5. Persistence/export boundaries transform tensors <-> tabular arrays/dataframes.
-6. `DataModule` consumes dataframe export for training workflows.
+6. Online adaptation can append parameter update events without mutating initial parameter state.
+7. `DataModule` consumes dataframe export with effective (event-replayed) parameters for training workflows.
+
+## User Interaction Loop
+
+1. User creates/loads experiments with initial parameters.
+2. Agent steps return `ParameterProposal` objects.
+3. User decides whether a proposal is physically applied.
+4. If applied, the user/agent records it as an event on `ExperimentData`.
+5. Export/training replays events to build row-wise effective parameters.
+6. Feature tensors stay measurement-only (no duplicated parameter history in feature arrays).
 
 ## Open Refactor Risks (Large-Scope Only)
 

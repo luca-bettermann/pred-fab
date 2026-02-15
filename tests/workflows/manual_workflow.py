@@ -6,7 +6,7 @@ Run directly for click-through debugging:
 
 from pathlib import Path
 
-from pred_fab.core import DatasetSchema, Dataset, DataModule
+from pred_fab.core import DatasetSchema, Dataset, DataModule, ParameterProposal
 from pred_fab.core.data_objects import Parameter, Feature, PerformanceAttribute
 from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
 from pred_fab.orchestration.agent import PfabAgent
@@ -21,7 +21,7 @@ from tests.workflows.interfaces import (
 )
 
 
-def run_workflow(root_folder: str) -> dict:
+def run_workflow(root_folder: str) -> ParameterProposal:
     # Schema
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     p2 = Parameter.integer("param_2", min_val=1, max_val=5)
@@ -59,7 +59,7 @@ def run_workflow(root_folder: str) -> dict:
     dataset.load_experiments(["exp_001", "exp_002", "exp_003"])
     for exp in dataset.get_all_experiments():
         exp.parameters.set_value("param_3", "B")
-        agent.evaluation_step(exp)
+        agent.evaluate(exp)
 
     dataset.save_all(recompute_flag=True, verbose_flag=False)
 

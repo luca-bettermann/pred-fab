@@ -126,10 +126,10 @@ class GPSurrogateModel COL_GPS {
     + forward_pass()
 }
 
-' class MLPResidualModel COL_MLP {
-'     + train()
-'     + forward_pass()
-' }
+class MLPResidualModel COL_MLP {
+    + train()
+    + forward_pass()
+}
 
 ' ABSTRACT_CLASS IExternalData COL_IFACE_EXT {
 '    + {abstract} pull_exp()
@@ -160,8 +160,8 @@ PredictionSystem -[hidden]right- CalibrationSystem
 IFeatureModel -[hidden]right- IEvaluationModel
 IEvaluationModel -[hidden]right- IPredictionModel
 IPredictionModel -[hidden]right- GPSurrogateModel
-' IPredictionModel -[hidden]right- MLPResidualModel
-' MLPResidualModel -[hidden]right- GPSurrogateModel
+IPredictionModel -[hidden]right- MLPResidualModel
+MLPResidualModel -[hidden]right- GPSurrogateModel
 
 ' === RELATIONSHIPS ===
 
@@ -179,7 +179,7 @@ PfabAgent *-- utils
 FeatureSystem *-- IFeatureModel
 EvaluationSystem *-- IEvaluationModel
 PredictionSystem *-- IPredictionModel
-' PredictionSystem *-- MLPResidualModel
+PredictionSystem *-- MLPResidualModel
 CalibrationSystem *-- GPSurrogateModel
 
 @enduml

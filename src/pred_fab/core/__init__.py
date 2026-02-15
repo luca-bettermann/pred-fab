@@ -21,7 +21,7 @@ from .data_blocks import (
 )
 
 from .schema import DatasetSchema, SchemaRegistry
-from .dataset import Dataset, ExperimentData
+from .dataset import Dataset, ExperimentData, ParameterProposal, ParameterUpdateEvent
 from .datamodule import DataModule
 
 __all__ = [
@@ -47,4 +47,6 @@ __all__ = [
     'Dataset',
     'ExperimentData',
     'DataModule',
+    'ParameterProposal',
+    'ParameterUpdateEvent',
 ]

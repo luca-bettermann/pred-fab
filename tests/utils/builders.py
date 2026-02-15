@@ -72,3 +72,22 @@ def sample_feature_tables() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         np.array(d1_rows, dtype=np.float64),
         np.array(scalar_rows, dtype=np.float64),
     )
+
+
+def build_real_agent_stack(tmp_path):
+    """Build a real PfabAgent stack with minimal interface models for orchestration tests."""
+    from pred_fab.orchestration.agent import PfabAgent
+    from tests.utils.dummies import MixedFeatureModel, ScalarEvaluationModel, MixedPredictionModel
+
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    schema = dataset.schema
+    exp = dataset.get_experiment("exp_001")
+
+    agent = PfabAgent(root_folder=str(tmp_path), debug_flag=True)
+    agent.register_feature_model(MixedFeatureModel)
+    agent.register_evaluation_model(ScalarEvaluationModel)
+    agent.register_prediction_model(MixedPredictionModel)
+    agent.initialize_systems(schema, verbose_flag=False)
+
+    datamodule = agent.create_datamodule(dataset)
+    return agent, dataset, exp, datamodule

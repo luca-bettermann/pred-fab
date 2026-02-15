@@ -11,7 +11,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 
-from .data_objects import DataDimension, DataCategorical
+from .data_objects import DataCategorical
 from .dataset import Dataset
 from ..utils import NormMethod, SplitType
 
@@ -470,87 +470,6 @@ class DataModule:
             if col in stats:
                 data[:, i] = self._apply_normalization(data[:, i], stats[col])
     
-    # === DATA EXTRACTION ===
-    
-    def _extract_raw_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Extract all dimensional training data from metric_arrays as DataFrames."""            
-        exp_codes = self.dataset.get_populated_experiment_codes()
-        
-        if not exp_codes:
-            # Return empty DFs if no data
-            return pd.DataFrame(), pd.DataFrame()
-        
-        X_rows = []
-        y_rows = []
-        
-        for code in exp_codes:
-            exp_data = self.dataset.get_experiment(code)
-            if exp_data.features is None:
-                continue
-            
-            # Get parameter values
-            param_dict = {
-                name: exp_data.parameters.get_value(name)
-                for name in exp_data.parameters.keys()
-                if not isinstance(exp_data.parameters.data_objects.get(name), DataDimension)
-            }
-            
-            # Get dimensional parameters
-            dim_params = {
-                name: obj for name, obj in exp_data.parameters.data_objects.items()
-                if isinstance(obj, DataDimension)
-            }
-            
-            if not dim_params:
-                # No dimensions - treat as single position
-                y_dict = {}
-                for feature_name in exp_data.features.keys():
-                    value = exp_data.features.get_value(feature_name)
-                    if isinstance(value, np.ndarray):
-                        y_dict[feature_name] = float(value.flat[0])
-                    else:
-                        y_dict[feature_name] = float(value)
-                
-                X_rows.append(param_dict)
-                y_rows.append(y_dict)
-                continue
-            
-            # Multi-dimensional case
-            first_feature = list(exp_data.features.keys())[0]
-            feature_array = exp_data.features.get_value(first_feature)
-            
-            if not isinstance(feature_array, np.ndarray):
-                continue
-            
-            shape = feature_array.shape
-            
-            for idx in np.ndindex(shape):
-                row_dict = param_dict.copy()
-                dim_names = list(dim_params.keys())
-                for i, dim_name in enumerate(dim_names):
-                    dim_obj = dim_params[dim_name]
-                    row_dict[dim_obj.iterator_code] = idx[i]
-                
-                X_rows.append(row_dict)
-                
-                y_dict = {}
-                for feature_name in exp_data.features.keys():
-                    feature_array = exp_data.features.get_value(feature_name)
-                    if isinstance(feature_array, np.ndarray):
-                        value = feature_array[idx]
-                        if not np.isnan(value):
-                            y_dict[feature_name] = float(value)
-                
-                y_rows.append(y_dict)
-        
-        if not X_rows:
-            return pd.DataFrame(), pd.DataFrame()
-        
-        X = pd.DataFrame(X_rows)
-        y = pd.DataFrame(y_rows)
-        
-        return X, y
-
     def _one_hot_encode(self, X_df: pd.DataFrame) -> np.ndarray:
         """Apply one-hot encoding and align columns to schema."""
         X = X_df.copy()
@@ -688,7 +607,8 @@ class DataModule:
                     )
                 continue
 
-            x_arr = self.params_to_array(exp.parameters.get_values_dict())
+            # Use latest effective parameters so recorded online updates are reflected.
+            x_arr = self.params_to_array(exp.get_effective_parameters_for_row(exp.get_num_rows() - 1))
             y_arr = [float(perf[name]) for name in performance_order]
 
             X_rows.append(x_arr)

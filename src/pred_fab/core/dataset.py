@@ -8,6 +8,7 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 import numpy as np
 import pandas as pd
 import os
+from dataclasses import dataclass
 from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 import functools
 
@@ -18,6 +19,74 @@ from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
 # from ..utils.enum import BlockType, PRED_SUFFIX, Loaders
 from ..utils.enum import BlockType, Loaders
+
+
+@dataclass(frozen=True)
+class ParameterProposal:
+    """Lightweight value object carrying proposed parameter values."""
+
+    values: Dict[str, Any]
+    source_step: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a shallow copy of proposed values."""
+        return dict(self.values)
+
+    @classmethod
+    def from_dict(cls, values: Dict[str, Any], source_step: Optional[str] = None) -> 'ParameterProposal':
+        """Build proposal from a plain dictionary."""
+        return cls(values=dict(values), source_step=source_step)
+
+    # Mapping-like compatibility for existing call-sites.
+    def __getitem__(self, key: str) -> Any:
+        return self.values[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.values
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.values.get(key, default)
+
+    def items(self):
+        return self.values.items()
+
+    def keys(self):
+        return self.values.keys()
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+
+@dataclass(frozen=True)
+class ParameterUpdateEvent:
+    """Immutable record of an applied parameter update at a specific fabrication step."""
+
+    updates: Dict[str, Any]
+    dimension: Optional[str] = None
+    step_index: Optional[int] = None
+    source_step: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize event to plain dictionary."""
+        return {
+            "updates": dict(self.updates),
+            "dimension": self.dimension,
+            "step_index": self.step_index,
+            "source_step": self.source_step,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ParameterUpdateEvent':
+        """Deserialize event from plain dictionary."""
+        return cls(
+            updates=dict(data.get("updates", {})),
+            dimension=data.get("dimension"),
+            step_index=data.get("step_index"),
+            source_step=data.get("source_step"),
+        )
 
 class ExperimentData:
     """
@@ -40,6 +109,7 @@ class ExperimentData:
         self.parameters = parameters
         self.performance = performance
         self.features = features
+        self.parameter_updates: List[ParameterUpdateEvent] = []
         # self.predicted_features = predicted_features
 
     # === Helper Methods for Validation ===
@@ -76,12 +146,102 @@ class ExperimentData:
             return True
         return False
 
+    def _event_start_index(self, event: ParameterUpdateEvent) -> int:
+        """Translate an event's step context into the flattened row start index."""
+        if event.dimension is None and event.step_index is None:
+            return 0
+        if event.dimension is None or event.step_index is None:
+            raise ValueError("ParameterUpdateEvent must set both dimension and step_index, or neither.")
+        start, _ = self.parameters.get_start_and_end_indices(event.dimension, event.step_index)
+        return start
+
+    def get_effective_parameters_for_row(self, row_index: int) -> Dict[str, Any]:
+        """Get effective parameter values at a flattened row index, including applied updates."""
+        effective = self.parameters.get_values_dict().copy()
+        for event in self.parameter_updates:
+            if row_index >= self._event_start_index(event):
+                effective.update(event.updates)
+        return effective
+
+    def get_num_rows(self) -> int:
+        """Return flattened row count implied by dimensional parameters."""
+        dim_names = self.parameters.get_dim_names()
+        if not dim_names:
+            return 1
+        dim_sizes = self.parameters.get_dim_values(dim_names)
+        return int(np.prod(dim_sizes))
+
+    def get_effective_parameters_at_step(
+        self,
+        dimension: Optional[str] = None,
+        step_index: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Get effective parameters at the start of the specified step context."""
+        if dimension is None and step_index is None:
+            return self.get_effective_parameters_for_row(0)
+        if dimension is None or step_index is None:
+            raise ValueError("Both dimension and step_index must be provided together.")
+        start, _ = self.parameters.get_start_and_end_indices(dimension, step_index)
+        return self.get_effective_parameters_for_row(start)
+
+    def record_parameter_update(
+        self,
+        proposal: ParameterProposal,
+        dimension: Optional[str] = None,
+        step_index: Optional[int] = None,
+    ) -> Optional[ParameterUpdateEvent]:
+        """Record an applied parameter proposal for later reconstruction of effective training rows."""
+        if dimension is None and step_index is not None:
+            raise ValueError("step_index can only be provided with dimension.")
+        if dimension is not None and step_index is None:
+            raise ValueError("dimension can only be provided with step_index.")
+        if not proposal.values:
+            return None
+
+        # Determine current effective context at this step before applying the update.
+        before = self.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
+
+        # Keep only changed values and sanitize to schema dtypes/constraints.
+        delta = {
+            code: value
+            for code, value in proposal.values.items()
+            if code not in before or before[code] != value
+        }
+        if not delta:
+            return None
+
+        for code in delta:
+            obj = self.parameters.get(code)
+            if isinstance(obj, DataDimension):
+                raise ValueError(f"Recording updates for dimension parameter '{code}' is not supported.")
+
+        sanitized_delta = self.parameters.sanitize_values(delta, ignore_unknown=False)
+        event = ParameterUpdateEvent(
+            updates=sanitized_delta,
+            dimension=dimension,
+            step_index=step_index,
+            source_step=proposal.source_step,
+        )
+        self.parameter_updates.append(event)
+        return event
+
     # === Helper Methods for Data Access ===
 
     def set_data(self, values: Any, block_type: BlockType, logger: PfabLogger) -> None:
         """Set values for a specific data type."""
         if block_type == BlockType.PARAMETERS:
             self.parameters.set_values_from_dict(values, logger)
+        elif block_type == BlockType.PARAM_UPDATES:
+            if isinstance(values, dict):
+                events_raw = values.get("events", [])
+            elif isinstance(values, list):
+                events_raw = values
+            else:
+                raise TypeError(
+                    f"Expected list/dict for parameter updates in experiment '{self.code}', "
+                    f"got {type(values).__name__}"
+                )
+            self.parameter_updates = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
         elif block_type == BlockType.FEATURES:
             self.features.set_values_from_df(values, logger, parameters=self.parameters)
         elif block_type == BlockType.PERF_ATTRS:
@@ -95,6 +255,10 @@ class ExperimentData:
         """Get values as dict for a specific data type."""
         if block_type == BlockType.PARAMETERS:
             return self.parameters.get_values_dict()
+        elif block_type == BlockType.PARAM_UPDATES:
+            if not self.parameter_updates:
+                return {}
+            return {"events": [e.to_dict() for e in self.parameter_updates]}
         elif block_type == BlockType.PERF_ATTRS:
             return self.performance.get_values_dict()
         elif block_type == BlockType.FEATURES:
@@ -108,6 +272,8 @@ class ExperimentData:
         """Check if values are set for a specific data type."""
         if block_type == BlockType.PARAMETERS:
             return bool(self.parameters.get_values_dict())
+        elif block_type == BlockType.PARAM_UPDATES:
+            return bool(self.parameter_updates)
         elif block_type == BlockType.PERF_ATTRS:
             return bool(self.performance.get_values_dict())
         elif block_type == BlockType.FEATURES:
@@ -199,6 +365,7 @@ class Dataset:
         parameters: Dict[str, Any],
         performance: Optional[Dict[str, Any]],
         metric_arrays: Optional[Dict[str, np.ndarray]],
+        parameter_updates: Optional[List[Dict[str, Any]]] = None,
         # predicted_arrays: Optional[Dict[str, np.ndarray]] = None
     ) -> ExperimentData:
         """Build ExperimentData from loaded components."""
@@ -218,6 +385,9 @@ class Dataset:
 
         if metric_arrays:
             exp_data.set_data(metric_arrays, BlockType.FEATURES, self.logger)
+
+        if parameter_updates:
+            exp_data.set_data({"events": parameter_updates}, BlockType.PARAM_UPDATES, self.logger)
             
         # if predicted_arrays:
         #     exp_data.set_data(predicted_arrays, BlockType.FEATURES_PRED, self.logger)
@@ -233,6 +403,7 @@ class Dataset:
         parameters: Dict[str, Any],
         performance: Optional[Dict[str, Any]] = None,
         features: Optional[Dict[str, np.ndarray]] = None,
+        parameter_updates: Optional[List[Dict[str, Any]]] = None,
         recompute: bool = False
     ) -> ExperimentData:
         """
@@ -260,7 +431,7 @@ class Dataset:
                  raise ValueError(f"Experiment {exp_code} already exists locally")
 
         # Build and store
-        exp_data = self._build_experiment_data(exp_code, parameters, performance, features)
+        exp_data = self._build_experiment_data(exp_code, parameters, performance, features, parameter_updates)
         self._experiments[exp_code] = exp_data
         return exp_data
     
@@ -417,6 +588,18 @@ class Dataset:
         if missing_params and len(self.schema.parameters.data_objects):
             raise ValueError(f"No parameters found for any of the following experiments: {missing_params}")
 
+        # 2b. Load parameter update logs (optional provenance state).
+        self._hierarchical_load(
+            BlockType.PARAM_UPDATES,
+            exp_codes,
+            loader=self.local_data.load_parameter_updates,
+            setter=functools.partial(self._set_exp_data, block_type=BlockType.PARAM_UPDATES),
+            in_memory=functools.partial(self._has_exp_data, block_type=BlockType.PARAM_UPDATES),
+            external_loader=None,
+            recompute_flag=recompute_flag,
+            verbose=verbose
+        )
+
         # Filter codes that were actually found and validate (parameters are mandatory)
         for code in exp_codes:
             exp_data = self.get_experiment(code)
@@ -504,6 +687,16 @@ class Dataset:
             getter=functools.partial(self._get_exp_data, block_type=BlockType.PARAMETERS),
             saver=self.local_data.save_parameters,
             external_saver=self.external_data.push_parameters if self.external_data else None,
+            recompute=recompute,
+            verbose=verbose
+        )
+
+        # 2b. Save parameter update logs.
+        self._hierarchical_save(
+            BlockType.PARAM_UPDATES, codes_to_save,
+            getter=functools.partial(self._get_exp_data, block_type=BlockType.PARAM_UPDATES),
+            saver=self.local_data.save_parameter_updates,
+            external_saver=None,
             recompute=recompute,
             verbose=verbose
         )
@@ -696,12 +889,8 @@ class Dataset:
                 continue
             
             # Get parameter info
-            all_params = exp_data.parameters.get_values_dict()
             dim_names = exp_data.parameters.get_dim_names()
-            
-            # Base params include both static and dimension-size parameters.
-            static_params = all_params.copy()
-            
+
             if not dim_names:
                 # Case 1: No dimensions (Scalar experiment)
                 y_dict = {}
@@ -713,20 +902,23 @@ class Dataset:
                     else:
                         y_dict[feature_name] = float(value)
                 
-                X_rows.append(static_params)
+                X_rows.append(exp_data.get_effective_parameters_for_row(0))
                 y_rows.append(y_dict)
                 continue
             
             # Case 2: Multi-dimensional experiment
             # Get all index combinations
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
+            dim_iterators = exp_data.parameters.get_dim_iterator_codes(codes=dim_names)
             
-            for idx_tuple in dim_combinations:
+            for row_idx, idx_tuple in enumerate(dim_combinations):
                 # Build X row (Static + Iterators)
-                row_dict = static_params.copy()
+                row_dict = exp_data.get_effective_parameters_for_row(row_idx)
+                iterator_ctx: Dict[str, Any] = {}
                 for i, dim_name in enumerate(dim_names):
-                    iterator_name = exp_data.parameters.get_dim_iterator_codes(codes=[dim_name])[0]
-                    row_dict[iterator_name] = idx_tuple[i]
+                    # Keep model-facing columns on schema parameter codes.
+                    row_dict[dim_name] = idx_tuple[i]
+                    iterator_ctx[dim_iterators[i]] = idx_tuple[i]
                 
                 X_rows.append(row_dict)
                 
@@ -734,7 +926,7 @@ class Dataset:
                 y_dict = {}
                 # Read feature values consistently from canonical tensor storage.
                 for feature_name in exp_data.features.keys():
-                    val = exp_data.features.value_at(feature_name, exp_data.parameters, row_dict)
+                    val = exp_data.features.value_at(feature_name, exp_data.parameters, iterator_ctx)
                     if val is not None and not np.isnan(val):
                         y_dict[feature_name] = val
                 

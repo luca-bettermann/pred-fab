@@ -146,6 +146,15 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
+    def load_parameter_updates(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Load parameter update event logs from local files."""
+        return self._load_files_generic(
+            codes=exp_codes,
+            subdirs=["{code}"],
+            filename=BlockType.PARAM_UPDATES.value,
+            file_format=FileFormat.JSON
+        )
+
     def load_features(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
         """Load feature arrays from local files."""
         feature_name = kwargs.get('feature_name')
@@ -197,6 +206,18 @@ class LocalData:
             data=data,
             subdirs=["{code}"], 
             filename=BlockType.PERF_ATTRS.value, 
+            recompute=recompute,
+            file_format=FileFormat.JSON
+        )
+
+    def save_parameter_updates(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]],
+                               recompute: bool, **kwargs) -> bool:
+        """Save parameter update event logs to local files."""
+        return self._save_files_generic(
+            codes=exp_codes,
+            data=data,
+            subdirs=["{code}"],
+            filename=BlockType.PARAM_UPDATES.value,
             recompute=recompute,
             file_format=FileFormat.JSON
         )

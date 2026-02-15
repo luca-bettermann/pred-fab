@@ -22,10 +22,17 @@ Update it whenever project direction, external references, or active debugging f
 
 - Core orchestrator class is `PfabAgent`.
 - Required step methods (target architecture):
-  - `evaluation_step`
   - `exploration_step`
   - `inference_step`
-  - `training_step`
+  - `adaptation_step`
+
+- Canonical operation methods (not steps):
+  - `evaluate`
+  - `train`
+  - `predict`
+  - `configure_calibration`
+  - `sample_baseline_experiments`
+  
 - Current practical validation path is the integration workflow in `tests/workflows/`, plus focused unit tests in `tests/core/`.
 - Prefer fixing underlying systems first (data flow, calibration/prediction interfaces), then finalize step-method API behavior.
 - Coding preferences for this repo:
@@ -36,6 +43,11 @@ Update it whenever project direction, external references, or active debugging f
 - Data representation convention:
   - canonical in-memory feature representation is tensor-first (`np.ndarray` with dimensional shape),
   - tabular representation exists as a transformation boundary only (IO/export/training table views).
+  - step outputs that propose new parameters are typed as `ParameterProposal` (not raw dict API by default).
+  - online parameter changes are logged as event records on `ExperimentData`; initial parameter block remains initial state.
+- Step semantics convention:
+  - a "step" advances decision-making in the workflow and should return typed artifacts for the next decision,
+  - mutating/evaluation/training/configuration utilities are operation methods and not treated as steps.
 
 ## State
 
@@ -48,6 +60,7 @@ Update it whenever project direction, external references, or active debugging f
 - Additional known transition issues in step layer:
   - signature mismatches between `PfabAgent` step methods and `CalibrationSystem`,
   - legacy methods (`step_offline`, `step_online`, `adaptation_step`, `prediction_step`) still coexist with target methods.
+  - adaptation API migration in progress: keep step-local behavior and proposal logging semantics aligned with tests.
 - Test suite status:
   - previous outdated tests replaced with new baseline structure in `tests/` (`core`, `integration`, `workflows`, `utils`).
   - integration flow previously in `examples/` is now under `tests/workflows/manual_workflow.py`.
@@ -62,3 +75,5 @@ Update it whenever project direction, external references, or active debugging f
   - `src/pred_fab/utils/UTILS_CONTEXT.md`
 - When starting a new thread, also confirm access to OneDrive paths above.
 - Keep this file short and operational; link to source files instead of duplicating long design docs.
+- User-level circular loop:
+  - proposal (`ParameterProposal`) -> optional apply/log (`ParameterUpdateEvent`) -> dataset export/datamodule replay -> next step proposal.

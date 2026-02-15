@@ -16,6 +16,10 @@ training, inference, and calibration:
 1. `agent.py`
 - Main integration surface (`PfabAgent`).
 - Owns model registration, system initialization, workflow steps, and calibration config.
+- Step methods return typed `ParameterProposal` outputs for parameter suggestions.
+- API taxonomy:
+  - step methods: `exploration_step`, `inference_step`, `adaptation_step`
+  - operation methods: `evaluate`, `train`, `predict`, `configure_calibration`, `sample_baseline_experiments`
 
 2. `base_system.py`
 - Shared helpers for model specs and schema reference wiring.
@@ -28,24 +32,22 @@ training, inference, and calibration:
 
 5. `prediction.py`
 - Handles prediction model training/tuning/validation/inference and inference bundle export.
+- Online tuning now respects requested slice boundaries (`start:end`) for step-local adaptation.
 
 6. `calibration.py`
 - Handles surrogate training, acquisition/inference objectives, sampling, and optimization.
+- Adaptation uses current effective parameters (initial + recorded updates) as optimization center.
 
 7. `inference_bundle.py`
 - Lightweight deployed inference wrapper (prediction + normalization + schema validation).
 
 ## Open Refactor Risks (Large-Scope Only)
 
-1. Legacy vs target step API overlap
-- `agent.py` still contains both target step methods and legacy flow methods.
-- Risk: behavior drift and duplicated logic paths during ongoing migration.
-
-2. Use of private DataModule internals across systems
+1. Use of private DataModule internals across systems
 - Orchestration systems still rely on internal DataModule methods/fields (normalization internals).
 - Risk: tight coupling makes independent evolution/testing of modules harder.
 
-3. Inference bundle schema/input validation depth
+2. Inference bundle schema/input validation depth
 - Bundle validates unknown columns but does not yet enforce full schema constraint checks.
 - Risk: invalid but schema-shaped requests can pass until deeper model/runtime stages.
 
