@@ -8,17 +8,17 @@ This file provides stable, agent-facing instructions for this repository.
 2. Human-facing overview: `README.md` (keep minimal, high-level, and up to date)
 3. Project-specific status and conventions: `PROJECT_CONTEXT.md`
 4. Folder-level context notes (`*_CONTEXT.md`) in relevant subfolders for local architecture + known vulnerabilities.
-5. Then inspect relevant code paths in `src/pred_fab/` and integration flow in `tests/workflows/`.
+5. Then inspect relevant code paths in `src/pred_fab/` and integration coverage in `tests/integration/` and `tests/orchestration/`.
 
 ## Scope
 
 - Primary project package: `pred_fab`
 - Main orchestrator: `PfabAgent`
-- Current integration/debug entrypoint: `tests/workflows/manual_workflow.py`
+- Current integration/debug entrypoint: `tests/integration/test_stepwise_workflow.py`
 
 ## Working Conventions
 
-- Treat repository tests as secondary for now; primary validation is via the example integration flow.
+- Primary validation is the stepwise integration + orchestration test suite.
 - Prioritize fixing underlying functionality before finalizing step-method APIs.
 - Keep docs and context files aligned with implementation changes.
 - Keep `README.md` updated as the human-facing entrypoint: high-level and minimal, then link to detailed docs in `docs/`.

@@ -2,21 +2,12 @@ import numpy as np
 import pytest
 
 from pred_fab.core import ParameterProposal
-from tests.utils.builders import build_dataset_with_single_experiment, sample_feature_tables
-
-
-def _populate_features(exp):
-    """Populate deterministic feature tensors for export tests."""
-    grid, d1_only, scalar = sample_feature_tables()
-    exp.features.set_value("feature_grid", exp.features.table_to_tensor("feature_grid", grid, exp.parameters))
-    exp.features.set_value("feature_d1", exp.features.table_to_tensor("feature_d1", d1_only, exp.parameters))
-    exp.features.set_value("feature_scalar", exp.features.table_to_tensor("feature_scalar", scalar, exp.parameters))
+from tests.utils.builders import build_dataset_with_single_experiment, populate_single_experiment_features
 
 
 def test_export_to_dataframe_applies_recorded_parameter_updates_by_step(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
-    exp = dataset.get_experiment("exp_001")
-    _populate_features(exp)
+    exp = populate_single_experiment_features(dataset)
 
     proposal = ParameterProposal.from_dict({"param_1": 9.0}, source_step="adaptation_step")
     exp.record_parameter_update(proposal, dimension="dim_1", step_index=1)
@@ -54,8 +45,7 @@ def test_record_parameter_update_skips_no_change_delta(tmp_path):
 
 def test_parameter_update_events_roundtrip_via_save_load(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path / "run")
-    exp = dataset.get_experiment("exp_001")
-    _populate_features(exp)
+    exp = populate_single_experiment_features(dataset)
     exp.record_parameter_update(
         ParameterProposal.from_dict({"param_1": 8.5}, source_step="adaptation_step"),
         dimension="dim_1",

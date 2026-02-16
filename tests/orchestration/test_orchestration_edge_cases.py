@@ -1,72 +1,56 @@
 import numpy as np
 
-from pred_fab.core import DataModule
-from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.inference_bundle import InferenceBundle
-from pred_fab.orchestration.prediction import PredictionSystem
-from pred_fab.utils import PfabLogger, SplitType, LocalData
-from tests.utils.builders import build_dataset_with_single_experiment, sample_feature_tables, build_mixed_feature_schema
-from tests.utils.dummies import (
-    ShapeCheckingPredictionModel,
-    DummySurrogateModel,
+from pred_fab.utils import SplitType
+from tests.utils.builders import (
+    build_calibration_system_with_capturing_surrogate,
+    build_dataset_with_single_experiment,
+    build_initialized_datamodule,
+    build_shape_checking_prediction_system,
+    populate_single_experiment_features,
 )
-
-
-def _logger(tmp_path):
-    return PfabLogger.get_logger(str(tmp_path / "logs"))
-
-
-def _populate_single_experiment_features(dataset):
-    exp = dataset.get_experiment("exp_001")
-    grid, d1_only, scalar = sample_feature_tables()
-    exp.features.set_value("feature_grid", exp.features.table_to_tensor("feature_grid", grid, exp.parameters))
-    exp.features.set_value("feature_d1", exp.features.table_to_tensor("feature_d1", d1_only, exp.parameters))
-    exp.features.set_value("feature_scalar", exp.features.table_to_tensor("feature_scalar", scalar, exp.parameters))
-    return exp
 
 
 def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
-    _populate_single_experiment_features(dataset)
+    populate_single_experiment_features(dataset)
 
-    datamodule = DataModule(dataset)
-    datamodule.initialize(
+    datamodule = build_initialized_datamodule(
+        dataset=dataset,
         input_parameters=["param_1", "dim_1", "dim_2"],
         input_features=[],
         output_columns=["feature_grid", "feature_d1", "feature_scalar"],
+        fitted=True,
+        split_codes={SplitType.TRAIN: ["exp_001"], SplitType.VAL: ["exp_001"], SplitType.TEST: []},
     )
-    datamodule._is_fitted = True
-    datamodule._split_codes = {SplitType.TRAIN: ["exp_001"], SplitType.VAL: ["exp_001"], SplitType.TEST: []}
-
-    schema = dataset.schema
-    pred_system = PredictionSystem(_logger(tmp_path), schema=schema, local_data=LocalData(str(tmp_path)))
-    m_a = ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["param_1"], outputs=["feature_grid"])
-    m_b = ShapeCheckingPredictionModel(_logger(tmp_path), in_params=["dim_1", "dim_2"], outputs=["feature_d1"])
-    pred_system.models = [m_a, m_b]
-    pred_system.datamodule = datamodule
+    pred_system, models = build_shape_checking_prediction_system(
+        tmp_path=tmp_path,
+        dataset=dataset,
+        datamodule=datamodule,
+        model_specs=[
+            (["param_1"], ["feature_grid"]),
+            (["dim_1", "dim_2"], ["feature_d1"]),
+        ],
+    )
 
     pred_system.validate(use_test=False)
-    assert m_a.seen_widths and m_a.seen_widths[0] == 1
-    assert m_b.seen_widths and m_b.seen_widths[0] == 2
+    assert models[0].seen_widths and models[0].seen_widths[0] == 1
+    assert models[1].seen_widths and models[1].seen_widths[0] == 2
 
 
 def test_calibration_surrogate_training_skips_missing_performance_rows(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
-    schema = dataset.schema
-
-    datamodule = DataModule(dataset)
-    datamodule.initialize(input_parameters=["param_1", "dim_1", "dim_2"], input_features=[], output_columns=[])
-    datamodule._is_fitted = True
-    datamodule._split_codes = {SplitType.TRAIN: ["exp_001"], SplitType.VAL: [], SplitType.TEST: []}
-
-    surrogate = DummySurrogateModel(_logger(tmp_path))
-    calibration = CalibrationSystem(
-        schema=schema,
-        logger=_logger(tmp_path),
-        predict_fn=lambda x: {"feature_scalar": np.zeros((len(x), 1))},
-        residual_predict_fn=lambda x: np.zeros((len(x), 1)),
-        evaluate_fn=lambda x: {"performance_1": np.zeros((len(x), 1))},
-        surrogate_model=surrogate,
+    datamodule = build_initialized_datamodule(
+        dataset=dataset,
+        input_parameters=["param_1", "dim_1", "dim_2"],
+        input_features=[],
+        output_columns=[],
+        fitted=True,
+        split_codes={SplitType.TRAIN: ["exp_001"], SplitType.VAL: [], SplitType.TEST: []},
+    )
+    calibration, surrogate = build_calibration_system_with_capturing_surrogate(
+        tmp_path=tmp_path,
+        dataset=dataset,
     )
 
     calibration.train_surrogate_model(datamodule)
@@ -93,25 +77,29 @@ def test_inference_bundle_handles_degenerate_minmax():
 
 def test_prediction_tune_respects_requested_row_slice(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
-    _populate_single_experiment_features(dataset)
+    populate_single_experiment_features(dataset)
     exp = dataset.get_experiment("exp_001")
 
-    datamodule = DataModule(dataset)
-    datamodule.initialize(
+    datamodule = build_initialized_datamodule(
+        dataset=dataset,
         input_parameters=["param_1", "dim_1", "dim_2"],
         input_features=[],
         output_columns=["feature_grid", "feature_d1", "feature_scalar"],
     )
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
 
-    pred_system = PredictionSystem(_logger(tmp_path), schema=dataset.schema, local_data=LocalData(str(tmp_path)))
-    model = ShapeCheckingPredictionModel(
-        _logger(tmp_path),
-        in_params=["param_1", "dim_1", "dim_2"],
-        outputs=["feature_grid", "feature_d1", "feature_scalar"],
+    pred_system, models = build_shape_checking_prediction_system(
+        tmp_path=tmp_path,
+        dataset=dataset,
+        datamodule=datamodule,
+        model_specs=[
+            (
+                ["param_1", "dim_1", "dim_2"],
+                ["feature_grid", "feature_d1", "feature_scalar"],
+            )
+        ],
     )
-    pred_system.models = [model]
-    pred_system.datamodule = datamodule
+    model = models[0]
 
     pred_system.tune(exp_data=exp, start=3, end=6)
 

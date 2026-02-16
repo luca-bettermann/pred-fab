@@ -7,8 +7,8 @@ Update it whenever project direction, external references, or active debugging f
 
 - Project root: `/Users/TUM/Documents/repos/pred-fab`
   - Main PFAB package source code.
-- Example integration flow: `/Users/TUM/Documents/repos/pred-fab/tests/workflows/manual_workflow.py`
-  - Primary step-through script currently used for debugging.
+- Example integration flow: `/Users/TUM/Documents/repos/pred-fab/tests/integration/test_stepwise_workflow.py`
+  - Stepwise workflow coverage replacing the old manual workflow script.
 - OneDrive root: `/Users/TUM/OneDrive - TUM`
   - External context outside repo.
 - Knowledge base: `/Users/TUM/OneDrive - TUM/02 Knowledge Base`
@@ -33,7 +33,7 @@ Update it whenever project direction, external references, or active debugging f
   - `configure_calibration`
   - `sample_baseline_experiments`
   
-- Current practical validation path is the integration workflow in `tests/workflows/`, plus focused unit tests in `tests/core/`.
+- Current practical validation path is stepwise integration tests in `tests/integration/` plus focused orchestration/core tests.
 - Prefer fixing underlying systems first (data flow, calibration/prediction interfaces), then finalize step-method API behavior.
 - Coding preferences for this repo:
   - first debug/refactor existing code paths, avoid adding parallel new code blocks unless unavoidable,
@@ -58,12 +58,11 @@ Update it whenever project direction, external references, or active debugging f
 - Latest resolved core issue:
   - `export_to_dataframe` dimensional indexing mismatch fixed via canonical tensor access (`Features.value_at`) and explicit tensor/tabular transforms.
 - Additional known transition issues in step layer:
-  - signature mismatches between `PfabAgent` step methods and `CalibrationSystem`,
-  - legacy methods (`step_offline`, `step_online`, `adaptation_step`, `prediction_step`) still coexist with target methods.
-  - adaptation API migration in progress: keep step-local behavior and proposal logging semantics aligned with tests.
+  - keep `PfabAgent` step signatures synchronized with `CalibrationSystem` call contracts as those evolve.
+  - adaptation proposal logging semantics (`record` behavior + event persistence) must stay aligned with tests.
 - Test suite status:
-  - previous outdated tests replaced with new baseline structure in `tests/` (`core`, `integration`, `workflows`, `utils`).
-  - integration flow previously in `examples/` is now under `tests/workflows/manual_workflow.py`.
+  - previous outdated tests replaced with the current structure in `tests/` (`core`, `interfaces`, `orchestration`, `integration`, `utils`).
+  - old `tests/workflows/manual_workflow.py` flow was removed and migrated to dedicated integration tests.
 
 ## Notes
 
