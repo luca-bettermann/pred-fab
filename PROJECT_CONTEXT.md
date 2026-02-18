@@ -55,6 +55,10 @@ Update it whenever project direction, external references, or active debugging f
 - Main active debugging focus:
   - underlying functionality and integration behavior beneath step methods,
   - before finalizing the step method contracts.
+- Documentation state:
+  - quick usage guide lives in root-level `QUICK_START.md`,
+  - architectural/operational technical context is maintained in `*_CONTEXT.md` files plus this file,
+  - legacy `docs/` markdown set was retired after migration of relevant content.
 - Latest resolved core issue:
   - `export_to_dataframe` dimensional indexing mismatch fixed via canonical tensor access (`Features.value_at`) and explicit tensor/tabular transforms.
 - Additional known transition issues in step layer:

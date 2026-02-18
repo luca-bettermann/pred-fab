@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Documentation consolidation and API-alignment** (2026-02-18)
+  - Consolidated technical documentation into root/context markdown files (`QUICK_START.md`, `PROJECT_CONTEXT.md`, `*_CONTEXT.md`).
+  - Retired the `docs/` markdown set after migrating relevant architecture/strategy content.
+  - Removed obsolete docs that were superseded by current context-driven documentation:
+    - `docs/IMPLEMENTATION_SUMMARY.md`
+    - `IMPLEMENTATION_PLAN_CALIBRATION.md`
+  - Updated agent/project context references to the consolidated structure.
+
+### Notes
+- Historical entries below may reference former LBP-era naming (`lbp_package`, `LBPAgent`, etc.) as part of archival release history.
+
 ### Added
 - **BaseOrchestrationSystem** (2025-11-28)
   - Shared base class for `EvaluationSystem` and `PredictionSystem`
@@ -48,7 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Model compatibility validation (dimensional requirements)
   - `required_features` property in `IPredictionModel` for explicit external dependencies
   - 32 comprehensive tests for dimensional prediction (including overlap validation)
-  - Full documentation in IMPLEMENTATION_SUMMARY.md
+  - Documentation for this phase was originally captured in `IMPLEMENTATION_SUMMARY.md` (later consolidated into current docs/context files).
 
 ### Fixed
 - **Architecture Fix: DataObject Value Storage** (2025-11-26)
@@ -102,11 +114,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `IEvaluationModel`: Evaluation interface with feature model support
 - `IFeatureModel`: Feature computation interface with memoization
 - `IPredictionModel`: Prediction interface with train/predict
-- `ICalibrationModel`: Calibration interface with weighted optimization
+- Calibration interface with weighted optimization (legacy name: `ICalibrationModel`)
 - `EvaluationSystem`, `PredictionSystem`: Orchestration layers
 
 **Phase 5: Agent & Schema Generation**
-- `LBPAgent`: Orchestration layer with two-phase initialization
+- `PfabAgent` orchestration layer with two-phase initialization (legacy name: `LBPAgent`)
 - Dataclass-based schema generation (replaced decorator introspection)
 - Delayed model instantiation pattern
 - Register → Initialize workflow
