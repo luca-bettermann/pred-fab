@@ -67,7 +67,11 @@ class DataModule:
         self._col_norm_methods: Dict[str, NormMethod] = {}
         
         # Create splits (stores experiment codes)
-        self._split_codes: Dict[str, List[str]] = {}
+        self._split_codes: Dict[str, List[str]] = {
+            SplitType.TRAIN: [],
+            SplitType.VAL: [],
+            SplitType.TEST: [],
+        }
 
     def initialize(
             self, 
@@ -330,6 +334,9 @@ class DataModule:
     def set_parameter_normalize(self, parameter_name: str, method: NormMethod) -> None:
         """Override normalization method for a specific parameter."""
         self._parameter_overrides[parameter_name] = method
+        # Propagate immediately to _col_norm_methods if initialize() has already been called.
+        if parameter_name in self._col_norm_methods:
+            self._col_norm_methods[parameter_name] = method
     
     def _get_feature_normalize_method(self, feature_name: str) -> NormMethod:
         """Get normalization method for a feature (override or default)."""
