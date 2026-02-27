@@ -133,7 +133,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         Returns:
             Temporary DataModule used for tuning
         """
-        if self.datamodule is None:
+        if self.datamodule is None or not self.datamodule._is_fitted:
             raise RuntimeError(
                 "PredictionSystem not trained yet. Call train() before tune(). "
                 "Tuning requires existing normalization parameters from training."
