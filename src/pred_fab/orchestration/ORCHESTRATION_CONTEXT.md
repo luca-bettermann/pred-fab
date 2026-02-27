@@ -41,6 +41,21 @@ training, inference, and calibration:
 7. `inference_bundle.py`
 - Lightweight deployed inference wrapper (prediction + normalization + schema validation).
 
+## Calibration and Tuning Semantics
+
+1. Exploration vs inference objective split
+- `Mode.EXPLORATION`: surrogate-driven acquisition objective combining weighted mean + uncertainty.
+- `Mode.INFERENCE`: direct prediction + evaluation objective (with optional residual correction).
+
+2. Offline vs online optimization domains
+- Offline calibration (`run_calibration`) uses global bounds/fixed params.
+- Online adaptation (`run_adaptation`) uses trust-region bounds around current effective parameters.
+
+3. Online residual adaptation lifecycle
+- `PredictionSystem.tune(...)` trains residual correction on selected row slices only.
+- Residual model uses base inputs + base predictions as tuning input.
+- Applied online parameter changes are persisted as `ParameterUpdateEvent` records, then replayed in export/datamodule flows.
+
 ## Open Refactor Risks (Large-Scope Only)
 
 1. Use of private DataModule internals across systems

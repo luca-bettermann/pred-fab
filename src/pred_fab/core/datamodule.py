@@ -639,6 +639,19 @@ class DataModule:
             SplitType.VAL: len(self._split_codes[SplitType.VAL]),
             SplitType.TEST: len(self._split_codes[SplitType.TEST])
         }
+
+    def set_split_codes(
+        self,
+        train_codes: List[str],
+        val_codes: Optional[List[str]] = None,
+        test_codes: Optional[List[str]] = None,
+    ) -> None:
+        """Explicitly set split membership without triggering split recomputation or refit."""
+        self._split_codes = {
+            SplitType.TRAIN: list(train_codes),
+            SplitType.VAL: list(val_codes or []),
+            SplitType.TEST: list(test_codes or []),
+        }
     
     def __repr__(self) -> str:
         """String representation."""

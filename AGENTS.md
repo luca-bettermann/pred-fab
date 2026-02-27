@@ -6,8 +6,9 @@ This file provides stable, agent-facing instructions for this repository.
 
 1. Universal guidance: `~/OneDrive - TUM/02 Knowledge Base/AGENTS.md`
 2. Human-facing overview: `README.md` (keep minimal, high-level, and up to date)
-3. Project-specific status and conventions: `PROJECT_CONTEXT.md`
-4. Folder-level context notes (`*_CONTEXT.md`) in relevant subfolders for local architecture + known vulnerabilities.
+3. Quick usage reference: `QUICK_START.md`
+4. Project-specific status and conventions: `PROJECT_CONTEXT.md`
+5. Folder-level context notes (`*_CONTEXT.md`) in relevant subfolders for local architecture + known vulnerabilities.
 5. Then inspect relevant code paths in `src/pred_fab/` and integration coverage in `tests/integration/` and `tests/orchestration/`.
 
 ## Scope
@@ -21,7 +22,7 @@ This file provides stable, agent-facing instructions for this repository.
 - Primary validation is the stepwise integration + orchestration test suite.
 - Prioritize fixing underlying functionality before finalizing step-method APIs.
 - Keep docs and context files aligned with implementation changes.
-- Keep `README.md` updated as the human-facing entrypoint: high-level and minimal, then link to detailed docs in `docs/`.
+- Keep `README.md` updated as the human-facing entrypoint: high-level and minimal, and keep `QUICK_START.md` current for executable usage.
 - Prefer refactoring existing code paths over adding parallel one-off helpers.
 - If new functionality replaces legacy behavior, remove replaced code in the same change.
 - Add short single-line purpose comments/docstrings before non-obvious code blocks.
