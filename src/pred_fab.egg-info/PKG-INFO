@@ -13,7 +13,7 @@ Provides-Extra: dev
 Requires-Dist: pytest>=8.4.1; extra == "dev"
 Dynamic: license-file
 
-# Learning by Printing (LbP) Framework
+# PFAB: A Predictive Layer for Digital Fabrication Systems
 
 A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
 

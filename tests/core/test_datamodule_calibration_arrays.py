@@ -66,3 +66,52 @@ def test_build_calibration_training_arrays_uses_latest_effective_parameters(tmp_
 
     X, _ = datamodule.build_calibration_training_arrays(["performance_1"])
     assert np.isclose(X[0, 0], 7.25)
+
+
+def test_build_calibration_training_arrays_excludes_val_and_test_splits(tmp_path):
+    """Only train split experiments contribute rows; val/test are ignored."""
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp1 = dataset.get_experiment("exp_001")
+    exp1.performance.set_values_from_dict({"performance_1": 0.8}, logger=dataset.logger)
+
+    dataset.create_experiment("exp_002", parameters={"param_1": 9.0, "dim_1": 2, "dim_2": 3})
+    exp2 = dataset.get_experiment("exp_002")
+    exp2.performance.set_values_from_dict({"performance_1": 0.5}, logger=dataset.logger)
+
+    datamodule = DataModule(dataset)
+    datamodule.initialize(input_parameters=["param_1", "dim_1", "dim_2"], input_features=[], output_columns=[])
+    datamodule._is_fitted = True
+    datamodule._split_codes = {
+        SplitType.TRAIN: ["exp_001"],
+        SplitType.VAL: ["exp_002"],
+        SplitType.TEST: [],
+    }
+
+    X, y = datamodule.build_calibration_training_arrays(["performance_1"])
+    assert X.shape == (1, 3)  # Only exp_001 in train
+    assert y.shape == (1, 1)
+    assert np.isclose(y[0, 0], 0.8)
+
+
+def test_build_calibration_training_arrays_multiple_train_experiments(tmp_path):
+    """Multiple experiments in the train split produce one row per experiment."""
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp1 = dataset.get_experiment("exp_001")
+    exp1.performance.set_values_from_dict({"performance_1": 0.6}, logger=dataset.logger)
+
+    dataset.create_experiment("exp_002", parameters={"param_1": 7.0, "dim_1": 2, "dim_2": 3})
+    exp2 = dataset.get_experiment("exp_002")
+    exp2.performance.set_values_from_dict({"performance_1": 0.9}, logger=dataset.logger)
+
+    datamodule = DataModule(dataset)
+    datamodule.initialize(input_parameters=["param_1", "dim_1", "dim_2"], input_features=[], output_columns=[])
+    datamodule._is_fitted = True
+    datamodule._split_codes = {
+        SplitType.TRAIN: ["exp_001", "exp_002"],
+        SplitType.VAL: [],
+        SplitType.TEST: [],
+    }
+
+    X, y = datamodule.build_calibration_training_arrays(["performance_1"])
+    assert X.shape == (2, 3)
+    assert y.shape == (2, 1)

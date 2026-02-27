@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from tests.utils.builders import build_dataset_with_single_experiment
 
@@ -49,3 +50,57 @@ def test_tensor_to_table_roundtrip_for_mixed_features(tmp_path):
     assert np.array_equal(exp.features.tensor_to_table("feature_grid", grid_tensor, exp.parameters), grid_table)
     assert np.array_equal(exp.features.tensor_to_table("feature_d1", d1_tensor, exp.parameters), d1_table)
     assert np.array_equal(exp.features.tensor_to_table("feature_scalar", scalar_tensor, exp.parameters), scalar_table)
+
+
+# ===== is_populated() =====
+
+def test_is_populated_false_for_all_features_after_create(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp = dataset.get_experiment("exp_001")
+    assert exp.features.is_populated("feature_grid") is False
+    assert exp.features.is_populated("feature_d1") is False
+    assert exp.features.is_populated("feature_scalar") is False
+
+
+def test_is_populated_true_after_set_values_from_df(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp = dataset.get_experiment("exp_001")
+
+    rows = [[i, j, float(i * 10 + j)] for i in range(2) for j in range(3)]
+    df = pd.DataFrame(rows, columns=["d1", "d2", "feature_grid"], dtype=np.float64)
+    exp.features.set_values_from_df(df, logger=dataset.logger, parameters=exp.parameters)
+
+    assert exp.features.is_populated("feature_grid") is True
+
+
+# ===== value_at() =====
+
+def test_value_at_returns_correct_value_for_known_grid_coordinates(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp = dataset.get_experiment("exp_001")
+
+    grid_table = np.array(
+        [[0, 0, 0], [0, 1, 1], [0, 2, 2], [1, 0, 10], [1, 1, 11], [1, 2, 12]],
+        dtype=np.float64,
+    )
+    tensor = exp.features.table_to_tensor("feature_grid", grid_table, exp.parameters)
+    exp.features.set_value("feature_grid", tensor)
+
+    val = exp.features.value_at("feature_grid", exp.parameters, {"d1": 1, "d2": 2})
+    assert val == pytest.approx(12.0)
+
+
+def test_value_at_returns_none_for_missing_iterator_key(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp = dataset.get_experiment("exp_001")
+
+    grid_table = np.array(
+        [[0, 0, 0], [0, 1, 1], [0, 2, 2], [1, 0, 10], [1, 1, 11], [1, 2, 12]],
+        dtype=np.float64,
+    )
+    tensor = exp.features.table_to_tensor("feature_grid", grid_table, exp.parameters)
+    exp.features.set_value("feature_grid", tensor)
+
+    # "d2" key is missing from iterator_values
+    val = exp.features.value_at("feature_grid", exp.parameters, {"d1": 0})
+    assert val is None

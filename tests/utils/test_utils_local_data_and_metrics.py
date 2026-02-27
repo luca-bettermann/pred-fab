@@ -38,3 +38,46 @@ def test_metrics_handles_constant_targets_and_shape_mismatch():
 
     with pytest.raises(ValueError):
         Metrics.calculate_regression_metrics(np.array([1.0, 2.0]), np.array([1.0]))
+
+
+def test_local_data_save_load_performance_roundtrip(tmp_path):
+    local = LocalData(str(tmp_path))
+    local.set_schema("schema_test")
+
+    saved = local.save_performance(
+        ["exp_001"],
+        {"exp_001": {"performance_1": 0.85, "performance_2": 0.42}},
+        recompute=True,
+    )
+    assert saved is True
+
+    missing, perf = local.load_performance(["exp_001"])
+    assert missing == []
+    assert perf["exp_001"]["performance_1"] == pytest.approx(0.85)
+    assert perf["exp_001"]["performance_2"] == pytest.approx(0.42)
+
+
+def test_local_data_save_with_recompute_false_skips_existing_file(tmp_path):
+    local = LocalData(str(tmp_path))
+    local.set_schema("schema_test")
+
+    local.save_parameters(["exp_001"], {"exp_001": {"a": 1}}, recompute=True)
+    result = local.save_parameters(["exp_001"], {"exp_001": {"a": 99}}, recompute=False)
+    assert result is False
+
+    _, params = local.load_parameters(["exp_001"])
+    assert params["exp_001"]["a"] == 1  # Original value preserved
+
+
+def test_metrics_returns_all_expected_keys():
+    result = Metrics.calculate_regression_metrics(np.array([1.0, 2.0, 3.0]), np.array([1.1, 1.9, 3.1]))
+    assert set(result.keys()) == {"mae", "rmse", "r2", "n_samples"}
+    assert result["n_samples"] == 3
+
+
+def test_metrics_empty_arrays_return_zeros():
+    result = Metrics.calculate_regression_metrics(np.array([]), np.array([]))
+    assert result["mae"] == 0.0
+    assert result["rmse"] == 0.0
+    assert result["r2"] == 0.0
+    assert result["n_samples"] == 0

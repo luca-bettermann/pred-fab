@@ -52,3 +52,21 @@ def test_schema_compatibility_uses_block_compatibility_check(tmp_path):
     schema_a = build_mixed_feature_schema(tmp_path / "a", name="schema_a")
     schema_b = build_mixed_feature_schema(tmp_path / "b", name="schema_b")
     assert schema_a.is_compatible_with(schema_b)
+
+
+def test_sanitize_values_raises_key_error_for_unknown_parameter_without_ignore(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    params = dataset.schema.parameters
+    with pytest.raises(KeyError):
+        params.sanitize_values({"nonexistent_param": 5.0})
+
+
+def test_sanitize_values_with_ignore_unknown_passes_through_unknown_key(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    params = dataset.schema.parameters
+    result = params.sanitize_values(
+        {"param_1": 3.0, "unknown_extra": "whatever"},
+        ignore_unknown=True,
+    )
+    assert result["param_1"] == pytest.approx(3.0)
+    assert result["unknown_extra"] == "whatever"

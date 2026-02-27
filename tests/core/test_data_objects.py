@@ -1,0 +1,460 @@
+"""
+Tests for DataObject subclasses: validation, coercion, serialization, and type contracts.
+
+Covers DataReal, DataInt, DataBool, DataCategorical, DataDimension, DataArray,
+and the factory classes Parameter, Feature, PerformanceAttribute.
+"""
+import pytest
+import numpy as np
+
+from pred_fab.core.data_objects import (
+    DataReal,
+    DataInt,
+    DataBool,
+    DataCategorical,
+    DataDimension,
+    DataArray,
+    Parameter,
+    Feature,
+    PerformanceAttribute,
+)
+from pred_fab.utils.enum import Roles
+
+
+# ===== DataReal =====
+
+def test_datareal_validate_accepts_value_at_min_bound():
+    obj = DataReal("x", Roles.PARAMETER, min_val=0.0, max_val=10.0)
+    assert obj.validate(0.0) is True
+
+
+def test_datareal_validate_accepts_value_at_max_bound():
+    obj = DataReal("x", Roles.PARAMETER, min_val=0.0, max_val=10.0)
+    assert obj.validate(10.0) is True
+
+
+def test_datareal_validate_raises_for_value_below_min():
+    obj = DataReal("x", Roles.PARAMETER, min_val=0.0, max_val=10.0)
+    with pytest.raises(ValueError, match="below minimum"):
+        obj.validate(-0.001)
+
+
+def test_datareal_validate_raises_for_value_above_max():
+    obj = DataReal("x", Roles.PARAMETER, min_val=0.0, max_val=10.0)
+    with pytest.raises(ValueError, match="above maximum"):
+        obj.validate(10.001)
+
+
+def test_datareal_validate_raises_for_non_numeric():
+    obj = DataReal("x", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate("not_a_number")
+
+
+def test_datareal_validate_accepts_int_as_numeric():
+    obj = DataReal("x", Roles.PARAMETER, min_val=0.0, max_val=10.0)
+    assert obj.validate(5) is True
+
+
+def test_datareal_coerce_applies_rounding():
+    obj = DataReal("x", Roles.PARAMETER, round_digits=2)
+    assert obj.coerce(3.14159) == pytest.approx(3.14)
+
+
+def test_datareal_coerce_no_rounding_when_not_configured():
+    obj = DataReal("x", Roles.PARAMETER)
+    assert obj.coerce(3.14159) == pytest.approx(3.14159)
+
+
+def test_datareal_coerce_converts_int_to_float():
+    obj = DataReal("x", Roles.PARAMETER)
+    result = obj.coerce(5)
+    assert isinstance(result, float)
+    assert result == 5.0
+
+
+def test_datareal_validate_no_constraints_accepts_any_numeric():
+    obj = DataReal("x", Roles.PARAMETER)
+    assert obj.validate(-1e10) is True
+    assert obj.validate(1e10) is True
+
+
+def test_datareal_to_dict_from_dict_roundtrip():
+    obj = DataReal("speed", Roles.PARAMETER, min_val=0.0, max_val=100.0, round_digits=3)
+    d = obj.to_dict()
+    from pred_fab.core.data_objects import DataObject
+    restored = DataObject.from_dict(d)
+    assert restored.code == obj.code
+    assert restored.constraints == obj.constraints
+    assert restored.round_digits == obj.round_digits
+
+
+def test_datareal_validate_exactly_at_boundary_inclusive():
+    """Boundary values min and max should be valid (inclusive)."""
+    obj = DataReal("x", Roles.PARAMETER, min_val=5.0, max_val=5.0)
+    assert obj.validate(5.0) is True
+
+
+# ===== DataInt =====
+
+def test_dataint_validate_accepts_int():
+    obj = DataInt("n", Roles.PARAMETER, min_val=1, max_val=10)
+    assert obj.validate(5) is True
+
+
+def test_dataint_validate_raises_for_float():
+    obj = DataInt("n", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate(3.0)
+
+
+def test_dataint_validate_raises_for_bool():
+    """bool is subclass of int in Python; DataInt explicitly rejects it."""
+    obj = DataInt("n", Roles.PARAMETER)
+    with pytest.raises(TypeError, match="must be int"):
+        obj.validate(True)
+
+
+def test_dataint_validate_raises_below_min():
+    obj = DataInt("n", Roles.PARAMETER, min_val=1, max_val=10)
+    with pytest.raises(ValueError):
+        obj.validate(0)
+
+
+def test_dataint_validate_raises_above_max():
+    obj = DataInt("n", Roles.PARAMETER, min_val=1, max_val=10)
+    with pytest.raises(ValueError):
+        obj.validate(11)
+
+
+def test_dataint_validate_accepts_boundary_values():
+    obj = DataInt("n", Roles.PARAMETER, min_val=1, max_val=10)
+    assert obj.validate(1) is True
+    assert obj.validate(10) is True
+
+
+def test_dataint_coerce_rounds_0_4_down():
+    obj = DataInt("n", Roles.PARAMETER)
+    assert obj.coerce(0.4) == 0
+
+
+def test_dataint_coerce_rounds_0_6_up():
+    obj = DataInt("n", Roles.PARAMETER)
+    assert obj.coerce(0.6) == 1
+
+
+def test_dataint_coerce_0_5_uses_python_rounding():
+    """Python 3 uses banker's rounding: round(0.5) == 0, round(1.5) == 2."""
+    obj = DataInt("n", Roles.PARAMETER)
+    # Document the exact behavior — not asserting specific value, just that it's an int
+    result = obj.coerce(0.5)
+    assert isinstance(result, int)
+
+
+def test_dataint_coerce_float_to_int():
+    obj = DataInt("n", Roles.PARAMETER)
+    assert obj.coerce(3.9) == 4
+    assert obj.coerce(2.1) == 2
+    assert isinstance(obj.coerce(2.1), int)
+
+
+def test_dataint_coerce_negative_float():
+    obj = DataInt("n", Roles.PARAMETER)
+    assert obj.coerce(-1.6) == -2
+    assert obj.coerce(-1.4) == -1
+
+
+def test_dataint_coerce_returns_int_type():
+    obj = DataInt("n", Roles.PARAMETER)
+    result = obj.coerce(5.7)
+    assert isinstance(result, int)
+
+
+# ===== DataBool =====
+
+def test_databool_validate_accepts_true():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.validate(True) is True
+
+
+def test_databool_validate_accepts_false():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.validate(False) is True
+
+
+def test_databool_validate_raises_for_int():
+    obj = DataBool("flag", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate(1)
+
+
+def test_databool_validate_raises_for_string():
+    obj = DataBool("flag", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate("true")
+
+
+def test_databool_validate_raises_for_float():
+    obj = DataBool("flag", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate(1.0)
+
+
+def test_databool_coerce_0_5_is_true():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(0.5) is True
+
+
+def test_databool_coerce_0_49_is_false():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(0.49) is False
+
+
+def test_databool_coerce_0_51_is_true():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(0.51) is True
+
+
+def test_databool_coerce_zero_is_false():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(0) is False
+
+
+def test_databool_coerce_one_is_true():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(1) is True
+
+
+def test_databool_coerce_passes_through_true():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(True) is True
+
+
+def test_databool_coerce_passes_through_false():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.coerce(False) is False
+
+
+def test_databool_coerce_raises_for_string():
+    obj = DataBool("flag", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.coerce("yes")
+
+
+def test_databool_coerce_returns_bool_type():
+    obj = DataBool("flag", Roles.PARAMETER)
+    result = obj.coerce(0.8)
+    assert isinstance(result, bool)
+
+
+# ===== DataCategorical =====
+
+def test_datacategorical_validate_accepts_known_category():
+    obj = DataCategorical("material", ["PLA", "ABS", "PETG"], Roles.PARAMETER)
+    assert obj.validate("PLA") is True
+    assert obj.validate("ABS") is True
+
+
+def test_datacategorical_validate_raises_for_unknown_category():
+    obj = DataCategorical("material", ["PLA", "ABS"], Roles.PARAMETER)
+    with pytest.raises(ValueError, match="not in allowed categories"):
+        obj.validate("UNKNOWN")
+
+
+def test_datacategorical_validate_raises_for_non_string():
+    obj = DataCategorical("material", ["PLA", "ABS"], Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate(1)
+
+
+def test_datacategorical_raises_for_empty_categories():
+    with pytest.raises(ValueError, match="cannot be empty"):
+        DataCategorical("material", [], Roles.PARAMETER)
+
+
+def test_datacategorical_coerce_converts_number_to_str():
+    obj = DataCategorical("material", ["1", "2"], Roles.PARAMETER)
+    assert obj.coerce(1) == "1"
+
+
+def test_datacategorical_coerce_passes_through_string():
+    obj = DataCategorical("material", ["PLA", "ABS"], Roles.PARAMETER)
+    assert obj.coerce("PLA") == "PLA"
+
+
+def test_datacategorical_to_dict_from_dict_roundtrip():
+    obj = DataCategorical("mat", ["A", "B", "C"], Roles.PARAMETER)
+    from pred_fab.core.data_objects import DataObject
+    d = obj.to_dict()
+    restored = DataObject.from_dict(d)
+    assert restored.constraints["categories"] == obj.constraints["categories"]
+
+
+def test_datacategorical_case_sensitive():
+    """Validation should be case-sensitive."""
+    obj = DataCategorical("mat", ["PLA", "ABS"], Roles.PARAMETER)
+    with pytest.raises(ValueError):
+        obj.validate("pla")
+
+
+# ===== DataDimension =====
+
+def test_datadimension_requires_non_negative_level():
+    with pytest.raises(ValueError, match="non-negative"):
+        DataDimension("n_layers", "layer_id", level=-1, role=Roles.PARAMETER)
+
+
+def test_datadimension_requires_integer_level():
+    with pytest.raises((ValueError, TypeError)):
+        DataDimension("n_layers", "layer_id", level=1.5, role=Roles.PARAMETER)  # type: ignore
+
+
+def test_datadimension_level_zero_is_valid():
+    d = DataDimension("n_layers", "layer_id", level=0, role=Roles.PARAMETER)
+    assert d.level == 0
+
+
+def test_datadimension_level_stored_in_constraints():
+    d = DataDimension("n_layers", "layer_id", level=2, role=Roles.PARAMETER, max_val=10)
+    assert d.constraints["level"] == 2
+
+
+def test_datadimension_stores_iterator_code():
+    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER, max_val=10)
+    assert d.iterator_code == "layer_id"
+
+
+def test_datadimension_iterator_code_in_constraints():
+    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
+    assert d.constraints["dim_iterator_code"] == "layer_id"
+
+
+def test_datadimension_to_dict_from_dict_roundtrip():
+    from pred_fab.core.data_objects import DataObject
+    obj = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER, min_val=1, max_val=10)
+    d = obj.to_dict()
+    restored = DataObject.from_dict(d)
+    assert restored.iterator_code == "layer_id"  # type: ignore
+    assert restored.level == 1  # type: ignore
+    assert restored.constraints.get("min") == 1
+    assert restored.constraints.get("max") == 10
+
+
+def test_datadimension_min_val_default_is_1():
+    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
+    assert d.constraints.get("min") == 1
+
+
+# ===== DataArray =====
+
+def test_dataarray_validate_accepts_correct_dtype():
+    obj = DataArray("features", Roles.FEATURE, dtype=np.float64)
+    assert obj.validate(np.array([1.0, 2.0], dtype=np.float64)) is True
+
+
+def test_dataarray_validate_raises_for_wrong_dtype():
+    obj = DataArray("features", Roles.FEATURE, dtype=np.float64)
+    with pytest.raises(ValueError, match="dtype mismatch"):
+        obj.validate(np.array([1, 2], dtype=np.int32))
+
+
+def test_dataarray_validate_raises_for_list_input():
+    obj = DataArray("features", Roles.FEATURE, dtype=np.float64)
+    with pytest.raises(TypeError):
+        obj.validate([1.0, 2.0])
+
+
+def test_dataarray_coerce_converts_list_to_ndarray():
+    obj = DataArray("features", Roles.FEATURE, dtype=np.float64)
+    result = obj.coerce([1, 2, 3])
+    assert isinstance(result, np.ndarray)
+    assert result.dtype == np.float64
+
+
+def test_dataarray_coerce_preserves_shape():
+    obj = DataArray("features", Roles.FEATURE, dtype=np.float64)
+    result = obj.coerce(np.array([[1.0, 2.0], [3.0, 4.0]]))
+    assert result.shape == (2, 2)
+
+
+def test_dataarray_set_columns_updates_constraints():
+    obj = DataArray("feat", Roles.FEATURE, dtype=np.float64)
+    obj.set_columns(["d1", "d2", "feat"])
+    assert obj.columns == ["d1", "d2", "feat"]
+    assert obj.constraints["columns"] == ["d1", "d2", "feat"]
+
+
+def test_dataarray_to_dict_from_dict_roundtrip():
+    from pred_fab.core.data_objects import DataObject
+    obj = DataArray("feat", Roles.FEATURE, dtype=np.float64)
+    obj.set_columns(["d1", "feat"])
+    d = obj.to_dict()
+    restored = DataObject.from_dict(d)
+    assert restored.constraints.get("columns") == ["d1", "feat"]
+
+
+# ===== Factories =====
+
+def test_parameter_factory_real_creates_correct_type():
+    p = Parameter.real("speed", min_val=0.0, max_val=100.0)
+    assert isinstance(p, DataReal)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_factory_real_defaults_round_digits_3():
+    p = Parameter.real("speed", min_val=0.0, max_val=100.0)
+    assert p.round_digits == 3
+
+
+def test_parameter_factory_integer_creates_correct_type():
+    p = Parameter.integer("n_layers", min_val=1, max_val=50)
+    assert isinstance(p, DataInt)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_factory_categorical_creates_correct_type():
+    p = Parameter.categorical("material", ["PLA", "ABS"])
+    assert isinstance(p, DataCategorical)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_factory_boolean_creates_correct_type():
+    p = Parameter.boolean("enabled")
+    assert isinstance(p, DataBool)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_factory_dimension_creates_correct_type():
+    p = Parameter.dimension("n_layers", "layer_id", level=1, max_val=20)
+    assert isinstance(p, DataDimension)
+    assert p.role == Roles.PARAMETER
+
+
+def test_feature_factory_array_creates_correct_type():
+    f = Feature.array("my_feature")
+    assert isinstance(f, DataArray)
+    assert f.role == Roles.FEATURE
+
+
+def test_performance_attribute_factory_score_creates_correct_type():
+    p = PerformanceAttribute.score("accuracy")
+    assert isinstance(p, DataReal)
+    assert p.role == Roles.PERFORMANCE
+
+
+def test_performance_attribute_factory_score_bounds_0_to_1():
+    p = PerformanceAttribute.score("accuracy")
+    assert p.constraints["min"] == 0
+    assert p.constraints["max"] == 1
+
+
+def test_performance_attribute_score_rejects_value_above_1():
+    p = PerformanceAttribute.score("accuracy")
+    with pytest.raises(ValueError):
+        p.validate(1.001)
+
+
+def test_performance_attribute_score_rejects_value_below_0():
+    p = PerformanceAttribute.score("accuracy")
+    with pytest.raises(ValueError):
+        p.validate(-0.001)
