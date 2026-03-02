@@ -8,7 +8,7 @@ against a DatasetSchema. It does NOT handle persistence (that's LocalData's job)
 import numpy as np
 import pandas as pd
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 import functools
 
@@ -87,6 +87,55 @@ class ParameterUpdateEvent:
             step_index=data.get("step_index"),
             source_step=data.get("source_step"),
         )
+
+@dataclass
+class ParameterSchedule:
+    """Sparse ordered schedule of runtime parameter changes for one dimension level."""
+    dimension: str
+    entries: List[Tuple[int, 'ParameterProposal']] = field(default_factory=list)
+
+    def apply(self, experiment: 'ExperimentData') -> None:
+        """Record all schedule entries as ParameterUpdateEvents on the experiment."""
+        for step_index, proposal in self.entries:
+            experiment.record_parameter_update(
+                proposal, dimension=self.dimension, step_index=step_index
+            )
+
+
+@dataclass
+class ExperimentSpec:
+    """Initial parameter proposal plus optional per-dimension runtime schedules."""
+    initial_params: 'ParameterProposal'
+    schedules: Dict[str, 'ParameterSchedule'] = field(default_factory=dict)
+
+    def apply_schedules(self, experiment: 'ExperimentData') -> None:
+        """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
+        for schedule in self.schedules.values():
+            schedule.apply(experiment)
+
+    # dict-like delegation to initial_params for backward compatibility.
+
+    def __getitem__(self, key: str) -> Any:
+        return self.initial_params[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.initial_params
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.initial_params.get(key, default)
+
+    def keys(self):
+        return self.initial_params.keys()
+
+    def items(self):
+        return self.initial_params.items()
+
+    def __iter__(self):
+        return iter(self.initial_params)
+
+    def __len__(self) -> int:
+        return len(self.initial_params)
+
 
 class ExperimentData:
     """

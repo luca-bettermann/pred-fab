@@ -7,7 +7,7 @@ and _get_online_bounds trust-region semantics.
 import pytest
 import numpy as np
 
-from pred_fab.core import ParameterProposal
+from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
 from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
     build_calibration_system_with_capturing_surrogate,
@@ -17,6 +17,7 @@ from tests.utils.builders import (
     configure_default_workflow_calibration,
     build_prepared_workflow_datamodule,
     build_real_agent_stack,
+    build_runtime_agent_stack,
 )
 
 
@@ -138,13 +139,13 @@ def test_compute_system_performance_fewer_values_than_perf_attrs_raises_index_er
 
 def test_run_adaptation_returns_dict_with_schema_keys(tmp_path):
     """run_adaptation should return a dict containing all parameter keys from the schema."""
-    agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    # Configure a trust region on param_1 so adaptation can move
-    agent.calibration_system.configure_adaptation_delta({"param_1": 1.0})
+    # "speed" is runtime=True in the runtime schema — configure its trust region
+    agent.calibration_system.configure_adaptation_delta({"speed": 10.0})
 
     current_params = exp.parameters.get_values_dict()
     result = agent.calibration_system.run_adaptation(
@@ -158,17 +159,18 @@ def test_run_adaptation_returns_dict_with_schema_keys(tmp_path):
     assert schema_params.issubset(set(result.keys()))
 
 
-def test_run_adaptation_with_no_trust_regions_returns_current_params(tmp_path):
+def test_run_adaptation_with_no_trust_regions_and_no_runtime_params_passes(tmp_path):
     """
-    With no trust regions configured, all params are fixed to current_params.
+    Schema with NO runtime parameters: run_adaptation() passes even with zero trust regions.
     The optimizer has zero degrees of freedom and should return (near) current values.
     """
+    # build_real_agent_stack uses build_mixed_feature_schema which has no runtime params
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    # No trust regions — all params fixed
+    # No trust regions, no runtime params → validation passes
     assert len(agent.calibration_system.trust_regions) == 0
     current_params = exp.parameters.get_values_dict()
 
@@ -178,23 +180,44 @@ def test_run_adaptation_with_no_trust_regions_returns_current_params(tmp_path):
         current_params=current_params,
     )
 
-    # With zero degrees of freedom, result should equal current params (or be very close)
+    # With zero degrees of freedom, result should equal current params
     assert result["param_1"] == pytest.approx(current_params["param_1"], abs=0.01)
 
 
-def test_run_adaptation_trust_region_constrains_proposed_value(tmp_path):
+def test_run_adaptation_raises_when_runtime_param_missing_trust_region(tmp_path):
     """
-    The proposed param_1 should stay within delta of the current value.
+    Schema with a runtime parameter but no configured trust region → RuntimeError.
     """
-    agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    delta = 0.5
-    agent.calibration_system.configure_adaptation_delta({"param_1": delta})
+    # "speed" is runtime=True but NO trust region configured
+    assert "speed" not in agent.calibration_system.trust_regions
     current_params = exp.parameters.get_values_dict()
-    current_val = current_params["param_1"]
+
+    with pytest.raises(RuntimeError, match="runtime-adjustable"):
+        agent.calibration_system.run_adaptation(
+            datamodule=datamodule,
+            mode=Mode.INFERENCE,
+            current_params=current_params,
+        )
+
+
+def test_run_adaptation_trust_region_constrains_proposed_value(tmp_path):
+    """
+    The proposed ``speed`` value should stay within delta of the current value.
+    """
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
+    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
+    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    delta = 5.0
+    agent.calibration_system.configure_adaptation_delta({"speed": delta})
+    current_params = exp.parameters.get_values_dict()
+    current_val = current_params["speed"]
 
     result = agent.calibration_system.run_adaptation(
         datamodule=datamodule,
@@ -202,7 +225,7 @@ def test_run_adaptation_trust_region_constrains_proposed_value(tmp_path):
         current_params=current_params,
     )
 
-    assert result["param_1"] == pytest.approx(current_val, abs=delta + 0.1)
+    assert result["speed"] == pytest.approx(current_val, abs=delta + 0.1)
 
 
 # ===== CalibrationSystem.agent.configure_calibration integration =====
@@ -218,7 +241,8 @@ def test_configure_calibration_sets_all_system_fields(tmp_path):
     assert cs.param_bounds["param_1"] == (0.0, 10.0)
     assert cs.param_bounds["param_2"] == (1, 4)
     assert cs.fixed_params["param_3"] == "B"
-    assert cs.trust_regions["param_1"] == pytest.approx(0.1)
+    # "speed" is the runtime-adjustable parameter in the workflow schema
+    assert cs.trust_regions["speed"] == pytest.approx(10.0)
 
 
 # ===== Baseline determinism =====
@@ -240,3 +264,233 @@ def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
     for s1, s2 in zip(r1, r2):
         assert s1["param_1"] == pytest.approx(s2["param_1"], abs=1e-6)
         assert s1["param_2"] == s2["param_2"]
+
+
+# ===== ExperimentSpec return type =====
+
+def test_generate_baseline_returns_experiment_spec_instances(tmp_path):
+    """generate_baseline_experiments() should return ExperimentSpec objects."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    results = calibration.generate_baseline_experiments(n_samples=3)
+    for spec in results:
+        assert isinstance(spec, ExperimentSpec)
+        assert isinstance(spec.initial_params, ParameterProposal)
+
+
+def test_generate_baseline_no_trajectories_has_empty_schedules(tmp_path):
+    """Without trajectory configs, every ExperimentSpec has empty schedules."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    results = calibration.generate_baseline_experiments(n_samples=4)
+    for spec in results:
+        assert spec.schedules == {}
+
+
+def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
+    """ExperimentSpec forwarding interface: __getitem__, __contains__, keys() work."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    results = calibration.generate_baseline_experiments(n_samples=2)
+    spec = results[0]
+
+    # __getitem__
+    val = spec["param_1"]
+    assert isinstance(val, float)
+
+    # __contains__
+    assert "param_1" in spec
+    assert "nonexistent" not in spec
+
+    # keys()
+    assert "param_1" in set(spec.keys())
+    assert "speed" in set(spec.keys())
+
+
+# ===== configure_trajectory() =====
+
+def test_configure_trajectory_sets_config(tmp_path):
+    """configure_trajectory() stores the dimension level for the given runtime param."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("speed", dimension_level=1)
+    assert calibration.trajectory_configs["speed"] == 1
+
+
+def test_configure_trajectory_raises_for_non_runtime_param(tmp_path):
+    """configure_trajectory() raises ValueError when the parameter is not runtime-adjustable."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    with pytest.raises(ValueError, match="not runtime-adjustable"):
+        calibration.configure_trajectory("param_1", dimension_level=1)
+
+
+def test_configure_trajectory_blocked_without_force(tmp_path):
+    """Calling configure_trajectory twice without force is silently blocked."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("speed", dimension_level=1)
+    calibration.configure_trajectory("speed", dimension_level=2)  # blocked without force
+
+    # Level should remain 1, not overwritten by 2
+    assert calibration.trajectory_configs["speed"] == 1
+
+
+def test_configure_trajectory_with_force_overwrites(tmp_path):
+    """force=True overwrites an existing trajectory configuration."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("speed", dimension_level=1)
+    calibration.configure_trajectory("speed", dimension_level=2, force=True)
+
+    assert calibration.trajectory_configs["speed"] == 2
+
+
+def test_configure_trajectory_ignores_unknown_param(tmp_path):
+    """configure_trajectory() silently skips params not in the schema."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("nonexistent", dimension_level=1)
+    assert "nonexistent" not in calibration.trajectory_configs
+
+
+# ===== generate_baseline_experiments with trajectories =====
+
+def test_generate_baseline_with_trajectory_generates_non_empty_schedules(tmp_path):
+    """When trajectory is configured, ExperimentSpecs should contain non-empty schedules."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("speed", dimension_level=1)
+    results = calibration.generate_baseline_experiments(n_samples=3, n_trajectory_segments=3)
+
+    for spec in results:
+        # The schedule keys should contain the iterator name for level-1 dim
+        assert len(spec.schedules) > 0
+        # Each schedule should have trigger entries
+        for schedule in spec.schedules.values():
+            assert isinstance(schedule, ParameterSchedule)
+            assert len(schedule.entries) > 0
+
+
+def test_generate_baseline_trajectory_entries_contain_speed(tmp_path):
+    """Schedule entries must contain 'speed' values when speed is trajectory-configured."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    calibration.configure_trajectory("speed", dimension_level=1)
+    results = calibration.generate_baseline_experiments(n_samples=2, n_trajectory_segments=2)
+
+    for spec in results:
+        for dim_key, schedule in spec.schedules.items():
+            for step_idx, proposal in schedule.entries:
+                assert "speed" in proposal
+
+
+# ===== ParameterSchedule.apply() =====
+
+def test_parameter_schedule_apply_records_update_events(tmp_path):
+    """ParameterSchedule.apply() records each entry as a ParameterUpdateEvent."""
+    agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
+
+    # "speed" initial = 100.0; change to 150.0 at step 1 of dim_1.
+    # Use the parameter code "dim_1" (not iterator code "d1") — same convention
+    # as ExperimentData.record_parameter_update().
+    proposal = ParameterProposal.from_dict({"speed": 150.0})
+    schedule = ParameterSchedule(dimension="dim_1", entries=[(1, proposal)])
+
+    initial_count = len(exp.parameter_updates)
+    schedule.apply(exp)
+
+    assert len(exp.parameter_updates) == initial_count + 1
+    event = exp.parameter_updates[-1]
+    assert event.updates.get("speed") == pytest.approx(150.0)
+    assert event.dimension == "dim_1"
+    assert event.step_index == 1
+
+
+def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
+    """ExperimentSpec.apply_schedules() applies all dimensional schedules to the experiment."""
+    agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
+
+    proposal = ParameterProposal.from_dict({"speed": 180.0})
+    schedule = ParameterSchedule(dimension="dim_1", entries=[(1, proposal)])
+    spec = ExperimentSpec(
+        initial_params=ParameterProposal.from_dict({"speed": 100.0}),
+        schedules={"dim_1": schedule},
+    )
+
+    initial_count = len(exp.parameter_updates)
+    spec.apply_schedules(exp)
+
+    assert len(exp.parameter_updates) == initial_count + 1
+
+
+# ===== run_trajectory_exploration() =====
+
+def test_run_trajectory_exploration_raises_without_trajectory_config(tmp_path):
+    """run_trajectory_exploration() raises RuntimeError when no trajectories are configured."""
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
+    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
+    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    cs = agent.calibration_system
+    assert not cs.trajectory_configs
+
+    with pytest.raises(RuntimeError, match="configure_trajectory"):
+        cs.run_trajectory_exploration(
+            datamodule=datamodule,
+            current_params=exp.parameters.get_values_dict(),
+        )
+
+
+def test_run_trajectory_exploration_raises_without_trust_region(tmp_path):
+    """run_trajectory_exploration() raises RuntimeError when trajectory param lacks a trust region."""
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
+    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
+    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    cs = agent.calibration_system
+    cs.configure_trajectory("speed", dimension_level=1)
+    # Intentionally NOT calling configure_adaptation_delta for "speed"
+
+    with pytest.raises(RuntimeError, match="trust region"):
+        cs.run_trajectory_exploration(
+            datamodule=datamodule,
+            current_params=exp.parameters.get_values_dict(),
+        )
+
+
+def test_run_trajectory_exploration_returns_experiment_spec(tmp_path):
+    """run_trajectory_exploration() returns an ExperimentSpec with a schedule."""
+    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
+    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
+    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    cs = agent.calibration_system
+    cs.configure_trajectory("speed", dimension_level=1)
+    cs.configure_adaptation_delta({"speed": 50.0})
+
+    result = cs.run_trajectory_exploration(
+        datamodule=datamodule,
+        current_params=exp.parameters.get_values_dict(),
+        n_segments=2,
+        n_lhs_candidates=5,
+    )
+
+    assert isinstance(result, ExperimentSpec)
+    # "speed" should be in the initial params
+    assert "speed" in result.initial_params
+    # At least one schedule should be present (level-1 dim "d1")
+    assert len(result.schedules) > 0

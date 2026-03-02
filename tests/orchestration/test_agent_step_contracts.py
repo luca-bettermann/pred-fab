@@ -1,4 +1,4 @@
-from pred_fab.core import ParameterProposal
+from pred_fab.core import ParameterProposal, ExperimentSpec
 from pred_fab.utils import Mode
 from tests.utils.builders import build_real_agent_stack
 
@@ -67,10 +67,11 @@ def test_train_executes_real_training_method(tmp_path):
     assert agent.pred_system.datamodule is datamodule
 
 
-def test_baseline_sampling_returns_parameter_proposals(tmp_path):
+def test_baseline_sampling_returns_experiment_specs(tmp_path):
+    """sample_baseline_experiments returns ExperimentSpec instances (Phase 3 update)."""
     agent, _, _, _ = build_real_agent_stack(tmp_path)
     sampled = agent.sample_baseline_experiments(n_samples=3)
 
     assert len(sampled) == 3
-    assert all(isinstance(p, ParameterProposal) for p in sampled)
-    assert all(p.source_step == "baseline_sampling" for p in sampled)
+    assert all(isinstance(p, ExperimentSpec) for p in sampled)
+    assert all(p.initial_params.source_step == "baseline_sampling" for p in sampled)

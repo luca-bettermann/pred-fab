@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Dict, List, Optional, Any, Tuple, Callable
 import numpy as np
 from scipy.stats import qmc
@@ -7,7 +8,8 @@ import warnings
 import functools
 
 from ..core import DataModule, DatasetSchema
-from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical
+from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
+from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
 from ..utils import PfabLogger, Mode, SamplingStrategy
 from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
@@ -59,6 +61,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.param_bounds: Dict[str, Tuple[float, float]] = {}
         self.fixed_params: Dict[str, Any] = {}
         self.trust_regions: Dict[str, float] = {}
+        self.trajectory_configs: Dict[str, int] = {}   # code → dimension_level
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)        
@@ -160,18 +163,63 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def configure_adaptation_delta(self, deltas: Dict[str, float], force: bool = False) -> None:
         """Configure trust region deltas for online calibration."""
         for code, delta in deltas.items():
-            
+
             # Helper Validation
             if not self._validate_and_clean_config(
-                code, 
-                (DataReal, DataInt), 
-                ['fixed_params'], 
+                code,
+                (DataReal, DataInt),
+                ['fixed_params'],
                 force
             ):
                 continue
-            
+
+            # Runtime-adjustability check: trust regions are exclusively for runtime params.
+            obj = self.data_objects[code]
+            if not obj.runtime_adjustable:
+                raise ValueError(
+                    f"Parameter '{code}' is not runtime-adjustable. Trust regions can only be "
+                    f"configured for parameters declared with runtime=True in the schema. "
+                    f"Either mark '{code}' as runtime=True in the schema definition, or remove "
+                    f"this configure_adaptation_delta() call."
+                )
+
             self.trust_regions[code] = delta
 
+
+    def configure_trajectory(self, code: str, dimension_level: int, force: bool = False) -> None:
+        """Configure a runtime parameter for trajectory-based exploration at a given dimension level."""
+        if code not in self.data_objects:
+            self.logger.console_warning(
+                f"Object '{code}' not found in schema; ignoring configure_trajectory."
+            )
+            return
+
+        obj = self.data_objects[code]
+
+        if not obj.runtime_adjustable:
+            raise ValueError(
+                f"Parameter '{code}' is not runtime-adjustable. configure_trajectory() "
+                f"requires a parameter declared with runtime=True in the schema."
+            )
+
+        if not isinstance(obj, (DataReal, DataInt)):
+            raise ValueError(
+                f"Parameter '{code}' type {type(obj).__name__} is not supported for "
+                f"trajectory exploration. Only DataReal and DataInt parameters can have "
+                f"trajectories."
+            )
+
+        if code in self.trajectory_configs and not force:
+            self.logger.console_warning(
+                f"Parameter '{code}' already has a trajectory configuration at level "
+                f"{self.trajectory_configs[code]}; ignoring. Use force=True to overwrite."
+            )
+            return
+
+        self.trajectory_configs[code] = dimension_level
+        self.logger.debug(
+            f"Configured trajectory for '{code}' at dimension level {dimension_level}."
+        )
 
     def _validate_and_clean_config(
         self, 
@@ -180,18 +228,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         conflicting_collections: List[str], 
         force: bool
     ) -> bool:
-        """
-        Validate parameter against schema and conflicting configurations.
-        
-        Args:
-            code: Parameter code
-            allowed_types: Tuple of allowed DataObject types
-            conflicting_collections: Names of dict attributes to check for conflicts
-            force: If True, remove conflicts. If False, return False on conflict.
-            
-        Returns:
-            bool: True if validation passed (and conflicts resolved), False if execution should stop.
-        """
+        """Validate parameter against schema and check for conflicting configurations."""
         # 1. Schema Existence
         if code not in self.data_objects:
             self.logger.console_warning(f"Object '{code}' not found in schema; ignoring.")
@@ -306,36 +343,112 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === BASELINE EXPERIMENT GENERATION ===
 
     def generate_baseline_experiments(
-        self, 
+        self,
         n_samples: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None
-    ) -> List[Dict[str, Any]]:
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        n_trajectory_segments: int = 3,
+    ) -> List[ExperimentSpec]:
         """Generate initial design using Latin Hypercube Sampling."""
+        self.logger.info(
+            f"Generating {n_samples} baseline experiments using Latin Hypercube Sampling..."
+        )
 
-        self.logger.info(f"Generating {n_samples} baseline experiments using Latin Hypercube Sampling...")
-        
         # 1. Define Sampling Space (Physics)
         sampling_specs = self._get_sampling_specs(param_bounds)
         if not sampling_specs:
             self.logger.warning("No valid parameters for baseline generation.")
             return []
-        
+
         param_names = sorted(sampling_specs.keys())
         d = len(param_names)
-        
+
         # 2. Generate Stratified Samples (Geometry)
         # Returns (n_samples, d) matrix with values in [0, 1]
         sampler = qmc.LatinHypercube(d=d, seed=self.random_seed)
-        lhs_samples = sampler.random(n=n_samples) 
-        
-        # 3. Transform Samples to Parameter Space (Mapping)
-        experiments = []
+        lhs_samples = sampler.random(n=n_samples)
+
+        # 3. Build ExperimentSpec per row
+        experiments: List[ExperimentSpec] = []
         for row in lhs_samples:
-            params = self._transform_lhs_sample(row, param_names, sampling_specs)
-            experiments.append(params)
-            self.logger.debug(f"Generated baseline experiment: {params}")
-            
+            initial_dict = self._transform_lhs_sample(row, param_names, sampling_specs)
+            initial_proposal = ParameterProposal.from_dict(
+                initial_dict, source_step="baseline_sampling"
+            )
+
+            # 4. Generate trajectory schedules for configured runtime params
+            schedules: Dict[str, ParameterSchedule] = {}
+            if self.trajectory_configs and n_trajectory_segments > 1:
+                schedules = self._generate_baseline_schedules(
+                    initial_dict, n_trajectory_segments
+                )
+
+            spec = ExperimentSpec(initial_params=initial_proposal, schedules=schedules)
+            experiments.append(spec)
+            self.logger.debug(
+                f"Generated baseline experiment: {initial_dict}, "
+                f"schedules={list(schedules.keys())}"
+            )
+
         return experiments
+
+    def _generate_baseline_schedules(
+        self,
+        initial_dict: Dict[str, Any],
+        n_segments: int,
+    ) -> Dict[str, ParameterSchedule]:
+        """Sample trajectory schedules for trajectory-configured runtime parameters."""
+        level_to_dim: Dict[int, Tuple[str, int]] = {}
+        for code, data_obj in self.data_objects.items():
+            if isinstance(data_obj, DataDimension):
+                dim_size = int(initial_dict.get(code, data_obj.constraints.get("min", 1)))
+                level_to_dim[data_obj.level] = (code, dim_size)
+
+        params_per_level: Dict[int, List[str]] = defaultdict(list)
+        for code, level in self.trajectory_configs.items():
+            params_per_level[level].append(code)
+
+        schedules: Dict[str, ParameterSchedule] = {}
+        for level, param_codes in params_per_level.items():
+            if level not in level_to_dim:
+                self.logger.warning(
+                    f"No dimension found at level {level} for trajectory params "
+                    f"{param_codes}. Skipping schedule generation."
+                )
+                continue
+
+            dim_code, dim_size = level_to_dim[level]
+            n_triggers = n_segments - 1
+            # Evenly spaced trigger steps (exclude step 0, covered by initial_params)
+            trigger_steps = sorted({
+                max(1, int((k + 1) * dim_size / n_segments))
+                for k in range(n_triggers)
+            })
+
+            entries: List[Tuple[int, ParameterProposal]] = []
+            for step_idx in trigger_steps:
+                step_values: Dict[str, Any] = {}
+                for code in param_codes:
+                    low, high = self.schema_bounds.get(code, (-np.inf, np.inf))
+                    if low == -np.inf or high == np.inf:
+                        try:
+                            low, high = self._get_hierarchical_bounds_for_code(code)
+                        except ValueError:
+                            continue
+                    step_values[code] = float(self.rng.uniform(low, high))
+                if step_values:
+                    entries.append((
+                        step_idx,
+                        ParameterProposal.from_dict(
+                            step_values, source_step="baseline_trajectory"
+                        ),
+                    ))
+
+            if entries:
+                schedules[dim_code] = ParameterSchedule(
+                    dimension=dim_code, entries=entries
+                )
+
+        return schedules
 
     def _get_sampling_specs(self, param_bounds: Optional[Dict[str, Tuple[float, float]]]) -> Dict[str, Dict[str, Any]]:
         """Build sampling specifications for each parameter."""
@@ -414,6 +527,165 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self.parameters.sanitize_values(params, ignore_unknown=True)
 
 
+    # === TRAJECTORY EXPLORATION ===
+
+    def run_trajectory_exploration(
+        self,
+        datamodule: DataModule,
+        current_params: Dict[str, Any],
+        w_explore: float = 0.5,
+        n_segments: int = 3,
+        n_lhs_candidates: int = 20,
+    ) -> ExperimentSpec:
+        """Propose an optimised trajectory schedule for runtime parameters via LHS warm start + SLSQP."""
+        if not self.trajectory_configs:
+            raise RuntimeError(
+                "run_trajectory_exploration() requires at least one trajectory parameter "
+                "configured via configure_trajectory()."
+            )
+
+        missing_deltas = [
+            code for code in self.trajectory_configs
+            if code not in self.trust_regions
+        ]
+        if missing_deltas:
+            raise RuntimeError(
+                f"run_trajectory_exploration() cannot proceed: trajectory parameters "
+                f"{sorted(missing_deltas)} have no configured trust region. "
+                f"Call configure_adaptation_delta() for each before running trajectory "
+                f"exploration."
+            )
+
+        self.train_surrogate_model(datamodule)
+
+        traj_codes = sorted(self.trajectory_configs.keys())
+        static_params = {k: v for k, v in current_params.items() if k not in self.trajectory_configs}
+
+        # Per-parameter bounds for the trajectory decision variable
+        traj_bounds_list: List[Tuple[float, float]] = []
+        for code in traj_codes:
+            low, high = self._get_hierarchical_bounds_for_code(code)
+            for _ in range(n_segments):
+                traj_bounds_list.append((low, high))
+        traj_bounds_arr = np.array(traj_bounds_list)
+
+        def _traj_objective(v: np.ndarray) -> float:
+            """Average acquisition score across segments (returns negative for minimisation)."""
+            total_neg = 0.0
+            count = 0
+            for seg_idx in range(n_segments):
+                seg_params = dict(static_params)
+                for p_idx, code in enumerate(traj_codes):
+                    seg_params[code] = float(v[p_idx * n_segments + seg_idx])
+                try:
+                    X = datamodule.params_to_array(seg_params)
+                    total_neg += self._acquisition_func(X, w_explore)  # already negative
+                    count += 1
+                except Exception:
+                    pass
+            return total_neg / count if count > 0 else 0.0
+
+        # SLSQP trust region constraints: |v[k+1] - v[k]| <= delta
+        constraints: List[Dict] = []
+        for p_idx, code in enumerate(traj_codes):
+            delta = self.trust_regions[code]
+            for seg_idx in range(n_segments - 1):
+                i_a = p_idx * n_segments + seg_idx
+                i_b = p_idx * n_segments + seg_idx + 1
+                constraints.append({
+                    'type': 'ineq',
+                    'fun': lambda v, a=i_a, b=i_b, d=delta: d - (v[b] - v[a])
+                })
+                constraints.append({
+                    'type': 'ineq',
+                    'fun': lambda v, a=i_a, b=i_b, d=delta: d - (v[a] - v[b])
+                })
+
+        # Phase 1: LHS warm start
+        n_dims = len(traj_codes) * n_segments
+        sampler = qmc.LatinHypercube(d=n_dims, seed=self.random_seed)
+        lhs_rows = sampler.random(n=n_lhs_candidates)
+
+        best_x0: Optional[np.ndarray] = None
+        best_score = np.inf
+        for row in lhs_rows:
+            v = traj_bounds_arr[:, 0] + row * (traj_bounds_arr[:, 1] - traj_bounds_arr[:, 0])
+            score = _traj_objective(v)
+            if score < best_score:
+                best_score = score
+                best_x0 = v.copy()
+
+        if best_x0 is None:
+            raise RuntimeError(
+                "LHS warm start produced no valid candidates for trajectory exploration."
+            )
+
+        # Phase 2: SLSQP refinement with step-change constraints
+        best_v = best_x0
+        try:
+            result = minimize(
+                fun=_traj_objective,
+                x0=best_x0,
+                bounds=traj_bounds_arr,
+                method='SLSQP',
+                constraints=constraints,
+            )
+            if result.success or result.fun < best_score:
+                best_v = result.x
+        except Exception as e:
+            self.logger.warning(
+                f"SLSQP trajectory optimisation failed: {e}. Using LHS best candidate."
+            )
+
+        # Decode best_v: segment 0 → initial_params, segments 1..K-1 → schedule entries.
+        initial_dict = dict(current_params)
+        for p_idx, code in enumerate(traj_codes):
+            initial_dict[code] = float(best_v[p_idx * n_segments + 0])
+
+        # Collect dimension info (level → (param_code, size))
+        level_to_dim: Dict[int, Tuple[str, int]] = {}
+        for code, data_obj in self.data_objects.items():
+            if isinstance(data_obj, DataDimension):
+                dim_size = int(current_params.get(code, data_obj.constraints.get("min", 1)))
+                level_to_dim[data_obj.level] = (code, dim_size)
+
+        params_per_level: Dict[int, List[str]] = defaultdict(list)
+        for code, level in self.trajectory_configs.items():
+            params_per_level[level].append(code)
+
+        schedules: Dict[str, ParameterSchedule] = {}
+        for level, param_codes in params_per_level.items():
+            if level not in level_to_dim or n_segments <= 1:
+                continue
+            dim_code, dim_size = level_to_dim[level]
+            n_triggers = n_segments - 1
+            trigger_steps = sorted({
+                max(1, int((k + 1) * dim_size / n_segments))
+                for k in range(n_triggers)
+            })
+            entries: List[Tuple[int, ParameterProposal]] = []
+            for t_idx, step in enumerate(trigger_steps[:n_triggers]):
+                seg_values: Dict[str, Any] = {}
+                for code in param_codes:
+                    p_idx = traj_codes.index(code)
+                    seg_values[code] = float(best_v[p_idx * n_segments + t_idx + 1])
+                if seg_values:
+                    entries.append((
+                        step,
+                        ParameterProposal.from_dict(
+                            seg_values, source_step="trajectory_exploration"
+                        ),
+                    ))
+            if entries:
+                schedules[dim_code] = ParameterSchedule(
+                    dimension=dim_code, entries=entries
+                )
+
+        initial_proposal = ParameterProposal.from_dict(
+            initial_dict, source_step="trajectory_exploration"
+        )
+        return ExperimentSpec(initial_params=initial_proposal, schedules=schedules)
+
     # === OPTIMIZATION WORKFLOW ===
 
     def run_calibration(
@@ -460,6 +732,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Run adaptation (Online) to propose new parameters.
         Uses trust regions around current_params.
         """
+        # Fail fast if any runtime parameter has no trust region configured.
+        runtime_without_delta = [
+            code
+            for code, obj in self.data_objects.items()
+            if obj.runtime_adjustable and code not in self.trust_regions
+        ]
+        if runtime_without_delta:
+            raise RuntimeError(
+                f"run_adaptation() cannot proceed: the following runtime-adjustable "
+                f"parameters have no configured trust region: "
+                f"{sorted(runtime_without_delta)}. "
+                f"Call configure_adaptation_delta() for each before running adaptation."
+            )
+
         # 1. Get Online Bounds
         bounds_array = self._get_online_bounds(datamodule, current_params)
         

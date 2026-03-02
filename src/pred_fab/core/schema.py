@@ -101,9 +101,15 @@ class DatasetSchema:
         return hashlib.sha256(hash_str.encode()).hexdigest()
     
     def _block_to_hash_structure(self, block: DataBlock) -> Dict[str, Any]:
-        """Convert DataBlock to hashable structure using full object serialization."""
+        """Convert DataBlock to hashable structure using structural identity only.
+
+        Uses to_hash_dict() rather than to_dict() so that operational metadata
+        (e.g. runtime_adjustable) does not contribute to the schema hash. Changing
+        which parameters are runtime-adjustable is a CalibrationSystem configuration
+        change, not a structural schema change.
+        """
         return {
-            name: obj.to_dict()
+            name: obj.to_hash_dict()
             for name, obj in block.items()
         }
     

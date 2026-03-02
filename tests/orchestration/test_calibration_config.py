@@ -166,23 +166,37 @@ def test_configure_fixed_params_with_force_removes_bounds_conflict(tmp_path):
 
 
 def test_configure_fixed_params_blocked_when_in_trust_regions_without_force(tmp_path):
+    """When a runtime param already has a trust region, trying to fix it is blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
 
-    calibration.configure_adaptation_delta({"param_1": 0.5})
-    calibration.configure_fixed_params({"param_1": 5.0})
+    # "speed" is runtime=True, so delta config succeeds
+    calibration.configure_adaptation_delta({"speed": 10.0})
+    # Trying to fix a param that has a trust region (without force) should be blocked
+    calibration.configure_fixed_params({"speed": 80.0})
 
-    assert "param_1" not in calibration.fixed_params
+    assert "speed" not in calibration.fixed_params
 
 
 # ===== configure_adaptation_delta() =====
 
 def test_configure_adaptation_delta_sets_trust_region(tmp_path):
+    """Trust region is recorded for a runtime-adjustable parameter."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
 
-    calibration.configure_adaptation_delta({"param_1": 0.5})
-    assert calibration.trust_regions["param_1"] == 0.5
+    # "speed" is declared runtime=True in build_workflow_schema
+    calibration.configure_adaptation_delta({"speed": 10.0})
+    assert calibration.trust_regions["speed"] == 10.0
+
+
+def test_configure_adaptation_delta_raises_for_non_runtime_parameter(tmp_path):
+    """Configuring a trust region for a static (non-runtime) parameter must raise ValueError."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+
+    with pytest.raises(ValueError, match="not runtime-adjustable"):
+        calibration.configure_adaptation_delta({"param_1": 0.5})
 
 
 def test_configure_adaptation_delta_silently_ignores_categorical(tmp_path):
@@ -194,24 +208,27 @@ def test_configure_adaptation_delta_silently_ignores_categorical(tmp_path):
 
 
 def test_configure_adaptation_delta_blocked_when_fixed_without_force(tmp_path):
+    """When a runtime param is already fixed, configuring a delta without force is blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
 
-    calibration.configure_fixed_params({"param_1": 5.0})
-    calibration.configure_adaptation_delta({"param_1": 0.5})
+    # Fix "speed" first, then try to add trust region without force — should be blocked
+    calibration.configure_fixed_params({"speed": 80.0})
+    calibration.configure_adaptation_delta({"speed": 10.0})
 
-    assert "param_1" not in calibration.trust_regions
+    assert "speed" not in calibration.trust_regions
 
 
 def test_configure_adaptation_delta_with_force_removes_fixed_conflict(tmp_path):
+    """force=True removes the fixed-param conflict and stores the trust region."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
 
-    calibration.configure_fixed_params({"param_1": 5.0})
-    calibration.configure_adaptation_delta({"param_1": 0.5}, force=True)
+    calibration.configure_fixed_params({"speed": 80.0})
+    calibration.configure_adaptation_delta({"speed": 10.0}, force=True)
 
-    assert "param_1" in calibration.trust_regions
-    assert "param_1" not in calibration.fixed_params
+    assert "speed" in calibration.trust_regions
+    assert "speed" not in calibration.fixed_params
 
 
 def test_configure_adaptation_delta_ignores_unknown_parameter(tmp_path):

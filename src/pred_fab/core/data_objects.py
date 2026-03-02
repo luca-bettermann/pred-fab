@@ -24,7 +24,7 @@ class DataObject(ABC):
         super().__init_subclass__(**kwargs)
         cls._registry[cls.__name__] = cls
     
-    def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None, 
+    def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None,
                  round_digits: Optional[int] = None):
         """Initialize DataObject with name, dtype, constraints, and optional rounding."""
         self.code = code
@@ -32,12 +32,13 @@ class DataObject(ABC):
         self.constraints = constraints or {}
         self.round_digits = round_digits
         self.role = role
+        self.runtime_adjustable: bool = False  # Set to True by Parameter factory for runtime params
     
     @property
     def normalize_strategy(self) -> NormMethod:
         """
         Get normalization strategy for this data type.
-        
+
         Returns:
             - 'default': Use DataModule's default normalization
             - 'standard': Standard scaling (mean=0, std=1)
@@ -47,7 +48,7 @@ class DataObject(ABC):
             - 'categorical': One-hot encoding (for categorical data)
         """
         return NormMethod.DEFAULT
-    
+
     @abstractmethod
     def validate(self, value: Any) -> bool:
         """
@@ -81,8 +82,32 @@ class DataObject(ABC):
         }
         if self.round_digits is not None:
             data["round_digits"] = self.round_digits
+        if self.runtime_adjustable:
+            data["runtime_adjustable"] = True
         return data
-    
+
+    def to_hash_dict(self) -> Dict[str, Any]:
+        """Serialize structural identity for schema hash computation.
+
+        Includes only fields that determine what data *can be recorded* in a dataset.
+        Excludes operational metadata — fields that control how the optimizer uses
+        the schema but do not change the recording structure.
+
+        Excluded from hash (stored in to_dict, not hashed):
+          - runtime_adjustable: optimizer targeting hint; ParameterUpdateEvents can be
+            recorded for any parameter regardless of this flag.
+        """
+        data = {
+            "code": self.code,
+            "role": self.role.value if self.role else None,
+            "type": self.__class__.__name__,
+            "dtype": self.dtype.__name__,
+            "constraints": self.constraints
+        }
+        if self.round_digits is not None:
+            data["round_digits"] = self.round_digits
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DataObject':
         """Reconstruct from dictionary."""
@@ -116,6 +141,7 @@ class DataObject(ABC):
         # Instantiate object using registry lookups implementation
         obj = cls._registry[obj_type]._from_json_impl(code, role, constraints, round_digits)
         obj.role = role
+        obj.runtime_adjustable = data.get("runtime_adjustable", False)
         return obj
     
     @classmethod
@@ -313,7 +339,7 @@ class DataDimension(DataInt):
 class DataArray(DataObject):
     """
     Wrapper for numpy arrays with shape and dtype validation.
-    
+
     Used for metric_arrays storage in ExperimentData.
     """
     
@@ -374,14 +400,36 @@ class Parameter:
     """Factory for creating parameter DataObjects."""
 
     @staticmethod
-    def real(code: str, min_val: float, max_val: float, round_digits: int = 3) -> DataReal:
-        """Create a real-valued parameter."""
-        return DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
-    
+    def real(code: str, min_val: float, max_val: float, round_digits: int = 3, runtime: bool = False) -> DataReal:
+        """
+        Create a real-valued parameter.
+
+        Args:
+            runtime: If True, sets runtime_adjustable=True on the returned object.
+                     Runtime parameters may be re-proposed by the adaptation or exploration
+                     system at dimensional steps during fabrication, within the configured
+                     trust region. Typical use cases: nozzle speed, extrusion rate,
+                     temperature setpoint. The role remains Roles.PARAMETER regardless.
+        """
+        obj = DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
+        obj.runtime_adjustable = runtime
+        return obj
+
     @staticmethod
-    def integer(code: str, min_val: int, max_val: int) -> DataInt:
-        """Create an integer parameter."""
-        return DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
+    def integer(code: str, min_val: int, max_val: int, runtime: bool = False) -> DataInt:
+        """
+        Create an integer parameter.
+
+        Args:
+            runtime: If True, sets runtime_adjustable=True on the returned object.
+                     Runtime parameters may be re-proposed by the adaptation or exploration
+                     system at dimensional steps during fabrication, within the configured
+                     trust region. Typical use cases: fan speed (RPM), discrete power level.
+                     The role remains Roles.PARAMETER regardless.
+        """
+        obj = DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
+        obj.runtime_adjustable = runtime
+        return obj
     
     @staticmethod
     def categorical(code: str, categories: List[str]) -> DataCategorical:
@@ -397,7 +445,8 @@ class Parameter:
     def dimension(code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
         """Create a dimensional parameter."""
         return DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
-    
+
+
 
 class Feature:
     """Factory for creating feature Feature objects."""

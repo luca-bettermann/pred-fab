@@ -14,7 +14,7 @@ from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
-from ..core import ParameterProposal
+from ..core import ParameterProposal, ExperimentSpec
 from ..orchestration import (
     FeatureSystem,
     EvaluationSystem,
@@ -494,20 +494,24 @@ class PfabAgent:
             self.logger.info("Configured adaptation delta for calibration system.")
 
     def sample_baseline_experiments(
-        self, 
+        self,
         n_samples: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None
-    ) -> List[ParameterProposal]:
-        """Sample baseline parameter proposals using Latin Hypercube Sampling."""
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    ) -> List[ExperimentSpec]:
+        """Sample baseline experiment specifications using Latin Hypercube Sampling.
+
+        Returns :class:`~pred_fab.core.ExperimentSpec` objects. Each spec contains
+        ``initial_params`` (all parameters at experiment level) and — when trajectory
+        parameters are configured via
+        :meth:`~pred_fab.orchestration.CalibrationSystem.configure_trajectory` —
+        per-dimension :class:`~pred_fab.core.ParameterSchedule` objects.
+
+        The returned specs support dict-like access (``spec["param"]``, ``spec.keys()``)
+        delegating to ``initial_params`` for backward compatibility.
+        """
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
-        
-        # Generate parameter sets using calibration system's method
-        param_dicts = self.calibration_system.generate_baseline_experiments(n_samples, param_bounds)
-        return [
-            ParameterProposal.from_dict(p, source_step="baseline_sampling")
-            for p in param_dicts
-        ]
+        return self.calibration_system.generate_baseline_experiments(n_samples, param_bounds)
 
     # === Helper Functions ===
 

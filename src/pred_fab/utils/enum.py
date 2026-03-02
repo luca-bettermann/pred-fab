@@ -10,8 +10,16 @@ class SystemName(str, Enum):
     CALIBRATION = 'calibration'
 
 class Roles(Enum):
+    """
+    Block-membership role for DataObjects.
+
+    Identifies which DataBlock a DataObject belongs to. Used by DataBlock.add()
+    to enforce that objects are registered in the correct block.
+
+    Note: sub-classifications *within* a block (e.g. runtime-adjustable parameters)
+    are expressed as attributes on DataObject directly, not as additional Roles values.
+    """
     PARAMETER = 'parameter'
-    DIMENSION = 'dimension'
     PERFORMANCE = 'performance'
     FEATURE = 'feature'
 
