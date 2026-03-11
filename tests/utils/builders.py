@@ -13,7 +13,6 @@ from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, PfabLogger, SplitType
 from tests.utils.interfaces import (
-    CapturingSurrogateModel,
     MixedFeatureModel,
     MixedPredictionModel,
     ScalarEvaluationModel,
@@ -228,25 +227,28 @@ def build_shape_checking_prediction_system(
     return system, models
 
 
-def build_calibration_system_with_capturing_surrogate(
+def build_calibration_system(
     tmp_path,
     dataset: Dataset,
-    predict_fn: Optional[Callable[[np.ndarray], Dict[str, np.ndarray]]] = None,
-    residual_predict_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-    evaluate_fn: Optional[Callable[[np.ndarray], Dict[str, np.ndarray]]] = None,
-) -> Tuple[CalibrationSystem, CapturingSurrogateModel]:
-    """Build calibration system using a reusable capturing surrogate interface."""
+    perf_fn: Optional[Callable] = None,
+    uncertainty_fn: Optional[Callable] = None,
+    similarity_fn: Optional[Callable] = None,
+) -> CalibrationSystem:
+    """Build a CalibrationSystem with lightweight no-op callables for unit tests."""
     logger = build_test_logger(tmp_path)
-    surrogate = CapturingSurrogateModel(logger)
-    calibration = CalibrationSystem(
-        schema=dataset.schema,
+    schema = dataset.schema
+    perf_names = list(schema.performance_attrs.keys())
+
+    def _default_perf_fn(params_dict):
+        return {name: 0.5 for name in perf_names}
+
+    return CalibrationSystem(
+        schema=schema,
         logger=logger,
-        predict_fn=predict_fn or (lambda x: {"feature_scalar": np.zeros((len(x), 1))}),
-        residual_predict_fn=residual_predict_fn or (lambda x: np.zeros((len(x), 1))),
-        evaluate_fn=evaluate_fn or (lambda x: {"performance_1": np.zeros((len(x), 1))}),
-        surrogate_model=surrogate,
+        perf_fn=perf_fn or _default_perf_fn,
+        uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
+        similarity_fn=similarity_fn,
     )
-    return calibration, surrogate
 
 
 def build_real_agent_stack(tmp_path):

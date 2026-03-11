@@ -10,7 +10,7 @@ import numpy as np
 from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
 from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
-    build_calibration_system_with_capturing_surrogate,
+    build_calibration_system,
     build_dataset_with_single_experiment,
     build_workflow_stack,
     evaluate_loaded_workflow_experiments,
@@ -25,7 +25,7 @@ from tests.utils.builders import (
 
 def test_generate_baseline_returns_correct_count(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
     results = calibration.generate_baseline_experiments(n_samples=5)
@@ -34,7 +34,7 @@ def test_generate_baseline_returns_correct_count(tmp_path):
 
 def test_generate_baseline_returns_empty_for_zero_samples(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=0)
     assert results == []
@@ -43,7 +43,7 @@ def test_generate_baseline_returns_empty_for_zero_samples(tmp_path):
 def test_generate_baseline_all_samples_contain_schema_keys(tmp_path):
     """Every generated sample should contain all schema parameter keys."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4), "dim_1": (1, 3), "dim_2": (1, 3)})
     calibration.configure_fixed_params({"param_3": "B"})
 
@@ -56,7 +56,7 @@ def test_generate_baseline_all_samples_contain_schema_keys(tmp_path):
 def test_generate_baseline_fixed_params_appear_in_all_samples(tmp_path):
     """Fixed parameters should appear with their fixed value in every sample."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_fixed_params({"param_3": "A"})
 
     results = calibration.generate_baseline_experiments(n_samples=6)
@@ -67,7 +67,7 @@ def test_generate_baseline_fixed_params_appear_in_all_samples(tmp_path):
 def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
     """Sampled continuous values should respect configured parameter bounds."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (2.0, 7.0)})
 
     results = calibration.generate_baseline_experiments(n_samples=20)
@@ -78,7 +78,7 @@ def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
 def test_generate_baseline_integer_params_are_int_typed(tmp_path):
     """Integer parameters (param_2, dim_1, dim_2) should be coerced to int type."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=5)
     for sample in results:
@@ -109,7 +109,7 @@ def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
         performance=perfs,
     )
     dataset = Dataset(schema=schema, debug_flag=True)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=3)
     # "unbounded" should be absent from each sample because it has infinite bounds
@@ -127,7 +127,7 @@ def test_compute_system_performance_fewer_values_than_perf_attrs_raises_index_er
     """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     # workflow schema has 2 perf attrs: performance_1 and performance_2
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
     calibration.set_performance_weights({"performance_1": 1.0, "performance_2": 1.0})
 
     with pytest.raises(IndexError):
@@ -251,12 +251,12 @@ def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
     """Same random seed must produce identical LHS samples."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
 
-    cal1, _ = build_calibration_system_with_capturing_surrogate(tmp_path / "a", dataset)
+    cal1 = build_calibration_system(tmp_path / "a", dataset)
     cal1.random_seed = 7
     cal1.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
     r1 = cal1.generate_baseline_experiments(n_samples=5)
 
-    cal2, _ = build_calibration_system_with_capturing_surrogate(tmp_path / "b", dataset)
+    cal2 = build_calibration_system(tmp_path / "b", dataset)
     cal2.random_seed = 7
     cal2.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
     r2 = cal2.generate_baseline_experiments(n_samples=5)
@@ -271,7 +271,7 @@ def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
 def test_generate_baseline_returns_experiment_spec_instances(tmp_path):
     """generate_baseline_experiments() should return ExperimentSpec objects."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=3)
     for spec in results:
@@ -282,7 +282,7 @@ def test_generate_baseline_returns_experiment_spec_instances(tmp_path):
 def test_generate_baseline_no_trajectories_has_empty_schedules(tmp_path):
     """Without trajectory configs, every ExperimentSpec has empty schedules."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=4)
     for spec in results:
@@ -292,7 +292,7 @@ def test_generate_baseline_no_trajectories_has_empty_schedules(tmp_path):
 def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
     """ExperimentSpec forwarding interface: __getitem__, __contains__, keys() work."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     results = calibration.generate_baseline_experiments(n_samples=2)
     spec = results[0]
@@ -315,7 +315,7 @@ def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
 def test_configure_trajectory_sets_config(tmp_path):
     """configure_trajectory() stores the dimension level for the given runtime param."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", dimension_level=1)
     assert calibration.trajectory_configs["speed"] == 1
@@ -324,7 +324,7 @@ def test_configure_trajectory_sets_config(tmp_path):
 def test_configure_trajectory_raises_for_non_runtime_param(tmp_path):
     """configure_trajectory() raises ValueError when the parameter is not runtime-adjustable."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     with pytest.raises(ValueError, match="not runtime-adjustable"):
         calibration.configure_trajectory("param_1", dimension_level=1)
@@ -333,7 +333,7 @@ def test_configure_trajectory_raises_for_non_runtime_param(tmp_path):
 def test_configure_trajectory_blocked_without_force(tmp_path):
     """Calling configure_trajectory twice without force is silently blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", dimension_level=1)
     calibration.configure_trajectory("speed", dimension_level=2)  # blocked without force
@@ -345,7 +345,7 @@ def test_configure_trajectory_blocked_without_force(tmp_path):
 def test_configure_trajectory_with_force_overwrites(tmp_path):
     """force=True overwrites an existing trajectory configuration."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", dimension_level=1)
     calibration.configure_trajectory("speed", dimension_level=2, force=True)
@@ -356,7 +356,7 @@ def test_configure_trajectory_with_force_overwrites(tmp_path):
 def test_configure_trajectory_ignores_unknown_param(tmp_path):
     """configure_trajectory() silently skips params not in the schema."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("nonexistent", dimension_level=1)
     assert "nonexistent" not in calibration.trajectory_configs
@@ -367,7 +367,7 @@ def test_configure_trajectory_ignores_unknown_param(tmp_path):
 def test_generate_baseline_with_trajectory_generates_non_empty_schedules(tmp_path):
     """When trajectory is configured, ExperimentSpecs should contain non-empty schedules."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", dimension_level=1)
     results = calibration.generate_baseline_experiments(n_samples=3, n_trajectory_segments=3)
@@ -384,7 +384,7 @@ def test_generate_baseline_with_trajectory_generates_non_empty_schedules(tmp_pat
 def test_generate_baseline_trajectory_entries_contain_speed(tmp_path):
     """Schedule entries must contain 'speed' values when speed is trajectory-configured."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration, _ = build_calibration_system_with_capturing_surrogate(tmp_path, dataset)
+    calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", dimension_level=1)
     results = calibration.generate_baseline_experiments(n_samples=2, n_trajectory_segments=2)

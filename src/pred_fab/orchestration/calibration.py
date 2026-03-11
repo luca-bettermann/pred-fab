@@ -11,7 +11,6 @@ from ..core import DataModule, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
 from ..utils import PfabLogger, Mode, SamplingStrategy
-from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
 from .base_system import BaseOrchestrationSystem
 
 # Suppress sklearn warnings
@@ -20,41 +19,52 @@ warnings.filterwarnings("ignore", category=UserWarning)
 class CalibrationSystem(BaseOrchestrationSystem):
     """
     Orchestrates calibration and active learning.
-    
-    - Owns Exploration Model (GP) and System Performance definition
+
+    - Owns System Performance definition and active-learning acquisition logic
     - Generates baseline experiments (LHS)
-    - Proposes new experiments via Bayesian Optimization
+    - Proposes new experiments via Bayesian Optimization (UCB with KDE uncertainty)
     - Supports Online (Trust Region) and Offline (Global) modes
+    - Level 2 trajectory exploration with diversity discounting via similarity_fn
     """
-    
+
     def __init__(
-        self, 
+        self,
         schema: DatasetSchema,
-        logger: PfabLogger, 
-        predict_fn: Callable, 
-        residual_predict_fn: Callable,
-        evaluate_fn: Callable, 
+        logger: PfabLogger,
+        perf_fn: Callable[[Dict[str, Any]], Dict[str, Optional[float]]],
+        uncertainty_fn: Callable[[np.ndarray], float],
+        similarity_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
         random_seed: Optional[int] = None,
-        surrogate_model: Optional[ISurrogateModel] = None,
     ):
+        """
+        Args:
+            schema: Dataset schema defining parameters and performance attributes.
+            logger: Logger instance.
+            perf_fn: Callable mapping a raw params dict to a performance dict
+                ``{perf_code: value_or_None}``.  Encapsulates predict + evaluate.
+            uncertainty_fn: Callable mapping a normalized parameter array (1-D) to
+                a scalar epistemic uncertainty in [0, 1].
+            similarity_fn: Optional callable mapping two normalized parameter arrays
+                to a scalar similarity in [0, 1].  Used for Level 2 trajectory
+                diversity discounting.  When None, diversity discounting is skipped.
+            random_seed: Seed for reproducible random sampling.
+        """
         super().__init__(logger)
-        self.predict_fn = predict_fn
-        self.evaluate_fn = evaluate_fn
-        self.residual_predict_fn = residual_predict_fn
+        self.perf_fn = perf_fn
+        self.uncertainty_fn = uncertainty_fn
+        self.similarity_fn = similarity_fn
         self.random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
-        # Initialize Surrogate Model
-        if surrogate_model:
-            self.model = surrogate_model
-        else:
-            self.model = GaussianProcessSurrogate(logger, random_seed or 42)
+        # Active datamodule — set before each optimization run so that
+        # _inference_func / _acquisition_func can call array_to_params.
+        self._active_datamodule: Optional[DataModule] = None
 
         # Set ordered weights
         self.perf_names_order = list(schema.performance_attrs.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
-        
+
         # Configure data_objects, bounds and fixed params
         self.data_objects: Dict[str, DataObject] = {}
         self.schema_bounds: Dict[str, Tuple[float, float]] = {}
@@ -64,7 +74,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.trajectory_configs: Dict[str, int] = {}   # code → dimension_level
 
         # Extract parameter constraints from schema
-        self._set_param_constraints_from_schema(schema)        
+        self._set_param_constraints_from_schema(schema)
 
     def _set_param_constraints_from_schema(self, schema: DatasetSchema) -> None:
         """Extract parameter constraints from dataset schema."""
@@ -78,7 +88,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 max_val = data_obj.constraints.get("max", np.inf)
             else:
                 raise TypeError(f"Expected DataObject type for parameter '{code}', got {type(data_obj).__name__}")
-            
+
             # Store constraints
             self.data_objects[code] = data_obj
             self.schema_bounds[code] = (min_val, max_val)
@@ -93,23 +103,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
         summary.append("-" * len(header))
 
         for code in self.data_objects.keys():
-            
+
             # Determine Bounds
             # Priority: Fixed -> Configured Bounds -> Schema Constraints
             low, high = self._get_hierarchical_bounds_for_code(code)
             bounds_str = f"[{low}, {high}]"
-            
+
             # Determine Delta
             delta = self.trust_regions.get(code, "-")
-            
+
             summary.append(f"{code:<{width}} | {bounds_str:<{width}} | {delta:<{8}}")
-        
+
         self.logger.console_new_line()
         self.logger.console_info("\n".join(summary))
         self.logger.console_new_line()
 
     # === CONFIGURATION METHODS ===
-        
+
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
         # set according to order in perf_names_order
@@ -119,16 +129,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.logger.debug(f"Set performance weight: {name} -> {value}")
             else:
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
-        
+
     def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]], force: bool = False) -> None:
         """Configure parameter ranges for offline calibration."""
         for code, (low, high) in bounds.items():
-            
+
             # Helper Validation
             if not self._validate_and_clean_config(
-                code, 
-                (DataReal, DataInt), 
-                ['fixed_params'], 
+                code,
+                (DataReal, DataInt),
+                ['fixed_params'],
                 force
             ):
                 continue
@@ -140,26 +150,26 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Bounds for object '{code}' exceed schema constraints: "
                     f"[{low}, {high}] vs schema [{schema_min}, {schema_max}]"
                 )
-            
+
             self.param_bounds[code] = (low, high)
             self.logger.debug(f"Set parameter bounds: {code} -> [{low}, {high}]")
 
     def configure_fixed_params(self, fixed_params: Dict[str, Any], force: bool = False) -> None:
         """Configure fixed parameter values."""
         for code, value in (fixed_params or {}).items():
-            
+
             # Helper Validation
             if not self._validate_and_clean_config(
-                code, 
+                code,
                 None,  # All types allow fixing
-                ['param_bounds', 'trust_regions'], 
+                ['param_bounds', 'trust_regions'],
                 force
             ):
                 continue
-            
+
             self.fixed_params[code] = value
             self.logger.debug(f"Set fixed parameter: {code} -> {value}")
-        
+
     def configure_adaptation_delta(self, deltas: Dict[str, float], force: bool = False) -> None:
         """Configure trust region deltas for online calibration."""
         for code, delta in deltas.items():
@@ -222,10 +232,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
     def _validate_and_clean_config(
-        self, 
-        code: str, 
-        allowed_types: Optional[Tuple[type, ...]], 
-        conflicting_collections: List[str], 
+        self,
+        code: str,
+        allowed_types: Optional[Tuple[type, ...]],
+        conflicting_collections: List[str],
         force: bool
     ) -> bool:
         """Validate parameter against schema and check for conflicting configurations."""
@@ -264,52 +274,51 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Objective for INFERENCE: Maximize predicted performance.
         Returns negative performance for minimization.
         """
-        # X is (n_features,)
-        # predict_fn expects (n_samples, n_features)
-        X_reshaped = X.reshape(1, -1)
-        pred_features = self.predict_fn(X_reshaped)
-        
-        # Apply residual correction if available (Online Adaptation)
-        # TODO: make this cleaner
-        if self.residual_predict_fn is not None:
-            # Prepare inputs for residual model: [X, BasePredictions]
-            X_residual_input = np.hstack([X_reshaped, pred_features])
-            residuals = self.residual_predict_fn(X_residual_input)
-            pred_features = pred_features + residuals
-            
-        pred_performance = self.evaluate_fn(pred_features)
-        
-        # Extract values from dict and compute score
-        # Note: evaluate_fn returns dict of arrays/scalars. 
-        # We assume single sample here.
-        perf_values = [float(val) if np.isscalar(val) else float(val[0]) for val in pred_performance.values()] # type: ignore
-        
+        dm = self._active_datamodule
+        if dm is None:
+            return 0.0
+        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            perf_dict = self.perf_fn(params_dict)
+        except Exception:
+            return 0.0
+        perf_values = [
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0
+            for name in self.perf_names_order
+            if name in perf_dict
+        ]
         sys_perf = self._compute_system_performance(perf_values)
         return -sys_perf
-    
+
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
         """
-        Objective for exploration: Maximize Weighted Score.
-        Score = (1 - w) * Mean + w * Std
+        Objective for exploration: Maximize UCB score.
+        Score = (1 - w) * predicted_performance + w * epistemic_uncertainty
         Returns negative Score for minimization.
         """
-        # Predict mean and std from surrogate
-        mean, std = self.model.predict(X.reshape(1, -1))
-        
-        weighted_mu = self._compute_system_performance(mean[0].tolist())
-        weighted_sigma = self._compute_system_performance(std[0].tolist())
-        
-        # Weighted Blend
-        # w=0 -> Pure Mean (Exploitation)
-        # w=1 -> Pure Std (Exploration)
-        score = (1.0 - w_explore) * weighted_mu + w_explore * weighted_sigma
-        return -score 
-    
+        dm = self._active_datamodule
+        if dm is None:
+            return 0.0
+        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            perf_dict = self.perf_fn(params_dict)
+        except Exception:
+            perf_dict = {}
+        perf_values = [
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0
+            for name in self.perf_names_order
+            if name in perf_dict
+        ]
+        sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
+        u = self.uncertainty_fn(X.reshape(-1))
+        score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
+        return -score
+
     def _compute_system_performance(self, performance: List[float]) -> float:
         """Compute weighted system performance [0, 1]."""
         if not performance:
             return 0.0
-            
+
         total_score = 0.0
         total_weight = 0.0
 
@@ -322,22 +331,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             total_weight += weight
 
         return total_score / total_weight if total_weight > 0 else 0.0
-    
-    # === SURROGATE TRAINING ===
-
-    def train_surrogate_model(
-        self,
-        datamodule: DataModule
-    ) -> None:
-        """Train surrogate model on existing experiment data. We assume the datamodule is fitted."""
-        X_train, y_train = datamodule.build_calibration_training_arrays(
-            performance_order=self.perf_names_order,
-            strict=False
-        )
-        if len(X_train) > 0:
-            self.model.fit(X_train, y_train)
-        else:
-            self.logger.warning("No valid data to train surrogate model.")
 
 
     # === BASELINE EXPERIMENT GENERATION ===
@@ -455,7 +448,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sampling_specs = {}
 
         for code, data_obj in self.data_objects.items():
-            
+
             # 1. Determine Effective Bounds (Continuous Only)
             if param_bounds and code in param_bounds:
                 low, high = param_bounds[code]
@@ -472,7 +465,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                  # Use retrieved bounds to detect fixed functionality
 
                  sampling_specs[code] = {
-                     'type': SamplingStrategy.CATEGORICAL, 
+                     'type': SamplingStrategy.CATEGORICAL,
                      'categories': data_obj.constraints['categories'] if low != high else [low]
                 }
             elif isinstance(data_obj, DataBool):
@@ -490,14 +483,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
                  # Continuous / Integer
                  dtype = int if isinstance(data_obj, DataInt) else float
                  sampling_specs[code] = {
-                     'type': SamplingStrategy.NUMERICAL, 
-                     'low': low, 
-                     'high': high, 
+                     'type': SamplingStrategy.NUMERICAL,
+                     'low': low,
+                     'high': high,
                      'dtype': dtype
                 }
-            
+
             self.logger.debug(f"Included '{code}' in baseline generation specs.")
-            
+
         return sampling_specs
 
     def _transform_lhs_sample(self, row: np.ndarray, param_names: List[str], sampling_specs: Dict[str, Any]) -> Dict[str, Any]:
@@ -505,24 +498,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
         params = {}
         for val, name in zip(row, param_names):
             spec = sampling_specs[name]
-            
+
             if spec['type'] == SamplingStrategy.NUMERICAL:
                 # Scale: [0, 1] -> [low, high]
 
                 scaled_val = spec['low'] + val * (spec['high'] - spec['low'])
                 params[name] = spec['dtype'](scaled_val)
-                
+
             elif spec['type'] == SamplingStrategy.BOOL:
                 # Scale: [0, 1] -> {True, False}
                 params[name] = bool(val > 0.5)
-                
+
             elif spec['type'] == SamplingStrategy.CATEGORICAL:
                 # Scale: [0, 1] -> Category Index
                 cats = spec['categories']
                 idx = int(val * len(cats))
                 idx = min(idx, len(cats) - 1) # clip to be safe
                 params[name] = cats[idx]
-        
+
         # Reuse canonical parameter coercion/rounding rules.
         return self.parameters.sanitize_values(params, ignore_unknown=True)
 
@@ -537,7 +530,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_segments: int = 3,
         n_lhs_candidates: int = 20,
     ) -> ExperimentSpec:
-        """Propose an optimised trajectory schedule for runtime parameters via LHS warm start + SLSQP."""
+        """Propose an optimised trajectory schedule for runtime parameters via LHS warm start + SLSQP.
+
+        Uses Level 2 diversity discounting when ``similarity_fn`` is provided: each
+        trajectory segment's acquisition score is multiplied by
+        ``max(0, 1 - max_{j<k} sim(X_j, X_k))`` so that the optimizer is incentivised
+        to explore different regions of the latent space across segments.
+        """
         if not self.trajectory_configs:
             raise RuntimeError(
                 "run_trajectory_exploration() requires at least one trajectory parameter "
@@ -556,7 +555,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"exploration."
             )
 
-        self.train_surrogate_model(datamodule)
+        self._active_datamodule = datamodule
 
         traj_codes = sorted(self.trajectory_configs.keys())
         static_params = {k: v for k, v in current_params.items() if k not in self.trajectory_configs}
@@ -570,19 +569,41 @@ class CalibrationSystem(BaseOrchestrationSystem):
         traj_bounds_arr = np.array(traj_bounds_list)
 
         def _traj_objective(v: np.ndarray) -> float:
-            """Average acquisition score across segments (returns negative for minimisation)."""
-            total_neg = 0.0
-            count = 0
+            """Average (Level-2) acquisition score across segments (returns negative for minimisation)."""
+            per_seg_acq: List[float] = []
+            per_seg_X: List[Optional[np.ndarray]] = []
             for seg_idx in range(n_segments):
                 seg_params = dict(static_params)
                 for p_idx, code in enumerate(traj_codes):
                     seg_params[code] = float(v[p_idx * n_segments + seg_idx])
                 try:
                     X = datamodule.params_to_array(seg_params)
-                    total_neg += self._acquisition_func(X, w_explore)  # already negative
-                    count += 1
+                    per_seg_acq.append(self._acquisition_func(X, w_explore))  # already negative
+                    per_seg_X.append(X)
                 except Exception:
-                    pass
+                    per_seg_acq.append(0.0)
+                    per_seg_X.append(None)
+
+            # Level 2: discount each segment by (1 - max_sim to all prior segments)
+            # acq values are negative; multiplying by discount in [0,1] moves them
+            # closer to zero (less contribution), incentivising diversity.
+            if self.similarity_fn is not None:
+                discounted: List[float] = []
+                for k, acq in enumerate(per_seg_acq):
+                    if k == 0 or per_seg_X[k] is None:
+                        discounted.append(acq)
+                        continue
+                    valid_prior = [X_j for X_j in per_seg_X[:k] if X_j is not None]
+                    max_sim = max(
+                        (self.similarity_fn(X_j, per_seg_X[k]) for X_j in valid_prior),
+                        default=0.0,
+                    )
+                    discounted.append(acq * max(0.0, 1.0 - max_sim))
+                total_neg = sum(discounted)
+            else:
+                total_neg = sum(per_seg_acq)
+
+            count = sum(1 for X in per_seg_X if X is not None)
             return total_neg / count if count > 0 else 0.0
 
         # SLSQP trust region constraints: |v[k+1] - v[k]| <= delta
@@ -699,13 +720,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Run calibration (Offline) to propose new parameters.
         Uses global parameter bounds and fixed context.
         """
+        self._active_datamodule = datamodule
+
         # 1. Get Offline Bounds
         bounds_array = self._get_offline_bounds(datamodule)
-        
+
         # 2. Select Objective Function
         if mode == Mode.EXPLORATION:
-            self.train_surrogate_model(datamodule)
-            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore) 
+            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
         elif mode == Mode.INFERENCE:
             objective_func = self._inference_func
         else:
@@ -713,9 +735,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # 3. Run Unified Optimization
         return self._run_optimization(
-            datamodule, 
-            x0_params=None, 
-            bounds=bounds_array, 
+            datamodule,
+            x0_params=None,
+            bounds=bounds_array,
             objective_func=objective_func,
             n_rounds=n_optimization_rounds,
             fixed_param_values=self.fixed_params
@@ -746,12 +768,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"Call configure_adaptation_delta() for each before running adaptation."
             )
 
+        self._active_datamodule = datamodule
+
         # 1. Get Online Bounds
         bounds_array = self._get_online_bounds(datamodule, current_params)
-        
+
         # 2. Select Objective Function
         if mode == Mode.EXPLORATION:
-            self.train_surrogate_model(datamodule)
             objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
         elif mode == Mode.INFERENCE:
             objective_func = self._inference_func
@@ -760,27 +783,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # 3. Prepare Fixed Parameters (parameters without trust regions are fixed to current)
         fixed_subset = {
-            k: v for k, v in current_params.items() 
+            k: v for k, v in current_params.items()
             if k not in self.trust_regions
         }
 
         # 4. Run Unified Optimization
         return self._run_optimization(
-            datamodule, 
-            x0_params=current_params, 
-            bounds=bounds_array, 
+            datamodule,
+            x0_params=current_params,
+            bounds=bounds_array,
             objective_func=objective_func,
             n_rounds=0, # No random restarts for adaptation
             fixed_param_values=fixed_subset
         )
-    
+
     def _run_optimization(
-        self, 
-        datamodule: DataModule, 
+        self,
+        datamodule: DataModule,
         x0_params: Optional[Dict[str, Any]],
-        bounds: np.ndarray, 
+        bounds: np.ndarray,
         objective_func: Callable,
-        n_rounds: int, 
+        n_rounds: int,
         fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Run the acquisition function optimization."""
@@ -788,11 +811,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         x0_list = []
         if x0_params:
             x0_list.append(datamodule.params_to_array(x0_params))
-        
+
         # Random restarts
         for _ in range(n_rounds):
             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
-        
+
         if not x0_list:
              # Fallback if no x0_params and n_rounds=0 (unlikely)
              x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
@@ -814,7 +837,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             except Exception as e:
                 self.logger.warning(f"Optimization round failed with error: {e}")
                 continue
-        
+
         # Handle failure
         if best_x is None:
             self.logger.warning("Optimization failed, returning fallback parameters.")
@@ -824,11 +847,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 raise RuntimeError("No valid parameters could be proposed.")
         else:
             self.logger.info(f"Optimization succeeded: best_val={best_val}, best_x={best_x}")
-                
+
         # Convert result back
         proposed_params = datamodule.array_to_params(best_x)
         if fixed_param_values:
             proposed_params.update(fixed_param_values)
+        # Carry over any params from the starting point that aren't in the
+        # optimization space (e.g. runtime params not used by any prediction model).
+        if x0_params:
+            for k, v in x0_params.items():
+                if k not in proposed_params:
+                    proposed_params[k] = v
         return datamodule.dataset.schema.parameters.sanitize_values(
             proposed_params,
             ignore_unknown=True
@@ -842,7 +871,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         col_map = datamodule.get_onehot_column_map()
 
         for code in datamodule.input_columns:
-            
+
             # Fast One-Hot Check
             if code in col_map:
                 parent_param, cat_val = col_map[code]
@@ -859,7 +888,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Process & Append
             n_low, n_high = self._normalize_bounds(code, low, high, datamodule)
             bounds_list.append((n_low, n_high))
-            
+
         return np.array(bounds_list)
 
     def _get_online_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
@@ -868,21 +897,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         col_map = datamodule.get_onehot_column_map()
 
         for code in datamodule.input_columns:
-            
+
             # Determine Center (Current Value) & Check One-hot
             curr = 0.0
             is_one_hot = code in col_map
-            
+
             if is_one_hot:
                 parent_param, cat_val = col_map[code]
                 if parent_param and parent_param in current_params:
                      curr = 1.0 if current_params[parent_param] == cat_val else 0.0
-                elif code in current_params: 
+                elif code in current_params:
                     curr = current_params[code]
             else:
                 if code in current_params:
                     curr = current_params[code]
-            
+
             # Determine Bounds from Trust Region
             # Note: Trust Regions (deltas) are typically only for continuous parameters.
             # If a parameter is not in trust_regions, it is fixed to current.
@@ -892,12 +921,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 # No trust region -> Fixed to current
                 low, high = curr, curr
-                
+
             # Process & Append
             bounds_list.append(self._normalize_bounds(code, low, high, datamodule))
-            
+
         return np.array(bounds_list)
-    
+
     def _get_hierarchical_bounds_for_code(self, code: str) -> Tuple[float, float]:
         # 1. Check Fixed Context
         if code in self.fixed_params:
@@ -925,8 +954,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === WRAPPERS ===
 
     def get_models(self) -> List[Any]:
-        """Return Surrogate Model (required by BaseOrchestrationSystem)."""
-        return [self.model]
-    
+        """Return empty list (no internal ML models owned by CalibrationSystem)."""
+        return []
+
     def get_model_specs(self) -> Dict[str, List[str]]:
         return {}

@@ -156,14 +156,26 @@ class PfabAgent:
         )
         self.pred_system.set_ref_objects(schema)
 
-        # Calibration system requires prediction, evaluation and schema to be set
+        # Calibration system requires prediction, evaluation and schema to be set.
+        # perf_fn encapsulates predict_for_calibration + _evaluate_feature_dict so
+        # CalibrationSystem never calls internal PM/EM methods directly.
+        _pred = self.pred_system
+        _eval = self.eval_system
+
+        def _perf_fn(params_dict):
+            try:
+                feature_arrays, params_block = _pred.predict_for_calibration(params_dict)
+                return _eval._evaluate_feature_dict(feature_arrays, params_block)
+            except Exception:
+                return {}
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
-            logger=self.logger, 
-            predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict,
-            residual_predict_fn=self.pred_system.residual_model.predict
-            )
+            logger=self.logger,
+            perf_fn=_perf_fn,
+            uncertainty_fn=_pred.uncertainty,
+            similarity_fn=_pred.kernel_similarity,
+        )
 
         # validate against schema
         self._validate_systems_against_schema(schema)
