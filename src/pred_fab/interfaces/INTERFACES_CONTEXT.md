@@ -8,9 +8,11 @@ Keep this concise and aligned with code.
 `interfaces` defines contracts for model and data adapters used by orchestration:
 - base model contract and schema references (`base_interface.py`)
 - feature/evaluation/prediction model interfaces (`features.py`, `evaluation.py`, `prediction.py`)
-- calibration surrogate interface (`calibration.py`)
 - residual tuning interface (`tuning.py`)
 - external data gateway contract (`external_data.py`)
+
+Note: `calibration.py` (which previously defined `ISurrogateModel` and `GaussianProcessSurrogate`)
+has been removed. Uncertainty estimation is now handled by `PredictionSystem` via NatPN-light KDE.
 
 ## Structure
 
@@ -24,19 +26,19 @@ Keep this concise and aligned with code.
 
 3. `evaluation.py`
 - `IEvaluationModel`: target/scaling/performance computation contract.
-- Computes per-point and averaged performance values.
+- `compute_performance()` returns a 3-tuple `(avg, per_row_list, std_list)`; accepts optional
+  `feature_std` for uncertainty propagation.
 
 4. `prediction.py`
 - `IPredictionModel`: training/inference/export/import contract.
 - Optional online tuning hook.
+- Optional `encode(X)` method — default identity; override to expose learned latent representations
+  for KDE-based uncertainty estimation in `PredictionSystem`.
 
-5. `calibration.py`
-- `ISurrogateModel` + default GP implementation for exploration calibration.
-
-6. `tuning.py`
+5. `tuning.py`
 - `IResidualModel` + default residual MLP implementation.
 
-7. `external_data.py`
+6. `external_data.py`
 - `IExternalData` abstraction for pull/push operations to external stores.
 
 ## Open Refactor Risks (Large-Scope Only)

@@ -1,12 +1,12 @@
 # Test Suite Context
 
-This suite validates the current `pred_fab` architecture.  335 tests, all passing.
+This suite validates the current `pred_fab` architecture.  393 tests passing, 2 expected skips.
 
 ## Structure
 
 - `tests/utils/`
   - `builders.py` — Shared builders for schemas, datasets, agents, datamodules, and orchestration stacks.
-  - `interfaces.py` — Reusable interface implementations (`WorkflowFeatureModelA/B`, `WorkflowEvaluationModelA/B`, `WorkflowPredictionModel`, `MixedFeatureModel`, `ScalarEvaluationModel`, `MixedPredictionModel`, `ShapeCheckingPredictionModel`, `CapturingSurrogateModel`, etc.).
+  - `interfaces.py` — Reusable interface implementations (`WorkflowFeatureModelA/B`, `WorkflowEvaluationModelA/B`, `WorkflowPredictionModel`, `MixedFeatureModel`, `ScalarEvaluationModel`, `MixedPredictionModel`, `ShapeCheckingPredictionModel`, `CapturingResidualModel`, etc.). Note: `CapturingSurrogateModel` removed (GP surrogate removed from architecture).
 - `tests/core/`
   - `test_data_objects.py` — `DataReal`, `DataInt`, `DataBool`, `DataCategorical`, `DataDimension`, `DataArray`, and factory methods.
   - `test_data_blocks.py` — `Parameters`, `Features`, `PerformanceAttributes`: strides, iterator combinations, `value_at`, round-trip persistence.
@@ -23,7 +23,8 @@ This suite validates the current `pred_fab` architecture.  335 tests, all passin
   - `test_adaptation_step.py` — Adaptation step with trust regions and parameter proposal integration.
   - `test_calibration_config.py` — `CalibrationSystem` configuration: `configure_param_bounds`, `set_performance_weights`, `configure_fixed_params`, `configure_adaptation_delta`, `_compute_system_performance`, bounds validation.
   - `test_calibration_sampling.py` — `generate_baseline_experiments` (count, empty, schema keys, fixed params, bounds, integer typing, infinite bounds skip, determinism), `run_adaptation` behavior, `_compute_system_performance` mismatched lengths.
-  - `test_orchestration_edge_cases.py` — `PredictionSystem.validate` model-specific input slices, `CalibrationSystem.train_surrogate_model` skipping missing performance rows, `InferenceBundle` degenerate min-max, `tune` row-slice semantics.
+  - `test_orchestration_edge_cases.py` — `PredictionSystem.validate` model-specific input slices, `CalibrationSystem._acquisition_func` integration (perf_fn + uncertainty_fn callables), `InferenceBundle` degenerate min-max, `tune` row-slice semantics.
+  - `test_uncertainty_estimation.py` — NatPN-light: `encode()` identity/override, `uncertainty()` pre/post training, KDE OOD behavior, `kernel_similarity()`, `predict_for_calibration()`, `compute_performance()` with `feature_std`, UCB acquisition and inference function integration, Level 2 trajectory diversity discounting.
   - `test_prediction_system_errors.py` — `PredictionSystem.train` empty-split error, `validate` before/after training, `tune` boundary errors (start/end/negative), `predict_experiment` shape and partial-range NaN fill.
 - `tests/interfaces/`
   - Interface contract tests for model implementations.
@@ -37,7 +38,7 @@ This suite validates the current `pred_fab` architecture.  335 tests, all passin
 - Reuse interface implementations from `tests/utils/interfaces.py`; do not define ad-hoc models in individual tests.
 - Add new tests under the module area they validate.
 - Do not stub orchestration systems (`FeatureSystem`, `EvaluationSystem`, `PredictionSystem`, `CalibrationSystem`).
-- Keep simplification at interface/model level only (feature/evaluation/prediction/surrogate implementations).
+- Keep simplification at interface/model level only (feature/evaluation/prediction implementations).
 
 ## Bugs Discovered via Tests
 
