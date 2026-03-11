@@ -22,6 +22,8 @@ from tests.utils.builders import (
 )
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, SplitType
+from pred_fab.core import ExperimentSpec
+
 
 
 # ===========================================================================
@@ -489,3 +491,85 @@ def test_calibration_system_get_models_returns_empty_list(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     assert calibration.get_models() == []
+
+
+# ===========================================================================
+# KDE bandwidth + trajectory exploration integration
+# ===========================================================================
+
+def test_trajectory_exploration_respects_delta_constraints_with_fitted_kde(tmp_path):
+    """After KDE fitting, run_trajectory_exploration should return an ExperimentSpec
+    whose consecutive speed waypoints differ by at most the configured delta."""
+    delta = 50.0
+    n_segments = 3
+
+    # Build 3-experiment stack so KDE can be fitted (workflow schema has 'speed' runtime param).
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    if agent.pred_system._kde is None:
+        pytest.skip("KDE not fitted — not enough distinct training configs")
+
+    cs = agent.calibration_system
+    cs.configure_trajectory("speed", dimension_level=1)
+    cs.configure_adaptation_delta({"speed": delta})
+
+    first_exp = dataset.get_experiment(codes[0])
+    current_params = first_exp.parameters.get_values_dict()
+
+    result = cs.run_trajectory_exploration(
+        datamodule=datamodule,
+        current_params=current_params,
+        w_explore=0.5,
+        n_segments=n_segments,
+        n_lhs_candidates=10,
+    )
+
+    assert isinstance(result, ExperimentSpec)
+
+    # Schedule should be keyed by the dimension that 'speed' is linked to (level 1 → dim_1).
+    assert "dim_1" in result.schedules, "Expected schedule for dim_1 dimension"
+
+    schedule = result.schedules["dim_1"]
+    seg0 = result.initial_params["speed"]
+    waypoints = [proposal["speed"] for _, proposal in schedule.entries]
+
+    # All consecutive pairs must satisfy the delta constraint (with a small tolerance
+    # for floating-point / SLSQP convergence).
+    tol = 1e-4
+    all_vals = [seg0] + waypoints
+    for k in range(len(all_vals) - 1):
+        diff = abs(all_vals[k + 1] - all_vals[k])
+        assert diff <= delta + tol, (
+            f"Segment {k}→{k+1}: |{all_vals[k+1]:.4f} - {all_vals[k]:.4f}| = {diff:.4f} "
+            f"exceeds delta={delta}"
+        )
+
+
+def test_exploration_step_trajectory_flag_returns_experiment_spec(tmp_path):
+    """agent.exploration_step(trajectory=True) should return an ExperimentSpec."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    agent.calibration_system.configure_trajectory("speed", dimension_level=1)
+    agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
+
+    first_exp = dataset.get_experiment(codes[0])
+    current_params = first_exp.parameters.get_values_dict()
+
+    result = agent.exploration_step(
+        datamodule=datamodule,
+        trajectory=True,
+        n_segments=2,
+        current_params=current_params,
+    )
+
+    assert isinstance(result, ExperimentSpec)

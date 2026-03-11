@@ -146,7 +146,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             if not exp.parameter_updates:
                 # Non-trajectory: single config
-                params = exp.get_effective_parameters_for_row(0)
+                params = exp.parameters.get_values_dict().copy()
                 z = self._encode_params(params, datamodule)
                 if z is not None:
                     latent_points.append(z)
@@ -426,8 +426,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if end_index <= start or end_index > len(X_df_all):
             raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {len(X_df_all)} rows.")
 
-        X_df = X_df_all.iloc[start:end_index].copy()
-        y_df = y_df_all.iloc[start:end_index].copy()
+        X_df: pd.DataFrame = X_df_all.iloc[start:end_index].copy() # type: ignore
+        y_df: pd.DataFrame = y_df_all.iloc[start:end_index].copy() # type: ignore
 
         # Prepare tune arrays with training-fitted normalization.
         X_tune = temp_datamodule.prepare_input(X_df)

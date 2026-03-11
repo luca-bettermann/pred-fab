@@ -283,7 +283,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         except Exception:
             return 0.0
         perf_values = [
-            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
             for name in self.perf_names_order
             if name in perf_dict
         ]
@@ -305,7 +305,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         except Exception:
             perf_dict = {}
         perf_values = [
-            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
             for name in self.perf_names_order
             if name in perf_dict
         ]
@@ -333,6 +333,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return total_score / total_weight if total_weight > 0 else 0.0
 
 
+    # === PRIVATE HELPERS ===
+
+    def _lhs_unit_samples(self, d: int, n: int) -> np.ndarray:
+        """Return (n, d) array of LHS samples in [0, 1]^d."""
+        return qmc.LatinHypercube(d=d, seed=self.random_seed).random(n=n)
+
     # === BASELINE EXPERIMENT GENERATION ===
 
     def generate_baseline_experiments(
@@ -357,8 +363,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # 2. Generate Stratified Samples (Geometry)
         # Returns (n_samples, d) matrix with values in [0, 1]
-        sampler = qmc.LatinHypercube(d=d, seed=self.random_seed)
-        lhs_samples = sampler.random(n=n_samples)
+        lhs_samples = self._lhs_unit_samples(d, n_samples)
 
         # 3. Build ExperimentSpec per row
         experiments: List[ExperimentSpec] = []
@@ -595,7 +600,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         continue
                     valid_prior = [X_j for X_j in per_seg_X[:k] if X_j is not None]
                     max_sim = max(
-                        (self.similarity_fn(X_j, per_seg_X[k]) for X_j in valid_prior),
+                        (self.similarity_fn(X_j, per_seg_X[k]) for X_j in valid_prior),  # type: ignore
                         default=0.0,
                     )
                     discounted.append(acq * max(0.0, 1.0 - max_sim))
@@ -624,8 +629,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Phase 1: LHS warm start
         n_dims = len(traj_codes) * n_segments
-        sampler = qmc.LatinHypercube(d=n_dims, seed=self.random_seed)
-        lhs_rows = sampler.random(n=n_lhs_candidates)
+        lhs_rows = self._lhs_unit_samples(n_dims, n_lhs_candidates)
 
         best_x0: Optional[np.ndarray] = None
         best_score = np.inf

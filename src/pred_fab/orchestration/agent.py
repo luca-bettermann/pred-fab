@@ -7,7 +7,7 @@ manages schema generation and dataset initialization.
 """
 
 import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple
+from typing import Any, Dict, List, Set, Type, Optional, Tuple, Union
 import numpy as np
 
 from pred_fab.utils.enum import SystemName
@@ -312,12 +312,30 @@ class PfabAgent:
         self,
         datamodule: DataModule,
         w_explore: float = 0.5,
-        n_optimization_rounds: int = 10
-    ) -> ParameterProposal:
-        """Run global exploration and return a parameter proposal."""
+        n_optimization_rounds: int = 10,
+        trajectory: bool = False,
+        n_segments: int = 3,
+        current_params: Optional[Dict[str, Any]] = None,
+    ) -> Union[ParameterProposal, ExperimentSpec]:
+        """Run global exploration and return a parameter proposal or trajectory spec."""
         self._check_systems(StepType.FULL)
 
-        # Train Exploration Model and calibrate new experiment
+        if trajectory:
+            if current_params is None:
+                raise ValueError(
+                    "exploration_step() with trajectory=True requires current_params. "
+                    "Pass the current experiment's effective parameter dict."
+                )
+            result = self.calibration_system.run_trajectory_exploration(
+                datamodule=datamodule,
+                current_params=current_params,
+                w_explore=w_explore,
+                n_segments=n_segments,
+            )
+            self.logger.console_success("Successfully completed trajectory exploration step.")
+            return result
+
+        # Standard point exploration
         new_params = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
