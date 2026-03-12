@@ -1,12 +1,11 @@
-from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, ISurrogateModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel
 from .orchestration import PfabAgent, InferenceBundle
 
 __all__ = [
     "PfabAgent",
     "InferenceBundle",
     "IExternalData",
-    "IFeatureModel", 
+    "IFeatureModel",
     "IEvaluationModel",
     "IPredictionModel",
-    "ISurrogateModel"
 ]

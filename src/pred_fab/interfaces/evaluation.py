@@ -78,30 +78,49 @@ class IEvaluationModel(BaseInterface):
 
     @final
     def compute_performance(
-        self, 
-        feature_array: NDArray, 
-        parameters: Parameters
-        ) -> Tuple[Optional[float], List[Optional[float]]]:
-        """Compute average of the performance from the feature array."""
-        
+        self,
+        feature_array: NDArray,
+        parameters: Parameters,
+        feature_std: Optional[NDArray] = None,
+    ) -> Tuple[Optional[float], List[Optional[float]], Optional[List[Optional[float]]]]:
+        """Compute average performance from the feature array.
+
+        Args:
+            feature_array: 2-D array of shape (n_rows, n_dim_cols + 1) where
+                the last column contains the feature values and the preceding
+                columns hold dimensional iterator values.
+            parameters: Parameter block for target/scaling computation.
+            feature_std: Optional 1-D array of per-row feature standard
+                deviations (same length as feature_array). When provided,
+                each performance standard deviation is approximated as
+                ``std_feat / scaling_factor``.  Returns ``None`` when omitted.
+
+        Returns:
+            Tuple of:
+                - avg_performance: mean of performance_list (or None if empty)
+                - performance_list: per-row performance values
+                - std_performance_list: per-row performance std deviations, or
+                  None when feature_std was not provided
+        """
         # Unpack DataBlocks
         params = parameters.get_values_dict()
         dim_iterator_codes = [dim.iterator_code for dim in self.get_input_dimensions()]
 
-        # Compute list of performance values
-        performance_list = []
-        for row in feature_array:
+        performance_list: List[Optional[float]] = []
+        std_list: List[Optional[float]] = []
+
+        for i, row in enumerate(feature_array):
             # Extract current dimension values
             current_dim = row[:-1]
             feature_value = row[-1]
-            
+
             # merge dims and params into single dict
             current_dim_dict = dict(zip(dim_iterator_codes, current_dim))
 
             # Compute target value, scaling factor
             target_value = self._compute_target_value(params, **current_dim_dict)
             scaling_factor = self._compute_scaling_factor(params, **current_dim_dict)
-        
+
             # Validate outputs from user implementation
             if not isinstance(target_value, (int, float, np.integer, np.floating)):
                 raise TypeError(
@@ -113,14 +132,31 @@ class IEvaluationModel(BaseInterface):
                     f"_compute_scaling_factor() must return numeric or None. "
                     f"Expected int/float/None, got {type(scaling_factor).__name__}"
                 )
-        
+
             # Compute performance value
             performance_value = self._compute_performance_value(feature_value, target_value, scaling_factor)
             performance_list.append(performance_value)
 
+            # Propagate feature uncertainty to performance uncertainty if provided
+            if feature_std is not None:
+                sigma_feat = float(feature_std[i]) if feature_std[i] is not None else None
+                if sigma_feat is not None and sigma_feat >= 0.0:
+                    # Determine the same denominator used in _compute_performance_value
+                    if scaling_factor is not None and scaling_factor > 0:
+                        denom = float(scaling_factor)
+                    elif target_value > 0:
+                        denom = float(target_value)
+                    else:
+                        denom = None
+                    std_perf = float(sigma_feat / denom) if denom else None
+                else:
+                    std_perf = None
+                std_list.append(std_perf)
+
         performance_array = np.array(performance_list)
         avg_performance = float(np.nanmean(performance_array)) if len(performance_array) > 0 else None
-        return avg_performance, performance_list
+
+        return avg_performance, performance_list, std_list if feature_std is not None else None
 
     @final
     def _compute_performance_value(

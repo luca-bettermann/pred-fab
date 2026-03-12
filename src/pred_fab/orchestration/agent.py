@@ -23,7 +23,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, StepType, Mode
+from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep, Domain
 
 
 class PfabAgent:
@@ -156,14 +156,26 @@ class PfabAgent:
         )
         self.pred_system.set_ref_objects(schema)
 
-        # Calibration system requires prediction, evaluation and schema to be set
+        # Calibration system requires prediction, evaluation and schema to be set.
+        # perf_fn encapsulates predict_for_calibration + _evaluate_feature_dict so
+        # CalibrationSystem never calls internal PM/EM methods directly.
+        _pred = self.pred_system
+        _eval = self.eval_system
+
+        def _perf_fn(params_dict):
+            try:
+                feature_arrays, params_block = _pred.predict_for_calibration(params_dict)
+                return _eval._evaluate_feature_dict(feature_arrays, params_block)
+            except Exception:
+                return {}
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
-            logger=self.logger, 
-            predict_fn=self.pred_system._predict_from_params,
-            evaluate_fn=self.eval_system._evaluate_feature_dict,
-            residual_predict_fn=self.pred_system.residual_model.predict
-            )
+            logger=self.logger,
+            perf_fn=_perf_fn,
+            uncertainty_fn=_pred.uncertainty,
+            similarity_fn=_pred.kernel_similarity,
+        )
 
         # validate against schema
         self._validate_systems_against_schema(schema)
@@ -300,25 +312,28 @@ class PfabAgent:
         self,
         datamodule: DataModule,
         w_explore: float = 0.5,
-        n_optimization_rounds: int = 10
-    ) -> ParameterProposal:
-        """Run global exploration and return a parameter proposal."""
+        n_optimization_rounds: int = 10,
+        current_params: Optional[Dict[str, Any]] = None,
+    ) -> ExperimentSpec:
+        """Run exploration and return an ``ExperimentSpec``.
+
+        When trajectory parameters are configured on the calibration system,
+        the step-loop iterates over their dimensions.  Otherwise a single
+        experiment-level proposal is returned (with empty schedules).
+        """
         self._check_systems(StepType.FULL)
 
-        # Train Exploration Model and calibrate new experiment
-        new_params = self.calibration_system.run_calibration(
+        result = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
+            domain=Domain.OFFLINE,
+            current_params=current_params,
             w_explore=w_explore,
-            n_optimization_rounds=n_optimization_rounds
+            n_optimization_rounds=n_optimization_rounds,
         )
-        proposal = ParameterProposal.from_dict(new_params, source_step="exploration_step")
 
-        self.logger.console_success("Successfully completed exploration step. Proposed new parameters:")
-        for key, value in proposal.items():
-            self.logger.console_info(f"  {key}: {value}")
-
-        return proposal
+        self.logger.console_success("Successfully completed exploration step.")
+        return result
 
     def inference_step(
         self,
@@ -328,33 +343,31 @@ class PfabAgent:
         n_optimization_rounds: int = 10,
         recompute: bool = False,
         visualize: bool = False,
-    ) -> ParameterProposal:
-        """Run inference-guided proposal step and return a parameter proposal."""
+        current_params: Optional[Dict[str, Any]] = None,
+    ) -> ExperimentSpec:
+        """Run inference-guided proposal step and return an ``ExperimentSpec``."""
         self._check_systems(StepType.FULL)
 
-        # Set start and end values
         start, end = 0, None
-        
+
         # 1. Extract Features
         self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute, visualize=visualize)
 
         # 2. Evaluate Performance
         self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute)
 
-        # 3. Train Exploration Model and calibrate new experiment
-        new_params = self.calibration_system.run_calibration(
+        # 3. Calibrate
+        result = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.INFERENCE,
+            domain=Domain.OFFLINE,
+            current_params=current_params,
             w_explore=w_explore,
-            n_optimization_rounds=n_optimization_rounds
+            n_optimization_rounds=n_optimization_rounds,
         )
-        proposal = ParameterProposal.from_dict(new_params, source_step="inference_step")
 
-        self.logger.console_success("Successfully completed inference step. Proposed new parameters:")
-        for key, value in proposal.items():
-            self.logger.console_info(f"  {key}: {value}")
-
-        return proposal
+        self.logger.console_success("Successfully completed inference step.")
+        return result
 
     def adaptation_step(
         self,
@@ -366,45 +379,48 @@ class PfabAgent:
         w_explore: float = 0.0,
         record: bool = False,
         **kwargs
-    ) -> ParameterProposal:
-        """Run online adaptation for a step slice and return a parameter proposal."""
+    ) -> ExperimentSpec:
+        """Run online adaptation for a step slice and return an ``ExperimentSpec``."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
         if self.calibration_system is None:
             raise RuntimeError("CalibrationSystem not initialized. Call initialize() first.")
-        
+
         # Retrieve experiment data
         exp_data, start, end = self._step_config(exp_data, dimension, step_index)
 
         # Tune prediction system on the requested online slice.
         temp_datamodule = self.pred_system.tune(
-            exp_data=exp_data, 
-            start=start, 
-            end=end, 
+            exp_data=exp_data,
+            start=start,
+            end=end,
             batch_size=batch_size,
             **kwargs
         )
         self._log_step_completion(exp_data.code, start, end, action="used for tuning")
 
-        # Calibrate around effective current parameters (including recorded updates).
+        # Calibrate around effective current parameters (online = single step).
         current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
-        new_params = self.calibration_system.run_adaptation(
+        result = self.calibration_system.run_calibration(
             datamodule=temp_datamodule,
             mode=mode,
+            domain=Domain.ONLINE,
             current_params=current_params,
-            w_explore=w_explore
+            w_explore=w_explore,
         )
-        proposal = ParameterProposal.from_dict(new_params, source_step="adaptation_step")
+        # Tag as adaptation (run_calibration uses mode-derived source_step).
+        proposal = ParameterProposal.from_dict(
+            result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
+        )
+        result = ExperimentSpec(initial_params=proposal, schedules=result.schedules)
 
         # Record only if user confirms that proposed changes were applied physically.
         if record:
             exp_data.record_parameter_update(proposal, dimension=dimension, step_index=step_index)
             self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
 
-        self.logger.console_success("Successfully completed adaptation step. Proposed new parameters:")
-        for key, value in proposal.items():
-            self.logger.console_info(f"  {key}: {value}")
-        return proposal
+        self.logger.console_success("Successfully completed adaptation step.")
+        return result
 
     # === ADDITIONAL API CALLS ===
 

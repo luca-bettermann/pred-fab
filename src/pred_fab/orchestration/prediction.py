@@ -7,9 +7,11 @@ Integrates with DataModule for normalization and batching.
 """
 
 from typing import Dict, List, Optional, Type, Any, Tuple
+import copy
 import pandas as pd
 import numpy as np
 import pickle
+from scipy.stats import gaussian_kde
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
@@ -38,6 +40,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
         self.datamodule: Optional[DataModule] = None  # Stored after training
+
+        # KDE state for NatPN-light uncertainty estimation (set after training)
+        self._kde: Optional[gaussian_kde] = None
+        self._q_max: Optional[float] = None
+        self._n_exp: int = 0
+        self._kde_bandwidth: Optional[float] = None
+        self._kde_active_mask: Optional[np.ndarray] = None  # Boolean mask of non-constant dims
 
     def get_system_input_parameters(self) -> List[str]:
         """Get the parameter codes of all model inputs."""
@@ -109,11 +118,259 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.console_success(
             f"Training complete: {trained_count}/{len(self.models)} models trained"
         )
+
+        # Fit KDE on latent representations of training configs (NatPN-light)
+        self._fit_kde(datamodule)
     
+    # === UNCERTAINTY ESTIMATION (NatPN-light) ===
+
+    def _fit_kde(self, datamodule: DataModule) -> None:
+        """Fit weighted KDE on latent representations of all unique training configs.
+
+        Option B: one latent point per unique effective parameter configuration.
+        Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
+        Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
+        Bandwidth: Silverman's rule.
+        """
+        if not self.models:
+            return
+
+        latent_points: List[np.ndarray] = []
+        weights: List[float] = []
+        n_exp = 0
+
+        for code in datamodule.get_split_codes(SplitType.TRAIN):
+            exp = datamodule.dataset.get_experiment(code)
+            n_exp += 1
+            n_rows = exp.get_num_rows()
+
+            if not exp.parameter_updates:
+                # Non-trajectory: single config
+                params = exp.parameters.get_values_dict().copy()
+                z = self._encode_params(params, datamodule)
+                if z is not None:
+                    latent_points.append(z)
+                    weights.append(float(np.sqrt(max(n_rows, 1))))
+            else:
+                # Trajectory: one point per segment (initial + each update event)
+                events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
+                seg_start = 0
+                for event in events:
+                    seg_end = exp._event_start_index(event)
+                    seg_rows = seg_end - seg_start
+                    if seg_rows > 0:
+                        params = exp.get_effective_parameters_for_row(seg_start)
+                        z = self._encode_params(params, datamodule)
+                        if z is not None:
+                            latent_points.append(z)
+                            weights.append(float(np.sqrt(max(seg_rows, 1))))
+                    seg_start = seg_end
+                # Last segment
+                seg_rows = n_rows - seg_start
+                if seg_rows > 0:
+                    params = exp.get_effective_parameters_for_row(seg_start)
+                    z = self._encode_params(params, datamodule)
+                    if z is not None:
+                        latent_points.append(z)
+                        weights.append(float(np.sqrt(max(seg_rows, 1))))
+
+        if len(latent_points) < 2:
+            self.logger.info("Too few training configs for KDE — uncertainty defaults to 1.0.")
+            return
+
+        latent_array = np.array(latent_points)   # (n_configs, n_latent)
+        weights_array = np.array(weights)
+        weights_array = weights_array / weights_array.sum()  # normalize
+
+        # Drop constant dimensions to avoid a singular covariance matrix.
+        # Dimensions where all training configs have the same latent value carry no
+        # discriminative information and would cause gaussian_kde to fail.
+        per_dim_std = np.std(latent_array, axis=0)
+        active_mask = per_dim_std > 1e-8
+        if not np.any(active_mask):
+            self.logger.info("All latent dimensions are constant across training configs — uncertainty defaults to 1.0.")
+            return
+
+        projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
+        n_samples, n_active_dims = projected.shape
+        if n_samples <= n_active_dims:
+            self.logger.info(
+                f"Too few training configs ({n_samples}) for {n_active_dims}D KDE — uncertainty defaults to 1.0."
+            )
+            return
+
+        try:
+            # gaussian_kde expects (n_dims, n_samples)
+            self._kde = gaussian_kde(projected.T, bw_method='silverman', weights=weights_array)
+            self._kde_active_mask = active_mask
+            # Scalar bandwidth: Silverman factor * mean std across active latent dimensions
+            self._kde_bandwidth = float(self._kde.factor * np.mean(per_dim_std[active_mask] + 1e-8))
+            # q_max for normalization: max KDE density over all training points
+            densities = self._kde(projected.T)
+            self._q_max = float(np.max(densities)) if len(densities) > 0 else 1.0
+            self._n_exp = n_exp
+            self.logger.info(
+                f"KDE fitted on {len(latent_points)} latent configs from {n_exp} experiments "
+                f"({n_active_dims}/{latent_array.shape[1]} active dims, "
+                f"h={self._kde_bandwidth:.4f}, q_max={self._q_max:.6f})."
+            )
+        except Exception as e:
+            self.logger.warning(f"KDE fitting failed: {e}. Uncertainty defaults to 1.0.")
+            self._kde = None
+
+    def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
+        """Encode a params dict to latent representation via the first PM's encode()."""
+        try:
+            X_norm = datamodule.params_to_array(params)
+            return self._encode_from_norm_array(X_norm)
+        except Exception:
+            return None
+
+    def _encode_from_norm_array(self, X_norm: np.ndarray) -> np.ndarray:
+        """Encode a 1-D normalized parameter array to latent space via first PM's encode()."""
+        if not self.models or self.datamodule is None:
+            return X_norm
+        model = self.models[0]
+        input_cols = model.input_parameters + model.input_features
+        input_indices = [
+            self.datamodule.input_columns.index(f)
+            for f in input_cols
+            if f in self.datamodule.input_columns
+        ]
+        if not input_indices:
+            return X_norm
+        X_model = X_norm[input_indices].reshape(1, -1)
+        return model.encode(X_model)[0]
+
+    def encode(self, X: np.ndarray) -> np.ndarray:
+        """Encode a batch of normalized parameter arrays to latent space.
+
+        Uses the first registered PM's encode() method.  Falls back to identity
+        if no models are registered or the system is not yet trained.
+
+        Args:
+            X: Normalized parameter array (batch_size, n_inputs)
+
+        Returns:
+            Latent array (batch_size, n_latent)
+        """
+        if not self.models or self.datamodule is None:
+            return X
+        model = self.models[0]
+        input_cols = model.input_parameters + model.input_features
+        input_indices = [
+            self.datamodule.input_columns.index(f)
+            for f in input_cols
+            if f in self.datamodule.input_columns
+        ]
+        if not input_indices:
+            return X
+        X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
+        return model.encode(X_model)
+
+    def uncertainty(self, X: np.ndarray) -> float:
+        """Compute epistemic uncertainty at a normalized parameter vector.
+
+        Returns a value in [0, 1]:
+            u = 1 / (1 + n_post)
+        where n_post = N_exp * q_KDE(z) / q_max  (NatPN evidence posterior).
+
+        Returns 1.0 (maximum uncertainty) before KDE is fitted.
+
+        Args:
+            X: Normalized parameter array of shape (1, n_inputs) or (n_inputs,)
+        """
+        if self._kde is None or self._q_max is None or self._q_max <= 0:
+            return 1.0
+        z = self._encode_from_norm_array(X.reshape(-1))
+        if self._kde_active_mask is not None:
+            z = z[self._kde_active_mask]
+        q = float(self._kde(z.reshape(-1, 1))[0])
+        n_post = self._n_exp * q / self._q_max
+        return float(1.0 / (1.0 + n_post))
+
+    def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
+        """Gaussian kernel similarity between two parameter vectors in latent space.
+
+        sim(X1, X2) = exp(-||z1 - z2||^2 / h^2)
+
+        Returns 0.0 if KDE has not been fitted yet (no bandwidth available).
+
+        Args:
+            X1, X2: Normalized parameter arrays of shape (n_inputs,) or (1, n_inputs)
+        """
+        if self._kde_bandwidth is None or self._kde_bandwidth < 1e-10:
+            return 0.0
+        z1 = self._encode_from_norm_array(X1.reshape(-1))
+        z2 = self._encode_from_norm_array(X2.reshape(-1))
+        if self._kde_active_mask is not None:
+            z1 = z1[self._kde_active_mask]
+            z2 = z2[self._kde_active_mask]
+        h = self._kde_bandwidth
+        return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+
+    def predict_for_calibration(self, params: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Any]:
+        """Predict feature arrays for all dimensional positions for calibration use.
+
+        Runs the full dimensional prediction for the given parameter configuration
+        and converts each feature tensor to a tabular array suitable for evaluation
+        models (rows = [dim_iter_vals..., feature_val]).
+
+        Args:
+            params: Raw (denormalized) parameter dict for the virtual experiment.
+
+        Returns:
+            Tuple of:
+                - feature_arrays: Dict mapping feature code to 2-D array
+                  where each row is [dim_iter_1, ..., feature_value].
+                - params_block: A copy of the schema Parameters block with values
+                  set from ``params``.
+
+        Raises:
+            RuntimeError: If the system has not been trained yet.
+        """
+        if self.datamodule is None:
+            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+
+        dim_info = self._extract_dimensional_structure_from_params(params)
+        shape = dim_info['shape']
+        dim_iterators = dim_info['dim_iterators']
+
+        # Full dimensional prediction
+        predictions = self._initialize_prediction_dict(shape)
+        self._execute_batched_predictions_to_dict(
+            predictions=predictions,
+            dim_info=dim_info,
+            predict_from=0,
+            predict_to=dim_info['total_positions'],
+            batch_size=1000,
+        )
+
+        # Convert N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
+        feature_arrays: Dict[str, np.ndarray] = {}
+        for feat_name, tensor in predictions.items():
+            flat = tensor.reshape(-1)
+            rows = []
+            for pos, feat_val in enumerate(flat):
+                idx = np.unravel_index(pos, shape)
+                rows.append(list(idx) + [float(feat_val)])
+            feature_arrays[feat_name] = np.array(rows, dtype=np.float64)
+
+        # Build Parameters block with values from params
+        params_block = copy.deepcopy(self.schema.parameters)
+        for code, val in params.items():
+            if code in params_block.data_objects:
+                try:
+                    params_block.set_value(code, val)
+                except Exception:
+                    pass
+
+        return feature_arrays, params_block
+
     def tune(
-            self, 
-            exp_data: ExperimentData, 
-            start: int, 
+            self,
+            exp_data: ExperimentData,
+            start: int,
             end: Optional[int] = None,
             batch_size: Optional[int] = None,
             **kwargs
@@ -169,8 +426,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if end_index <= start or end_index > len(X_df_all):
             raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {len(X_df_all)} rows.")
 
-        X_df = X_df_all.iloc[start:end_index].copy()
-        y_df = y_df_all.iloc[start:end_index].copy()
+        X_df: pd.DataFrame = X_df_all.iloc[start:end_index].copy() # type: ignore
+        y_df: pd.DataFrame = y_df_all.iloc[start:end_index].copy() # type: ignore
 
         # Prepare tune arrays with training-fitted normalization.
         X_tune = temp_datamodule.prepare_input(X_df)

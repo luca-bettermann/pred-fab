@@ -82,11 +82,11 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 self.logger.info(f"Skipping evaluation for '{eval_model.input_feature}' as feature array incomplete.'")
                 continue
 
-            # Run evaluation (we only keep the average performance))
-            avg_performance, _ = eval_model.compute_performance(
+            # Run evaluation (we only keep the average performance)
+            avg_performance, _, _ = eval_model.compute_performance(
                 feature_array=features_dict[eval_model.input_feature],
-                parameters=parameters
-                )
+                parameters=parameters,
+            )
 
             # Collect results
             performance_dict[eval_model.output_performance] = avg_performance

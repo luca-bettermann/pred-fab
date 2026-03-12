@@ -1,12 +1,12 @@
 # Test Suite Context
 
-This suite validates the current `pred_fab` architecture.  335 tests, all passing.
+This suite validates the current `pred_fab` architecture.  458 tests passing, 2 expected skips.
 
 ## Structure
 
 - `tests/utils/`
   - `builders.py` — Shared builders for schemas, datasets, agents, datamodules, and orchestration stacks.
-  - `interfaces.py` — Reusable interface implementations (`WorkflowFeatureModelA/B`, `WorkflowEvaluationModelA/B`, `WorkflowPredictionModel`, `MixedFeatureModel`, `ScalarEvaluationModel`, `MixedPredictionModel`, `ShapeCheckingPredictionModel`, `CapturingSurrogateModel`, etc.).
+  - `interfaces.py` — Reusable interface implementations (`WorkflowFeatureModelA/B`, `WorkflowEvaluationModelA/B`, `WorkflowPredictionModel`, `MixedFeatureModel`, `ScalarEvaluationModel`, `MixedPredictionModel`, `ShapeCheckingPredictionModel`, `CapturingResidualModel`, etc.). Note: `CapturingSurrogateModel` removed (GP surrogate removed from architecture).
 - `tests/core/`
   - `test_data_objects.py` — `DataReal`, `DataInt`, `DataBool`, `DataCategorical`, `DataDimension`, `DataArray`, and factory methods.
   - `test_data_blocks.py` — `Parameters`, `Features`, `PerformanceAttributes`: strides, iterator combinations, `value_at`, round-trip persistence.
@@ -19,16 +19,27 @@ This suite validates the current `pred_fab` architecture.  335 tests, all passin
   - `test_parameter_updates.py` — `ParameterUpdateEvent` recording, rejection of dimension updates, no-change skip, save/load round-trip.
   - `test_schema_registry.py` — `DatasetSchema` hashing and `SchemaRegistry` lookup.
 - `tests/orchestration/`
-  - `test_agent_step_contracts.py` — `PfabAgent` step method (`exploration_step`, `inference_step`, `adaptation_step`) output contracts.
-  - `test_adaptation_step.py` — Adaptation step with trust regions and parameter proposal integration.
+  - `test_agent_step_contracts.py` — `PfabAgent` step method (`exploration_step`, `inference_step`) output contracts: `ExperimentSpec` return type, source_step tagging, spy mocks verifying `Mode` propagation.
+  - `test_adaptation_step.py` — Adaptation step: `ExperimentSpec` return type, `SourceStep.ADAPTATION` tagging, effective-param replay with prior updates.
   - `test_calibration_config.py` — `CalibrationSystem` configuration: `configure_param_bounds`, `set_performance_weights`, `configure_fixed_params`, `configure_adaptation_delta`, `_compute_system_performance`, bounds validation.
-  - `test_calibration_sampling.py` — `generate_baseline_experiments` (count, empty, schema keys, fixed params, bounds, integer typing, infinite bounds skip, determinism), `run_adaptation` behavior, `_compute_system_performance` mismatched lengths.
-  - `test_orchestration_edge_cases.py` — `PredictionSystem.validate` model-specific input slices, `CalibrationSystem.train_surrogate_model` skipping missing performance rows, `InferenceBundle` degenerate min-max, `tune` row-slice semantics.
+  - `test_calibration_sampling.py` — `generate_baseline_experiments` (count, empty, schema keys, fixed params, bounds, integer typing, infinite bounds skip, determinism), `run_calibration(domain=ONLINE)` behavior (returns `ExperimentSpec`, trust-region constraints, raises for missing trust region), `configure_trajectory` (new string API), trajectory-based baseline schedule generation.
+  - `test_run_calibration_contracts.py` — **Unified `run_calibration()` contract tests:**
+    - Offline exploration, experiment level (single step): return type, source_step, empty schedules, fixed params, dict-like access
+    - Offline inference, experiment level (single step): return type, source_step, mode differentiation
+    - Offline exploration, dimensional level (multi-step): schedule keyed by dimension, ParameterSchedule type, entries contain trajectory params, delta constraints
+    - Offline inference, dimensional level (multi-step): schedule produced, delta constraints
+    - Step-loop internals: `_build_step_grid`, `_get_eligible_params`, `_build_experiment_spec` unit tests
+    - Multi-dimensional mixed scenario (`TestMultiDimMixedScenario`): two trajectory params on different dimension levels (layer_height→dim_1 level 1, speed→dim_2 level 2), verifying 6-step Cartesian product grid (coarsest-first), per-step eligibility logic, both dimension schedules produced, delta constraints per param, and direct `_build_experiment_spec` unit test with 6 proposals
+    - `ExperimentSpec` integration: `apply_schedules`, dict delegation
+    - Agent-level spy tests confirming Mode/Domain propagation from `exploration_step`/`inference_step`
+    - `target_indices` (`TestTargetIndices`): collapsing full grid to a single targeted step, per-dim eligibility isolation, empty schedules invariant, source_step preservation, works without trajectory configs
+  - `test_orchestration_edge_cases.py` — `PredictionSystem.validate` model-specific input slices, `CalibrationSystem._acquisition_func` integration (perf_fn + uncertainty_fn callables), `InferenceBundle` degenerate min-max, `tune` row-slice semantics.
+  - `test_uncertainty_estimation.py` — NatPN-light: `encode()` identity/override, `uncertainty()` pre/post training, KDE OOD behavior, `kernel_similarity()`, `predict_for_calibration()`, `compute_performance()` with `feature_std`, UCB acquisition and inference function integration, trajectory step-loop with KDE delta constraints.
   - `test_prediction_system_errors.py` — `PredictionSystem.train` empty-split error, `validate` before/after training, `tune` boundary errors (start/end/negative), `predict_experiment` shape and partial-range NaN fill.
 - `tests/interfaces/`
   - Interface contract tests for model implementations.
 - `tests/integration/`
-  - `test_stepwise_workflow.py` — End-to-end stepwise workflow including local persistence.
+  - `test_stepwise_workflow.py` — End-to-end stepwise workflow including local persistence; `exploration_step` returns `ExperimentSpec`.
 
 ## Conventions
 
@@ -37,7 +48,7 @@ This suite validates the current `pred_fab` architecture.  335 tests, all passin
 - Reuse interface implementations from `tests/utils/interfaces.py`; do not define ad-hoc models in individual tests.
 - Add new tests under the module area they validate.
 - Do not stub orchestration systems (`FeatureSystem`, `EvaluationSystem`, `PredictionSystem`, `CalibrationSystem`).
-- Keep simplification at interface/model level only (feature/evaluation/prediction/surrogate implementations).
+- Keep simplification at interface/model level only (feature/evaluation/prediction implementations).
 
 ## Bugs Discovered via Tests
 

@@ -12,7 +12,8 @@ from .enum import (
     Mode,
     Loaders,
     FileFormat,
-    SamplingStrategy
+    SamplingStrategy,
+    SourceStep,
 )
 
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "Loaders",
     "FileFormat",
     "SamplingStrategy",
+    "SourceStep",
 ]
     

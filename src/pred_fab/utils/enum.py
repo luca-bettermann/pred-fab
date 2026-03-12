@@ -76,4 +76,12 @@ class SamplingStrategy(str, Enum):
     CATEGORICAL = 'categorical'
     BOOL = 'bool'
 
+class SourceStep(str, Enum):
+    """Identifies which agent step produced a ParameterProposal or ParameterUpdateEvent."""
+    EXPLORATION = 'exploration_step'
+    INFERENCE = 'inference_step'
+    ADAPTATION = 'adaptation_step'
+    BASELINE_SAMPLING = 'baseline_sampling'
+    BASELINE_TRAJECTORY = 'baseline_trajectory'
+
     

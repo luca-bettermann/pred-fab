@@ -3,16 +3,13 @@ from .base_interface import BaseInterface
 from .features import IFeatureModel
 from .evaluation import IEvaluationModel
 from .prediction import IPredictionModel
-from .calibration import ISurrogateModel, GaussianProcessSurrogate
 from .tuning import IResidualModel
 
 __all__ = [
     "BaseInterface",
     "IExternalData",
-    "IFeatureModel", 
+    "IFeatureModel",
     "IEvaluationModel",
     "IPredictionModel",
-    "ISurrogateModel",
-    "GaussianProcessSurrogate",
     "IResidualModel"
 ]

@@ -1,4 +1,4 @@
-from pred_fab.core import ParameterProposal
+from pred_fab.core import ParameterProposal, ExperimentSpec
 from tests.utils.builders import build_real_agent_stack
 
 
@@ -12,20 +12,20 @@ def _build_real_agent_and_data(tmp_path):
     return agent, exp
 
 
-def test_adaptation_step_runs_real_tuning_flow_and_returns_proposal(tmp_path):
+def test_adaptation_step_runs_real_tuning_flow_and_returns_experiment_spec(tmp_path):
     agent, exp = _build_real_agent_and_data(tmp_path)
 
-    proposal = agent.adaptation_step(
+    result = agent.adaptation_step(
         dimension="dim_1",
         step_index=1,
         exp_data=exp,
         record=False,
     )
 
-    assert isinstance(proposal, ParameterProposal)
-    assert proposal.source_step == "adaptation_step"
-    assert "param_1" in proposal and "dim_1" in proposal and "dim_2" in proposal
-    assert proposal["param_1"] == 2.5
+    assert isinstance(result, ExperimentSpec)
+    assert result.initial_params.source_step == "adaptation_step"
+    assert "param_1" in result and "dim_1" in result and "dim_2" in result
+    assert result["param_1"] == 2.5
     assert len(exp.parameter_updates) == 0
 
 
@@ -37,13 +37,13 @@ def test_adaptation_step_record_uses_effective_params_after_prior_updates(tmp_pa
         step_index=0,
     )
 
-    proposal = agent.adaptation_step(
+    result = agent.adaptation_step(
         dimension="dim_1",
         step_index=1,
         exp_data=exp,
         record=True,
     )
 
-    assert proposal["param_1"] == 5.0
+    assert result["param_1"] == 5.0
     # No-op proposals are intentionally not logged as additional update events.
     assert len(exp.parameter_updates) == 1

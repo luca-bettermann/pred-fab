@@ -1,9 +1,10 @@
+import pytest
 import numpy as np
 
 from pred_fab.orchestration.inference_bundle import InferenceBundle
 from pred_fab.utils import SplitType
 from tests.utils.builders import (
-    build_calibration_system_with_capturing_surrogate,
+    build_calibration_system,
     build_dataset_with_single_experiment,
     build_initialized_datamodule,
     build_shape_checking_prediction_system,
@@ -38,8 +39,28 @@ def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
     assert models[1].seen_widths and models[1].seen_widths[0] == 2
 
 
-def test_calibration_surrogate_training_skips_missing_performance_rows(tmp_path):
+def test_calibration_acquisition_uses_perf_fn_and_uncertainty_fn(tmp_path):
+    """_acquisition_func integrates perf_fn and uncertainty_fn into a UCB score."""
     dataset = build_dataset_with_single_experiment(tmp_path)
+
+    perf_calls = []
+    unc_calls = []
+
+    def perf_fn(params_dict):
+        perf_calls.append(params_dict)
+        return {"performance_1": 0.7}
+
+    def uncertainty_fn(X):
+        unc_calls.append(X.shape)
+        return 0.4
+
+    calibration = build_calibration_system(
+        tmp_path=tmp_path,
+        dataset=dataset,
+        perf_fn=perf_fn,
+        uncertainty_fn=uncertainty_fn,
+    )
+
     datamodule = build_initialized_datamodule(
         dataset=dataset,
         input_parameters=["param_1", "dim_1", "dim_2"],
@@ -48,19 +69,18 @@ def test_calibration_surrogate_training_skips_missing_performance_rows(tmp_path)
         fitted=True,
         split_codes={SplitType.TRAIN: ["exp_001"], SplitType.VAL: [], SplitType.TEST: []},
     )
-    calibration, surrogate = build_calibration_system_with_capturing_surrogate(
-        tmp_path=tmp_path,
-        dataset=dataset,
-    )
+    calibration._active_datamodule = datamodule
 
-    calibration.train_surrogate_model(datamodule)
-    assert surrogate.fit_calls == 0
+    # Build a dummy normalized X array
+    X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
+    w = 0.5
+    result = calibration._acquisition_func(X, w_explore=w)
 
-    exp = dataset.get_experiment("exp_001")
-    exp.performance.set_values_from_dict({"performance_1": 0.5}, logger=dataset.logger)
-    calibration.train_surrogate_model(datamodule)
-    assert surrogate.fit_calls == 1
-    assert surrogate.last_shapes == ((1, 3), (1, 1))
+    # Both callables should have been invoked
+    assert len(perf_calls) == 1
+    assert len(unc_calls) == 1
+    # UCB: -(0.5 * 0.7 + 0.5 * 0.4) = -0.55
+    assert result == pytest.approx(-((1 - w) * 0.7 + w * 0.4), abs=1e-4)
 
 
 def test_inference_bundle_handles_degenerate_minmax():

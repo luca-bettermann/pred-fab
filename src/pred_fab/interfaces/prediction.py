@@ -62,6 +62,24 @@ class IPredictionModel(BaseInterface):
         """
         pass
 
+    # === LATENT ENCODING ===
+
+    def encode(self, X: np.ndarray) -> np.ndarray:
+        """
+        Map normalized parameter vectors to latent representations.
+
+        Override to provide a custom latent space (e.g. penultimate layer of a
+        neural network). The default implementation is the identity map so that
+        the normalized parameter space itself is used as the latent space.
+
+        Args:
+            X: Normalized parameter array (batch_size, n_params)
+
+        Returns:
+            Latent representation array (batch_size, n_latent)
+        """
+        return X
+
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:

@@ -1,7 +1,5 @@
-from collections import defaultdict
-from typing import Dict, List, Optional, Any, Tuple, Callable
+from typing import Dict, List, Optional, Any, Set, Tuple, Callable
 import numpy as np
-from scipy.stats import qmc
 from scipy.optimize import minimize
 
 import warnings
@@ -10,9 +8,9 @@ import functools
 from ..core import DataModule, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, SamplingStrategy
-from ..interfaces import ISurrogateModel, GaussianProcessSurrogate
+from ..utils import PfabLogger, Mode, SourceStep
 from .base_system import BaseOrchestrationSystem
+from ._calib_baseline import BaselineSampler
 
 # Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -20,51 +18,90 @@ warnings.filterwarnings("ignore", category=UserWarning)
 class CalibrationSystem(BaseOrchestrationSystem):
     """
     Orchestrates calibration and active learning.
-    
-    - Owns Exploration Model (GP) and System Performance definition
+
+    - Owns System Performance definition and active-learning acquisition logic
     - Generates baseline experiments (LHS)
-    - Proposes new experiments via Bayesian Optimization
+    - Proposes new experiments via Bayesian Optimization (UCB with KDE uncertainty)
     - Supports Online (Trust Region) and Offline (Global) modes
+    - Level 2 trajectory exploration with diversity discounting via similarity_fn
     """
-    
+
     def __init__(
-        self, 
+        self,
         schema: DatasetSchema,
-        logger: PfabLogger, 
-        predict_fn: Callable, 
-        residual_predict_fn: Callable,
-        evaluate_fn: Callable, 
+        logger: PfabLogger,
+        perf_fn: Callable[[Dict[str, Any]], Dict[str, Optional[float]]],
+        uncertainty_fn: Callable[[np.ndarray], float],
+        similarity_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
         random_seed: Optional[int] = None,
-        surrogate_model: Optional[ISurrogateModel] = None,
     ):
+        """
+        Args:
+            schema: Dataset schema defining parameters and performance attributes.
+            logger: Logger instance.
+            perf_fn: Callable mapping a raw params dict to a performance dict
+                ``{perf_code: value_or_None}``.  Encapsulates predict + evaluate.
+            uncertainty_fn: Callable mapping a normalized parameter array (1-D) to
+                a scalar epistemic uncertainty in [0, 1].
+            similarity_fn: Optional callable mapping two normalized parameter arrays
+                to a scalar similarity in [0, 1].  Used for Level 2 trajectory
+                diversity discounting.  When None, diversity discounting is skipped.
+            random_seed: Seed for reproducible random sampling.
+        """
         super().__init__(logger)
-        self.predict_fn = predict_fn
-        self.evaluate_fn = evaluate_fn
-        self.residual_predict_fn = residual_predict_fn
-        self.random_seed = random_seed
+        self.perf_fn = perf_fn
+        self.uncertainty_fn = uncertainty_fn
+        self.similarity_fn = similarity_fn
+        self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
-        # Initialize Surrogate Model
-        if surrogate_model:
-            self.model = surrogate_model
-        else:
-            self.model = GaussianProcessSurrogate(logger, random_seed or 42)
+        # Active datamodule — set before each optimization run so that
+        # _inference_func / _acquisition_func can call array_to_params.
+        self._active_datamodule: Optional[DataModule] = None
 
         # Set ordered weights
         self.perf_names_order = list(schema.performance_attrs.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
-        
+
         # Configure data_objects, bounds and fixed params
         self.data_objects: Dict[str, DataObject] = {}
         self.schema_bounds: Dict[str, Tuple[float, float]] = {}
         self.param_bounds: Dict[str, Tuple[float, float]] = {}
         self.fixed_params: Dict[str, Any] = {}
         self.trust_regions: Dict[str, float] = {}
-        self.trajectory_configs: Dict[str, int] = {}   # code → dimension_level
+        self.trajectory_configs: Dict[str, str] = {}   # param_code → dimension_code
 
         # Extract parameter constraints from schema
-        self._set_param_constraints_from_schema(schema)        
+        self._set_param_constraints_from_schema(schema)
+
+        # Baseline sampler — holds references to the shared config dicts so that
+        # configure_* mutations are automatically visible without re-wiring.
+        self._baseline = BaselineSampler(
+            parameters=self.parameters,
+            data_objects=self.data_objects,
+            schema_bounds=self.schema_bounds,
+            fixed_params=self.fixed_params,
+            param_bounds=self.param_bounds,
+            trajectory_configs=self.trajectory_configs,
+            rng=self.rng,
+            logger=self.logger,
+            random_seed=self._random_seed,
+        )
+
+    # ------------------------------------------------------------------
+    # random_seed property — propagates updates to the baseline sampler.
+    # ------------------------------------------------------------------
+
+    @property
+    def random_seed(self) -> Optional[int]:
+        return self._random_seed
+
+    @random_seed.setter
+    def random_seed(self, value: Optional[int]) -> None:
+        self._random_seed = value
+        if hasattr(self, '_baseline') and self._baseline is not None:
+            self._baseline.random_seed = value
 
     def _set_param_constraints_from_schema(self, schema: DatasetSchema) -> None:
         """Extract parameter constraints from dataset schema."""
@@ -78,7 +115,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 max_val = data_obj.constraints.get("max", np.inf)
             else:
                 raise TypeError(f"Expected DataObject type for parameter '{code}', got {type(data_obj).__name__}")
-            
+
             # Store constraints
             self.data_objects[code] = data_obj
             self.schema_bounds[code] = (min_val, max_val)
@@ -93,23 +130,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
         summary.append("-" * len(header))
 
         for code in self.data_objects.keys():
-            
+
             # Determine Bounds
             # Priority: Fixed -> Configured Bounds -> Schema Constraints
             low, high = self._get_hierarchical_bounds_for_code(code)
             bounds_str = f"[{low}, {high}]"
-            
+
             # Determine Delta
             delta = self.trust_regions.get(code, "-")
-            
+
             summary.append(f"{code:<{width}} | {bounds_str:<{width}} | {delta:<{8}}")
-        
+
         self.logger.console_new_line()
         self.logger.console_info("\n".join(summary))
         self.logger.console_new_line()
 
     # === CONFIGURATION METHODS ===
-        
+
     def set_performance_weights(self, weights: Dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
         # set according to order in perf_names_order
@@ -119,16 +156,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.logger.debug(f"Set performance weight: {name} -> {value}")
             else:
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
-        
+
     def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]], force: bool = False) -> None:
         """Configure parameter ranges for offline calibration."""
         for code, (low, high) in bounds.items():
-            
+
             # Helper Validation
             if not self._validate_and_clean_config(
-                code, 
-                (DataReal, DataInt), 
-                ['fixed_params'], 
+                code,
+                (DataReal, DataInt),
+                ['fixed_params'],
                 force
             ):
                 continue
@@ -140,26 +177,26 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Bounds for object '{code}' exceed schema constraints: "
                     f"[{low}, {high}] vs schema [{schema_min}, {schema_max}]"
                 )
-            
+
             self.param_bounds[code] = (low, high)
             self.logger.debug(f"Set parameter bounds: {code} -> [{low}, {high}]")
 
     def configure_fixed_params(self, fixed_params: Dict[str, Any], force: bool = False) -> None:
         """Configure fixed parameter values."""
         for code, value in (fixed_params or {}).items():
-            
+
             # Helper Validation
             if not self._validate_and_clean_config(
-                code, 
+                code,
                 None,  # All types allow fixing
-                ['param_bounds', 'trust_regions'], 
+                ['param_bounds', 'trust_regions'],
                 force
             ):
                 continue
-            
+
             self.fixed_params[code] = value
             self.logger.debug(f"Set fixed parameter: {code} -> {value}")
-        
+
     def configure_adaptation_delta(self, deltas: Dict[str, float], force: bool = False) -> None:
         """Configure trust region deltas for online calibration."""
         for code, delta in deltas.items():
@@ -186,8 +223,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.trust_regions[code] = delta
 
 
-    def configure_trajectory(self, code: str, dimension_level: int, force: bool = False) -> None:
-        """Configure a runtime parameter for trajectory-based exploration at a given dimension level."""
+    def configure_trajectory(self, code: str, dimension_code: str, force: bool = False) -> None:
+        """Configure a runtime parameter for trajectory-based stepping over a dimension.
+
+        Args:
+            code: Runtime-adjustable parameter code (e.g., ``"speed"``).
+            dimension_code: Dimension parameter code to step through (e.g., ``"dim_1"``).
+                Must refer to a ``DataDimension`` in the schema.
+            force: Overwrite an existing trajectory configuration for *code*.
+        """
         if code not in self.data_objects:
             self.logger.console_warning(
                 f"Object '{code}' not found in schema; ignoring configure_trajectory."
@@ -209,23 +253,35 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"trajectories."
             )
 
+        # Validate dimension_code
+        if dimension_code not in self.data_objects:
+            raise ValueError(
+                f"Dimension '{dimension_code}' not found in schema."
+            )
+        dim_obj = self.data_objects[dimension_code]
+        if not isinstance(dim_obj, DataDimension):
+            raise ValueError(
+                f"'{dimension_code}' is not a DataDimension parameter "
+                f"(got {type(dim_obj).__name__})."
+            )
+
         if code in self.trajectory_configs and not force:
             self.logger.console_warning(
-                f"Parameter '{code}' already has a trajectory configuration at level "
-                f"{self.trajectory_configs[code]}; ignoring. Use force=True to overwrite."
+                f"Parameter '{code}' already has a trajectory configuration for "
+                f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
             )
             return
 
-        self.trajectory_configs[code] = dimension_level
+        self.trajectory_configs[code] = dimension_code
         self.logger.debug(
-            f"Configured trajectory for '{code}' at dimension level {dimension_level}."
+            f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
         )
 
     def _validate_and_clean_config(
-        self, 
-        code: str, 
-        allowed_types: Optional[Tuple[type, ...]], 
-        conflicting_collections: List[str], 
+        self,
+        code: str,
+        allowed_types: Optional[Tuple[type, ...]],
+        conflicting_collections: List[str],
         force: bool
     ) -> bool:
         """Validate parameter against schema and check for conflicting configurations."""
@@ -264,52 +320,51 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Objective for INFERENCE: Maximize predicted performance.
         Returns negative performance for minimization.
         """
-        # X is (n_features,)
-        # predict_fn expects (n_samples, n_features)
-        X_reshaped = X.reshape(1, -1)
-        pred_features = self.predict_fn(X_reshaped)
-        
-        # Apply residual correction if available (Online Adaptation)
-        # TODO: make this cleaner
-        if self.residual_predict_fn is not None:
-            # Prepare inputs for residual model: [X, BasePredictions]
-            X_residual_input = np.hstack([X_reshaped, pred_features])
-            residuals = self.residual_predict_fn(X_residual_input)
-            pred_features = pred_features + residuals
-            
-        pred_performance = self.evaluate_fn(pred_features)
-        
-        # Extract values from dict and compute score
-        # Note: evaluate_fn returns dict of arrays/scalars. 
-        # We assume single sample here.
-        perf_values = [float(val) if np.isscalar(val) else float(val[0]) for val in pred_performance.values()] # type: ignore
-        
+        dm = self._active_datamodule
+        if dm is None:
+            return 0.0
+        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            perf_dict = self.perf_fn(params_dict)
+        except Exception:
+            return 0.0
+        perf_values = [
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
+            for name in self.perf_names_order
+            if name in perf_dict
+        ]
         sys_perf = self._compute_system_performance(perf_values)
         return -sys_perf
-    
+
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
         """
-        Objective for exploration: Maximize Weighted Score.
-        Score = (1 - w) * Mean + w * Std
+        Objective for exploration: Maximize UCB score.
+        Score = (1 - w) * predicted_performance + w * epistemic_uncertainty
         Returns negative Score for minimization.
         """
-        # Predict mean and std from surrogate
-        mean, std = self.model.predict(X.reshape(1, -1))
-        
-        weighted_mu = self._compute_system_performance(mean[0].tolist())
-        weighted_sigma = self._compute_system_performance(std[0].tolist())
-        
-        # Weighted Blend
-        # w=0 -> Pure Mean (Exploitation)
-        # w=1 -> Pure Std (Exploration)
-        score = (1.0 - w_explore) * weighted_mu + w_explore * weighted_sigma
-        return -score 
-    
+        dm = self._active_datamodule
+        if dm is None:
+            return 0.0
+        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            perf_dict = self.perf_fn(params_dict)
+        except Exception:
+            perf_dict = {}
+        perf_values = [
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
+            for name in self.perf_names_order
+            if name in perf_dict
+        ]
+        sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
+        u = self.uncertainty_fn(X.reshape(-1))
+        score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
+        return -score
+
     def _compute_system_performance(self, performance: List[float]) -> float:
         """Compute weighted system performance [0, 1]."""
         if not performance:
             return 0.0
-            
+
         total_score = 0.0
         total_weight = 0.0
 
@@ -322,23 +377,165 @@ class CalibrationSystem(BaseOrchestrationSystem):
             total_weight += weight
 
         return total_score / total_weight if total_weight > 0 else 0.0
-    
-    # === SURROGATE TRAINING ===
 
-    def train_surrogate_model(
+
+    # === PRIVATE HELPERS ===
+
+    def _wrap_mpc_objective(
         self,
-        datamodule: DataModule
-    ) -> None:
-        """Train surrogate model on existing experiment data. We assume the datamodule is fitted."""
-        X_train, y_train = datamodule.build_calibration_training_arrays(
-            performance_order=self.perf_names_order,
-            strict=False
-        )
-        if len(X_train) > 0:
-            self.model.fit(X_train, y_train)
-        else:
-            self.logger.warning("No valid data to train surrogate model.")
+        base_objective: Callable,
+        datamodule: DataModule,
+        depth: int,
+        discount: float,
+    ) -> Callable:
+        """Wrap *base_objective* with an MPC rollout of *depth* lookahead steps.
 
+        Model-predictive control reduces greedy myopia: instead of scoring only
+        the immediate candidate X, the objective simulates *depth* greedy steps
+        forward and accumulates their discounted acquisition scores:
+
+            MPC(X) = score(X) + γ¹·score(X₁) + γ²·score(X₂) + … + γᵈ·score(Xᵈ)
+
+        where each Xⱼ₊₁ is obtained by a quick trust-region L-BFGS-B step from Xⱼ.
+        Parameters without a configured trust region are held fixed at their current
+        value in the lookahead (zero-width bounds), so they cannot drift.
+
+        Args:
+            base_objective: The base (negative) objective callable — same signature
+                as those returned by ``_build_objective``.
+            datamodule: Active datamodule used to convert arrays ↔ param dicts for
+                trust-region bound construction.
+            depth: Number of lookahead steps (0 = pure greedy, returns *base_objective*
+                unchanged with no overhead).
+            discount: Geometric discount factor γ ∈ (0, 1].  ``discount=1.0`` weights
+                all steps equally; ``discount=0.0`` makes the lookahead costless (pure
+                greedy objective with extra computation — use ``depth=0`` instead).
+
+        Returns:
+            A callable with the same signature as *base_objective* that returns the
+            accumulated MPC score.  Exceptions inside lookahead steps are swallowed:
+            if a step fails the rollout terminates early (partial sum is returned).
+        """
+        if depth <= 0:
+            return base_objective
+
+        def mpc_obj(X: np.ndarray) -> float:
+            total = base_objective(X)
+            X_cur = X.copy()
+            for j in range(depth):
+                try:
+                    params_cur = datamodule.array_to_params(X_cur)
+                    bounds_ahead = self._get_online_bounds(datamodule, params_cur)
+                    res = minimize(
+                        fun=base_objective,
+                        x0=X_cur,
+                        bounds=bounds_ahead,
+                        method='L-BFGS-B',
+                    )
+                    X_cur = res.x
+                    total += (discount ** (j + 1)) * base_objective(X_cur)
+                except Exception:
+                    break
+            return total
+
+        return mpc_obj
+
+    def _build_objective(self, mode: Mode, w_explore: float) -> Callable:
+        """Return the objective function for the given calibration mode."""
+        if mode == Mode.EXPLORATION:
+            return functools.partial(self._acquisition_func, w_explore=w_explore)
+        elif mode == Mode.INFERENCE:
+            return self._inference_func
+        raise ValueError(f"Unknown calibration mode: {mode}")
+
+    def _build_step_grid(self, current_params: Dict[str, Any]) -> List[Dict[str, int]]:
+        """Build flattened grid of ``{dim_code: step_index}`` dicts.
+
+        Dimensions are ordered coarsest-first (by ``DataDimension.level``).
+        Returns ``[{}]`` when no trajectory configs exist (experiment-level).
+        """
+        import itertools as _it
+
+        dim_codes = sorted(
+            {dc for dc in self.trajectory_configs.values()},
+            key=lambda dc: self.data_objects[dc].level,
+        )
+        if not dim_codes:
+            return [{}]
+
+        sizes = [int(current_params[dc]) for dc in dim_codes]
+        return [
+            dict(zip(dim_codes, idx))
+            for idx in _it.product(*(range(s) for s in sizes))
+        ]
+
+    def _get_eligible_params(
+        self,
+        prev_indices: Optional[Dict[str, int]],
+        curr_indices: Dict[str, int],
+    ) -> set:
+        """Return trajectory param codes eligible for optimization at this step.
+
+        A param is eligible when the dimension it is mapped to *transitions*
+        (i.e. its index differs from the previous step, or it is the first step).
+        """
+        transitioning_dims: set = set()
+        for dim_code in curr_indices:
+            if prev_indices is None or curr_indices[dim_code] != prev_indices.get(dim_code):
+                transitioning_dims.add(dim_code)
+        return {
+            code for code, dim_code in self.trajectory_configs.items()
+            if dim_code in transitioning_dims
+        }
+
+    def _build_experiment_spec(
+        self,
+        proposals: List[Dict[str, Any]],
+        step_grid: List[Dict[str, int]],
+        source_step: str,
+    ) -> ExperimentSpec:
+        """Assemble per-step result dicts into an ``ExperimentSpec``.
+
+        ``proposals[0]`` becomes ``initial_params``.  For each dimension in the
+        grid, collect proposals where that dimension transitions and build a
+        ``ParameterSchedule`` with entries keyed by step index.
+        """
+        initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
+
+        schedules: Dict[str, ParameterSchedule] = {}
+        if len(proposals) > 1 and step_grid and step_grid[0]:
+            # Collect unique dims
+            dim_codes = sorted(
+                {dc for dc in self.trajectory_configs.values()},
+                key=lambda dc: self.data_objects[dc].level,
+            )
+            for dim_code in dim_codes:
+                traj_codes = [
+                    c for c, dc in self.trajectory_configs.items() if dc == dim_code
+                ]
+                entries: List[Tuple[int, ParameterProposal]] = []
+                prev_idx: Optional[int] = None
+                for flat_i, indices in enumerate(step_grid):
+                    cur_idx = indices.get(dim_code, 0)
+                    if flat_i == 0:
+                        prev_idx = cur_idx
+                        continue
+                    if cur_idx != prev_idx:
+                        # Dimension transitioned — record schedule entry
+                        seg_vals = {c: proposals[flat_i][c] for c in traj_codes if c in proposals[flat_i]}
+                        if seg_vals:
+                            entries.append((
+                                cur_idx,
+                                ParameterProposal.from_dict(seg_vals, source_step=source_step),
+                            ))
+                    prev_idx = cur_idx
+
+                if entries:
+                    schedules[dim_code] = ParameterSchedule(
+                        dimension=dim_code, entries=entries,
+                    )
+
+        return ExperimentSpec(initial_params=initial, schedules=schedules)
 
     # === BASELINE EXPERIMENT GENERATION ===
 
@@ -348,343 +545,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         n_trajectory_segments: int = 3,
     ) -> List[ExperimentSpec]:
-        """Generate initial design using Latin Hypercube Sampling."""
-        self.logger.info(
-            f"Generating {n_samples} baseline experiments using Latin Hypercube Sampling..."
-        )
+        """Generate an initial design using Latin Hypercube Sampling.
 
-        # 1. Define Sampling Space (Physics)
-        sampling_specs = self._get_sampling_specs(param_bounds)
-        if not sampling_specs:
-            self.logger.warning("No valid parameters for baseline generation.")
-            return []
-
-        param_names = sorted(sampling_specs.keys())
-        d = len(param_names)
-
-        # 2. Generate Stratified Samples (Geometry)
-        # Returns (n_samples, d) matrix with values in [0, 1]
-        sampler = qmc.LatinHypercube(d=d, seed=self.random_seed)
-        lhs_samples = sampler.random(n=n_samples)
-
-        # 3. Build ExperimentSpec per row
-        experiments: List[ExperimentSpec] = []
-        for row in lhs_samples:
-            initial_dict = self._transform_lhs_sample(row, param_names, sampling_specs)
-            initial_proposal = ParameterProposal.from_dict(
-                initial_dict, source_step="baseline_sampling"
-            )
-
-            # 4. Generate trajectory schedules for configured runtime params
-            schedules: Dict[str, ParameterSchedule] = {}
-            if self.trajectory_configs and n_trajectory_segments > 1:
-                schedules = self._generate_baseline_schedules(
-                    initial_dict, n_trajectory_segments
-                )
-
-            spec = ExperimentSpec(initial_params=initial_proposal, schedules=schedules)
-            experiments.append(spec)
-            self.logger.debug(
-                f"Generated baseline experiment: {initial_dict}, "
-                f"schedules={list(schedules.keys())}"
-            )
-
-        return experiments
-
-    def _generate_baseline_schedules(
-        self,
-        initial_dict: Dict[str, Any],
-        n_segments: int,
-    ) -> Dict[str, ParameterSchedule]:
-        """Sample trajectory schedules for trajectory-configured runtime parameters."""
-        level_to_dim: Dict[int, Tuple[str, int]] = {}
-        for code, data_obj in self.data_objects.items():
-            if isinstance(data_obj, DataDimension):
-                dim_size = int(initial_dict.get(code, data_obj.constraints.get("min", 1)))
-                level_to_dim[data_obj.level] = (code, dim_size)
-
-        params_per_level: Dict[int, List[str]] = defaultdict(list)
-        for code, level in self.trajectory_configs.items():
-            params_per_level[level].append(code)
-
-        schedules: Dict[str, ParameterSchedule] = {}
-        for level, param_codes in params_per_level.items():
-            if level not in level_to_dim:
-                self.logger.warning(
-                    f"No dimension found at level {level} for trajectory params "
-                    f"{param_codes}. Skipping schedule generation."
-                )
-                continue
-
-            dim_code, dim_size = level_to_dim[level]
-            n_triggers = n_segments - 1
-            # Evenly spaced trigger steps (exclude step 0, covered by initial_params)
-            trigger_steps = sorted({
-                max(1, int((k + 1) * dim_size / n_segments))
-                for k in range(n_triggers)
-            })
-
-            entries: List[Tuple[int, ParameterProposal]] = []
-            for step_idx in trigger_steps:
-                step_values: Dict[str, Any] = {}
-                for code in param_codes:
-                    low, high = self.schema_bounds.get(code, (-np.inf, np.inf))
-                    if low == -np.inf or high == np.inf:
-                        try:
-                            low, high = self._get_hierarchical_bounds_for_code(code)
-                        except ValueError:
-                            continue
-                    step_values[code] = float(self.rng.uniform(low, high))
-                if step_values:
-                    entries.append((
-                        step_idx,
-                        ParameterProposal.from_dict(
-                            step_values, source_step="baseline_trajectory"
-                        ),
-                    ))
-
-            if entries:
-                schedules[dim_code] = ParameterSchedule(
-                    dimension=dim_code, entries=entries
-                )
-
-        return schedules
-
-    def _get_sampling_specs(self, param_bounds: Optional[Dict[str, Tuple[float, float]]]) -> Dict[str, Dict[str, Any]]:
-        """Build sampling specifications for each parameter."""
-        sampling_specs = {}
-
-        for code, data_obj in self.data_objects.items():
-            
-            # 1. Determine Effective Bounds (Continuous Only)
-            if param_bounds and code in param_bounds:
-                low, high = param_bounds[code]
-            else:
-                low, high = self._get_hierarchical_bounds_for_code(code)
-
-            # 2. Check for Infinite Bounds (Safeguard)
-            if isinstance(data_obj, (DataReal, DataInt)) and (low == -np.inf or high == np.inf):
-                self.logger.warning(f"Parameter '{code}' has infinite bounds; skipping in baseline generation.")
-                continue
-
-            # 3. Create Specification
-            if isinstance(data_obj, DataCategorical):
-                 # Use retrieved bounds to detect fixed functionality
-
-                 sampling_specs[code] = {
-                     'type': SamplingStrategy.CATEGORICAL, 
-                     'categories': data_obj.constraints['categories'] if low != high else [low]
-                }
-            elif isinstance(data_obj, DataBool):
-                 # Use retrieved bounds to detect fixed functionality
-                 if low == high:
-                     sampling_specs[code] = {
-                         'type': SamplingStrategy.CATEGORICAL,
-                         'categories': [low]
-                     }
-                 else:
-                     sampling_specs[code] = {
-                         'type': SamplingStrategy.BOOL
-                    }
-            else:
-                 # Continuous / Integer
-                 dtype = int if isinstance(data_obj, DataInt) else float
-                 sampling_specs[code] = {
-                     'type': SamplingStrategy.NUMERICAL, 
-                     'low': low, 
-                     'high': high, 
-                     'dtype': dtype
-                }
-            
-            self.logger.debug(f"Included '{code}' in baseline generation specs.")
-            
-        return sampling_specs
-
-    def _transform_lhs_sample(self, row: np.ndarray, param_names: List[str], sampling_specs: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform a single [0, 1] LHS vector into a valid parameter dictionary."""
-        params = {}
-        for val, name in zip(row, param_names):
-            spec = sampling_specs[name]
-            
-            if spec['type'] == SamplingStrategy.NUMERICAL:
-                # Scale: [0, 1] -> [low, high]
-
-                scaled_val = spec['low'] + val * (spec['high'] - spec['low'])
-                params[name] = spec['dtype'](scaled_val)
-                
-            elif spec['type'] == SamplingStrategy.BOOL:
-                # Scale: [0, 1] -> {True, False}
-                params[name] = bool(val > 0.5)
-                
-            elif spec['type'] == SamplingStrategy.CATEGORICAL:
-                # Scale: [0, 1] -> Category Index
-                cats = spec['categories']
-                idx = int(val * len(cats))
-                idx = min(idx, len(cats) - 1) # clip to be safe
-                params[name] = cats[idx]
-        
-        # Reuse canonical parameter coercion/rounding rules.
-        return self.parameters.sanitize_values(params, ignore_unknown=True)
+        Delegates to ``BaselineSampler`` — see ``_calib_baseline.py`` for the
+        full implementation.
+        """
+        return self._baseline.generate(n_samples, param_bounds, n_trajectory_segments)
 
 
-    # === TRAJECTORY EXPLORATION ===
-
-    def run_trajectory_exploration(
-        self,
-        datamodule: DataModule,
-        current_params: Dict[str, Any],
-        w_explore: float = 0.5,
-        n_segments: int = 3,
-        n_lhs_candidates: int = 20,
-    ) -> ExperimentSpec:
-        """Propose an optimised trajectory schedule for runtime parameters via LHS warm start + SLSQP."""
-        if not self.trajectory_configs:
-            raise RuntimeError(
-                "run_trajectory_exploration() requires at least one trajectory parameter "
-                "configured via configure_trajectory()."
-            )
-
-        missing_deltas = [
-            code for code in self.trajectory_configs
-            if code not in self.trust_regions
-        ]
-        if missing_deltas:
-            raise RuntimeError(
-                f"run_trajectory_exploration() cannot proceed: trajectory parameters "
-                f"{sorted(missing_deltas)} have no configured trust region. "
-                f"Call configure_adaptation_delta() for each before running trajectory "
-                f"exploration."
-            )
-
-        self.train_surrogate_model(datamodule)
-
-        traj_codes = sorted(self.trajectory_configs.keys())
-        static_params = {k: v for k, v in current_params.items() if k not in self.trajectory_configs}
-
-        # Per-parameter bounds for the trajectory decision variable
-        traj_bounds_list: List[Tuple[float, float]] = []
-        for code in traj_codes:
-            low, high = self._get_hierarchical_bounds_for_code(code)
-            for _ in range(n_segments):
-                traj_bounds_list.append((low, high))
-        traj_bounds_arr = np.array(traj_bounds_list)
-
-        def _traj_objective(v: np.ndarray) -> float:
-            """Average acquisition score across segments (returns negative for minimisation)."""
-            total_neg = 0.0
-            count = 0
-            for seg_idx in range(n_segments):
-                seg_params = dict(static_params)
-                for p_idx, code in enumerate(traj_codes):
-                    seg_params[code] = float(v[p_idx * n_segments + seg_idx])
-                try:
-                    X = datamodule.params_to_array(seg_params)
-                    total_neg += self._acquisition_func(X, w_explore)  # already negative
-                    count += 1
-                except Exception:
-                    pass
-            return total_neg / count if count > 0 else 0.0
-
-        # SLSQP trust region constraints: |v[k+1] - v[k]| <= delta
-        constraints: List[Dict] = []
-        for p_idx, code in enumerate(traj_codes):
-            delta = self.trust_regions[code]
-            for seg_idx in range(n_segments - 1):
-                i_a = p_idx * n_segments + seg_idx
-                i_b = p_idx * n_segments + seg_idx + 1
-                constraints.append({
-                    'type': 'ineq',
-                    'fun': lambda v, a=i_a, b=i_b, d=delta: d - (v[b] - v[a])
-                })
-                constraints.append({
-                    'type': 'ineq',
-                    'fun': lambda v, a=i_a, b=i_b, d=delta: d - (v[a] - v[b])
-                })
-
-        # Phase 1: LHS warm start
-        n_dims = len(traj_codes) * n_segments
-        sampler = qmc.LatinHypercube(d=n_dims, seed=self.random_seed)
-        lhs_rows = sampler.random(n=n_lhs_candidates)
-
-        best_x0: Optional[np.ndarray] = None
-        best_score = np.inf
-        for row in lhs_rows:
-            v = traj_bounds_arr[:, 0] + row * (traj_bounds_arr[:, 1] - traj_bounds_arr[:, 0])
-            score = _traj_objective(v)
-            if score < best_score:
-                best_score = score
-                best_x0 = v.copy()
-
-        if best_x0 is None:
-            raise RuntimeError(
-                "LHS warm start produced no valid candidates for trajectory exploration."
-            )
-
-        # Phase 2: SLSQP refinement with step-change constraints
-        best_v = best_x0
-        try:
-            result = minimize(
-                fun=_traj_objective,
-                x0=best_x0,
-                bounds=traj_bounds_arr,
-                method='SLSQP',
-                constraints=constraints,
-            )
-            if result.success or result.fun < best_score:
-                best_v = result.x
-        except Exception as e:
-            self.logger.warning(
-                f"SLSQP trajectory optimisation failed: {e}. Using LHS best candidate."
-            )
-
-        # Decode best_v: segment 0 → initial_params, segments 1..K-1 → schedule entries.
-        initial_dict = dict(current_params)
-        for p_idx, code in enumerate(traj_codes):
-            initial_dict[code] = float(best_v[p_idx * n_segments + 0])
-
-        # Collect dimension info (level → (param_code, size))
-        level_to_dim: Dict[int, Tuple[str, int]] = {}
-        for code, data_obj in self.data_objects.items():
-            if isinstance(data_obj, DataDimension):
-                dim_size = int(current_params.get(code, data_obj.constraints.get("min", 1)))
-                level_to_dim[data_obj.level] = (code, dim_size)
-
-        params_per_level: Dict[int, List[str]] = defaultdict(list)
-        for code, level in self.trajectory_configs.items():
-            params_per_level[level].append(code)
-
-        schedules: Dict[str, ParameterSchedule] = {}
-        for level, param_codes in params_per_level.items():
-            if level not in level_to_dim or n_segments <= 1:
-                continue
-            dim_code, dim_size = level_to_dim[level]
-            n_triggers = n_segments - 1
-            trigger_steps = sorted({
-                max(1, int((k + 1) * dim_size / n_segments))
-                for k in range(n_triggers)
-            })
-            entries: List[Tuple[int, ParameterProposal]] = []
-            for t_idx, step in enumerate(trigger_steps[:n_triggers]):
-                seg_values: Dict[str, Any] = {}
-                for code in param_codes:
-                    p_idx = traj_codes.index(code)
-                    seg_values[code] = float(best_v[p_idx * n_segments + t_idx + 1])
-                if seg_values:
-                    entries.append((
-                        step,
-                        ParameterProposal.from_dict(
-                            seg_values, source_step="trajectory_exploration"
-                        ),
-                    ))
-            if entries:
-                schedules[dim_code] = ParameterSchedule(
-                    dimension=dim_code, entries=entries
-                )
-
-        initial_proposal = ParameterProposal.from_dict(
-            initial_dict, source_step="trajectory_exploration"
-        )
-        return ExperimentSpec(initial_params=initial_proposal, schedules=schedules)
 
     # === OPTIMIZATION WORKFLOW ===
 
@@ -692,95 +560,176 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         datamodule: DataModule,
         mode: Mode,
+        domain: 'Domain' = None,
+        current_params: Optional[Dict[str, Any]] = None,
+        target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-    ) -> Dict[str, Any]:
-        """
-        Run calibration (Offline) to propose new parameters.
-        Uses global parameter bounds and fixed context.
-        """
-        # 1. Get Offline Bounds
-        bounds_array = self._get_offline_bounds(datamodule)
-        
-        # 2. Select Objective Function
-        if mode == Mode.EXPLORATION:
-            self.train_surrogate_model(datamodule)
-            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore) 
-        elif mode == Mode.INFERENCE:
-            objective_func = self._inference_func
-        else:
-            raise ValueError(f"Unknown phase: {mode}")
+        mpc_lookahead_depth: int = 0,
+        mpc_discount: float = 0.9,
+    ) -> ExperimentSpec:
+        """Unified calibration entry point.
 
-        # 3. Run Unified Optimization
-        return self._run_optimization(
-            datamodule, 
-            x0_params=None, 
-            bounds=bounds_array, 
-            objective_func=objective_func,
-            n_rounds=n_optimization_rounds,
-            fixed_param_values=self.fixed_params
-        )
+        Handles all four calibration use cases through two axes:
 
-    def run_adaptation(
-        self,
-        datamodule: DataModule,
-        mode: Mode,
-        current_params: Dict[str, Any],
-        w_explore: float = 0.5,
-    ) -> Dict[str, Any]:
+        - **mode** selects the objective: ``EXPLORATION`` (UCB) or ``INFERENCE``
+          (performance only).
+        - **domain** selects the bounds strategy: ``OFFLINE`` uses global bounds
+          at step 0 with random restarts, then trust-region bounds for subsequent
+          steps.  ``ONLINE`` uses trust-region bounds throughout (single step;
+          the fabrication process is the outer loop).
+
+        When trajectory parameters are configured (via ``configure_trajectory``),
+        the method iterates over a flattened Cartesian product of dimensions,
+        optimising eligible parameters at each step and fixing the rest.  Without
+        trajectory configs, it runs a single experiment-level optimisation.
+
+        ``target_indices`` collapses the full grid to a single step.  Pass a
+        ``{dim_code: step_index}`` dict to optimise only the parameters mapped
+        to those dimensions at that specific step, e.g.
+        ``target_indices={"dim_1": 0}`` optimises ``layer_height`` (mapped to
+        dim_1) while fixing everything else.  Parameters whose dimension does not
+        appear in ``target_indices`` are treated as fixed.
+
+        Args:
+            datamodule: Prepared datamodule for normalisation and bounds.
+            mode: ``EXPLORATION`` (UCB) or ``INFERENCE`` (performance only).
+            domain: ``OFFLINE`` or ``ONLINE``.  Defaults to ``Domain.OFFLINE``.
+            current_params: Current parameter values.  Required for ``ONLINE``
+                domain and when trajectory configs are set (to derive step counts
+                and provide static context).
+            target_indices: Optional ``{dim_code: step_index}`` dict.  When
+                provided, the step grid is replaced by this single entry so only
+                the trajectory params for those dimensions are optimised.
+            w_explore: Exploration weight for UCB acquisition.
+            n_optimization_rounds: Random restarts for step 0 in ``OFFLINE`` mode.
+            mpc_lookahead_depth: Number of greedy lookahead steps to simulate when
+                scoring each candidate.  ``0`` (default) is pure greedy.  With
+                ``depth=d``, the objective at candidate X evaluates a d-step
+                trust-region rollout forward and accumulates discounted scores —
+                reducing short-sightedness at the cost of extra objective evaluations.
+                See ``_wrap_mpc_objective`` for details.
+            mpc_discount: Geometric discount factor γ for lookahead scores.
+                Must be in (0, 1].  Ignored when ``mpc_lookahead_depth=0``.
+
+        Returns:
+            ``ExperimentSpec`` — ``initial_params`` holds the first proposal;
+            ``schedules`` holds per-dimension parameter updates (empty when no
+            trajectory configs are set).
         """
-        Run adaptation (Online) to propose new parameters.
-        Uses trust regions around current_params.
-        """
-        # Fail fast if any runtime parameter has no trust region configured.
-        runtime_without_delta = [
-            code
-            for code, obj in self.data_objects.items()
-            if obj.runtime_adjustable and code not in self.trust_regions
-        ]
-        if runtime_without_delta:
-            raise RuntimeError(
-                f"run_adaptation() cannot proceed: the following runtime-adjustable "
-                f"parameters have no configured trust region: "
-                f"{sorted(runtime_without_delta)}. "
-                f"Call configure_adaptation_delta() for each before running adaptation."
+        from ..utils import Domain  # local to avoid circular at module level
+        if domain is None:
+            domain = Domain.OFFLINE
+
+        self._active_datamodule = datamodule
+        objective = self._build_objective(mode, w_explore)
+
+        # MPC: wrap objective with lookahead rollout if depth > 0
+        if mpc_lookahead_depth > 0:
+            objective = self._wrap_mpc_objective(
+                objective, datamodule, mpc_lookahead_depth, mpc_discount,
             )
 
-        # 1. Get Online Bounds
-        bounds_array = self._get_online_bounds(datamodule, current_params)
-        
-        # 2. Select Objective Function
-        if mode == Mode.EXPLORATION:
-            self.train_surrogate_model(datamodule)
-            objective_func = functools.partial(self._acquisition_func, w_explore=w_explore)
-        elif mode == Mode.INFERENCE:
-            objective_func = self._inference_func
-        else:
-            raise ValueError(f"Unknown phase: {mode}")
-
-        # 3. Prepare Fixed Parameters (parameters without trust regions are fixed to current)
-        fixed_subset = {
-            k: v for k, v in current_params.items() 
-            if k not in self.trust_regions
-        }
-
-        # 4. Run Unified Optimization
-        return self._run_optimization(
-            datamodule, 
-            x0_params=current_params, 
-            bounds=bounds_array, 
-            objective_func=objective_func,
-            n_rounds=0, # No random restarts for adaptation
-            fixed_param_values=fixed_subset
+        # --- Determine source step label ---
+        source_step = (
+            SourceStep.EXPLORATION if mode == Mode.EXPLORATION else SourceStep.INFERENCE
         )
-    
+
+        # --- ONLINE: always a single step with trust-region bounds ---
+        if domain == Domain.ONLINE:
+            if current_params is None:
+                raise ValueError("current_params is required for Domain.ONLINE.")
+            # Fail fast if any runtime param lacks a trust region
+            missing = [
+                c for c, obj in self.data_objects.items()
+                if obj.runtime_adjustable and c not in self.trust_regions
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"run_calibration(domain=ONLINE) cannot proceed: the following "
+                    f"runtime-adjustable parameters have no configured trust region: "
+                    f"{sorted(missing)}. "
+                    f"Call configure_adaptation_delta() for each before running."
+                )
+            bounds = self._get_online_bounds(datamodule, current_params)
+            fixed_subset = {
+                k: v for k, v in current_params.items()
+                if k not in self.trust_regions
+            }
+            result = self._run_optimization(
+                datamodule, x0_params=current_params,
+                bounds=bounds, objective_func=objective,
+                n_rounds=0, fixed_param_values=fixed_subset,
+            )
+            return self._build_experiment_spec(
+                [result], step_grid=[{}], source_step=source_step,
+            )
+
+        # --- OFFLINE: step-loop over dimension grid ---
+        if target_indices is not None:
+            step_grid = [target_indices]
+        else:
+            step_grid = self._build_step_grid(current_params) if current_params else [{}]
+
+        # Validate: if multi-step, trajectory params must have trust regions
+        if len(step_grid) > 1:
+            traj_without_delta = [
+                c for c in self.trajectory_configs if c not in self.trust_regions
+            ]
+            if traj_without_delta:
+                raise RuntimeError(
+                    f"Trajectory parameters {sorted(traj_without_delta)} have no "
+                    f"configured trust region. "
+                    f"Call configure_adaptation_delta() for each before running."
+                )
+
+        working_params: Optional[Dict[str, Any]] = (
+            dict(current_params) if current_params else None
+        )
+        prev_indices: Optional[Dict[str, int]] = None
+        proposals: List[Dict[str, Any]] = []
+
+        for step_idx, curr_indices in enumerate(step_grid):
+            eligible = self._get_eligible_params(prev_indices, curr_indices)
+
+            # Build fixed params for this step
+            fixed_for_step = dict(self.fixed_params)
+            if working_params:
+                for code in self.trajectory_configs:
+                    if code not in eligible and code in working_params:
+                        fixed_for_step[code] = working_params[code]
+
+            # Determine bounds and restarts
+            if step_idx == 0:
+                # First step: global bounds + random restarts
+                bounds = self._get_offline_bounds(datamodule)
+                n_rounds = n_optimization_rounds
+            else:
+                # Subsequent steps: trust-region bounds, no restarts
+                bounds = self._get_online_bounds(datamodule, working_params)
+                n_rounds = 0
+
+            result = self._run_optimization(
+                datamodule,
+                x0_params=working_params,
+                bounds=bounds,
+                objective_func=objective,
+                n_rounds=n_rounds,
+                fixed_param_values=fixed_for_step,
+            )
+            proposals.append(result)
+            working_params = result
+            prev_indices = curr_indices
+
+        return self._build_experiment_spec(proposals, step_grid, source_step)
+
     def _run_optimization(
-        self, 
-        datamodule: DataModule, 
+        self,
+        datamodule: DataModule,
         x0_params: Optional[Dict[str, Any]],
-        bounds: np.ndarray, 
+        bounds: np.ndarray,
         objective_func: Callable,
-        n_rounds: int, 
+        n_rounds: int,
         fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Run the acquisition function optimization."""
@@ -788,11 +737,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         x0_list = []
         if x0_params:
             x0_list.append(datamodule.params_to_array(x0_params))
-        
+
         # Random restarts
         for _ in range(n_rounds):
             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
-        
+
         if not x0_list:
              # Fallback if no x0_params and n_rounds=0 (unlikely)
              x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
@@ -814,7 +763,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             except Exception as e:
                 self.logger.warning(f"Optimization round failed with error: {e}")
                 continue
-        
+
         # Handle failure
         if best_x is None:
             self.logger.warning("Optimization failed, returning fallback parameters.")
@@ -824,11 +773,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 raise RuntimeError("No valid parameters could be proposed.")
         else:
             self.logger.info(f"Optimization succeeded: best_val={best_val}, best_x={best_x}")
-                
+
         # Convert result back
         proposed_params = datamodule.array_to_params(best_x)
         if fixed_param_values:
             proposed_params.update(fixed_param_values)
+        # Carry over any params from the starting point that aren't in the
+        # optimization space (e.g. runtime params not used by any prediction model).
+        if x0_params:
+            for k, v in x0_params.items():
+                if k not in proposed_params:
+                    proposed_params[k] = v
         return datamodule.dataset.schema.parameters.sanitize_values(
             proposed_params,
             ignore_unknown=True
@@ -842,7 +797,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         col_map = datamodule.get_onehot_column_map()
 
         for code in datamodule.input_columns:
-            
+
             # Fast One-Hot Check
             if code in col_map:
                 parent_param, cat_val = col_map[code]
@@ -859,7 +814,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Process & Append
             n_low, n_high = self._normalize_bounds(code, low, high, datamodule)
             bounds_list.append((n_low, n_high))
-            
+
         return np.array(bounds_list)
 
     def _get_online_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
@@ -868,21 +823,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         col_map = datamodule.get_onehot_column_map()
 
         for code in datamodule.input_columns:
-            
+
             # Determine Center (Current Value) & Check One-hot
             curr = 0.0
             is_one_hot = code in col_map
-            
+
             if is_one_hot:
                 parent_param, cat_val = col_map[code]
                 if parent_param and parent_param in current_params:
                      curr = 1.0 if current_params[parent_param] == cat_val else 0.0
-                elif code in current_params: 
+                elif code in current_params:
                     curr = current_params[code]
             else:
                 if code in current_params:
                     curr = current_params[code]
-            
+
             # Determine Bounds from Trust Region
             # Note: Trust Regions (deltas) are typically only for continuous parameters.
             # If a parameter is not in trust_regions, it is fixed to current.
@@ -892,12 +847,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 # No trust region -> Fixed to current
                 low, high = curr, curr
-                
+
             # Process & Append
             bounds_list.append(self._normalize_bounds(code, low, high, datamodule))
-            
+
         return np.array(bounds_list)
-    
+
     def _get_hierarchical_bounds_for_code(self, code: str) -> Tuple[float, float]:
         # 1. Check Fixed Context
         if code in self.fixed_params:
@@ -925,8 +880,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === WRAPPERS ===
 
     def get_models(self) -> List[Any]:
-        """Return Surrogate Model (required by BaseOrchestrationSystem)."""
-        return [self.model]
-    
+        """Return empty list (no internal ML models owned by CalibrationSystem)."""
+        return []
+
     def get_model_specs(self) -> Dict[str, List[str]]:
         return {}
