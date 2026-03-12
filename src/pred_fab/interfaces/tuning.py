@@ -143,4 +143,4 @@ class MLPResidualModel(IResidualModel):
             return np.zeros((X.shape[0], 1)) # Assumption: 1D residual per sample? 
             # Or we can return 0 and let numpy broadcast.
             
-        return self.model.predict(X)
+        return self.model.predict(X)  # type: ignore[return-value]

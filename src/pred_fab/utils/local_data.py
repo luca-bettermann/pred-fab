@@ -324,7 +324,7 @@ class LocalData:
 
                 # Save as CSV
                 if file_format == FileFormat.CSV:
-                    df = pd.DataFrame(code_data, columns=column_names)
+                    df = pd.DataFrame(code_data, columns=column_names)  # type: ignore[call-overload]
                     df.to_csv(file_path, index=False)
                 # Save as JSON
                 elif file_format == FileFormat.JSON:

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any, Set, Tuple, Callable
+from typing import Dict, List, Optional, Any, Set, Tuple, Callable, cast
 import numpy as np
 from scipy.optimize import minimize
 
@@ -8,7 +8,7 @@ import functools
 from ..core import DataModule, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, SourceStep
+from ..utils import PfabLogger, Mode, SourceStep, Domain
 from .base_system import BaseOrchestrationSystem
 from ..utils._calib_baseline import BaselineSampler
 
@@ -458,7 +458,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         dim_codes = sorted(
             {dc for dc in self.trajectory_configs.values()},
-            key=lambda dc: self.data_objects[dc].level,
+            key=lambda dc: cast(DataDimension, self.data_objects[dc]).level,
         )
         if not dim_codes:
             return [{}]
@@ -507,7 +507,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Collect unique dims
             dim_codes = sorted(
                 {dc for dc in self.trajectory_configs.values()},
-                key=lambda dc: self.data_objects[dc].level,
+                key=lambda dc: cast(DataDimension, self.data_objects[dc]).level,
             )
             for dim_code in dim_codes:
                 traj_codes = [
@@ -560,7 +560,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         datamodule: DataModule,
         mode: Mode,
-        domain: 'Domain' = None,
+        domain: Optional[Domain] = None,
         current_params: Optional[Dict[str, Any]] = None,
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
@@ -706,6 +706,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n_rounds = n_optimization_rounds
             else:
                 # Subsequent steps: trust-region bounds, no restarts
+                assert working_params is not None
                 bounds = self._get_online_bounds(datamodule, working_params)
                 n_rounds = 0
 

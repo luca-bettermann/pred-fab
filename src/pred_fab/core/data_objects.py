@@ -230,7 +230,7 @@ class DataInt(DataObject):
         return int(round(float(value)))
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataInt':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataInt':
         return cls(code, role, constraints.get("min"), constraints.get("max"))
 
 
@@ -261,7 +261,7 @@ class DataBool(DataObject):
         raise TypeError(f"{self.code} must be bool-like, got {type(value).__name__}")
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataBool':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataBool':
         return cls(code, role)
 
 class DataCategorical(DataObject):
@@ -295,7 +295,7 @@ class DataCategorical(DataObject):
         return str(value)
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataCategorical':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataCategorical':
         return cls(code, constraints["categories"], role)
 
 class DataDimension(DataInt):
@@ -325,7 +325,7 @@ class DataDimension(DataInt):
         return NormMethod.MIN_MAX
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataDimension':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataDimension':
         return cls(
             code,
             constraints["dim_iterator_code"],
