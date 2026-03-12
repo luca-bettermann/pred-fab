@@ -1,6 +1,6 @@
 # Exploration Scope: From Experiment-Level to Dimensional-Level Exploration
 
-> **Status:** Living document — Option B (trajectory-based) selected as near-term target; Option A backlogged
+> **Status:** Living document — Unified step-loop (`run_calibration` Phase 5) implemented; Option A backlogged
 > **Related:** [01-parameter-levels.md](01-parameter-levels.md), [03-uncertainty-estimation.md](03-uncertainty-estimation.md)
 
 ---
@@ -142,11 +142,15 @@ For each runtime parameter eligible for trajectory exploration, the user configu
 ```python
 calibration.configure_trajectory(
     code="speed",
-    dimension_level=1    # adjust at each layer (level-1 iteration)
+    dimension_code="dim_1"   # adjust at each layer (level-1 dimension)
 )
-# Trust region (max value change per proposal) from:
+# Trust region (max value change per step) from:
 calibration.configure_adaptation_delta({"speed": 50.0})
 ```
+
+Note: the API changed in Phase 5 from `dimension_level: int` to `dimension_code: str`.
+The dimension code maps directly to a `DataDimension` in the schema, removing the
+intermediate level→dimension lookup.
 
 This is CalibrationSystem configuration — analogous to `configure_adaptation_delta()` for online adaptation. It does not modify the schema. The schema declares that `speed` is runtime-adjustable; the CalibrationSystem config declares *where* it is adjusted (at which dimensional level). The number of actual trigger steps is an internal optimization hyperparameter, not a user-facing config field: the optimizer decides how many proposals to place and where, and the resulting schedule is sparse — it only records steps where values actually change, exactly like `ParameterUpdateEvent`s. This follows the schema/config boundary established in [Document 1](01-parameter-levels.md).
 
@@ -259,7 +263,7 @@ for schedule in experiment_schedule.values():
 
 ### Risks and Challenges
 
-- **Not truly adaptive:** The schedule is committed before execution; the system cannot react to unexpected outcomes mid-run (unlike Option A). A segment that produces unexpected behavior cannot trigger a course correction.
+- **Not truly adaptive:** The schedule is committed before execution; the system cannot react to unexpected outcomes mid-run (unlike Option A). A segment that produces unexpected behavior cannot trigger a course correction. MPC lookahead (`mpc_lookahead_depth > 0`) partially mitigates this by anticipating future trust-region steps offline, but the schedule is still fixed before execution begins.
 - **Larger proposal space:** A K=5 segment schedule with 3 runtime parameters gives a 15D proposal space. Standard LHS handles this, but acquisition landscape becomes harder to optimize compared to the single-point case.
 - **Correlated training data:** Multiple steps within one trajectory share the same static parameters and are spatially correlated along the dimensional axis. This introduces dependencies that IID PM training assumptions don't account for. The PM's ability to correctly interpret trajectory data depends on whether it has access to sufficient dimensional context (prior feature values within the experiment). If the PM treats each (params, position) row independently, the correlation is absorbed as noise; if it needs sequential context to produce accurate predictions, the PM architecture becomes more demanding.
 - **Interpretability:** If a trajectory produces poor performance, attributing responsibility to a specific segment requires analysis. The PM's dimensional-level predictions serve this purpose: per-segment feature estimates enable post-hoc decomposition of experiment outcomes.
@@ -314,7 +318,39 @@ This asymmetry is an additional argument for pursuing Option B before Option A.
 |-------|-------|-----------|--------|
 | **Phase 1** | `runtime_adjustable` flag + schema boundary design | Low | ✅ Done |
 | **Phase 2** | CalibrationSystem validation (runtime-only trust regions, completeness check) | Low | ✅ Done |
-| **Phase 3** | Option B: `configure_trajectory()` + `ParameterSchedule` + trajectory scoring | Medium | ✅ Done |
-| **Phase 4** | Option A: fabrication-time residual-driven exploration | High | 🔲 Backlogged |
+| **Phase 3** | Option B: `configure_trajectory()` + `ParameterSchedule` + trajectory scoring (SLSQP) | Medium | ✅ Done (superseded) |
+| **Phase 4** | NatPN-light: KDE-based uncertainty estimation | Medium | ✅ Done |
+| **Phase 5** | Unified step-loop + MPC lookahead: `run_calibration()` with optional `mpc_lookahead_depth` | Medium | ✅ Done |
+| **Phase 6** | Option A: fabrication-time residual-driven exploration | High | 🔲 Backlogged |
 
-Phase 4 should remain in the backlog until: (a) hardware latency constraints are quantified for target fabrication systems, (b) residual model update speed is benchmarked against step cycle times, and (c) safety bounds are formally specified.
+**Phase 5 — Unified Step-Loop + MPC Lookahead** replaced the Phase 3 SLSQP trajectory
+infrastructure with a greedy step-loop that re-uses the same L-BFGS-B optimizer from the
+experiment-level path.  The loop iterates over a flattened Cartesian product of configured
+dimensions (coarsest-first), fixing parameters mapped to unchanged dimensions at each step.
+Online adaptation (previously `run_adaptation`) is now `run_calibration(domain=ONLINE)` —
+a degenerate single step.  See `ORCHESTRATION_CONTEXT.md` for the full step-loop design.
+
+**MPC lookahead** (Phase 5 extension) reduces the greedy myopia of the step-loop by
+augmenting each step's objective with a short d-step forward rollout:
+
+```
+MPC(X) = score(X) + γ¹·score(X₁) + γ²·score(X₂) + … + γᵈ·score(Xᵈ)
+```
+
+Each Xⱼ₊₁ is obtained by a quick trust-region L-BFGS-B minimization from Xⱼ.
+Usage: `run_calibration(..., mpc_lookahead_depth=d, mpc_discount=γ)`.
+Default `mpc_lookahead_depth=0` is pure greedy (no overhead).  The step-loop structure,
+return type, and schedule assembly are unchanged — MPC is purely an objective-function
+enrichment.  This is the MPC-style approach described earlier in this document as a
+future-compatible extension requiring no structural changes.
+
+Key benefits of Phase 5 vs Phase 3:
+- One optimizer path (L-BFGS-B) for all use cases — no SLSQP/L-BFGS-B split
+- Multi-dimensional parameter mixing (e.g., layer_height→dim_1, speed→dim_2) handled automatically
+- Online and offline cases structurally identical — domain selects bounds strategy only
+- `target_indices`: collapse full Cartesian grid to a single targeted step for step-specific planning
+- MPC lookahead: reduce greedy myopia via `mpc_lookahead_depth` parameter, no structural changes
+
+Phase 6 should remain in the backlog until: (a) hardware latency constraints are quantified for
+target fabrication systems, (b) residual model update speed is benchmarked against step cycle
+times, and (c) safety bounds are formally specified.

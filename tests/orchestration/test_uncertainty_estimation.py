@@ -23,6 +23,7 @@ from tests.utils.builders import (
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, SplitType
 from pred_fab.core import ExperimentSpec
+from pred_fab.utils.enum import Mode
 
 
 
@@ -414,37 +415,35 @@ def test_acquisition_func_with_no_active_datamodule_returns_zero(tmp_path):
 
 
 # ===========================================================================
-# Level 2 trajectory diversity
+# Trajectory diversity via step-loop
 # ===========================================================================
 
-def test_trajectory_exploration_with_similarity_fn_penalises_redundant_segments(tmp_path):
-    """With a constant similarity_fn=1, all segments after the first are discounted to 0."""
+def test_run_calibration_with_similarity_fn_completes(tmp_path):
+    """With a constant similarity_fn=1, the step-loop should still complete."""
     agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", dimension_level=1)
+    cs.configure_trajectory("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
-    # Replace similarity_fn with constant 1.0 → all inter-segment similarities = 1
+    # Replace similarity_fn with constant 1.0
     cs.similarity_fn = lambda X1, X2: 1.0
 
-    result = cs.run_trajectory_exploration(
+    current_params = exp.parameters.get_values_dict()
+    result = cs.run_calibration(
         datamodule=datamodule,
-        current_params=exp.parameters.get_values_dict(),
-        n_segments=2,
-        n_lhs_candidates=5,
+        mode=Mode.EXPLORATION,
+        current_params=current_params,
     )
 
-    # The call should complete without error
-    from pred_fab.core import ExperimentSpec
     assert isinstance(result, ExperimentSpec)
 
 
-def test_trajectory_exploration_without_similarity_fn_still_works(tmp_path):
-    """When similarity_fn is None, Level 2 is skipped and standard trajectory runs."""
+def test_run_calibration_without_similarity_fn_still_works(tmp_path):
+    """When similarity_fn is None, the step-loop runs without diversity penalty."""
     agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
@@ -452,17 +451,16 @@ def test_trajectory_exploration_without_similarity_fn_still_works(tmp_path):
 
     cs = agent.calibration_system
     cs.similarity_fn = None  # explicit no diversity
-    cs.configure_trajectory("speed", dimension_level=1)
+    cs.configure_trajectory("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
-    result = cs.run_trajectory_exploration(
+    current_params = exp.parameters.get_values_dict()
+    result = cs.run_calibration(
         datamodule=datamodule,
-        current_params=exp.parameters.get_values_dict(),
-        n_segments=2,
-        n_lhs_candidates=5,
+        mode=Mode.EXPLORATION,
+        current_params=current_params,
     )
 
-    from pred_fab.core import ExperimentSpec
     assert isinstance(result, ExperimentSpec)
 
 
@@ -494,14 +492,13 @@ def test_calibration_system_get_models_returns_empty_list(tmp_path):
 
 
 # ===========================================================================
-# KDE bandwidth + trajectory exploration integration
+# KDE bandwidth + trajectory step-loop integration
 # ===========================================================================
 
-def test_trajectory_exploration_respects_delta_constraints_with_fitted_kde(tmp_path):
-    """After KDE fitting, run_trajectory_exploration should return an ExperimentSpec
-    whose consecutive speed waypoints differ by at most the configured delta."""
+def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(tmp_path):
+    """After KDE fitting, run_calibration with trajectory configs should return an
+    ExperimentSpec whose consecutive speed waypoints differ by at most the configured delta."""
     delta = 50.0
-    n_segments = 3
 
     # Build 3-experiment stack so KDE can be fitted (workflow schema has 'speed' runtime param).
     agent, dataset, codes = build_workflow_stack(tmp_path)
@@ -515,31 +512,30 @@ def test_trajectory_exploration_respects_delta_constraints_with_fitted_kde(tmp_p
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", dimension_level=1)
+    cs.configure_trajectory("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": delta})
 
     first_exp = dataset.get_experiment(codes[0])
     current_params = first_exp.parameters.get_values_dict()
+    current_params["speed"] = 100.0  # must supply runtime param for trajectory stepping
 
-    result = cs.run_trajectory_exploration(
+    result = cs.run_calibration(
         datamodule=datamodule,
+        mode=Mode.EXPLORATION,
         current_params=current_params,
         w_explore=0.5,
-        n_segments=n_segments,
-        n_lhs_candidates=10,
     )
 
     assert isinstance(result, ExperimentSpec)
 
-    # Schedule should be keyed by the dimension that 'speed' is linked to (level 1 → dim_1).
+    # Schedule should be keyed by the dimension that 'speed' is linked to (dim_1).
     assert "dim_1" in result.schedules, "Expected schedule for dim_1 dimension"
 
     schedule = result.schedules["dim_1"]
     seg0 = result.initial_params["speed"]
     waypoints = [proposal["speed"] for _, proposal in schedule.entries]
 
-    # All consecutive pairs must satisfy the delta constraint (with a small tolerance
-    # for floating-point / SLSQP convergence).
+    # All consecutive pairs must satisfy the delta constraint (with a small tolerance).
     tol = 1e-4
     all_vals = [seg0] + waypoints
     for k in range(len(all_vals) - 1):
@@ -550,8 +546,8 @@ def test_trajectory_exploration_respects_delta_constraints_with_fitted_kde(tmp_p
         )
 
 
-def test_exploration_step_trajectory_flag_returns_experiment_spec(tmp_path):
-    """agent.exploration_step(trajectory=True) should return an ExperimentSpec."""
+def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
+    """agent.exploration_step() with trajectory configs returns an ExperimentSpec."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
     datamodule = build_prepared_workflow_datamodule(
@@ -559,7 +555,7 @@ def test_exploration_step_trajectory_flag_returns_experiment_spec(tmp_path):
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    agent.calibration_system.configure_trajectory("speed", dimension_level=1)
+    agent.calibration_system.configure_trajectory("speed", "dim_1")
     agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
     first_exp = dataset.get_experiment(codes[0])
@@ -567,8 +563,6 @@ def test_exploration_step_trajectory_flag_returns_experiment_spec(tmp_path):
 
     result = agent.exploration_step(
         datamodule=datamodule,
-        trajectory=True,
-        n_segments=2,
         current_params=current_params,
     )
 
