@@ -10,7 +10,7 @@ from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, Dat
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
 from ..utils import PfabLogger, Mode, SourceStep
 from .base_system import BaseOrchestrationSystem
-from ._calib_baseline import BaselineSampler
+from ..utils._calib_baseline import BaselineSampler
 
 # Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
