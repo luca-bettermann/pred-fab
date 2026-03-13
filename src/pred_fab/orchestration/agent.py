@@ -380,6 +380,7 @@ class PfabAgent:
         record: bool = False,
         **kwargs
     ) -> ExperimentSpec:
+        # QUESTION: should we remove batch_size and set it automatically, so that each step in dim is one batch? is there a risk for memory overflow? we cnould add it as an overwrite config, but I would not keep it here as an argument.
         """Run online adaptation for a step slice and return an ``ExperimentSpec``."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
@@ -400,6 +401,7 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="used for tuning")
 
         # Calibrate around effective current parameters (online = single step).
+        # COMMENT: call run_calibration with current_params and target_indices
         current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
         result = self.calibration_system.run_calibration(
             datamodule=temp_datamodule,

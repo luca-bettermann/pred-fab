@@ -388,6 +388,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         depth: int,
         discount: float,
     ) -> Callable:
+        # COMMENT: move these long class descriptions into documentation, instead of having them here. Keep it short in the code.
         """Wrap *base_objective* with an MPC rollout of *depth* lookahead steps.
 
         Model-predictive control reduces greedy myopia: instead of scoring only
@@ -539,6 +540,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === BASELINE EXPERIMENT GENERATION ===
 
+    # COMMENT: call BaselineSampler directly from agent. this should not be part of calibration
     def generate_baseline_experiments(
         self,
         n_samples: int,
@@ -617,6 +619,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             ``schedules`` holds per-dimension parameter updates (empty when no
             trajectory configs are set).
         """
+        # COMMENT: remove domain from method
+        # COMMENT: offline -> call without current_params / target_indices
+        # COMMENT: online -> call with current_params / target indices
+        # COMMENT: remove distinction between offline and online, all same flow
+        # COMMENT: make default lookahead configurable as a self attribute. default 0. mpc_discount as well
         from ..utils import Domain  # local to avoid circular at module level
         if domain is None:
             domain = Domain.OFFLINE
@@ -699,6 +706,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     if code not in eligible and code in working_params:
                         fixed_for_step[code] = working_params[code]
 
+            # COMMENT: rename _get_online_bounds (and offline) to something more fitting
+            # COMMENT: adjust logic that the n_rounds = n_optimization_rounds fif curr_indices == 0, remove enumerate. then it works for both offline and online
             # Determine bounds and restarts
             if step_idx == 0:
                 # First step: global bounds + random restarts
