@@ -388,7 +388,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         depth: int,
         discount: float,
     ) -> Callable:
-        # COMMENT: move these long class descriptions into documentation, instead of having them here. Keep it short in the code.
+        # COMMENT: move these long class descriptions into documentation, instead of having them here. Keep it short in the code. adapt others as well.
         """Wrap *base_objective* with an MPC rollout of *depth* lookahead steps.
 
         Model-predictive control reduces greedy myopia: instead of scoring only
