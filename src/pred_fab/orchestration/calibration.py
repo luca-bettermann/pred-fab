@@ -8,7 +8,7 @@ import functools
 from ..core import DataModule, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, SourceStep, Domain
+from ..utils import PfabLogger, Mode, SourceStep
 from .base_system import BaseOrchestrationSystem
 from ..utils._calib_baseline import BaselineSampler
 
@@ -54,6 +54,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.similarity_fn = similarity_fn
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
+        self.default_mpc_lookahead_depth: int = 0
+        self.default_mpc_discount: float = 0.9
 
         # Active datamodule — set before each optimization run so that
         # _inference_func / _acquisition_func can call array_to_params.
@@ -77,7 +79,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Baseline sampler — holds references to the shared config dicts so that
         # configure_* mutations are automatically visible without re-wiring.
-        self._baseline = BaselineSampler(
+        self.baseline_sampler = BaselineSampler(
             parameters=self.parameters,
             data_objects=self.data_objects,
             schema_bounds=self.schema_bounds,
@@ -100,8 +102,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     @random_seed.setter
     def random_seed(self, value: Optional[int]) -> None:
         self._random_seed = value
-        if hasattr(self, '_baseline') and self._baseline is not None:
-            self._baseline.random_seed = value
+        if hasattr(self, 'baseline_sampler') and self.baseline_sampler is not None:
+            self.baseline_sampler.random_seed = value
 
     def _set_param_constraints_from_schema(self, schema: DatasetSchema) -> None:
         """Extract parameter constraints from dataset schema."""
@@ -388,34 +390,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         depth: int,
         discount: float,
     ) -> Callable:
-        # COMMENT: move these long class descriptions into documentation, instead of having them here. Keep it short in the code. adapt others as well.
-        """Wrap *base_objective* with an MPC rollout of *depth* lookahead steps.
+        """Wrap base_objective with a depth-step MPC lookahead.
 
-        Model-predictive control reduces greedy myopia: instead of scoring only
-        the immediate candidate X, the objective simulates *depth* greedy steps
-        forward and accumulates their discounted acquisition scores:
-
-            MPC(X) = score(X) + γ¹·score(X₁) + γ²·score(X₂) + … + γᵈ·score(Xᵈ)
-
-        where each Xⱼ₊₁ is obtained by a quick trust-region L-BFGS-B step from Xⱼ.
-        Parameters without a configured trust region are held fixed at their current
-        value in the lookahead (zero-width bounds), so they cannot drift.
-
-        Args:
-            base_objective: The base (negative) objective callable — same signature
-                as those returned by ``_build_objective``.
-            datamodule: Active datamodule used to convert arrays ↔ param dicts for
-                trust-region bound construction.
-            depth: Number of lookahead steps (0 = pure greedy, returns *base_objective*
-                unchanged with no overhead).
-            discount: Geometric discount factor γ ∈ (0, 1].  ``discount=1.0`` weights
-                all steps equally; ``discount=0.0`` makes the lookahead costless (pure
-                greedy objective with extra computation — use ``depth=0`` instead).
-
-        Returns:
-            A callable with the same signature as *base_objective* that returns the
-            accumulated MPC score.  Exceptions inside lookahead steps are swallowed:
-            if a step fails the rollout terminates early (partial sum is returned).
+        Accumulates discounted scores: MPC(X) = score(X) + γ¹·score(X₁) + … + γᵈ·score(Xᵈ),
+        where each Xⱼ₊₁ is obtained by a trust-region L-BFGS-B step from Xⱼ.
+        Returns base_objective unchanged when depth <= 0.
         """
         if depth <= 0:
             return base_objective
@@ -426,7 +405,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             for j in range(depth):
                 try:
                     params_cur = datamodule.array_to_params(X_cur)
-                    bounds_ahead = self._get_online_bounds(datamodule, params_cur)
+                    bounds_ahead = self._get_trust_region_bounds(datamodule, params_cur)
                     res = minimize(
                         fun=base_objective,
                         x0=X_cur,
@@ -538,147 +517,63 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return ExperimentSpec(initial_params=initial, schedules=schedules)
 
-    # === BASELINE EXPERIMENT GENERATION ===
-
-    # COMMENT: call BaselineSampler directly from agent. this should not be part of calibration
-    def generate_baseline_experiments(
-        self,
-        n_samples: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        n_trajectory_segments: int = 3,
-    ) -> List[ExperimentSpec]:
-        """Generate an initial design using Latin Hypercube Sampling.
-
-        Delegates to ``BaselineSampler`` — see ``_calib_baseline.py`` for the
-        full implementation.
-        """
-        return self._baseline.generate(n_samples, param_bounds, n_trajectory_segments)
-
-
-
     # === OPTIMIZATION WORKFLOW ===
 
     def run_calibration(
         self,
         datamodule: DataModule,
         mode: Mode,
-        domain: Optional[Domain] = None,
         current_params: Optional[Dict[str, Any]] = None,
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        mpc_lookahead_depth: int = 0,
-        mpc_discount: float = 0.9,
+        mpc_lookahead_depth: Optional[int] = None,
+        mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
-        """Unified calibration entry point.
+        """Run calibration and return an ExperimentSpec.
 
-        Handles all four calibration use cases through two axes:
-
-        - **mode** selects the objective: ``EXPLORATION`` (UCB) or ``INFERENCE``
-          (performance only).
-        - **domain** selects the bounds strategy: ``OFFLINE`` uses global bounds
-          at step 0 with random restarts, then trust-region bounds for subsequent
-          steps.  ``ONLINE`` uses trust-region bounds throughout (single step;
-          the fabrication process is the outer loop).
-
-        When trajectory parameters are configured (via ``configure_trajectory``),
-        the method iterates over a flattened Cartesian product of dimensions,
-        optimising eligible parameters at each step and fixing the rest.  Without
-        trajectory configs, it runs a single experiment-level optimisation.
-
-        ``target_indices`` collapses the full grid to a single step.  Pass a
-        ``{dim_code: step_index}`` dict to optimise only the parameters mapped
-        to those dimensions at that specific step, e.g.
-        ``target_indices={"dim_1": 0}`` optimises ``layer_height`` (mapped to
-        dim_1) while fixing everything else.  Parameters whose dimension does not
-        appear in ``target_indices`` are treated as fixed.
-
-        Args:
-            datamodule: Prepared datamodule for normalisation and bounds.
-            mode: ``EXPLORATION`` (UCB) or ``INFERENCE`` (performance only).
-            domain: ``OFFLINE`` or ``ONLINE``.  Defaults to ``Domain.OFFLINE``.
-            current_params: Current parameter values.  Required for ``ONLINE``
-                domain and when trajectory configs are set (to derive step counts
-                and provide static context).
-            target_indices: Optional ``{dim_code: step_index}`` dict.  When
-                provided, the step grid is replaced by this single entry so only
-                the trajectory params for those dimensions are optimised.
-            w_explore: Exploration weight for UCB acquisition.
-            n_optimization_rounds: Random restarts for step 0 in ``OFFLINE`` mode.
-            mpc_lookahead_depth: Number of greedy lookahead steps to simulate when
-                scoring each candidate.  ``0`` (default) is pure greedy.  With
-                ``depth=d``, the objective at candidate X evaluates a d-step
-                trust-region rollout forward and accumulates discounted scores —
-                reducing short-sightedness at the cost of extra objective evaluations.
-                See ``_wrap_mpc_objective`` for details.
-            mpc_discount: Geometric discount factor γ for lookahead scores.
-                Must be in (0, 1].  Ignored when ``mpc_lookahead_depth=0``.
-
-        Returns:
-            ``ExperimentSpec`` — ``initial_params`` holds the first proposal;
-            ``schedules`` holds per-dimension parameter updates (empty when no
-            trajectory configs are set).
+        Pass current_params and target_indices for online (trust-region) optimization.
+        Omit both for offline (global bounds with random restarts) optimization.
+        When trajectory parameters are configured, iterates over a step grid derived
+        from current_params dimensions.
         """
-        # COMMENT: remove domain from method
-        # COMMENT: offline -> call without current_params / target_indices
-        # COMMENT: online -> call with current_params / target indices
-        # COMMENT: remove distinction between offline and online, all same flow
-        # COMMENT: make default lookahead configurable as a self attribute. default 0. mpc_discount as well
-        from ..utils import Domain  # local to avoid circular at module level
-        if domain is None:
-            domain = Domain.OFFLINE
+        # Resolve instance-level MPC defaults
+        lookahead = self.default_mpc_lookahead_depth if mpc_lookahead_depth is None else mpc_lookahead_depth
+        discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
 
         self._active_datamodule = datamodule
         objective = self._build_objective(mode, w_explore)
 
-        # MPC: wrap objective with lookahead rollout if depth > 0
-        if mpc_lookahead_depth > 0:
-            objective = self._wrap_mpc_objective(
-                objective, datamodule, mpc_lookahead_depth, mpc_discount,
-            )
+        if lookahead > 0:
+            objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
 
-        # --- Determine source step label ---
         source_step = (
             SourceStep.EXPLORATION if mode == Mode.EXPLORATION else SourceStep.INFERENCE
         )
 
-        # --- ONLINE: always a single step with trust-region bounds ---
-        if domain == Domain.ONLINE:
-            if current_params is None:
-                raise ValueError("current_params is required for Domain.ONLINE.")
-            # Fail fast if any runtime param lacks a trust region
+        # Online = both current_params AND target_indices provided (target_indices may be empty dict)
+        is_online = current_params is not None and target_indices is not None
+        if target_indices is not None:
+            step_grid: List[Dict[str, int]] = [target_indices]  # type: ignore[list-item]
+        elif current_params is not None:
+            step_grid = self._build_step_grid(current_params)
+        else:
+            step_grid = [{}]
+
+        # Validate trust regions for online/trust-region optimization
+        if is_online:
             missing = [
                 c for c, obj in self.data_objects.items()
                 if obj.runtime_adjustable and c not in self.trust_regions
             ]
             if missing:
                 raise RuntimeError(
-                    f"run_calibration(domain=ONLINE) cannot proceed: the following "
-                    f"runtime-adjustable parameters have no configured trust region: "
-                    f"{sorted(missing)}. "
-                    f"Call configure_adaptation_delta() for each before running."
+                    f"Trust-region optimization cannot proceed: runtime-adjustable parameters "
+                    f"{sorted(missing)} have no configured trust region. "
+                    f"Call configure_adaptation_delta() for each."
                 )
-            bounds = self._get_online_bounds(datamodule, current_params)
-            fixed_subset = {
-                k: v for k, v in current_params.items()
-                if k not in self.trust_regions
-            }
-            result = self._run_optimization(
-                datamodule, x0_params=current_params,
-                bounds=bounds, objective_func=objective,
-                n_rounds=0, fixed_param_values=fixed_subset,
-            )
-            return self._build_experiment_spec(
-                [result], step_grid=[{}], source_step=source_step,
-            )
 
-        # --- OFFLINE: step-loop over dimension grid ---
-        if target_indices is not None:
-            step_grid = [target_indices]
-        else:
-            step_grid = self._build_step_grid(current_params) if current_params else [{}]
-
-        # Validate: if multi-step, trajectory params must have trust regions
+        # Validate trajectory params have trust regions if multi-step
         if len(step_grid) > 1:
             traj_without_delta = [
                 c for c in self.trajectory_configs if c not in self.trust_regions
@@ -696,28 +591,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: Optional[Dict[str, int]] = None
         proposals: List[Dict[str, Any]] = []
 
-        for step_idx, curr_indices in enumerate(step_grid):
-            eligible = self._get_eligible_params(prev_indices, curr_indices)
-
+        for curr_indices in step_grid:
             # Build fixed params for this step
             fixed_for_step = dict(self.fixed_params)
-            if working_params:
+            if working_params and self.trajectory_configs and curr_indices:
+                eligible = self._get_eligible_params(prev_indices, curr_indices)
                 for code in self.trajectory_configs:
                     if code not in eligible and code in working_params:
                         fixed_for_step[code] = working_params[code]
 
-            # COMMENT: rename _get_online_bounds (and offline) to something more fitting
-            # COMMENT: adjust logic that the n_rounds = n_optimization_rounds fif curr_indices == 0, remove enumerate. then it works for both offline and online
-            # Determine bounds and restarts
-            if step_idx == 0:
-                # First step: global bounds + random restarts
-                bounds = self._get_offline_bounds(datamodule)
-                n_rounds = n_optimization_rounds
-            else:
-                # Subsequent steps: trust-region bounds, no restarts
-                assert working_params is not None
-                bounds = self._get_online_bounds(datamodule, working_params)
+            # Online: explicitly pin all params outside the trust region to current values.
+            # This avoids denormalization drift for params that have zero-width bounds.
+            if is_online and working_params is not None:
+                for code, val in working_params.items():
+                    if code not in self.trust_regions and code not in fixed_for_step:
+                        fixed_for_step[code] = val
+
+            # Use trust-region when online (current_params + target_indices), or when we have a
+            # reference point on a non-experiment-level step (subsequent trajectory steps).
+            # Otherwise use global bounds with random restarts.
+            if is_online or (working_params is not None and bool(curr_indices)):
+                bounds = self._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
                 n_rounds = 0
+            else:
+                bounds = self._get_global_bounds(datamodule)
+                n_rounds = n_optimization_rounds
 
             result = self._run_optimization(
                 datamodule,
@@ -801,8 +699,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === BOUNDS FOR OPTIMIZATION ===
 
-    def _get_offline_bounds(self, datamodule: DataModule) -> np.ndarray:
-        """Calculate optimization bounds for OFFLINE domain (Global + Fixed Context)."""
+    def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
+        """Calculate global optimization bounds (full parameter space + fixed context)."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
 
@@ -827,8 +725,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(bounds_list)
 
-    def _get_online_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
-        """Calculate optimization bounds for ONLINE domain (Trust Regions around Current)."""
+    def _get_trust_region_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
+        """Calculate trust-region optimization bounds centred on current_params."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
 

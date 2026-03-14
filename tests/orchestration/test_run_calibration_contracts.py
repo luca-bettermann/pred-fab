@@ -16,7 +16,7 @@ import pytest
 import numpy as np
 
 from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
-from pred_fab.utils.enum import Mode, Domain
+from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
     build_calibration_system,
     build_real_agent_stack,
@@ -176,7 +176,7 @@ class TestOfflineInferenceExperimentLevel:
             datamodule=datamodule, mode=Mode.INFERENCE,
         )
         r_explicit = agent.calibration_system.run_calibration(
-            datamodule=datamodule, mode=Mode.INFERENCE, domain=Domain.OFFLINE,
+            datamodule=datamodule, mode=Mode.INFERENCE,
         )
         assert isinstance(r_default, ExperimentSpec)
         assert isinstance(r_explicit, ExperimentSpec)
@@ -1138,7 +1138,7 @@ class TestMPCLookahead:
         """MPC also applies in the ONLINE domain (single-step trust-region run)."""
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION, domain=Domain.ONLINE,
+            datamodule=datamodule, mode=Mode.EXPLORATION, target_indices={},
             current_params=current_params, mpc_lookahead_depth=1,
         )
         assert isinstance(result, ExperimentSpec)

@@ -23,7 +23,8 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep, Domain
+from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
+from ..utils._calib_baseline import BaselineSampler
 
 
 class PfabAgent:
@@ -326,7 +327,6 @@ class PfabAgent:
         result = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
-            domain=Domain.OFFLINE,
             current_params=current_params,
             w_explore=w_explore,
             n_optimization_rounds=n_optimization_rounds,
@@ -360,7 +360,6 @@ class PfabAgent:
         result = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.INFERENCE,
-            domain=Domain.OFFLINE,
             current_params=current_params,
             w_explore=w_explore,
             n_optimization_rounds=n_optimization_rounds,
@@ -401,13 +400,13 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="used for tuning")
 
         # Calibrate around effective current parameters (online = single step).
-        # COMMENT: call run_calibration with current_params and target_indices
         current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
+        target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
         result = self.calibration_system.run_calibration(
             datamodule=temp_datamodule,
             mode=mode,
-            domain=Domain.ONLINE,
             current_params=current_params,
+            target_indices=target_indices,
             w_explore=w_explore,
         )
         # Tag as adaptation (run_calibration uses mode-derived source_step).
@@ -516,20 +515,10 @@ class PfabAgent:
         n_samples: int,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> List[ExperimentSpec]:
-        """Sample baseline experiment specifications using Latin Hypercube Sampling.
-
-        Returns :class:`~pred_fab.core.ExperimentSpec` objects. Each spec contains
-        ``initial_params`` (all parameters at experiment level) and — when trajectory
-        parameters are configured via
-        :meth:`~pred_fab.orchestration.CalibrationSystem.configure_trajectory` —
-        per-dimension :class:`~pred_fab.core.ParameterSchedule` objects.
-
-        The returned specs support dict-like access (``spec["param"]``, ``spec.keys()``)
-        delegating to ``initial_params`` for backward compatibility.
-        """
+        """Sample baseline experiment specifications using Latin Hypercube Sampling."""
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
-        return self.calibration_system.generate_baseline_experiments(n_samples, param_bounds)
+        return self.calibration_system.baseline_sampler.generate(n_samples, param_bounds)
 
     # === Helper Functions ===
 

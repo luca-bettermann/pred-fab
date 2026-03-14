@@ -8,7 +8,7 @@ import pytest
 import numpy as np
 
 from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
-from pred_fab.utils.enum import Mode, Domain
+from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
     build_calibration_system,
     build_dataset_with_single_experiment,
@@ -28,7 +28,7 @@ def test_generate_baseline_returns_correct_count(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.generate_baseline_experiments(n_samples=5)
+    results = calibration.baseline_sampler.generate(n_samples=5)
     assert len(results) == 5
 
 
@@ -36,7 +36,7 @@ def test_generate_baseline_returns_empty_for_zero_samples(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=0)
+    results = calibration.baseline_sampler.generate(n_samples=0)
     assert results == []
 
 
@@ -47,7 +47,7 @@ def test_generate_baseline_all_samples_contain_schema_keys(tmp_path):
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4), "dim_1": (1, 3), "dim_2": (1, 3)})
     calibration.configure_fixed_params({"param_3": "B"})
 
-    results = calibration.generate_baseline_experiments(n_samples=4)
+    results = calibration.baseline_sampler.generate(n_samples=4)
     schema_keys = set(dataset.schema.parameters.keys())
     for sample in results:
         assert schema_keys == set(sample.keys()), f"Missing keys in sample: {schema_keys - set(sample.keys())}"
@@ -59,7 +59,7 @@ def test_generate_baseline_fixed_params_appear_in_all_samples(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_fixed_params({"param_3": "A"})
 
-    results = calibration.generate_baseline_experiments(n_samples=6)
+    results = calibration.baseline_sampler.generate(n_samples=6)
     for sample in results:
         assert sample["param_3"] == "A"
 
@@ -70,7 +70,7 @@ def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (2.0, 7.0)})
 
-    results = calibration.generate_baseline_experiments(n_samples=20)
+    results = calibration.baseline_sampler.generate(n_samples=20)
     for sample in results:
         assert 2.0 <= sample["param_1"] <= 7.0, f"param_1 out of bounds: {sample['param_1']}"
 
@@ -80,7 +80,7 @@ def test_generate_baseline_integer_params_are_int_typed(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=5)
+    results = calibration.baseline_sampler.generate(n_samples=5)
     for sample in results:
         assert isinstance(sample["param_2"], int), f"param_2 should be int, got {type(sample['param_2'])}"
 
@@ -111,7 +111,7 @@ def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
     dataset = Dataset(schema=schema, debug_flag=True)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=3)
+    results = calibration.baseline_sampler.generate(n_samples=3)
     # "unbounded" should be absent from each sample because it has infinite bounds
     for sample in results:
         assert "unbounded" not in sample, f"Infinite-bounds param should be skipped, got: {sample}"
@@ -151,7 +151,7 @@ def test_run_calibration_online_returns_experiment_spec_with_schema_keys(tmp_pat
     result = agent.calibration_system.run_calibration(
         datamodule=datamodule,
         mode=Mode.INFERENCE,
-        domain=Domain.ONLINE,
+        target_indices={},
         current_params=current_params,
     )
 
@@ -178,7 +178,7 @@ def test_run_calibration_online_with_no_trust_regions_and_no_runtime_params_pass
     result = agent.calibration_system.run_calibration(
         datamodule=datamodule,
         mode=Mode.INFERENCE,
-        domain=Domain.ONLINE,
+        target_indices={},
         current_params=current_params,
     )
 
@@ -203,7 +203,7 @@ def test_run_calibration_online_raises_when_runtime_param_missing_trust_region(t
         agent.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.INFERENCE,
-            domain=Domain.ONLINE,
+            target_indices={},
             current_params=current_params,
         )
 
@@ -225,7 +225,7 @@ def test_run_calibration_online_trust_region_constrains_proposed_value(tmp_path)
     result = agent.calibration_system.run_calibration(
         datamodule=datamodule,
         mode=Mode.INFERENCE,
-        domain=Domain.ONLINE,
+        target_indices={},
         current_params=current_params,
     )
 
@@ -258,12 +258,12 @@ def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
     cal1 = build_calibration_system(tmp_path / "a", dataset)
     cal1.random_seed = 7
     cal1.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
-    r1 = cal1.generate_baseline_experiments(n_samples=5)
+    r1 = cal1.baseline_sampler.generate(n_samples=5)
 
     cal2 = build_calibration_system(tmp_path / "b", dataset)
     cal2.random_seed = 7
     cal2.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
-    r2 = cal2.generate_baseline_experiments(n_samples=5)
+    r2 = cal2.baseline_sampler.generate(n_samples=5)
 
     for s1, s2 in zip(r1, r2):
         assert s1["param_1"] == pytest.approx(s2["param_1"], abs=1e-6)
@@ -277,7 +277,7 @@ def test_generate_baseline_returns_experiment_spec_instances(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=3)
+    results = calibration.baseline_sampler.generate(n_samples=3)
     for spec in results:
         assert isinstance(spec, ExperimentSpec)
         assert isinstance(spec.initial_params, ParameterProposal)
@@ -288,7 +288,7 @@ def test_generate_baseline_no_trajectories_has_empty_schedules(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=4)
+    results = calibration.baseline_sampler.generate(n_samples=4)
     for spec in results:
         assert spec.schedules == {}
 
@@ -298,7 +298,7 @@ def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.generate_baseline_experiments(n_samples=2)
+    results = calibration.baseline_sampler.generate(n_samples=2)
     spec = results[0]
 
     # __getitem__
@@ -374,7 +374,7 @@ def test_generate_baseline_with_trajectory_generates_non_empty_schedules(tmp_pat
     calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", "dim_1")
-    results = calibration.generate_baseline_experiments(n_samples=3, n_trajectory_segments=3)
+    results = calibration.baseline_sampler.generate(n_samples=3, n_trajectory_segments=3)
 
     for spec in results:
         # The schedule keys should contain the dimension code
@@ -391,7 +391,7 @@ def test_generate_baseline_trajectory_entries_contain_speed(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
 
     calibration.configure_trajectory("speed", "dim_1")
-    results = calibration.generate_baseline_experiments(n_samples=2, n_trajectory_segments=2)
+    results = calibration.baseline_sampler.generate(n_samples=2, n_trajectory_segments=2)
 
     for spec in results:
         for dim_key, schedule in spec.schedules.items():
