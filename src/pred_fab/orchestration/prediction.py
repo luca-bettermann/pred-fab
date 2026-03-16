@@ -90,8 +90,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "Reduce test_size and/or val_size in DataModule configuration."
             )
         
+        # Validate dimensional coherence for all registered models
+        for model in self.models:
+            model.validate_dimensional_coherence(self.schema)
+
         self.logger.console_info("Starting prediction model training...")
-        
+
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
         self.datamodule.fit_normalization(SplitType.TRAIN)
@@ -332,27 +336,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         if self.datamodule is None:
             raise RuntimeError("PredictionSystem not trained. Call train() first.")
 
-        dim_info = self._extract_dimensional_structure_from_params(params)
-        shape = dim_info['shape']
-        dim_iterators = dim_info['dim_iterators']
+        predictions = self._predict_from_params(params=params, batch_size=1000)
 
-        # Full dimensional prediction
-        predictions = self._initialize_prediction_dict(shape)
-        self._execute_batched_predictions_to_dict(
-            predictions=predictions,
-            dim_info=dim_info,
-            predict_from=0,
-            predict_to=dim_info['total_positions'],
-            batch_size=1000,
-        )
-
-        # Convert N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
+        # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
         feature_arrays: Dict[str, np.ndarray] = {}
         for feat_name, tensor in predictions.items():
+            feat_shape = tensor.shape
             flat = tensor.reshape(-1)
             rows = []
             for pos, feat_val in enumerate(flat):
-                idx = np.unravel_index(pos, shape)
+                idx = np.unravel_index(pos, feat_shape) if feat_shape else ()
                 rows.append(list(idx) + [float(feat_val)])
             feature_arrays[feat_name] = np.array(rows, dtype=np.float64)
 
@@ -581,6 +574,62 @@ class PredictionSystem(BaseOrchestrationSystem):
         # self._store_predictions_in_exp_data(exp_data, predictions)
         return predictions
     
+    def _get_feature_shape(self, feat_code: str, params: Dict[str, Any]) -> Tuple[int, ...]:
+        """Get the output tensor shape for a feature given current dimensional parameters."""
+        feat_obj = self.schema.features.data_objects.get(feat_code)
+        # data_objects stores DataArray instances; Pyright sees DataObject which lacks .columns.
+        if feat_obj is None or not hasattr(feat_obj, "columns") or not feat_obj.columns:  # type: ignore[union-attr]
+            return ()
+        iterator_cols = feat_obj.columns[:-1]  # type: ignore[union-attr]
+        if not iterator_cols:
+            return ()
+        iter_to_dim_code = {
+            dim.iterator_code: dim.code
+            for dim in self.schema.parameters.get_sorted_dimensions()
+        }
+        shape = []
+        for ic in iterator_cols:
+            size_code = iter_to_dim_code.get(ic)
+            if size_code is None or size_code not in params:
+                raise ValueError(
+                    f"Cannot resolve size for iterator '{ic}' — "
+                    f"check that '{size_code}' is present in params."
+                )
+            shape.append(int(params[size_code]))
+        return tuple(shape)
+
+    def _get_model_dim_info(self, model: IPredictionModel, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Build dimensional iteration structure for a specific model based on its depth."""
+        depth = model.depth
+        all_sorted_dims = self.schema.parameters.get_sorted_dimensions()
+        model_dims = all_sorted_dims[:depth]
+
+        dim_sizes: List[int] = []
+        dim_iterators: List[str] = []
+        dim_codes: set = set()
+
+        for dim_obj in model_dims:
+            name = dim_obj.code
+            if name not in params:
+                raise ValueError(
+                    f"Missing dimensional parameter '{name}' for model "
+                    f"{model.__class__.__name__}"
+                )
+            dim_sizes.append(int(params[name]))
+            dim_iterators.append(dim_obj.iterator_code)
+            dim_codes.add(name)
+
+        shape = tuple(dim_sizes)
+        total_positions = int(np.prod(shape)) if shape else 1
+        param_base = {k: v for k, v in params.items() if k not in dim_codes}
+
+        return {
+            'shape': shape,
+            'dim_iterators': dim_iterators,
+            'param_base': param_base,
+            'total_positions': total_positions,
+        }
+
     def _predict_from_params(
         self,
         params: Dict[str, Any],
@@ -589,36 +638,38 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_size: int = 1000,
         overlap: int = 0
     ) -> Dict[str, np.ndarray]:
-        """Core prediction logic from raw parameters with shape determined by dimensional params."""
+        """Core prediction logic: per-model iteration with per-feature tensor shapes."""
         if self.datamodule is None:
             raise RuntimeError("PredictionSystem not trained. Call train() first.")
-        
-        # Extract dimensional structure from params
-        dim_info = self._extract_dimensional_structure_from_params(params)
-        
-        # Validate prediction range
-        total_positions = dim_info['total_positions']
-        if predict_from < 0 or predict_from > total_positions:
-            raise ValueError(f"predict_from {predict_from} out of range [0, {total_positions}]")
-        if predict_to is None:
-            predict_to = total_positions
-        elif predict_to < 0 or predict_to > total_positions:
-            raise ValueError(f"predict_to {predict_to} out of range [0, {total_positions}]")
-        
-        # Initialize prediction arrays
-        predictions = self._initialize_prediction_dict(dim_info['shape'])
-        
-        # Execute batched predictions
-        self._execute_batched_predictions_to_dict(
-            predictions=predictions,
-            dim_info=dim_info,
-            predict_from=predict_from,
-            predict_to=predict_to, # type: ignore
-            batch_size=batch_size,
-            overlap=overlap
-        )
-        
-        self.logger.info(f"✓ Predicted {predict_to - predict_from} positions") # type: ignore
+
+        predictions: Dict[str, np.ndarray] = {}
+
+        for model in self.models:
+            model_dim_info = self._get_model_dim_info(model, params)
+            total_positions = model_dim_info['total_positions']
+
+            p_from = max(0, predict_from)
+            p_to = min(predict_to if predict_to is not None else total_positions, total_positions)
+            if p_from > total_positions:
+                continue
+
+            # Initialize output arrays with per-feature shapes
+            for feat in model.outputs:
+                if feat not in predictions:
+                    feat_shape = self._get_feature_shape(feat, params)
+                    predictions[feat] = np.full(feat_shape, np.nan)
+
+            self._execute_batched_predictions_to_dict(
+                predictions=predictions,
+                dim_info=model_dim_info,
+                predict_from=p_from,
+                predict_to=p_to,
+                batch_size=batch_size,
+                overlap=overlap,
+                model=model,
+            )
+
+        self.logger.info(f"✓ Predicted features for {len(self.models)} model(s)")
         return predictions
     
     # def _store_predictions_in_exp_data(
@@ -633,57 +684,6 @@ class PredictionSystem(BaseOrchestrationSystem):
     #             exp_data.predicted_features.add(feature_name, arr)
     #         exp_data.predicted_features.set_value(feature_name, pred_array)
     
-    def _extract_dimensional_structure_from_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract dimensional info (shape, params, positions) from schema and params dict."""
-        # Use schema parameters to get dimensions sorted correctly by level
-        sorted_dims = self.schema.parameters.get_sorted_dimensions()
-        
-        if not sorted_dims:
-            raise ValueError("No dimensional parameters in schema - cannot predict dimensional features")
-        
-        dim_sizes = []
-        dim_iterators = []
-        dim_codes = set()
-        
-        for dim_obj in sorted_dims:
-            name = dim_obj.code
-            if name not in params:
-                raise ValueError(f"Missing dimensional parameter in params: {name}")
-            
-            size = int(params[name])
-            dim_sizes.append(size)
-            dim_iterators.append(dim_obj.iterator_code)
-            dim_codes.add(name)
-        
-        shape = tuple(dim_sizes)
-        total_positions = int(np.prod(shape))
-        
-        # Extract non-dimensional parameters for feature matrix base
-        param_base = {}
-        for name in self.schema.parameters.keys():
-            if name not in dim_codes and name in params:
-                param_base[name] = params[name]
-        
-        return {
-            'shape': shape,
-            'dim_iterators': dim_iterators,
-            'param_base': param_base,
-            'total_positions': total_positions
-        }
-    
-    def _initialize_prediction_dict(self, shape: Tuple[int, ...]) -> Dict[str, np.ndarray]:
-        """Create prediction dictionary with NaN-initialized arrays for each feature."""
-        predictions = {}
-        
-        # Collect all feature names from registered models
-        for model in self.models:
-            for feature_name in model.outputs:
-                if feature_name not in predictions:
-                    # Initialize with NaN (positions will be filled during prediction)
-                    predictions[feature_name] = np.full(shape, np.nan)
-        
-        return predictions
-    
     def _execute_batched_predictions_to_dict(
         self,
         predictions: Dict[str, np.ndarray],
@@ -691,7 +691,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         predict_from: int,
         predict_to: int,
         batch_size: int,
-        overlap: int = 0
+        overlap: int = 0,
+        model: Optional[IPredictionModel] = None,
     ) -> None:
         """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap."""
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")
@@ -718,11 +719,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                 dim_info=dim_info
             )
 
-            # Run predictions for all models
+            # Run predictions for the specified model (or all models if None)
             self._predict_and_store_batch_to_dict(
                 predictions=predictions,
                 X_batch=X_batch,
-                batch_indices=batch_indices
+                batch_indices=batch_indices,
+                model=model,
             )
     
     def _build_batch_features(
@@ -758,32 +760,36 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         predictions: Dict[str, np.ndarray],
         X_batch: pd.DataFrame,
-        batch_indices: List[Tuple[int, ...]]
+        batch_indices: List[Tuple[int, ...]],
+        model: Optional[IPredictionModel] = None,
     ) -> None:
-        """Run all model predictions on X_batch, denormalize, and store in predictions dict."""
+        """Run model prediction on X_batch and store results with per-feature index truncation."""
         if self.datamodule is None:
-             raise RuntimeError("DataModule not set")
+            raise RuntimeError("DataModule not set")
 
         # Prepare input (one-hot + normalize)
         X_norm = self.datamodule.prepare_input(X_batch)
-        
-        for model in self.models:
+
+        models_to_run = [model] if model is not None else self.models
+        for m in models_to_run:
             # Predict in normalized space
-            y_pred_norm = model.forward_pass(X_norm)
-            
+            y_pred_norm = m.forward_pass(X_norm)
+
             # Denormalize to original scale
-            y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
-            
-            # Store predictions in arrays
-            for i, feature_name in enumerate(model.outputs):
+            y_pred = self.datamodule.denormalize_values(y_pred_norm, m.outputs)
+
+            # Store predictions in arrays with per-feature index truncation
+            for i, feature_name in enumerate(m.outputs):
                 if feature_name not in predictions:
                     continue
-                
+
                 # y_pred is (batch, n_outputs)
                 values = y_pred[:, i]
-                
+                feat_depth = len(predictions[feature_name].shape)
+
                 for j, idx in enumerate(batch_indices):
-                    predictions[feature_name][idx] = float(values[j])
+                    feat_idx = idx[:feat_depth]  # truncate to this feature's depth
+                    predictions[feature_name][feat_idx] = float(values[j])
     
     # === EXPORT FOR PRODUCTION INFERENCE ===
     

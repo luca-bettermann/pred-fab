@@ -29,9 +29,12 @@ class EvaluationSystem(BaseOrchestrationSystem):
         recompute: bool = False
     ) -> Dict[str, Optional[float]]:
         """Execute all evaluations for an experiment and mutate exp_data with results."""
-        
-        # Prepare feature dict slice
-        features_dict = exp_data.features.get_values_dict()
+
+        # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
+        # so that evaluation models can iterate rows uniformly regardless of feature depth.
+        features_dict: Dict[str, np.ndarray] = {}
+        for code, tensor in exp_data.features.get_values_dict().items():
+            features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
         # Check if the there are any incomplete feature arrays
         incomplete_features = {code: not exp_data.is_complete(code, evaluate_from, evaluate_to) 

@@ -35,11 +35,14 @@ class FeatureSystem(BaseOrchestrationSystem):
                 if not isinstance(data_array, DataArray):
                     raise ValueError(f"Expected obj of type 'DataArray', got {data_array.__class__} instead.")
 
-                # set column names in data array
-                dim_objs = schema.parameters.get_dim_objects(model.input_parameters)
-                model_column_names = [dim.iterator_code for dim in dim_objs]
-                model_column_names.append(output_code)
-                data_array.set_columns(model_column_names)
+                # Set column names in data array only if not already explicitly set.
+                # Pre-set columns (e.g. from schema builders) declare per-feature depth
+                # and take precedence over the feature model's full dimension set.
+                if not data_array.columns:
+                    dim_objs = schema.parameters.get_dim_objects(model.input_parameters)
+                    model_column_names = [dim.iterator_code for dim in dim_objs]
+                    model_column_names.append(output_code)
+                    data_array.set_columns(model_column_names)
 
     # === FEATURE EXTRACTION ===
 

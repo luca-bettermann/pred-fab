@@ -240,9 +240,9 @@ def test_predict_for_calibration_returns_feature_arrays_and_params_block(tmp_pat
     for feature_code in pred.get_system_outputs():
         assert feature_code in feature_arrays, f"Missing feature: {feature_code}"
         arr = feature_arrays[feature_code]
-        # Each row: [dim_iter_0, ..., dim_iter_n, feature_val]
+        # Each row: [dim_iter_0..., feature_val] — depth-0 features get shape (1, 1)
         assert arr.ndim == 2
-        assert arr.shape[1] >= 2  # at least one dim iterator + feature value
+        assert arr.shape[1] >= 1  # at least the feature value column
 
     # params_block should have all schema parameters
     for code in params:
@@ -252,7 +252,7 @@ def test_predict_for_calibration_returns_feature_arrays_and_params_block(tmp_pat
 
 
 def test_predict_for_calibration_feature_array_row_count(tmp_path):
-    """Feature array row count should equal total dimensional positions."""
+    """Feature array row count matches each feature's own dimensional depth."""
     agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
     pred = agent.pred_system
     params = exp.parameters.get_values_dict()
@@ -260,12 +260,13 @@ def test_predict_for_calibration_feature_array_row_count(tmp_path):
     feature_arrays, _ = pred.predict_for_calibration(params)
     dim_1 = int(params["dim_1"])
     dim_2 = int(params["dim_2"])
-    expected_rows = dim_1 * dim_2
 
-    for feat, arr in feature_arrays.items():
-        assert arr.shape[0] == expected_rows, (
-            f"Feature '{feat}': expected {expected_rows} rows, got {arr.shape[0]}"
-        )
+    # feature_grid: depth 2 → dim_1 * dim_2 rows
+    assert feature_arrays["feature_grid"].shape[0] == dim_1 * dim_2
+    # feature_d1: depth 1 → dim_1 rows
+    assert feature_arrays["feature_d1"].shape[0] == dim_1
+    # feature_scalar: depth 0 → 1 row
+    assert feature_arrays["feature_scalar"].shape[0] == 1
 
 
 # ===========================================================================
