@@ -606,6 +606,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         dim_sizes: List[int] = []
         dim_iterators: List[str] = []
+        dim_codes_ordered: List[str] = []
         dim_codes: set = set()
 
         for dim_obj in model_dims:
@@ -617,6 +618,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 )
             dim_sizes.append(int(params[name]))
             dim_iterators.append(dim_obj.iterator_code)
+            dim_codes_ordered.append(name)
             dim_codes.add(name)
 
         shape = tuple(dim_sizes)
@@ -626,6 +628,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         return {
             'shape': shape,
             'dim_iterators': dim_iterators,
+            'dim_codes_ordered': dim_codes_ordered,
             'param_base': param_base,
             'total_positions': total_positions,
         }
@@ -733,23 +736,29 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_end: int,
         dim_info: Dict[str, Any]
     ) -> Tuple[pd.DataFrame, List[Tuple[int, ...]]]:
-        """Build feature matrix X with params + dimensional indices for batch positions."""
+        """Build feature matrix X with params + dimensional indices for batch positions.
+
+        Uses dimension size-parameter codes (e.g. "dim_1") as column keys to match
+        the column structure produced by Dataset.export_to_dataframe() during training.
+        """
         shape = dim_info['shape']
         param_base = dim_info['param_base']
-        dim_iterators = dim_info['dim_iterators']
-        
+        dim_codes_ordered = dim_info['dim_codes_ordered']
+
         X_batch_rows = []
         batch_indices = []
-        
+
         for pos in range(batch_start, batch_end):
             # Convert linear position to multi-dimensional index
             idx = np.unravel_index(pos, shape)
             batch_indices.append(idx)
-            
-            # Create feature row: non-dimensional params + dimensional indices
+
+            # Create feature row: non-dimensional params + dimensional indices.
+            # Keys are size-parameter codes ("dim_1", "dim_2") to match training columns,
+            # while values are the iterator indices (0, 1, ...) matching export_to_dataframe.
             row = param_base.copy()
-            for i, iterator_name in enumerate(dim_iterators):
-                row[iterator_name] = idx[i]
+            for i, dim_code in enumerate(dim_codes_ordered):
+                row[dim_code] = idx[i]
             
             X_batch_rows.append(row)
         
