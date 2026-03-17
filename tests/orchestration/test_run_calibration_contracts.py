@@ -1073,8 +1073,8 @@ class TestTargetIndices:
 # ===========================================================================
 
 class TestMPCLookahead:
-    """horizon > 1 augments each step's objective with a short forward rollout
-    (MPC lookahead depth = horizon - 1).  The step-loop structure and return
+    """mpc_lookahead > 0 augments each step's objective with a short forward rollout
+    .  The step-loop structure and return
     type are unchanged; only the score landscape seen by the optimizer differs.
     """
 
@@ -1101,11 +1101,11 @@ class TestMPCLookahead:
     # --- Smoke tests ---
 
     def test_mpc_depth_zero_returns_experiment_spec(self, tmp_path):
-        """Explicit horizon=1 (default, no lookahead) should behave identically to omitting the arg."""
+        """Explicit mpc_lookahead=0 (default, no lookahead) should behave identically to omitting the arg."""
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=1,
+            current_params=current_params, mpc_lookahead=0,
         )
         assert isinstance(result, ExperimentSpec)
 
@@ -1113,7 +1113,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         assert isinstance(result, ExperimentSpec)
 
@@ -1121,7 +1121,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=3,
+            current_params=current_params, mpc_lookahead=2,
         )
         assert isinstance(result, ExperimentSpec)
 
@@ -1130,7 +1130,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         assert isinstance(result, ExperimentSpec)
 
@@ -1139,7 +1139,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, target_indices={},
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         assert isinstance(result, ExperimentSpec)
 
@@ -1148,7 +1148,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._two_runtime_cs(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         assert isinstance(result, ExperimentSpec)
         assert "dim_1" in result.schedules
@@ -1159,7 +1159,7 @@ class TestMPCLookahead:
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         assert result.initial_params.source_step == "exploration_step"
 
@@ -1225,19 +1225,19 @@ class TestMPCLookahead:
         cs.perf_fn = counting_perf_fn
         current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
 
-        # Greedy baseline (horizon=1 → no lookahead)
+        # Greedy baseline (mpc_lookahead=0 → no lookahead)
         call_count["n"] = 0
         cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=1,
+            current_params=current_params, mpc_lookahead=0,
         )
         calls_greedy = call_count["n"]
 
-        # MPC depth=1 (horizon=2 → one step lookahead)
+        # MPC depth=1 (mpc_lookahead=1 → one step lookahead)
         call_count["n"] = 0
         cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, horizon=2,
+            current_params=current_params, mpc_lookahead=1,
         )
         calls_mpc = call_count["n"]
 
@@ -1279,18 +1279,18 @@ class TestMPCLookahead:
 
         current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
 
-        # Pure greedy (horizon=1): maximize speed within [100-50, 100+50] = [50, 150]
+        # Pure greedy (mpc_lookahead=0): maximize speed within [100-50, 100+50] = [50, 150]
         result_greedy = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, horizon=1,
+            current_params=current_params, mpc_lookahead=0,
         )
         speed_greedy = float(result_greedy["speed"])
 
-        # MPC horizon=2, discount=1.0: also considers step k+1 → can justify a slightly
+        # MPC mpc_lookahead=1, discount=1.0: also considers step k+1 → can justify a slightly
         # lower step-k speed to stay centred and avoid hitting the schema boundary.
         result_mpc = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, horizon=2, mpc_discount=1.0,
+            current_params=current_params, mpc_lookahead=1, mpc_discount=1.0,
         )
         speed_mpc = float(result_mpc["speed"])
 

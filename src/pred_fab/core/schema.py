@@ -1,12 +1,4 @@
-"""
-DatasetSchema for defining dataset structure.
-
-Schema represents the structure of a dataset (what CAN exist),
-not the actual values (which are stored in Dataset instances).
-
-SchemaRegistry maps schema hashes to human-readable IDs for deterministic
-folder path generation.
-"""
+"""DatasetSchema and SchemaRegistry — define dataset structure and map hashes to human-readable IDs."""
 
 import os
 import json
@@ -26,16 +18,7 @@ from .data_blocks import (
 # from ..utils.enum import PRED_SUFFIX
 
 class DatasetSchema:
-    """
-    Defines the structure and types of a dataset.
-    
-    Schema specifies:
-    - Parameters (including dimensions)
-    - Performance attributes (evaluation outputs)
-    - Feature arrays (multi-dimensional data storage)
-    
-    Schema hash provides deterministic ID generation via SchemaRegistry.
-    """
+    """Structural definition of a dataset (parameters, features, performance); hash registered via SchemaRegistry."""
     
     def __init__(
             self, 
@@ -101,13 +84,7 @@ class DatasetSchema:
         return hashlib.sha256(hash_str.encode()).hexdigest()
     
     def _block_to_hash_structure(self, block: DataBlock) -> Dict[str, Any]:
-        """Convert DataBlock to hashable structure using structural identity only.
-
-        Uses to_hash_dict() rather than to_dict() so that operational metadata
-        (e.g. runtime_adjustable) does not contribute to the schema hash. Changing
-        which parameters are runtime-adjustable is a CalibrationSystem configuration
-        change, not a structural schema change.
-        """
+        """Convert DataBlock to hashable structure using to_hash_dict() (excludes operational metadata)."""
         return {
             name: obj.to_hash_dict()
             for name, obj in block.items()
@@ -151,21 +128,9 @@ class DatasetSchema:
     #     return data_block_suffix
 
 class SchemaRegistry:
-    """
-    Registry mapping schema hashes to human-readable schema IDs.
-    
-    - Deterministic schema_id generation from structural hash
-    - Stored as JSON in {local_folder}/.lbp/schema_registry.json
-    - Single-user access model
-    """
-    
+    """Persists schema hash → schema_id mappings as JSON in the local folder."""
+
     def __init__(self, local_folder: str):
-        """
-        Initialize registry.
-        
-        Args:
-            local_folder: Base local data folder
-        """
         self.local_folder = local_folder
         self.registry_path = os.path.join(self.local_folder, "schema_registry.json")
         self.registry: Dict[str, Dict[str, Any]] = {}

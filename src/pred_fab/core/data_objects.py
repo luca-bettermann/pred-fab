@@ -1,9 +1,4 @@
-"""
-DataObject type system for AIXD schema definitions.
-
-DataObjects represent variable types in dataset schemas and hold actual values.
-They provide validation, type information, and value storage.
-"""
+"""DataObject type system for schema definitions — validation, typing, and value storage."""
 
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict, Tuple, Literal, Type, Union
@@ -12,11 +7,7 @@ import numpy as np
 from ..utils.enum import NormMethod, Roles
 
 class DataObject(ABC):
-    """
-    Base class for schema type definitions with value storage.
-    
-    Represents a variable's type, constraints, and holds actual value.
-    """
+    """Base class for schema type definitions — encapsulates dtype, constraints, and role."""
     
     _registry: Dict[str, Type['DataObject']] = {}
     
@@ -26,7 +17,6 @@ class DataObject(ABC):
     
     def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None,
                  round_digits: Optional[int] = None):
-        """Initialize DataObject with name, dtype, constraints, and optional rounding."""
         self.code = code
         self.dtype = dtype
         self.constraints = constraints or {}
@@ -36,34 +26,12 @@ class DataObject(ABC):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """
-        Get normalization strategy for this data type.
-
-        Returns:
-            - 'default': Use DataModule's default normalization
-            - 'standard': Standard scaling (mean=0, std=1)
-            - 'minmax': Min-max scaling to [0, 1]
-            - 'robust': Robust scaling using median and IQR
-            - 'none': No normalization
-            - 'categorical': One-hot encoding (for categorical data)
-        """
+        """Normalization strategy for this type; subclasses override as needed."""
         return NormMethod.DEFAULT
 
     @abstractmethod
     def validate(self, value: Any) -> bool:
-        """
-        Validate value against type and constraints.
-        
-        Args:
-            value: Value to validate
-            
-        Returns:
-            True if valid
-            
-        Raises:
-            TypeError: If value has wrong type
-            ValueError: If value violates constraints
-        """
+        """Validate value against type and constraints; raises TypeError/ValueError if invalid."""
         pass
 
     @abstractmethod
@@ -87,16 +55,7 @@ class DataObject(ABC):
         return data
 
     def to_hash_dict(self) -> Dict[str, Any]:
-        """Serialize structural identity for schema hash computation.
-
-        Includes only fields that determine what data *can be recorded* in a dataset.
-        Excludes operational metadata — fields that control how the optimizer uses
-        the schema but do not change the recording structure.
-
-        Excluded from hash (stored in to_dict, not hashed):
-          - runtime_adjustable: optimizer targeting hint; ParameterUpdateEvents can be
-            recorded for any parameter regardless of this flag.
-        """
+        """Serialize structural identity for schema hashing; excludes operational metadata (e.g. runtime_adjustable)."""
         data = {
             "code": self.code,
             "role": self.role.value if self.role else None,
@@ -153,10 +112,9 @@ class DataObject(ABC):
 
 class DataReal(DataObject):
     """Floating-point numeric parameter."""
-    
+
     def __init__(self, code: str, role: Roles, min_val: Optional[float] = None, max_val: Optional[float] = None,
                  round_digits: Optional[int] = None):
-        """Initialize DataReal with optional min/max bounds and rounding."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
@@ -166,9 +124,8 @@ class DataReal(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def validate(self, value: Any) -> bool:
         """Validate float value against constraints."""
         if not isinstance(value, (int, float)):
@@ -198,8 +155,8 @@ class DataReal(DataObject):
 
 class DataInt(DataObject):
     """Integer numeric parameter."""
+
     def __init__(self, code: str, role: Roles, min_val: Optional[int] = None, max_val: Optional[int] = None, round_digits: Optional[int] = None):
-        """Initialize DataInt with optional min/max bounds."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = int(min_val)
@@ -209,9 +166,8 @@ class DataInt(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def validate(self, value: Any) -> bool:
         """Validate integer value against constraints."""
         if not isinstance(value, int) or isinstance(value, bool):
@@ -236,14 +192,12 @@ class DataInt(DataObject):
 
 class DataBool(DataObject):
     """Boolean parameter."""
-    
+
     def __init__(self, code: str, role: Roles):
-        """Initialize DataBool."""
         super().__init__(code, bool, role, {})
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """No normalization needed - already 0/1."""
         return NormMethod.NONE
     
     def validate(self, value: Any) -> bool:
@@ -265,17 +219,15 @@ class DataBool(DataObject):
         return cls(code, role)
 
 class DataCategorical(DataObject):
-    """Categorical parameter with fixed set of allowed values."""
-    
+    """Categorical parameter with a fixed set of allowed string values."""
+
     def __init__(self, code: str, categories: List[str], role: Roles):
-        """Initialize DataCategorical with allowed categories."""
         if not categories:
             raise ValueError("Categories list cannot be empty")
         super().__init__(code, str, role, {"categories": categories})
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Categorical data requires one-hot encoding."""
         return NormMethod.CATEGORICAL
     
     def validate(self, value: Any) -> bool:
@@ -299,16 +251,9 @@ class DataCategorical(DataObject):
         return cls(code, constraints["categories"], role)
 
 class DataDimension(DataInt):
-    """
-    Three-aspect dimensional parameter for iteration.
-    
-    Maps the three related dimensional concepts:
-    - code: Parameter name for size (e.g., "n_layers")
-    - dim_iterator_name: Iterator variable name (e.g., "layer_id")
-    """
-    
+    """Integer dimension parameter linking a size code (e.g. n_layers) to an iterator code (e.g. layer_id) at a hierarchy level."""
+
     def __init__(self, code: str, iterator_code: str, level: int, role: Roles, min_val: int = 1, max_val: Optional[int] = None):
-        """Initialize DataDimension with two naming aspects and level hierarchy."""
         self.code = code
         self.iterator_code = iterator_code
 
@@ -321,7 +266,6 @@ class DataDimension(DataInt):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Dimensional indices use minmax to preserve ordinal structure."""
         return NormMethod.MIN_MAX
     
     @classmethod
@@ -337,14 +281,9 @@ class DataDimension(DataInt):
 
 
 class DataArray(DataObject):
-    """
-    Wrapper for numpy arrays with shape and dtype validation.
+    """Numpy array DataObject with dtype validation, used for feature tensor storage."""
 
-    Used for metric_arrays storage in ExperimentData.
-    """
-    
     def __init__(self, code: str, role: Roles, dtype: Union[str, type, np.dtype]):
-        """Initialize DataArray with optional shape and dtype constraints."""
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: List[str] = []
@@ -358,11 +297,10 @@ class DataArray(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def set_columns(self, columns: List[str]) -> None:
-        """Set associated dimension codes for this DataArray."""
+        """Set associated iterator column names for this DataArray."""
         self.columns = columns
         self.constraints["columns"] = columns
     
@@ -401,32 +339,14 @@ class Parameter:
 
     @staticmethod
     def real(code: str, min_val: float, max_val: float, round_digits: int = 3, runtime: bool = False) -> DataReal:
-        """
-        Create a real-valued parameter.
-
-        Args:
-            runtime: If True, sets runtime_adjustable=True on the returned object.
-                     Runtime parameters may be re-proposed by the adaptation or exploration
-                     system at dimensional steps during fabrication, within the configured
-                     trust region. Typical use cases: nozzle speed, extrusion rate,
-                     temperature setpoint. The role remains Roles.PARAMETER regardless.
-        """
+        """Create a real-valued parameter; runtime=True marks it as re-proposable during fabrication."""
         obj = DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
         obj.runtime_adjustable = runtime
         return obj
 
     @staticmethod
     def integer(code: str, min_val: int, max_val: int, runtime: bool = False) -> DataInt:
-        """
-        Create an integer parameter.
-
-        Args:
-            runtime: If True, sets runtime_adjustable=True on the returned object.
-                     Runtime parameters may be re-proposed by the adaptation or exploration
-                     system at dimensional steps during fabrication, within the configured
-                     trust region. Typical use cases: fan speed (RPM), discrete power level.
-                     The role remains Roles.PARAMETER regardless.
-        """
+        """Create an integer parameter; runtime=True marks it as re-proposable during fabrication."""
         obj = DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
         obj.runtime_adjustable = runtime
         return obj

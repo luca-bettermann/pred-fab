@@ -8,14 +8,9 @@ from .base_system import BaseOrchestrationSystem
 
 
 class EvaluationSystem(BaseOrchestrationSystem):
-    """
-    Orchestrates multiple evaluation models using Dataset.
-    
-    Manages evaluation model execution and stores results in ExperimentData.
-    """
-    
+    """Orchestrates performance evaluation across all registered evaluation models."""
+
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
         self.models: List[IEvaluationModel] = []
 
@@ -69,7 +64,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         incomplete_features: Dict[str, bool] = {},
         skip_for_code: Dict[str, bool] = {}
     ) -> Dict[str, Optional[float]]:
-        """Core evaluation logic from raw parameters."""
+        """Run all evaluation models and return {perf_code: value} dict."""
         
         # Prepare result dictionaries
         performance_dict: Dict[str, Optional[float]] = {}

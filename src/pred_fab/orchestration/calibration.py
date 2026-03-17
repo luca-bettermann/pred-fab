@@ -15,15 +15,7 @@ from .base_system import BaseOrchestrationSystem
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """
-    Orchestrates calibration and active learning.
-
-    - Owns System Performance definition and active-learning acquisition logic
-    - Generates baseline experiments (LHS)
-    - Proposes new experiments via Bayesian Optimization (UCB with KDE uncertainty)
-    - Supports Online (Trust Region) and Offline (Global) modes
-    - Level 2 trajectory exploration with diversity discounting via similarity_fn
-    """
+    """Active-learning calibration engine: UCB exploration, inference, greedy-maximin baseline, and MPC lookahead."""
 
     def __init__(
         self,
@@ -34,19 +26,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         similarity_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
         random_seed: Optional[int] = None,
     ):
-        """
-        Args:
-            schema: Dataset schema defining parameters and performance attributes.
-            logger: Logger instance.
-            perf_fn: Callable mapping a raw params dict to a performance dict
-                ``{perf_code: value_or_None}``.  Encapsulates predict + evaluate.
-            uncertainty_fn: Callable mapping a normalized parameter array (1-D) to
-                a scalar epistemic uncertainty in [0, 1].
-            similarity_fn: Optional callable mapping two normalized parameter arrays
-                to a scalar similarity in [0, 1].  Used for Level 2 trajectory
-                diversity discounting.  When None, diversity discounting is skipped.
-            random_seed: Seed for reproducible random sampling.
-        """
         super().__init__(logger)
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
@@ -302,10 +281,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === OBJECTIVE FUNCTIONS ===
 
     def _inference_func(self, X: np.ndarray) -> float:
-        """
-        Objective for INFERENCE: Maximize predicted performance.
-        Returns negative performance for minimization.
-        """
+        """INFERENCE objective: negative predicted performance (for minimisation)."""
         dm = self._active_datamodule
         if dm is None:
             return 0.0
@@ -323,11 +299,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return -sys_perf
 
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
-        """
-        Objective for exploration: Maximize UCB score.
-        Score = (1 - w) * predicted_performance + w * epistemic_uncertainty
-        Returns negative Score for minimization.
-        """
+        """EXPLORATION objective: negative UCB score = -(1−w)·perf + w·uncertainty."""
         dm = self._active_datamodule
         if dm is None:
             return 0.0
@@ -347,11 +319,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return -score
 
     def _baseline_func(self, X: np.ndarray, proposed_norm: List[np.ndarray]) -> float:
-        """Greedy maximin objective: maximise minimum distance from all proposed points.
-
-        Returns the negative min-distance for minimisation, consistent with the
-        sign convention of the other objective functions.
-        """
+        """BASELINE objective: negative min-distance from all previously proposed points (greedy maximin)."""
         dists = [float(np.linalg.norm(X - ref)) for ref in proposed_norm]
         return -min(dists)
 
@@ -383,10 +351,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         depth: int,
         discount: float,
     ) -> Callable:
-        """Wrap base_objective with a depth-step MPC lookahead.
+        """Wrap base_objective with MPC lookahead: MPC(X) = Σ γʲ·score(Xⱼ) over depth steps.
 
-        Accumulates discounted scores: MPC(X) = score(X) + γ¹·score(X₁) + … + γᵈ·score(Xᵈ),
-        where each Xⱼ₊₁ is obtained by a trust-region L-BFGS-B step from Xⱼ.
         Returns base_objective unchanged when depth <= 0.
         """
         if depth <= 0:
@@ -426,10 +392,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         raise ValueError(f"Unknown calibration mode: {mode}")
 
     def _build_step_grid(self, current_params: Dict[str, Any]) -> List[Dict[str, int]]:
-        """Build flattened grid of ``{dim_code: step_index}`` dicts.
+        """Build flattened Cartesian grid of {dim_code: step_index} dicts, coarsest dimension first.
 
-        Dimensions are ordered coarsest-first (by ``DataDimension.level``).
-        Returns ``[{}]`` when no trajectory configs exist (experiment-level).
+        Returns [{}] when no trajectory configs are configured (experiment-level use case).
         """
         import itertools as _it
 
@@ -451,11 +416,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: Optional[Dict[str, int]],
         curr_indices: Dict[str, int],
     ) -> set:
-        """Return trajectory param codes eligible for optimization at this step.
-
-        A param is eligible when the dimension it is mapped to *transitions*
-        (i.e. its index differs from the previous step, or it is the first step).
-        """
+        """Return trajectory params whose mapped dimension transitions at this step."""
         transitioning_dims: set = set()
         for dim_code in curr_indices:
             if prev_indices is None or curr_indices[dim_code] != prev_indices.get(dim_code):
@@ -471,12 +432,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         step_grid: List[Dict[str, int]],
         source_step: str,
     ) -> ExperimentSpec:
-        """Assemble per-step result dicts into an ``ExperimentSpec``.
-
-        ``proposals[0]`` becomes ``initial_params``.  For each dimension in the
-        grid, collect proposals where that dimension transitions and build a
-        ``ParameterSchedule`` with entries keyed by step index.
-        """
+        """Assemble per-step proposals into an ExperimentSpec with initial_params and dimension schedules."""
         initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
 
         schedules: Dict[str, ParameterSchedule] = {}
@@ -515,17 +471,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return ExperimentSpec(initial_params=initial, schedules=schedules)
 
     def _build_schema_datamodule(self) -> DataModule:
-        """Build a schema-only DataModule for baseline proposal generation.
+        """Build a schema-only DataModule (no training data) for baseline generation.
 
-        No training data is required.  Categorical parameters are one-hot
-        encoded via the DataModule's column machinery; all normalization is
-        identity (``NormMethod.NONE``).  Parameters with infinite effective
-        bounds are excluded and a warning is logged, consistent with the
-        space-filling semantics of baseline generation.
-
-        Caller is responsible for temporarily applying any per-call
-        ``param_bounds`` overrides to ``self.param_bounds`` before invoking
-        this method so that the correct bounds are reflected here.
+        Uses NormMethod.NONE; excludes params with infinite bounds (logged as warnings).
+        Caller must apply any param_bounds overrides to self.param_bounds before calling.
         """
         active_codes: List[str] = []
         for code, data_obj in self.data_objects.items():
@@ -566,27 +515,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         n_optimization_rounds: int = 10,
     ) -> List["ExperimentSpec"]:
-        """Generate n baseline ExperimentSpecs using greedy maximin spacing.
-
-        Each proposal maximises the minimum Euclidean distance in the
-        DataModule's encoded parameter space from all previously proposed
-        points (greedy maximin).  The first proposal is drawn at random
-        because the objective is flat with no reference points.
-
-        Categorical parameters are handled via one-hot encoding — the same
-        mechanism used by EXPLORATION and INFERENCE — so they are included in
-        the optimisation without requiring them to be fixed in advance.
-        Parameters with infinite effective bounds are excluded with a warning.
-
-        Args:
-            n: Number of baseline proposals to generate.
-            param_bounds: Optional per-parameter bounds override.  Falls back
-                to bounds configured via :meth:`configure_param_bounds`.
-            n_optimization_rounds: Random restarts per proposal (i ≥ 1).
-
-        Returns:
-            List of n ExperimentSpec objects.
-        """
+        """Generate n greedy-maximin baseline proposals. First proposal is random (flat objective)."""
         self.logger.info(
             f"Generating {n} baseline experiments using greedy maximin spacing..."
         )
@@ -662,26 +591,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_optimization_rounds: int = 10,
         level: int = 0,
         depth: int = 0,
-        horizon: int = 1,
+        mpc_lookahead: int = 0,
         mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
-        """Run calibration and return an ExperimentSpec.
+        """Run a single calibration pass and return an ExperimentSpec.
 
-        Pass current_params and target_indices for online (trust-region) optimization.
-        Omit both for offline (global bounds with random restarts) optimization.
-        When trajectory parameters are configured, iterates over a step grid derived
-        from current_params dimensions.
-
-        Args:
-            level: Hierarchy level at which the engine fires (0=experiment,
-                1=layer, 2=segment).  Informational — shapes future behaviour.
-            depth: Output granularity (0=one proposal, 1=per-layer,
-                2=per-segment).  Informational — shapes future behaviour.
-            horizon: Steps ahead to plan.  For EXPLORATION/INFERENCE this sets
-                the MPC lookahead depth (horizon=1 means no lookahead).
+        Offline (global bounds + random restarts) when current_params/target_indices are omitted;
+        online (trust-region) when both are provided.
+        mpc_lookahead=0 → greedy; mpc_lookahead=N → N steps of discounted lookahead.
         """
-        # horizon=1 → no MPC lookahead; horizon=2 → one step ahead; etc.
-        lookahead = max(0, horizon - 1)
+        lookahead = mpc_lookahead
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
 
         self._active_datamodule = datamodule
@@ -846,7 +765,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === BOUNDS FOR OPTIMIZATION ===
 
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
-        """Calculate global optimization bounds (full parameter space + fixed context)."""
+        """Return normalized optimization bounds over the full parameter space."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
 
@@ -872,7 +791,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return np.array(bounds_list)
 
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
-        """Calculate trust-region optimization bounds centred on current_params."""
+        """Return normalized trust-region bounds centred on current_params."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
 

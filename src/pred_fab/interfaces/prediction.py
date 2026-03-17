@@ -1,10 +1,4 @@
-"""
-Prediction Model Interface for AIXD architecture.
-
-Defines abstract interface for prediction models that learn from experiment data
-and predict features for new parameter combinations. Features can then be evaluated
-to compute performance metrics.
-"""
+"""Abstract interface for prediction models that learn parameter→feature mappings."""
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Type, Optional, Any, final, Tuple
@@ -16,31 +10,14 @@ from ..core import DataObject, Dataset
 
 
 class IPredictionModel(BaseInterface):
-    """
-    Abstract base class for prediction models.
-
-    - Learn parameter→feature relationships from experiment data
-    - Predict feature values for new parameter combinations (virtual experiments)
-    - Enable feature-based evaluation and multi-objective optimization
-    - Support export/import for production inference via InferenceBundle
-    - Must be dataclasses with DataObject fields for parameters (schema generation)
-    """
+    """Abstract base for prediction models: train on experiments, predict features, support export/import."""
 
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
 
     @property
     def depth(self) -> int:
-        """Operational depth: number of dimension levels this model iterates over.
-
-        Inferred from output feature tensor shapes — equals the maximum number of
-        iterator dimensions across all declared output features. Depth 0 means scalar
-        outputs with no dimensional iteration.
-
-        Requires set_ref_features() to have been called (done automatically by
-        PredictionSystem during agent initialization).
-        """
+        """Max iterator depth across output features; 0 for scalar outputs. Requires set_ref_features() called first."""
         max_depth = 0
         for code in self.outputs:
             feat = self._ref_features.get(code)
@@ -51,24 +28,7 @@ class IPredictionModel(BaseInterface):
         return max_depth
 
     def validate_dimensional_coherence(self, schema: Any) -> None:
-        """Validate that this model's input/output dimensions are coherent.
-
-        Rules:
-            1. (Warning) All output features should share the same depth. Mixed-depth
-               outputs are allowed but produce a warning — the model iterates at the
-               maximum depth, and shallower outputs overwrite on each deeper iteration.
-            2. (Error) Any dimension codes declared in input_parameters must form a
-               consecutive prefix of the schema hierarchy {level 1, 2, ..., k} — no
-               gaps, must start at level 1.
-            3. (Error) Input features must not have a depth exceeding the model's
-               operational depth.
-
-        Args:
-            schema: DatasetSchema instance with fully initialized feature columns.
-
-        Raises:
-            ValueError: If Rule 2 or Rule 3 is violated.
-        """
+        """Validate dimension coherence: output depths consistent (warn), declared dims form consecutive prefix (error), input feature depth ≤ op depth (error)."""
         name = self.__class__.__name__
         op_depth = self.depth
 
@@ -136,63 +96,24 @@ class IPredictionModel(BaseInterface):
 
     @abstractmethod
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        """
-        Forward pass of given parameter values to retrieve features.
-        
-        Args:
-            X: Numpy array with normalized parameter values (batch_size, n_params)
-        
-        Returns:
-            Numpy array with normalized feature values (batch_size, n_features)
-        """
+        """Run model inference on normalized X (batch, n_params) → normalized y (batch, n_features)."""
         pass
 
     @abstractmethod
     def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
-        """
-        Train the prediction model on batched data.
-        
-        Args:
-            train_batches: List of (X, y) tuples for training
-            val_batches: List of (X, y) tuples for validation
-            **kwargs: Additional training parameters
-        """
+        """Train the model on (X, y) batch tuples."""
         pass
 
     # === LATENT ENCODING ===
 
     def encode(self, X: np.ndarray) -> np.ndarray:
-        """
-        Map normalized parameter vectors to latent representations.
-
-        Override to provide a custom latent space (e.g. penultimate layer of a
-        neural network). The default implementation is the identity map so that
-        the normalized parameter space itself is used as the latent space.
-
-        Args:
-            X: Normalized parameter array (batch_size, n_params)
-
-        Returns:
-            Latent representation array (batch_size, n_latent)
-        """
+        """Map normalized parameters to latent space; default is identity. Override for custom latent encoding."""
         return X
 
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
-        """
-        Fine-tune model with new measurements during fabrication.
-        
-        Override this method to implement online learning/adaptation.
-        Default behavior: Raises NotImplementedError.
-        
-        Args:
-            tune_batches: List of (X, y) tuples for tuning
-            **kwargs: Additional tuning parameters
-        
-        Raises:
-            NotImplementedError: If tuning not supported (default behavior)
-        """
+        """Fine-tune with new measurements during fabrication; override to enable online learning."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support tuning. "
             f"Override tuning() method to enable online learning."
@@ -201,41 +122,14 @@ class IPredictionModel(BaseInterface):
     # === EXPORT/IMPORT SUPPORT ===
     
     def _get_model_artifacts(self) -> Dict[str, Any]:
-        """
-        Serialize trained model state for production export.
-        
-        Override this method to enable export to InferenceBundle. Return all
-        artifacts needed to restore model: weights, configuration, trained objects
-        (sklearn models, neural networks, etc.). All values must be picklable.
-        Raise RuntimeError if model not trained.
-        
-        Returns:
-            Dict containing complete model state for reconstruction
-            (e.g., {'model': sklearn_model, 'scaler': fitted_scaler})
-        
-        Raises:
-            NotImplementedError: If export not supported (default behavior)
-        """
+        """Serialize trained model state for InferenceBundle export; override to enable. All values must be picklable."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support export. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable export."
         )
     
     def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
-        """
-        Restore trained model state from exported artifacts.
-        
-        Override this method to enable import from InferenceBundle. Reconstruct
-        model to its trained state from the dict returned by _get_model_artifacts().
-        Must perfectly reverse _get_model_artifacts() so that round-trip
-        export→import preserves model behavior.
-        
-        Args:
-            artifacts: Dict containing model state (from _get_model_artifacts())
-        
-        Raises:
-            NotImplementedError: If import not supported (default behavior)
-        """
+        """Restore trained model state from artifacts dict; must exactly reverse _get_model_artifacts()."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support import. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable import."

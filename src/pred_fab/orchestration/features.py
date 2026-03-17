@@ -11,19 +11,14 @@ from .base_system import BaseOrchestrationSystem
 
 
 class FeatureSystem(BaseOrchestrationSystem):
-    """
-    Orchestrates multiple feature models.
-    
-    Manages evaluation model execution and stores results in ExperimentData.
-    """
-    
+    """Orchestrates feature extraction across all registered feature models."""
+
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
         self.models: List[IFeatureModel] = []
 
     def _set_feature_column_names(self, schema: DatasetSchema) -> None:
-        """Set dimension codes for all metric arrays based on dataset parameters."""        
+        """Set dimension iterator column names on each model's DataArray outputs."""
         # Iterate over all feature models to set dim codes
         for model in self.models:
             for output_code in model.outputs:
@@ -87,7 +82,7 @@ class FeatureSystem(BaseOrchestrationSystem):
         visualize: bool = False,
         skip_feature_code: Dict[str, bool] = {}
     ) -> Dict[str, np.ndarray]:
-        """Core evaluation logic from raw parameters."""
+        """Run all feature models and return {code: tensor} dict."""
         
         # Prepare result dictionaries
         feature_dict: Dict[str, np.ndarray] = {}

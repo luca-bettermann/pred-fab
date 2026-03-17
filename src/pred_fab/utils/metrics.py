@@ -10,19 +10,10 @@ class Metrics:
     
     @staticmethod
     def calculate_regression_metrics(
-        y_true: np.ndarray, 
+        y_true: np.ndarray,
         y_pred: np.ndarray
     ) -> Dict[str, float]:
-        """
-        Calculate MAE, RMSE, and R² for regression results.
-        
-        Args:
-            y_true: Ground truth values
-            y_pred: Predicted values
-            
-        Returns:
-            Dictionary containing 'mae', 'rmse', 'r2', and 'n_samples'
-        """
+        """Compute MAE, RMSE, and R² for regression results; returns dict with 'mae', 'rmse', 'r2', 'n_samples'."""
         # Ensure numpy arrays
         y_true = np.array(y_true)
         y_pred = np.array(y_pred)

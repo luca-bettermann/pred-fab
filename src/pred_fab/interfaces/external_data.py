@@ -12,30 +12,12 @@ class IExternalData(ABC):
     # === ABSTRACT METHODS ===
     @abstractmethod
     def pull_parameters(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """
-        Load experiment parameters in batch from external source.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            
-        Returns:
-            missing_exp_codes: List of experiment codes that were not found
-            parameters_dict: Dict mapping experiment codes to their parameters
-        """
+        """Fetch parameters for given experiment codes; returns (missing_codes, code→params dict)."""
         ...
 
     # === OPTIONAL METHODS ===        
     def pull_performance(self, exp_codes: List[str]) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
-        """
-        Load performance metrics from external source for multiple experiments.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            
-        Returns:
-            missing_exp_codes: List of experiment codes that were not found
-            performance_dict: Dict mapping experiment codes to their performance metrics
-        """
+        """Fetch performance metrics for given codes; returns (missing_codes, code→metrics dict). Default: all missing."""
         missing_exp_codes = exp_codes
         performance_dict = {}
 
@@ -43,17 +25,7 @@ class IExternalData(ABC):
         return missing_exp_codes, performance_dict
 
     def pull_features(self, exp_codes: List[str], feature_name: str = "default", **kwargs) -> tuple[List[str], Dict[str, np.ndarray]]:
-        """
-        Load feature arrays from external source for multiple experiments.
-        
-        Args:
-            exp_codes: List of experiment codes to load
-            feature_name: Identifier for the feature type
-            
-        Returns:
-            missing_exp_codes: List of experiment codes that were not found
-            features_dict: Dict mapping experiment codes to their feature arrays
-        """
+        """Fetch feature arrays for given codes; returns (missing_codes, code→array dict). Default: all missing."""
         missing_exp_codes = exp_codes
         features_dict = {}
 
@@ -61,87 +33,29 @@ class IExternalData(ABC):
         return missing_exp_codes, features_dict
 
     def push_parameters(self, exp_codes: List[str], parameters: Dict[str, Dict[str, Any]], recompute: bool = False) -> bool:
-        """
-        Save experiment parameters to external source.
-        
-        Args:
-            exp_codes: List of experiment codes to save
-            parameters: Dict mapping experiment codes to their parameters
-            recompute: Whether to overwrite existing records
-            
-        Returns:
-            success: True if all records were saved successfully
-        """
+        """Push parameters to external source; returns True on success. Default: no-op (False)."""
         return False
 
     def push_performance(self, exp_codes: List[str], performance: Dict[str, Dict[str, Any]], recompute: bool = False) -> bool:
-        """
-        Save performance metrics to external source.
-        
-        Args:
-            exp_codes: List of experiment codes to save
-            performance: Dict mapping experiment codes to their metrics
-            recompute: Whether to overwrite existing metrics
-            
-        Returns:
-            success: True if all metrics were saved successfully
-        """
+        """Push performance metrics to external source; returns True on success. Default: no-op (False)."""
         return False
 
     def push_features(self, exp_codes: List[str], features: Dict[str, np.ndarray], recompute: bool = False, feature_name: str = "default", **kwargs) -> bool:
-        """
-        Save feature arrays to external source.
-        
-        Args:
-            exp_codes: List of experiment codes to save
-            features: Dict mapping experiment codes to their arrays
-            recompute: Whether to overwrite existing arrays
-            feature_name: Identifier for the feature type
-            
-        Returns:
-            success: True if all arrays were saved successfully
-        """
+        """Push feature arrays to external source; returns True on success. Default: no-op (False)."""
         return False
     
     def push_schema(self, schema_id: str, schema_data: Dict[str, Any]) -> bool:
-        """
-        Save dataset schema to external source.
-        
-        Args:
-            schema_id: Unique identifier for the schema (typically hash)
-            schema_data: Serialized schema dictionary
-            
-        Returns:
-            True if schema was successfully saved, False otherwise
-        """
-        # Default implementation - override in subclasses
+        """Push schema to external source; returns True on success. Default: no-op (False)."""
         return False
-    
+
     def pull_schema(self, schema_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve dataset schema from external source.
-        
-        Args:
-            schema_id: Unique identifier for the schema
-            
-        Returns:
-            Schema dictionary if found, None otherwise
-        """
-        # Default implementation - override in subclasses
+        """Fetch schema dict by ID from external source; returns None if not found. Default: no-op."""
         return None
-    
+
     # === PUBLIC API METHODS ===
     @final
     def pull_exp_parameters(self, exp_code: str) -> Dict[str, Any]:
-        """
-        Retrieve experiment record by experiment code.
-        
-        Args:
-            exp_code: Unique experiment identifier
-
-        Returns:
-            Dict of exp_record with "id", "Code" and "Parameters" keys
-        """
+        """Fetch parameters for a single experiment code; raises KeyError if not found."""
         missing, records = self.pull_parameters([exp_code])
         if exp_code in missing or exp_code not in records:
             raise KeyError(f"Experiment record not found: {exp_code}")

@@ -1,13 +1,7 @@
-"""
-LBPAgent - Main orchestration class for AIXD architecture.
-
-Replaces study-based logic with dataset-centric approach while maintaining
-existing workflow patterns. Wraps EvaluationSystem, PredictionSystem, and
-manages schema generation and dataset initialization.
-"""
+"""PfabAgent — main orchestration class for the PFAB framework."""
 
 import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple, Union
+from typing import Any, Dict, List, Set, Type, Optional, Tuple
 import numpy as np
 
 from pred_fab.utils.enum import SystemName
@@ -27,15 +21,8 @@ from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
 
 
 class PfabAgent:
-    """
-    Main orchestration class for AIXD-based LBP framework.
-    
-    - Model registration and activation
-    - Schema generation from active models
-    - Dataset initialization and loading
-    - Coordination between EvaluationSystem, PredictionSystem, CalibrationSystem
-    """
-    
+    """Main orchestration class: coordinates EvaluationSystem, PredictionSystem, and CalibrationSystem."""
+
     def __init__(
         self,
         root_folder: str,
@@ -43,17 +30,6 @@ class PfabAgent:
         recompute_flag: bool = False,
         visualize_flag: bool = True,
     ):
-        """
-        Initialize LBP Agent.
-        
-        Args:
-            root_folder: Project root folder
-            local_folder: Path to local data storage
-            external_data_interface: Optional interface for database operations
-            debug_flag: Skip external data operations if True
-            recompute_flag: Force recomputation/overwrite if True
-            visualize_flag: Enable visualizations if True
-        """
         
         # Initialize local data handler
         self.local_data = LocalData(root_folder)
@@ -315,12 +291,7 @@ class PfabAgent:
         n_optimization_rounds: int = 10,
         current_params: Optional[Dict[str, Any]] = None,
     ) -> ExperimentSpec:
-        """Run exploration and return an ``ExperimentSpec``.
-
-        When trajectory parameters are configured on the calibration system,
-        the step-loop iterates over their dimensions.  Otherwise a single
-        experiment-level proposal is returned (with empty schedules).
-        """
+        """UCB-based exploration proposal. Iterates over trajectory dimensions when configured."""
         self._check_systems(StepType.FULL)
 
         result = self.calibration_system.run_calibration(
@@ -344,7 +315,7 @@ class PfabAgent:
         visualize: bool = False,
         current_params: Optional[Dict[str, Any]] = None,
     ) -> ExperimentSpec:
-        """Run inference-guided proposal step and return an ``ExperimentSpec``."""
+        """Extract features, evaluate, then return an inference-guided proposal."""
         self._check_systems(StepType.FULL)
 
         start, end = 0, None
@@ -372,14 +343,16 @@ class PfabAgent:
         dimension: Optional[str] = None,
         step_index: Optional[int] = None,
         exp_data: Optional[ExperimentData] = None,
-        batch_size: Optional[int] = None,
         mode: Mode = Mode.INFERENCE,
         w_explore: float = 0.0,
         record: bool = False,
         **kwargs
     ) -> ExperimentSpec:
-        # QUESTION: should we remove batch_size and set it automatically, so that each step in dim is one batch? is there a risk for memory overflow? we cnould add it as an overwrite config, but I would not keep it here as an argument.
-        """Run online adaptation for a step slice and return an ``ExperimentSpec``."""
+        """Tune on a step slice then return an online calibration proposal.
+
+        batch_size is derived automatically (one batch per dimension step);
+        pass ``batch_size=N`` via ``**kwargs`` to override.
+        """
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
         if self.calibration_system is None:
@@ -393,7 +366,6 @@ class PfabAgent:
             exp_data=exp_data,
             start=start,
             end=end,
-            batch_size=batch_size,
             **kwargs
         )
         self._log_step_completion(exp_data.code, start, end, action="used for tuning")
@@ -515,21 +487,7 @@ class PfabAgent:
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         n_optimization_rounds: int = 10,
     ) -> List[ExperimentSpec]:
-        """Generate n baseline ExperimentSpecs using greedy maximin spacing.
-
-        Seeds the dataset before active learning begins.  No trained model
-        required.  Equivalent to calling the calibration engine with
-        ``mode=BASELINE, level=0, depth=0, horizon=n``.
-
-        Args:
-            n: Number of baseline proposals to generate.
-            param_bounds: Optional per-parameter bounds override.  Falls back
-                to bounds configured via :meth:`configure_calibration`.
-            n_optimization_rounds: Random restarts per proposal (for i ≥ 1).
-
-        Returns:
-            List of n ExperimentSpec objects.
-        """
+        """Generate n space-filling baseline proposals (greedy maximin). No trained model required."""
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
         result = self.calibration_system.run_baseline(
@@ -539,66 +497,6 @@ class PfabAgent:
         )
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
         return result
-
-    def calibration_step(
-        self,
-        datamodule: DataModule,
-        mode: Mode,
-        level: int = 0,
-        depth: int = 0,
-        horizon: int = 1,
-        w_explore: float = 0.5,
-        n_optimization_rounds: int = 10,
-        current_params: Optional[Dict[str, Any]] = None,
-        target_indices: Optional[Dict[str, int]] = None,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-    ) -> Union[ExperimentSpec, List[ExperimentSpec]]:
-        """Unified calibration entry point exposing the full engine API.
-
-        Named stage methods (``baseline_step``, ``exploration_step``,
-        ``inference_step``, ``adaptation_step``) are convenience wrappers that
-        fix their ``mode``/``level``/``depth``/``horizon`` and delegate here.
-
-        For ``Mode.BASELINE`` returns ``List[ExperimentSpec]`` (``horizon``
-        proposals).  For all other modes returns a single ``ExperimentSpec``.
-
-        Args:
-            datamodule: Active DataModule (unused for BASELINE).
-            mode: Calibration mode — BASELINE, EXPLORATION, or INFERENCE.
-            level: Hierarchy level at which the engine fires (0=experiment,
-                1=layer, 2=segment).
-            depth: Output granularity (0=one proposal, 1=per-layer,
-                2=per-segment).
-            horizon: Steps ahead to plan.  For BASELINE this is the number
-                of proposals; for EXPLORATION/INFERENCE this is the MPC
-                lookahead horizon (1 = no lookahead).
-            w_explore: Exploration weight κ ∈ (0, 1).  Ignored for BASELINE.
-            n_optimization_rounds: Random restarts per optimisation call.
-            current_params: Current parameter values (online/adaptation use).
-            target_indices: Target dimension indices (online/adaptation use).
-            param_bounds: Per-parameter bounds override (BASELINE only).
-        """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-
-        if mode == Mode.BASELINE:
-            return self.calibration_system.run_baseline(
-                n=horizon,
-                param_bounds=param_bounds,
-                n_optimization_rounds=n_optimization_rounds,
-            )
-
-        return self.calibration_system.run_calibration(
-            datamodule=datamodule,
-            mode=mode,
-            current_params=current_params,
-            target_indices=target_indices,
-            w_explore=w_explore,
-            n_optimization_rounds=n_optimization_rounds,
-            level=level,
-            depth=depth,
-            horizon=horizon,
-        )
 
     # === Helper Functions ===
 

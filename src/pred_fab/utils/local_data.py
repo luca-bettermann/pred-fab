@@ -9,26 +9,13 @@ from ..utils.enum import BlockType, FileFormat
 
 
 class LocalData:
-    """
-    Manages local file system operations for LBP framework.
-    
-    - JSON/CSV file reading/writing
-    - Path management and folder navigation
-    - Local caching of experiment data
-    """
+    """Local filesystem handler for JSON/CSV experiment data — path management, reading, and writing."""
 
     def __init__(
-            self, 
+            self,
             root_folder: str,
             local_folder_name: str = "local"
             ) -> None:
-        """
-        Initialize folder navigator with base paths.
-
-        Args:
-            root_folder: Project root folder
-            local_folder_name: Name of local data storage folder
-        """
         self.root_folder: str = root_folder
         self.local_folder: str = os.path.join(root_folder, local_folder_name)
 

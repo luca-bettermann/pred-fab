@@ -10,15 +10,9 @@ from ..utils import PfabLogger
 
 
 class IFeatureModel(BaseInterface):
-    """
-    Abstract base class for feature extraction models.
-    
-    Uses Dataset memoization to avoid redundant feature computation.
-    Models declare their parameters as dataclass fields (DataObjects).
-    """
+    """Abstract base for feature extraction models that iterate over dimension combinations."""
 
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
     
     # === ABSTRACT METHODS ===
@@ -30,41 +24,18 @@ class IFeatureModel(BaseInterface):
 
     @abstractmethod
     def _load_data(self, params: Dict, **dimensions) -> Any:
-        """
-        Load domain-specific data for feature extraction at specific parameter values.
-        
-        Uses parameter values to locate/load required data. May access external
-        databases, files, or other data sources not managed by Dataset.
-        
-        Args:
-            params: Parameter name-value pairs defining the context
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Loaded data object (format depends on domain)
-        """
+        """Load domain-specific raw data for the given parameter context (files, DB, etc.)."""
         ...
 
     @abstractmethod
     def _compute_feature_logic(
-        self, 
-        data: Any, 
-        params: Dict, 
+        self,
+        data: Any,
+        params: Dict,
         visualize: bool = False,
         **dimensions
         ) -> Dict[str, float]:
-        """
-        Extract feature value(s) from loaded data.
-        
-        Args:
-            data: Raw data object from _load_data (unstructured)
-            params: Parameter name-value pairs
-            visualize: Enable visualizations if True
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Computed feature values as a dict mapping feature codes to numeric values
-        """
+        """Extract feature values from loaded data; returns dict mapping feature codes to numeric values."""
         ...
     
     # Pre-define input features as empty. Features can not have other features as inputs.

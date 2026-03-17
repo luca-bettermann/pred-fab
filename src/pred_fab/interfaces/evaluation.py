@@ -9,15 +9,9 @@ from ..utils import PfabLogger
 
 
 class IEvaluationModel(BaseInterface):
-    """
-    Abstract base class for evaluation models.
-    
-    Evaluates feature values against target values to compute performance metrics.
-    Stores results directly in ExperimentData.
-    """
+    """Abstract base for evaluation models that score features against target values."""
 
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
     
     # === ABSTRACT METHODS ===
@@ -28,50 +22,22 @@ class IEvaluationModel(BaseInterface):
     @property
     @abstractmethod
     def input_feature(self) -> str:
-        """
-        Unique code identifying the feature that is required for this evaluation.
-
-        Returns:
-            Feature code string (e.g., 'feature_1')
-        """
+        """Code of the single input feature required by this evaluation model."""
         ...
 
     @property
     @abstractmethod
     def output_performance(self) -> str:
-        """
-        Unique code identifying the performance metric evaluated by this model.
-        
-        Returns:
-            Performance code string (e.g., 'dimensional_accuracy')
-        """
+        """Code of the performance attribute produced by this evaluation model."""
         ...
 
     @abstractmethod
     def _compute_target_value(self, params: Dict, **dimensions) -> float:
-        """
-        Compute target value for performance evaluation at specific parameters.
-        
-        Args:
-            params: Parameter name-value pairs
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Target value for these parameters
-        """
+        """Compute the target (ideal) value for scoring at the given parameter context."""
         ...
     
     def _compute_scaling_factor(self, params: Dict, **dimensions) -> Optional[float]:
-        """
-        Optionally compute scaling factor for performance normalization.
-        
-        Args:
-            params: Parameter name-value pairs
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Scaling factor or None for default scaling
-        """
+        """Optionally return a scaling factor for performance normalization; None uses target_value as denominator."""
         return None
     
     # === PUBLIC API ===
@@ -83,25 +49,7 @@ class IEvaluationModel(BaseInterface):
         parameters: Parameters,
         feature_std: Optional[NDArray] = None,
     ) -> Tuple[Optional[float], List[Optional[float]], Optional[List[Optional[float]]]]:
-        """Compute average performance from the feature array.
-
-        Args:
-            feature_array: 2-D array of shape (n_rows, n_dim_cols + 1) where
-                the last column contains the feature values and the preceding
-                columns hold dimensional iterator values.
-            parameters: Parameter block for target/scaling computation.
-            feature_std: Optional 1-D array of per-row feature standard
-                deviations (same length as feature_array). When provided,
-                each performance standard deviation is approximated as
-                ``std_feat / scaling_factor``.  Returns ``None`` when omitted.
-
-        Returns:
-            Tuple of:
-                - avg_performance: mean of performance_list (or None if empty)
-                - performance_list: per-row performance values
-                - std_performance_list: per-row performance std deviations, or
-                  None when feature_std was not provided
-        """
+        """Score each row of feature_array against its target; returns (avg, per-row list, per-row std or None)."""
         # Unpack DataBlocks
         params = parameters.get_values_dict()
         dim_iterator_codes = [dim.iterator_code for dim in self.get_input_dimensions()]
@@ -194,7 +142,7 @@ class IEvaluationModel(BaseInterface):
     @final
     @property
     def input_features(self) -> List[str]:
-        """Wrapper for input property."""
+        """Wrap input_feature scalar as a single-element list."""
         input_feat = self.input_feature
         if not isinstance(input_feat, str):
             raise TypeError(f"input_feature() must return str, got {type(input_feat).__name__}")
@@ -203,7 +151,7 @@ class IEvaluationModel(BaseInterface):
     @final
     @property
     def outputs(self) -> List[str]:
-        """Wrapper for output property."""
+        """Wrap output_performance scalar as a single-element list."""
         perf_code = self.output_performance
         if not isinstance(perf_code, str):
             raise TypeError(f"performance_code() must return str, got {type(perf_code).__name__}")
