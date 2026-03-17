@@ -26,9 +26,9 @@ experiment parameters that maximise process performance.
 
 ## Key Concepts
 - **Mode** — EXPLORATION (UCB), INFERENCE (perf-max), BASELINE (space-filling)
-- **ExperimentSpec** — output of calibration: `initial_params` + optional `schedules` for trajectory dims
-- **Trajectory** — per-segment parameter stepping via `configure_trajectory`; builds a step-grid at runtime
-- **MPC lookahead** — `mpc_lookahead=N` simulates N future steps in the calibration objective
+- **ExperimentSpec** — output of calibration: `initial_params` + optional `schedules` for step-grid dims
+- **Step parameters** — runtime params linked to a dimension via `configure_step_parameter`; re-optimised at each dimension transition
+- **MPC lookahead** — `mpc_lookahead=N` simulates N future steps per proposal (default 0 = greedy)
 - **Online vs Offline** — online uses trust-region bounds around current params; offline uses global bounds
 
 ## Knowledge Base

@@ -427,7 +427,7 @@ def test_run_calibration_with_similarity_fn_completes(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", "dim_1")
+    cs.configure_step_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     # Replace similarity_fn with constant 1.0
@@ -452,7 +452,7 @@ def test_run_calibration_without_similarity_fn_still_works(tmp_path):
 
     cs = agent.calibration_system
     cs.similarity_fn = None  # explicit no diversity
-    cs.configure_trajectory("speed", "dim_1")
+    cs.configure_step_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     current_params = exp.parameters.get_values_dict()
@@ -513,7 +513,7 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", "dim_1")
+    cs.configure_step_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": delta})
 
     first_exp = dataset.get_experiment(codes[0])
@@ -556,7 +556,7 @@ def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    agent.calibration_system.configure_trajectory("speed", "dim_1")
+    agent.calibration_system.configure_step_parameter("speed", "dim_1")
     agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
     first_exp = dataset.get_experiment(codes[0])

@@ -47,13 +47,17 @@ class IFeatureModel(BaseInterface):
 
     @final
     def compute_features(
-        self, 
+        self,
         parameters: Parameters,
         evaluate_from: int,
         evaluate_to: Optional[int] = None,
         visualize: bool = False
         ) -> NDArray:
-        """Iterate over parameter combinations to compute feature array."""
+        """Iterate over every dimension combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
+
+        Returns a 2-D array of shape (n_combinations, n_dims + n_outputs) where the first
+        n_dims columns are the dimension iterator values and the remaining columns are feature values.
+        """
 
         self.logger.info(f"Starting evaluation for '{self.outputs}'")
         

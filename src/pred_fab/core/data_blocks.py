@@ -15,7 +15,6 @@ class DataBlock(ABC):
     """Abstract container for typed DataObjects with value storage, validation, and access methods."""
     
     def __init__(self):
-        """Initialize empty DataBlock."""
         self.data_objects: Dict[str, DataObject] = {}  # Schema structure
         self.values: Dict[str, Any] = {}  # Actual values
         self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized

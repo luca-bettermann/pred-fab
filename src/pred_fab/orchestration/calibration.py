@@ -188,18 +188,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.trust_regions[code] = delta
 
 
-    def configure_trajectory(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Configure a runtime parameter for trajectory-based stepping over a dimension.
+    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
+        """Declare that a runtime-adjustable parameter should be re-optimised at each step of the given dimension.
 
-        Args:
-            code: Runtime-adjustable parameter code (e.g., ``"speed"``).
-            dimension_code: Dimension parameter code to step through (e.g., ``"dim_1"``).
-                Must refer to a ``DataDimension`` in the schema.
-            force: Overwrite an existing trajectory configuration for *code*.
+        When run_calibration iterates over the step-grid, only parameters whose mapped dimension
+        transitions at that step are free to move; the rest are fixed to the previous result.
         """
         if code not in self.data_objects:
             self.logger.console_warning(
-                f"Object '{code}' not found in schema; ignoring configure_trajectory."
+                f"Object '{code}' not found in schema; ignoring configure_step_parameter."
             )
             return
 
@@ -207,15 +204,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         if not obj.runtime_adjustable:
             raise ValueError(
-                f"Parameter '{code}' is not runtime-adjustable. configure_trajectory() "
+                f"Parameter '{code}' is not runtime-adjustable. configure_step_parameter() "
                 f"requires a parameter declared with runtime=True in the schema."
             )
 
         if not isinstance(obj, (DataReal, DataInt)):
             raise ValueError(
                 f"Parameter '{code}' type {type(obj).__name__} is not supported for "
-                f"trajectory exploration. Only DataReal and DataInt parameters can have "
-                f"trajectories."
+                f"dimension stepping. Only DataReal and DataInt parameters can be step parameters."
             )
 
         # Validate dimension_code

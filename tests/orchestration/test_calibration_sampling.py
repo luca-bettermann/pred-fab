@@ -306,55 +306,55 @@ def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
     assert "param_1" in set(spec.keys())
 
 
-# ===== configure_trajectory() =====
+# ===== configure_step_parameter() =====
 
-def test_configure_trajectory_sets_config(tmp_path):
-    """configure_trajectory() stores the dimension code for the given runtime param."""
+def test_configure_step_parameter_sets_config(tmp_path):
+    """configure_step_parameter() stores the dimension code for the given runtime param."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_trajectory("speed", "dim_1")
+    calibration.configure_step_parameter("speed", "dim_1")
     assert calibration.trajectory_configs["speed"] == "dim_1"
 
 
-def test_configure_trajectory_raises_for_non_runtime_param(tmp_path):
-    """configure_trajectory() raises ValueError when the parameter is not runtime-adjustable."""
+def test_configure_step_parameter_raises_for_non_runtime_param(tmp_path):
+    """configure_step_parameter() raises ValueError when the parameter is not runtime-adjustable."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
     with pytest.raises(ValueError, match="not runtime-adjustable"):
-        calibration.configure_trajectory("param_1", "dim_1")
+        calibration.configure_step_parameter("param_1", "dim_1")
 
 
-def test_configure_trajectory_blocked_without_force(tmp_path):
-    """Calling configure_trajectory twice without force is silently blocked."""
+def test_configure_step_parameter_blocked_without_force(tmp_path):
+    """Calling configure_step_parameter twice without force is silently blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_trajectory("speed", "dim_1")
-    calibration.configure_trajectory("speed", "dim_2")  # blocked without force
+    calibration.configure_step_parameter("speed", "dim_1")
+    calibration.configure_step_parameter("speed", "dim_2")  # blocked without force
 
     # Dimension code should remain dim_1, not overwritten by dim_2
     assert calibration.trajectory_configs["speed"] == "dim_1"
 
 
-def test_configure_trajectory_with_force_overwrites(tmp_path):
+def test_configure_step_parameter_with_force_overwrites(tmp_path):
     """force=True overwrites an existing trajectory configuration."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_trajectory("speed", "dim_1")
-    calibration.configure_trajectory("speed", "dim_2", force=True)
+    calibration.configure_step_parameter("speed", "dim_1")
+    calibration.configure_step_parameter("speed", "dim_2", force=True)
 
     assert calibration.trajectory_configs["speed"] == "dim_2"
 
 
-def test_configure_trajectory_ignores_unknown_param(tmp_path):
-    """configure_trajectory() silently skips params not in the schema."""
+def test_configure_step_parameter_ignores_unknown_param(tmp_path):
+    """configure_step_parameter() silently skips params not in the schema."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_trajectory("nonexistent", "dim_1")
+    calibration.configure_step_parameter("nonexistent", "dim_1")
     assert "nonexistent" not in calibration.trajectory_configs
 
 
@@ -405,7 +405,7 @@ def test_run_calibration_offline_raises_without_trust_region_for_trajectory_para
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", "dim_1")
+    cs.configure_step_parameter("speed", "dim_1")
     # Intentionally NOT calling configure_adaptation_delta for "speed"
 
     current_params = exp.parameters.get_values_dict()
@@ -425,7 +425,7 @@ def test_run_calibration_with_trajectory_returns_experiment_spec(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_trajectory("speed", "dim_1")
+    cs.configure_step_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     current_params = exp.parameters.get_values_dict()

@@ -110,7 +110,11 @@ class IEvaluationModel(BaseInterface):
     def _compute_performance_value(
         self, feature_value: float, target_value: float, scaling_factor: Optional[float]
     ) -> Optional[float]:
-        """Compute performance value from feature, target, and scaling."""
+        """Return 1 − |feature − target| / denominator, clamped to [0, 1].
+
+        denominator is scaling_factor when provided, else target_value.
+        Returns None for NaN/None inputs.
+        """
         # Handle missing values
         if feature_value is None or np.isnan(feature_value) or target_value is None:
             self.logger.warning("Feature or target is None/NaN, returning None")

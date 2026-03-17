@@ -28,7 +28,12 @@ class IPredictionModel(BaseInterface):
         return max_depth
 
     def validate_dimensional_coherence(self, schema: Any) -> None:
-        """Validate dimension coherence: output depths consistent (warn), declared dims form consecutive prefix (error), input feature depth ≤ op depth (error)."""
+        """Enforce three structural rules on the model's dimension declarations:
+
+        1. Output features may not mix depths (warning — shallower outputs are overwritten at deeper steps).
+        2. Declared dimension levels must form a consecutive prefix starting at 1 (error).
+        3. Input features may not exceed the model's operational depth (error).
+        """
         name = self.__class__.__name__
         op_depth = self.depth
 
