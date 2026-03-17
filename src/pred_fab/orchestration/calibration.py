@@ -588,9 +588,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         specs: List[ExperimentSpec] = []
 
         for i in range(n):
-            if i == 0:
-                # First proposal: centre of parameter space
-                x_norm = np.full(len(codes), 0.5)
+            if not proposed_norm:
+                # No reference points yet — objective is flat; any point is equally good.
+                # Pick a random starting point so the first proposal is not biased.
+                x_norm = self.rng.uniform(0.0, 1.0, len(codes))
             else:
                 # Greedy maximin: maximise min distance from proposed points
                 _refs = proposed_norm  # closure reference — stays current
