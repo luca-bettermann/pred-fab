@@ -83,7 +83,5 @@ class SourceStep(str, Enum):
     EXPLORATION = 'exploration_step'
     INFERENCE = 'inference_step'
     ADAPTATION = 'adaptation_step'
-    BASELINE_SAMPLING = 'baseline_sampling'      # legacy LHS path
-    BASELINE_TRAJECTORY = 'baseline_trajectory'  # legacy LHS path
 
     

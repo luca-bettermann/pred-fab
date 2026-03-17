@@ -24,7 +24,6 @@ from ..orchestration import (
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
-from ..utils._calib_baseline import BaselineSampler
 
 
 class PfabAgent:
@@ -509,21 +508,6 @@ class PfabAgent:
         if adaptation_delta:
             self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
-
-    def sample_baseline_experiments(
-        self,
-        n_samples: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-    ) -> List[ExperimentSpec]:
-        """Sample baseline experiment specifications using Latin Hypercube Sampling.
-
-        .. deprecated::
-            Use :meth:`baseline_step` instead, which applies greedy maximin
-            spacing through the unified CalibrationSystem engine.
-        """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        return self.calibration_system.baseline_sampler.generate(n_samples, param_bounds)
 
     def baseline_step(
         self,

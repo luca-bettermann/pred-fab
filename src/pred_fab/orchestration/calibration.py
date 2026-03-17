@@ -5,12 +5,11 @@ from scipy.optimize import minimize
 import warnings
 import functools
 
-from ..core import DataModule, DatasetSchema
+from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, SourceStep
+from ..utils import PfabLogger, Mode, NormMethod, SourceStep
 from .base_system import BaseOrchestrationSystem
-from ..utils._calib_baseline import BaselineSampler
 
 # Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -61,6 +60,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._active_datamodule: Optional[DataModule] = None
 
         # Set ordered weights
+        self.schema = schema
         self.perf_names_order = list(schema.performance_attrs.keys())
         self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
@@ -76,22 +76,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
 
-        # Baseline sampler — holds references to the shared config dicts so that
-        # configure_* mutations are automatically visible without re-wiring.
-        self.baseline_sampler = BaselineSampler(
-            parameters=self.parameters,
-            data_objects=self.data_objects,
-            schema_bounds=self.schema_bounds,
-            fixed_params=self.fixed_params,
-            param_bounds=self.param_bounds,
-            trajectory_configs=self.trajectory_configs,
-            rng=self.rng,
-            logger=self.logger,
-            random_seed=self._random_seed,
-        )
-
     # ------------------------------------------------------------------
-    # random_seed property — propagates updates to the baseline sampler.
+    # random_seed property
     # ------------------------------------------------------------------
 
     @property
@@ -101,8 +87,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     @random_seed.setter
     def random_seed(self, value: Optional[int]) -> None:
         self._random_seed = value
-        if hasattr(self, 'baseline_sampler') and self.baseline_sampler is not None:
-            self.baseline_sampler.random_seed = value
+        self.rng = np.random.RandomState(value)
 
     def _set_param_constraints_from_schema(self, schema: DatasetSchema) -> None:
         """Extract parameter constraints from dataset schema."""
@@ -361,6 +346,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
         return -score
 
+    def _baseline_func(self, X: np.ndarray, proposed_norm: List[np.ndarray]) -> float:
+        """Greedy maximin objective: maximise minimum distance from all proposed points.
+
+        Returns the negative min-distance for minimisation, consistent with the
+        sign convention of the other objective functions.
+        """
+        dists = [float(np.linalg.norm(X - ref)) for ref in proposed_norm]
+        return -min(dists)
+
     def _compute_system_performance(self, performance: List[float]) -> float:
         """Compute weighted system performance [0, 1]."""
         if not performance:
@@ -520,6 +514,50 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return ExperimentSpec(initial_params=initial, schedules=schedules)
 
+    def _build_schema_datamodule(self) -> DataModule:
+        """Build a schema-only DataModule for baseline proposal generation.
+
+        No training data is required.  Categorical parameters are one-hot
+        encoded via the DataModule's column machinery; all normalization is
+        identity (``NormMethod.NONE``).  Parameters with infinite effective
+        bounds are excluded and a warning is logged, consistent with the
+        space-filling semantics of baseline generation.
+
+        Caller is responsible for temporarily applying any per-call
+        ``param_bounds`` overrides to ``self.param_bounds`` before invoking
+        this method so that the correct bounds are reflected here.
+        """
+        active_codes: List[str] = []
+        for code, data_obj in self.data_objects.items():
+            if code in self.fixed_params:
+                continue
+            # Categoricals and bools always have finite schema bounds — include.
+            if isinstance(data_obj, (DataCategorical, DataBool)):
+                active_codes.append(code)
+                continue
+            # Continuous/integer: skip parameters whose effective bounds are unbounded.
+            try:
+                lo, hi = self._get_hierarchical_bounds_for_code(code)
+            except ValueError:
+                continue
+            if lo == -np.inf or hi == np.inf:
+                self.logger.warning(
+                    f"Parameter '{code}' has infinite bounds; "
+                    "skipping in baseline generation."
+                )
+                continue
+            active_codes.append(code)
+
+        dataset = Dataset(schema=self.schema, debug_flag=True)
+        datamodule = DataModule(dataset, normalize=NormMethod.NONE)
+        datamodule.initialize(
+            input_parameters=active_codes,
+            input_features=[],
+            output_columns=list(self.schema.performance_attrs.keys()),
+        )
+        datamodule.fit_without_data()
+        return datamodule
+
     # === OPTIMIZATION WORKFLOW ===
 
     def run_baseline(
@@ -530,18 +568,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> List["ExperimentSpec"]:
         """Generate n baseline ExperimentSpecs using greedy maximin spacing.
 
-        The first proposal is the centre of the parameter space.  Each
-        subsequent proposal maximises the minimum Euclidean distance in
-        bounds-normalised parameter space from all previously proposed points:
+        Each proposal maximises the minimum Euclidean distance in the
+        DataModule's encoded parameter space from all previously proposed
+        points (greedy maximin).  The first proposal is drawn at random
+        because the objective is flat with no reference points.
 
-            α(x) = min_{j ∈ proposed_so_far} ||x - x_j||
-
-        No trained model is required.
+        Categorical parameters are handled via one-hot encoding — the same
+        mechanism used by EXPLORATION and INFERENCE — so they are included in
+        the optimisation without requiring them to be fixed in advance.
+        Parameters with infinite effective bounds are excluded with a warning.
 
         Args:
             n: Number of baseline proposals to generate.
             param_bounds: Optional per-parameter bounds override.  Falls back
-                to configured bounds when absent.
+                to bounds configured via :meth:`configure_param_bounds`.
             n_optimization_rounds: Random restarts per proposal (i ≥ 1).
 
         Returns:
@@ -551,80 +591,66 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"Generating {n} baseline experiments using greedy maximin spacing..."
         )
 
-        # Collect free parameters with finite bounds
-        effective_bounds: Dict[str, Tuple[float, float]] = {}
-        for code in self.data_objects:
-            if code in self.fixed_params:
-                continue
-            override = (param_bounds or {}).get(code)
-            if override is not None:
-                low, high = override
-            else:
-                try:
-                    low, high = self._get_hierarchical_bounds_for_code(code)
-                except ValueError:
-                    continue
-            if low == -np.inf or high == np.inf:
-                self.logger.warning(
-                    f"Parameter '{code}' has infinite bounds; skipping in baseline generation."
-                )
-                continue
-            effective_bounds[code] = (low, high)
-
-        if not effective_bounds:
-            self.logger.warning("No valid parameters for baseline generation.")
+        if n == 0:
             return []
 
-        codes = sorted(effective_bounds.keys())
-        low_arr = np.array([effective_bounds[c][0] for c in codes])
-        high_arr = np.array([effective_bounds[c][1] for c in codes])
-        ranges = high_arr - low_arr
+        # Apply per-call bounds overrides temporarily so _build_schema_datamodule
+        # and _get_global_bounds see the correct bounds, then restore on exit.
+        _saved_param_bounds = dict(self.param_bounds)
+        if param_bounds:
+            self.param_bounds.update(param_bounds)
 
-        def _to_raw(norm: np.ndarray) -> np.ndarray:
-            return low_arr + norm * ranges
+        try:
+            datamodule = self._build_schema_datamodule()
+            if not datamodule.input_columns:
+                self.logger.warning("No valid parameters for baseline generation.")
+                return []
 
-        bounds_01 = [(0.0, 1.0)] * len(codes)
-        proposed_norm: List[np.ndarray] = []
-        specs: List[ExperimentSpec] = []
+            bounds = self._get_global_bounds(datamodule)
+            proposed_norm: List[np.ndarray] = []
+            specs: List[ExperimentSpec] = []
 
-        for i in range(n):
-            if not proposed_norm:
-                # No reference points yet — objective is flat; any point is equally good.
-                # Pick a random starting point so the first proposal is not biased.
-                x_norm = self.rng.uniform(0.0, 1.0, len(codes))
-            else:
-                # Greedy maximin: maximise min distance from proposed points
-                _refs = proposed_norm  # closure reference — stays current
+            def _flat_objective(X: np.ndarray) -> float:
+                return 0.0
 
-                def neg_min_dist(x: np.ndarray, refs: List[np.ndarray] = _refs) -> float:
-                    dists = [float(np.linalg.norm(x - ref)) for ref in refs]
-                    return -min(dists)
+            for i in range(n):
+                if not proposed_norm:
+                    # First proposal: objective is flat — any point is equally good.
+                    # Pass n_rounds=0 so _run_optimization picks a single random point.
+                    objective: Callable = _flat_objective
+                    n_rounds = 0
+                else:
+                    _refs = list(proposed_norm)
+                    objective = functools.partial(self._baseline_func, proposed_norm=_refs)
+                    n_rounds = n_optimization_rounds
 
-                best_x: Optional[np.ndarray] = None
-                best_val = np.inf
-                for _ in range(n_optimization_rounds):
-                    x0 = self.rng.uniform(0.0, 1.0, len(codes))
-                    try:
-                        res = minimize(neg_min_dist, x0, bounds=bounds_01, method='L-BFGS-B')
-                        if res.fun < best_val:
-                            best_val = res.fun
-                            best_x = res.x
-                    except Exception:
-                        continue
+                result = self._run_optimization(
+                    datamodule=datamodule,
+                    x0_params=None,
+                    bounds=bounds,
+                    objective_func=objective,
+                    n_rounds=n_rounds,
+                    fixed_param_values=dict(self.fixed_params),
+                )
 
-                x_norm = best_x if best_x is not None else self.rng.uniform(0.0, 1.0, len(codes))
+                # Re-encode to build the maximin reference set for the next proposal.
+                try:
+                    proposed_norm.append(datamodule.params_to_array(result).copy())
+                except Exception:
+                    self.logger.warning(
+                        f"Could not re-encode proposal {i + 1} into normalised space; "
+                        "subsequent spacing may degrade."
+                    )
 
-            proposed_norm.append(x_norm.copy())
-            params_dict: Dict[str, Any] = dict(zip(codes, _to_raw(x_norm).tolist()))
-            params_dict.update(self.fixed_params)
-            params_dict = self.parameters.sanitize_values(params_dict, ignore_unknown=True)
+                proposal = ParameterProposal.from_dict(result, source_step=SourceStep.BASELINE)
+                specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+                self.logger.debug(f"Baseline proposal {i + 1}/{n}: {result}")
 
-            proposal = ParameterProposal.from_dict(params_dict, source_step=SourceStep.BASELINE)
-            specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-            self.logger.debug(f"Baseline proposal {i + 1}/{n}: {params_dict}")
+            self.logger.info(f"Generated {n} baseline experiments.")
+            return specs
 
-        self.logger.info(f"Generated {n} baseline experiments.")
-        return specs
+        finally:
+            self.param_bounds = _saved_param_bounds
 
     def run_calibration(
         self,

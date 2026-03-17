@@ -260,6 +260,25 @@ class DataModule:
     def fit_normalization(self, split: SplitType = SplitType.TRAIN) -> None:
         """Public wrapper for fitting normalization on a dataset split."""
         self._fit_normalize(split)
+
+    def fit_without_data(self) -> None:
+        """Mark this DataModule as fitted with no normalization stats.
+
+        All parameters effectively use ``NormMethod.NONE`` (identity).  The
+        one-hot column structure set up by :meth:`initialize` is fully
+        operational, so :meth:`params_to_array` and :meth:`array_to_params`
+        work correctly for encoding/decoding without any training data.
+
+        Use this when you need the DataModule's column and encoding machinery
+        but have no training data yet — e.g. for baseline proposal generation.
+        """
+        if not self._initialized:
+            raise RuntimeError(
+                "DataModule must be initialized before calling fit_without_data()."
+            )
+        self._parameter_stats = {}
+        self._feature_stats = {}
+        self._is_fitted = True
     
     def get_batches(self, split: SplitType = SplitType.TRAIN) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
