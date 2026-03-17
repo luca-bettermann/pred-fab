@@ -53,6 +53,7 @@ class Domain(str, Enum):
 
 class Mode(str, Enum):
     """Enumeration of workflow modes."""
+    BASELINE = 'baseline'
     EXPLORATION = 'exploration'
     INFERENCE = 'inference'
 
@@ -78,10 +79,11 @@ class SamplingStrategy(str, Enum):
 
 class SourceStep(str, Enum):
     """Identifies which agent step produced a ParameterProposal or ParameterUpdateEvent."""
+    BASELINE = 'baseline_step'
     EXPLORATION = 'exploration_step'
     INFERENCE = 'inference_step'
     ADAPTATION = 'adaptation_step'
-    BASELINE_SAMPLING = 'baseline_sampling'
-    BASELINE_TRAJECTORY = 'baseline_trajectory'
+    BASELINE_SAMPLING = 'baseline_sampling'      # legacy LHS path
+    BASELINE_TRAJECTORY = 'baseline_trajectory'  # legacy LHS path
 
     

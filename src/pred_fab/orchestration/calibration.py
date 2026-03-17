@@ -54,7 +54,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.similarity_fn = similarity_fn
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
-        self.default_mpc_lookahead_depth: int = 0
         self.default_mpc_discount: float = 0.9
 
         # Active datamodule — set before each optimization run so that
@@ -422,6 +421,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _build_objective(self, mode: Mode, w_explore: float) -> Callable:
         """Return the objective function for the given calibration mode."""
+        if mode == Mode.BASELINE:
+            raise ValueError(
+                "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
+            )
         if mode == Mode.EXPLORATION:
             return functools.partial(self._acquisition_func, w_explore=w_explore)
         elif mode == Mode.INFERENCE:
@@ -519,6 +522,109 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === OPTIMIZATION WORKFLOW ===
 
+    def run_baseline(
+        self,
+        n: int,
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        n_optimization_rounds: int = 10,
+    ) -> List["ExperimentSpec"]:
+        """Generate n baseline ExperimentSpecs using greedy maximin spacing.
+
+        The first proposal is the centre of the parameter space.  Each
+        subsequent proposal maximises the minimum Euclidean distance in
+        bounds-normalised parameter space from all previously proposed points:
+
+            α(x) = min_{j ∈ proposed_so_far} ||x - x_j||
+
+        No trained model is required.
+
+        Args:
+            n: Number of baseline proposals to generate.
+            param_bounds: Optional per-parameter bounds override.  Falls back
+                to configured bounds when absent.
+            n_optimization_rounds: Random restarts per proposal (i ≥ 1).
+
+        Returns:
+            List of n ExperimentSpec objects.
+        """
+        self.logger.info(
+            f"Generating {n} baseline experiments using greedy maximin spacing..."
+        )
+
+        # Collect free parameters with finite bounds
+        effective_bounds: Dict[str, Tuple[float, float]] = {}
+        for code in self.data_objects:
+            if code in self.fixed_params:
+                continue
+            override = (param_bounds or {}).get(code)
+            if override is not None:
+                low, high = override
+            else:
+                try:
+                    low, high = self._get_hierarchical_bounds_for_code(code)
+                except ValueError:
+                    continue
+            if low == -np.inf or high == np.inf:
+                self.logger.warning(
+                    f"Parameter '{code}' has infinite bounds; skipping in baseline generation."
+                )
+                continue
+            effective_bounds[code] = (low, high)
+
+        if not effective_bounds:
+            self.logger.warning("No valid parameters for baseline generation.")
+            return []
+
+        codes = sorted(effective_bounds.keys())
+        low_arr = np.array([effective_bounds[c][0] for c in codes])
+        high_arr = np.array([effective_bounds[c][1] for c in codes])
+        ranges = high_arr - low_arr
+
+        def _to_raw(norm: np.ndarray) -> np.ndarray:
+            return low_arr + norm * ranges
+
+        bounds_01 = [(0.0, 1.0)] * len(codes)
+        proposed_norm: List[np.ndarray] = []
+        specs: List[ExperimentSpec] = []
+
+        for i in range(n):
+            if i == 0:
+                # First proposal: centre of parameter space
+                x_norm = np.full(len(codes), 0.5)
+            else:
+                # Greedy maximin: maximise min distance from proposed points
+                _refs = proposed_norm  # closure reference — stays current
+
+                def neg_min_dist(x: np.ndarray, refs: List[np.ndarray] = _refs) -> float:
+                    dists = [float(np.linalg.norm(x - ref)) for ref in refs]
+                    return -min(dists)
+
+                best_x: Optional[np.ndarray] = None
+                best_val = np.inf
+                for _ in range(n_optimization_rounds):
+                    x0 = self.rng.uniform(0.0, 1.0, len(codes))
+                    try:
+                        res = minimize(neg_min_dist, x0, bounds=bounds_01, method='L-BFGS-B')
+                        if res.fun < best_val:
+                            best_val = res.fun
+                            best_x = res.x
+                    except Exception:
+                        continue
+
+                x_norm = best_x if best_x is not None else self.rng.uniform(0.0, 1.0, len(codes))
+
+            proposed_norm.append(x_norm.copy())
+            params_dict: Dict[str, Any] = dict(zip(codes, _to_raw(x_norm).tolist()))
+            params_dict.update(self.fixed_params)
+            params_dict = self.parameters.sanitize_values(params_dict, ignore_unknown=True)
+
+            proposal = ParameterProposal.from_dict(params_dict, source_step=SourceStep.BASELINE)
+            specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+            self.logger.debug(f"Baseline proposal {i + 1}/{n}: {params_dict}")
+
+        self.logger.info(f"Generated {n} baseline experiments.")
+        return specs
+
     def run_calibration(
         self,
         datamodule: DataModule,
@@ -527,7 +633,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        mpc_lookahead_depth: Optional[int] = None,
+        level: int = 0,
+        depth: int = 0,
+        horizon: int = 1,
         mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
         """Run calibration and return an ExperimentSpec.
@@ -536,9 +644,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Omit both for offline (global bounds with random restarts) optimization.
         When trajectory parameters are configured, iterates over a step grid derived
         from current_params dimensions.
+
+        Args:
+            level: Hierarchy level at which the engine fires (0=experiment,
+                1=layer, 2=segment).  Informational — shapes future behaviour.
+            depth: Output granularity (0=one proposal, 1=per-layer,
+                2=per-segment).  Informational — shapes future behaviour.
+            horizon: Steps ahead to plan.  For EXPLORATION/INFERENCE this sets
+                the MPC lookahead depth (horizon=1 means no lookahead).
         """
-        # Resolve instance-level MPC defaults
-        lookahead = self.default_mpc_lookahead_depth if mpc_lookahead_depth is None else mpc_lookahead_depth
+        # horizon=1 → no MPC lookahead; horizon=2 → one step ahead; etc.
+        lookahead = max(0, horizon - 1)
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
 
         self._active_datamodule = datamodule
@@ -547,9 +663,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if lookahead > 0:
             objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
 
-        source_step = (
-            SourceStep.EXPLORATION if mode == Mode.EXPLORATION else SourceStep.INFERENCE
-        )
+        if mode == Mode.EXPLORATION:
+            source_step: SourceStep = SourceStep.EXPLORATION
+        elif mode == Mode.INFERENCE:
+            source_step = SourceStep.INFERENCE
+        else:
+            source_step = SourceStep.BASELINE
 
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None

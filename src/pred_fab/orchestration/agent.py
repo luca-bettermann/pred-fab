@@ -7,7 +7,7 @@ manages schema generation and dataset initialization.
 """
 
 import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple
+from typing import Any, Dict, List, Set, Type, Optional, Tuple, Union
 import numpy as np
 
 from pred_fab.utils.enum import SystemName
@@ -515,10 +515,106 @@ class PfabAgent:
         n_samples: int,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> List[ExperimentSpec]:
-        """Sample baseline experiment specifications using Latin Hypercube Sampling."""
+        """Sample baseline experiment specifications using Latin Hypercube Sampling.
+
+        .. deprecated::
+            Use :meth:`baseline_step` instead, which applies greedy maximin
+            spacing through the unified CalibrationSystem engine.
+        """
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
         return self.calibration_system.baseline_sampler.generate(n_samples, param_bounds)
+
+    def baseline_step(
+        self,
+        n: int,
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        n_optimization_rounds: int = 10,
+    ) -> List[ExperimentSpec]:
+        """Generate n baseline ExperimentSpecs using greedy maximin spacing.
+
+        Seeds the dataset before active learning begins.  No trained model
+        required.  Equivalent to calling the calibration engine with
+        ``mode=BASELINE, level=0, depth=0, horizon=n``.
+
+        Args:
+            n: Number of baseline proposals to generate.
+            param_bounds: Optional per-parameter bounds override.  Falls back
+                to bounds configured via :meth:`configure_calibration`.
+            n_optimization_rounds: Random restarts per proposal (for i ≥ 1).
+
+        Returns:
+            List of n ExperimentSpec objects.
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        result = self.calibration_system.run_baseline(
+            n=n,
+            param_bounds=param_bounds,
+            n_optimization_rounds=n_optimization_rounds,
+        )
+        self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
+        return result
+
+    def calibration_step(
+        self,
+        datamodule: DataModule,
+        mode: Mode,
+        level: int = 0,
+        depth: int = 0,
+        horizon: int = 1,
+        w_explore: float = 0.5,
+        n_optimization_rounds: int = 10,
+        current_params: Optional[Dict[str, Any]] = None,
+        target_indices: Optional[Dict[str, int]] = None,
+        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    ) -> Union[ExperimentSpec, List[ExperimentSpec]]:
+        """Unified calibration entry point exposing the full engine API.
+
+        Named stage methods (``baseline_step``, ``exploration_step``,
+        ``inference_step``, ``adaptation_step``) are convenience wrappers that
+        fix their ``mode``/``level``/``depth``/``horizon`` and delegate here.
+
+        For ``Mode.BASELINE`` returns ``List[ExperimentSpec]`` (``horizon``
+        proposals).  For all other modes returns a single ``ExperimentSpec``.
+
+        Args:
+            datamodule: Active DataModule (unused for BASELINE).
+            mode: Calibration mode — BASELINE, EXPLORATION, or INFERENCE.
+            level: Hierarchy level at which the engine fires (0=experiment,
+                1=layer, 2=segment).
+            depth: Output granularity (0=one proposal, 1=per-layer,
+                2=per-segment).
+            horizon: Steps ahead to plan.  For BASELINE this is the number
+                of proposals; for EXPLORATION/INFERENCE this is the MPC
+                lookahead horizon (1 = no lookahead).
+            w_explore: Exploration weight κ ∈ (0, 1).  Ignored for BASELINE.
+            n_optimization_rounds: Random restarts per optimisation call.
+            current_params: Current parameter values (online/adaptation use).
+            target_indices: Target dimension indices (online/adaptation use).
+            param_bounds: Per-parameter bounds override (BASELINE only).
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+
+        if mode == Mode.BASELINE:
+            return self.calibration_system.run_baseline(
+                n=horizon,
+                param_bounds=param_bounds,
+                n_optimization_rounds=n_optimization_rounds,
+            )
+
+        return self.calibration_system.run_calibration(
+            datamodule=datamodule,
+            mode=mode,
+            current_params=current_params,
+            target_indices=target_indices,
+            w_explore=w_explore,
+            n_optimization_rounds=n_optimization_rounds,
+            level=level,
+            depth=depth,
+            horizon=horizon,
+        )
 
     # === Helper Functions ===
 
