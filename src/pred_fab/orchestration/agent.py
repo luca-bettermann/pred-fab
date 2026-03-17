@@ -587,11 +587,11 @@ class PfabAgent:
                 raise RuntimeError("No active experiment set. Call set_active_experiment() first.")
             exp_data = self.active_exp
 
-        # Determine evaluation range
-        if any([dimension, step_index]) and not all([dimension, step_index]):
+        # Determine evaluation range (use explicit None checks to handle step_index=0)
+        if (dimension is None) != (step_index is None):
             raise ValueError("Both dimension and step_index must be provided for partial evaluation.")
         # Partial evaluation
-        elif dimension and step_index:
+        elif dimension is not None and step_index is not None:
             start, end = exp_data.parameters.get_start_and_end_indices(dimension, step_index)
         # Full evaluation
         else:
