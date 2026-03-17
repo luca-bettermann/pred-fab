@@ -13,7 +13,6 @@ from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, PfabLogger, SplitType
 from tests.utils.interfaces import (
-    CapturingSurrogateModel,
     MixedFeatureModel,
     MixedPredictionModel,
     ScalarEvaluationModel,
@@ -69,6 +68,8 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
     d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=5)
     d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=5)
     p3 = Parameter.categorical("param_3", categories=["A", "B", "C"])
+    # Runtime-adjustable parameter for adaptation / trajectory tests.
+    speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
     f1 = Feature.array("feature_1")
     f2 = Feature.array("feature_2")
@@ -80,7 +81,7 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
     return DatasetSchema(
         root_folder=str(tmp_path),
         name=name,
-        parameters=Parameters.from_list([p1, p2, d1, d2, p3]),
+        parameters=Parameters.from_list([p1, p2, d1, d2, p3, speed]),
         features=Features.from_list([f1, f2, f3]),
         performance=PerformanceAttributes.from_list([perf1, perf2]),
     )
@@ -132,12 +133,17 @@ def evaluate_loaded_workflow_experiments(agent: PfabAgent, dataset: Dataset, cat
 
 
 def configure_default_workflow_calibration(agent: PfabAgent) -> None:
-    """Apply the workflow calibration configuration used across integration tests."""
+    """Apply the workflow calibration configuration used across integration tests.
+
+    Trust regions are configured only for ``speed`` — the one runtime-adjustable parameter
+    in the workflow schema. Static parameters (``param_1``, ``param_2``) cannot receive
+    trust regions as of Phase 2 validation.
+    """
     agent.configure_calibration(
         performance_weights={"performance_1": 2.0, "performance_2": 1.3},
         bounds={"param_1": (0.0, 10.0), "param_2": (1, 4), "dim_1": (1, 3), "dim_2": (1, 3)},
         fixed_params={"param_3": "B"},
-        adaptation_delta={"param_1": 0.1, "param_2": 0.5},
+        adaptation_delta={"speed": 10.0},  # only runtime-adjustable params may have deltas
     )
 
 
@@ -221,25 +227,28 @@ def build_shape_checking_prediction_system(
     return system, models
 
 
-def build_calibration_system_with_capturing_surrogate(
+def build_calibration_system(
     tmp_path,
     dataset: Dataset,
-    predict_fn: Optional[Callable[[np.ndarray], Dict[str, np.ndarray]]] = None,
-    residual_predict_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-    evaluate_fn: Optional[Callable[[np.ndarray], Dict[str, np.ndarray]]] = None,
-) -> Tuple[CalibrationSystem, CapturingSurrogateModel]:
-    """Build calibration system using a reusable capturing surrogate interface."""
+    perf_fn: Optional[Callable] = None,
+    uncertainty_fn: Optional[Callable] = None,
+    similarity_fn: Optional[Callable] = None,
+) -> CalibrationSystem:
+    """Build a CalibrationSystem with lightweight no-op callables for unit tests."""
     logger = build_test_logger(tmp_path)
-    surrogate = CapturingSurrogateModel(logger)
-    calibration = CalibrationSystem(
-        schema=dataset.schema,
+    schema = dataset.schema
+    perf_names = list(schema.performance_attrs.keys())
+
+    def _default_perf_fn(params_dict):
+        return {name: 0.5 for name in perf_names}
+
+    return CalibrationSystem(
+        schema=schema,
         logger=logger,
-        predict_fn=predict_fn or (lambda x: {"feature_scalar": np.zeros((len(x), 1))}),
-        residual_predict_fn=residual_predict_fn or (lambda x: np.zeros((len(x), 1))),
-        evaluate_fn=evaluate_fn or (lambda x: {"performance_1": np.zeros((len(x), 1))}),
-        surrogate_model=surrogate,
+        perf_fn=perf_fn or _default_perf_fn,
+        uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
+        similarity_fn=similarity_fn,
     )
-    return calibration, surrogate
 
 
 def build_real_agent_stack(tmp_path):
@@ -249,6 +258,61 @@ def build_real_agent_stack(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     agent = PfabAgent(root_folder=str(tmp_path), debug_flag=True)
+    agent.register_feature_model(MixedFeatureModel)
+    agent.register_evaluation_model(ScalarEvaluationModel)
+    agent.register_prediction_model(MixedPredictionModel)
+    agent.initialize_systems(schema, verbose_flag=False)
+
+    datamodule = agent.create_datamodule(dataset)
+    return agent, dataset, exp, datamodule
+
+
+def build_runtime_agent_stack(tmp_path):
+    """Build a real orchestration stack with a runtime-adjustable ``speed`` parameter.
+
+    Used by adaptation / trajectory tests that need a schema containing at least one
+    ``runtime=True`` parameter. The schema is identical to the mixed-feature schema
+    (feature_grid, feature_d1, feature_scalar) but adds ``speed`` (runtime=True, 0–200).
+    """
+    from pred_fab.core.data_objects import Feature, PerformanceAttribute
+    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+    from pred_fab.core import Dataset, DatasetSchema
+
+    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
+    speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
+    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
+    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
+
+    f_grid = Feature.array("feature_grid")
+    f_d1 = Feature.array("feature_d1")
+    f_scalar = Feature.array("feature_scalar")
+    perf = PerformanceAttribute.score("performance_1")
+
+    params = Parameters.from_list([p1, speed, d1, d2])
+    feats = Features.from_list([f_grid, f_d1, f_scalar])
+    perfs = PerformanceAttributes.from_list([perf])
+
+    # Mirror FeatureSystem write paths — same column setup as build_mixed_feature_schema.
+    feats.get("feature_grid").set_columns(["d1", "d2", "feature_grid"])
+    feats.get("feature_d1").set_columns(["d1", "feature_d1"])
+    feats.get("feature_scalar").set_columns(["feature_scalar"])
+
+    schema = DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_runtime",
+        parameters=params,
+        features=feats,
+        performance=perfs,
+    )
+    dataset = Dataset(schema=schema, debug_flag=True)
+    dataset.create_experiment(
+        "exp_001",
+        parameters={"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3},
+    )
+    exp = dataset.get_experiment("exp_001")
+
+    from pred_fab.orchestration.agent import PfabAgent as _PfabAgent
+    agent = _PfabAgent(root_folder=str(tmp_path), debug_flag=True)
     agent.register_feature_model(MixedFeatureModel)
     agent.register_evaluation_model(ScalarEvaluationModel)
     agent.register_prediction_model(MixedPredictionModel)

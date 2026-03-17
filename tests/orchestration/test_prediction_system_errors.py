@@ -195,16 +195,19 @@ def test_predict_experiment_returns_dict_of_feature_arrays(tmp_path):
 
 
 def test_predict_experiment_arrays_have_correct_shape(tmp_path):
-    """Prediction arrays should have the same shape as the dimensional structure."""
+    """Prediction arrays should have shapes matching each feature's dimensional depth."""
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     predictions = agent.pred_system.predict_experiment(exp_data=exp)
-    # The mixed schema has dim_1=2, dim_2=3, so shape (2, 3)
-    for arr in predictions.values():
-        assert arr.shape == (2, 3)
+    # feature_grid is depth-2 (d1, d2) → shape (2, 3)
+    assert predictions["feature_grid"].shape == (2, 3)
+    # feature_d1 is depth-1 (d1 only) → shape (2,)
+    assert predictions["feature_d1"].shape == (2,)
+    # feature_scalar is depth-0 (no dims) → shape ()
+    assert predictions["feature_scalar"].shape == ()
 
 
 def test_predict_experiment_raises_before_training(tmp_path):
@@ -217,16 +220,15 @@ def test_predict_experiment_raises_before_training(tmp_path):
 
 
 def test_predict_experiment_range_subset_does_not_fill_all(tmp_path):
-    """Predicting only a partial range leaves the rest as NaN."""
+    """Predicting only a partial range on a depth-2 feature leaves the rest as NaN."""
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    total = exp.get_num_rows()
+    total = 6  # dim_1=2, dim_2=3 → 6 total positions for depth-2 features
     predictions = agent.pred_system.predict_experiment(exp_data=exp, predict_from=0, predict_to=2)
-    # Only first 2 positions filled; rest should be NaN
-    for arr in predictions.values():
-        flat = arr.flatten()
-        assert not np.isnan(flat[0])
-        assert np.isnan(flat[total - 1])
+    # Only first 2 positions filled for feature_grid; positions 2..5 should be NaN
+    flat = predictions["feature_grid"].flatten()
+    assert not np.isnan(flat[0])
+    assert np.isnan(flat[total - 1])

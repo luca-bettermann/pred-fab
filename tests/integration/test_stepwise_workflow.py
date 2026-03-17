@@ -1,3 +1,4 @@
+import pytest
 from tests.utils.builders import (
     build_prepared_workflow_datamodule,
     build_workflow_stack,
@@ -46,11 +47,11 @@ def test_workflow_exploration_step_runs_from_configured_calibration(tmp_path):
         test_size=0.0,
         recompute=True,
     )
-    proposal = agent.exploration_step(datamodule=datamodule)
+    result = agent.exploration_step(datamodule=datamodule)
 
-    assert proposal.source_step == "exploration_step"
-    assert set(["param_1", "param_2", "dim_1", "dim_2", "param_3"]).issubset(set(proposal.keys()))
-    assert proposal["param_3"] == "B"
+    assert result.initial_params.source_step == "exploration_step"
+    assert set(["param_1", "param_2", "dim_1", "dim_2", "param_3"]).issubset(set(result.keys()))
+    assert result["param_3"] == "B"
     assert agent.calibration_system.fixed_params["param_3"] == "B"
     assert agent.calibration_system.param_bounds["param_2"] == (1, 4)
-    assert agent.calibration_system.trust_regions["param_1"] == 0.1
+    assert agent.calibration_system.trust_regions["speed"] == pytest.approx(10.0)

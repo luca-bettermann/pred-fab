@@ -1,8 +1,4 @@
-"""
-Base class for orchestration systems.
-
-Provides shared functionality for EvaluationSystem and PredictionSystem.
-"""
+"""Shared base class for orchestration systems."""
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, Optional
@@ -15,26 +11,18 @@ from ..utils import PfabLogger
 
 
 class BaseOrchestrationSystem(ABC):
-    """
-    Base class for orchestration systems (Evaluation, Prediction).
-    
-    Provides shared functionality:
-    - Dataset and logger initialization
-    - DataObject extraction from model fields
-    - Parameter extraction from ExperimentData
-    """
-    
+    """Base class providing shared model-registry and schema-validation helpers."""
+
     def __init__(self, logger: PfabLogger):
-        """Initialize orchestration system with dataset and logger."""
         self.logger: PfabLogger = logger
         self.models: List[Any] = []
     
     def get_models(self) -> List[Any]:
-        """Return registered models in implementation-specific structure."""
+        """Return registered models."""
         return self.models
     
     def get_model_specs(self) -> Dict[str, List[str]]:
-        """Extract input/output DataObject specifications from registered models."""        
+        """Aggregate input/output specs across all registered models."""
         specs = {
             "input_parameters": [],
             "input_features": [],

@@ -7,14 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 class PfabLogger:
-    """
-    Enhanced logger with integrated console output.
-    
-    - Dual logging to file and console with different formatting
-    - Debug mode switching
-    - ANSI code stripping for clean log files
-    - Singleton pattern to share instance across classes
-    """
+    """Singleton logger with dual file/console output, ANSI stripping, and structured console methods."""
     
     _instance: Optional['PfabLogger'] = None
     

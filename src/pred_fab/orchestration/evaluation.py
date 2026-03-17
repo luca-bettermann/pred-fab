@@ -8,14 +8,9 @@ from .base_system import BaseOrchestrationSystem
 
 
 class EvaluationSystem(BaseOrchestrationSystem):
-    """
-    Orchestrates multiple evaluation models using Dataset.
-    
-    Manages evaluation model execution and stores results in ExperimentData.
-    """
-    
+    """Orchestrates performance evaluation across all registered evaluation models."""
+
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
         self.models: List[IEvaluationModel] = []
 
@@ -29,9 +24,12 @@ class EvaluationSystem(BaseOrchestrationSystem):
         recompute: bool = False
     ) -> Dict[str, Optional[float]]:
         """Execute all evaluations for an experiment and mutate exp_data with results."""
-        
-        # Prepare feature dict slice
-        features_dict = exp_data.features.get_values_dict()
+
+        # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
+        # so that evaluation models can iterate rows uniformly regardless of feature depth.
+        features_dict: Dict[str, np.ndarray] = {}
+        for code, tensor in exp_data.features.get_values_dict().items():
+            features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
         # Check if the there are any incomplete feature arrays
         incomplete_features = {code: not exp_data.is_complete(code, evaluate_from, evaluate_to) 
@@ -66,7 +64,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         incomplete_features: Dict[str, bool] = {},
         skip_for_code: Dict[str, bool] = {}
     ) -> Dict[str, Optional[float]]:
-        """Core evaluation logic from raw parameters."""
+        """Run all evaluation models and return {perf_code: value} dict."""
         
         # Prepare result dictionaries
         performance_dict: Dict[str, Optional[float]] = {}
@@ -82,11 +80,11 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 self.logger.info(f"Skipping evaluation for '{eval_model.input_feature}' as feature array incomplete.'")
                 continue
 
-            # Run evaluation (we only keep the average performance))
-            avg_performance, _ = eval_model.compute_performance(
+            # Run evaluation (we only keep the average performance)
+            avg_performance, _, _ = eval_model.compute_performance(
                 feature_array=features_dict[eval_model.input_feature],
-                parameters=parameters
-                )
+                parameters=parameters,
+            )
 
             # Collect results
             performance_dict[eval_model.output_performance] = avg_performance

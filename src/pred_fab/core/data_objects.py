@@ -1,9 +1,4 @@
-"""
-DataObject type system for AIXD schema definitions.
-
-DataObjects represent variable types in dataset schemas and hold actual values.
-They provide validation, type information, and value storage.
-"""
+"""DataObject type system for schema definitions — validation, typing, and value storage."""
 
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Dict, Tuple, Literal, Type, Union
@@ -12,11 +7,7 @@ import numpy as np
 from ..utils.enum import NormMethod, Roles
 
 class DataObject(ABC):
-    """
-    Base class for schema type definitions with value storage.
-    
-    Represents a variable's type, constraints, and holds actual value.
-    """
+    """Base class for schema type definitions — encapsulates dtype, constraints, and role."""
     
     _registry: Dict[str, Type['DataObject']] = {}
     
@@ -24,45 +15,23 @@ class DataObject(ABC):
         super().__init_subclass__(**kwargs)
         cls._registry[cls.__name__] = cls
     
-    def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None, 
+    def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None,
                  round_digits: Optional[int] = None):
-        """Initialize DataObject with name, dtype, constraints, and optional rounding."""
         self.code = code
         self.dtype = dtype
         self.constraints = constraints or {}
         self.round_digits = round_digits
         self.role = role
+        self.runtime_adjustable: bool = False  # Set to True by Parameter factory for runtime params
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """
-        Get normalization strategy for this data type.
-        
-        Returns:
-            - 'default': Use DataModule's default normalization
-            - 'standard': Standard scaling (mean=0, std=1)
-            - 'minmax': Min-max scaling to [0, 1]
-            - 'robust': Robust scaling using median and IQR
-            - 'none': No normalization
-            - 'categorical': One-hot encoding (for categorical data)
-        """
+        """Normalization strategy for this type; subclasses override as needed."""
         return NormMethod.DEFAULT
-    
+
     @abstractmethod
     def validate(self, value: Any) -> bool:
-        """
-        Validate value against type and constraints.
-        
-        Args:
-            value: Value to validate
-            
-        Returns:
-            True if valid
-            
-        Raises:
-            TypeError: If value has wrong type
-            ValueError: If value violates constraints
-        """
+        """Validate value against type and constraints; raises TypeError/ValueError if invalid."""
         pass
 
     @abstractmethod
@@ -81,8 +50,23 @@ class DataObject(ABC):
         }
         if self.round_digits is not None:
             data["round_digits"] = self.round_digits
+        if self.runtime_adjustable:
+            data["runtime_adjustable"] = True
         return data
-    
+
+    def to_hash_dict(self) -> Dict[str, Any]:
+        """Serialize structural identity for schema hashing; excludes operational metadata (e.g. runtime_adjustable)."""
+        data = {
+            "code": self.code,
+            "role": self.role.value if self.role else None,
+            "type": self.__class__.__name__,
+            "dtype": self.dtype.__name__,
+            "constraints": self.constraints
+        }
+        if self.round_digits is not None:
+            data["round_digits"] = self.round_digits
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DataObject':
         """Reconstruct from dictionary."""
@@ -116,6 +100,7 @@ class DataObject(ABC):
         # Instantiate object using registry lookups implementation
         obj = cls._registry[obj_type]._from_json_impl(code, role, constraints, round_digits)
         obj.role = role
+        obj.runtime_adjustable = data.get("runtime_adjustable", False)
         return obj
     
     @classmethod
@@ -127,10 +112,9 @@ class DataObject(ABC):
 
 class DataReal(DataObject):
     """Floating-point numeric parameter."""
-    
+
     def __init__(self, code: str, role: Roles, min_val: Optional[float] = None, max_val: Optional[float] = None,
                  round_digits: Optional[int] = None):
-        """Initialize DataReal with optional min/max bounds and rounding."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
@@ -140,9 +124,8 @@ class DataReal(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def validate(self, value: Any) -> bool:
         """Validate float value against constraints."""
         if not isinstance(value, (int, float)):
@@ -172,8 +155,8 @@ class DataReal(DataObject):
 
 class DataInt(DataObject):
     """Integer numeric parameter."""
+
     def __init__(self, code: str, role: Roles, min_val: Optional[int] = None, max_val: Optional[int] = None, round_digits: Optional[int] = None):
-        """Initialize DataInt with optional min/max bounds."""
         constraints = {}
         if min_val is not None:
             constraints["min"] = int(min_val)
@@ -183,9 +166,8 @@ class DataInt(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def validate(self, value: Any) -> bool:
         """Validate integer value against constraints."""
         if not isinstance(value, int) or isinstance(value, bool):
@@ -204,20 +186,18 @@ class DataInt(DataObject):
         return int(round(float(value)))
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataInt':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataInt':
         return cls(code, role, constraints.get("min"), constraints.get("max"))
 
 
 class DataBool(DataObject):
     """Boolean parameter."""
-    
+
     def __init__(self, code: str, role: Roles):
-        """Initialize DataBool."""
         super().__init__(code, bool, role, {})
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """No normalization needed - already 0/1."""
         return NormMethod.NONE
     
     def validate(self, value: Any) -> bool:
@@ -235,21 +215,19 @@ class DataBool(DataObject):
         raise TypeError(f"{self.code} must be bool-like, got {type(value).__name__}")
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataBool':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataBool':
         return cls(code, role)
 
 class DataCategorical(DataObject):
-    """Categorical parameter with fixed set of allowed values."""
-    
+    """Categorical parameter with a fixed set of allowed string values."""
+
     def __init__(self, code: str, categories: List[str], role: Roles):
-        """Initialize DataCategorical with allowed categories."""
         if not categories:
             raise ValueError("Categories list cannot be empty")
         super().__init__(code, str, role, {"categories": categories})
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Categorical data requires one-hot encoding."""
         return NormMethod.CATEGORICAL
     
     def validate(self, value: Any) -> bool:
@@ -269,20 +247,13 @@ class DataCategorical(DataObject):
         return str(value)
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataCategorical':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataCategorical':
         return cls(code, constraints["categories"], role)
 
 class DataDimension(DataInt):
-    """
-    Three-aspect dimensional parameter for iteration.
-    
-    Maps the three related dimensional concepts:
-    - code: Parameter name for size (e.g., "n_layers")
-    - dim_iterator_name: Iterator variable name (e.g., "layer_id")
-    """
-    
+    """Integer dimension parameter linking a size code (e.g. n_layers) to an iterator code (e.g. layer_id) at a hierarchy level."""
+
     def __init__(self, code: str, iterator_code: str, level: int, role: Roles, min_val: int = 1, max_val: Optional[int] = None):
-        """Initialize DataDimension with two naming aspects and level hierarchy."""
         self.code = code
         self.iterator_code = iterator_code
 
@@ -295,11 +266,10 @@ class DataDimension(DataInt):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Dimensional indices use minmax to preserve ordinal structure."""
         return NormMethod.MIN_MAX
     
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: int) -> 'DataDimension':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataDimension':
         return cls(
             code,
             constraints["dim_iterator_code"],
@@ -311,14 +281,9 @@ class DataDimension(DataInt):
 
 
 class DataArray(DataObject):
-    """
-    Wrapper for numpy arrays with shape and dtype validation.
-    
-    Used for metric_arrays storage in ExperimentData.
-    """
-    
+    """Numpy array DataObject with dtype validation, used for feature tensor storage."""
+
     def __init__(self, code: str, role: Roles, dtype: Union[str, type, np.dtype]):
-        """Initialize DataArray with optional shape and dtype constraints."""
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: List[str] = []
@@ -332,11 +297,10 @@ class DataArray(DataObject):
     
     @property
     def normalize_strategy(self) -> NormMethod:
-        """Use DataModule default normalization (typically 'standard')."""
         return NormMethod.DEFAULT
-    
+
     def set_columns(self, columns: List[str]) -> None:
-        """Set associated dimension codes for this DataArray."""
+        """Set associated iterator column names for this DataArray."""
         self.columns = columns
         self.constraints["columns"] = columns
     
@@ -374,14 +338,18 @@ class Parameter:
     """Factory for creating parameter DataObjects."""
 
     @staticmethod
-    def real(code: str, min_val: float, max_val: float, round_digits: int = 3) -> DataReal:
-        """Create a real-valued parameter."""
-        return DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
-    
+    def real(code: str, min_val: float, max_val: float, round_digits: int = 3, runtime: bool = False) -> DataReal:
+        """Create a real-valued parameter; runtime=True marks it as re-proposable during fabrication."""
+        obj = DataReal(code=code, min_val=min_val, max_val=max_val, round_digits=round_digits, role=Roles.PARAMETER)
+        obj.runtime_adjustable = runtime
+        return obj
+
     @staticmethod
-    def integer(code: str, min_val: int, max_val: int) -> DataInt:
-        """Create an integer parameter."""
-        return DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
+    def integer(code: str, min_val: int, max_val: int, runtime: bool = False) -> DataInt:
+        """Create an integer parameter; runtime=True marks it as re-proposable during fabrication."""
+        obj = DataInt(code=code, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
+        obj.runtime_adjustable = runtime
+        return obj
     
     @staticmethod
     def categorical(code: str, categories: List[str]) -> DataCategorical:
@@ -397,7 +365,8 @@ class Parameter:
     def dimension(code: str, iterator_code: str, level: int, min_val: int = 1, max_val: Optional[int] = None) -> DataDimension:
         """Create a dimensional parameter."""
         return DataDimension(code=code, iterator_code=iterator_code, level=level, min_val=min_val, max_val=max_val, role=Roles.PARAMETER)
-    
+
+
 
 class Feature:
     """Factory for creating feature Feature objects."""

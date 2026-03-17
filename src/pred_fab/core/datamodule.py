@@ -1,9 +1,4 @@
-"""
-DataModule - ML preprocessing configuration for LBP datasets.
-
-Manages batching and normalization for machine learning workflows.
-Stores normalization parameters, not normalized data (memory efficient).
-"""
+"""DataModule — ML preprocessing (normalization, splitting, batching) for Dataset instances."""
 
 from typing import Optional, Dict, List, Tuple, Any, cast
 import pandas as pd
@@ -17,14 +12,7 @@ from ..utils import NormMethod, SplitType
 
 
 class DataModule:
-    """
-    Preprocessing configuration for ML workflows.
-    
-    - Extract and batch features from Dataset experiments
-    - Fit/apply normalization to features (y) and parameters (X)
-    - Stores data as Numpy arrays for efficiency
-    - Handles one-hot encoding and batching internally
-    """
+    """Preprocessing pipeline: normalization fitting, train/val/test splitting, and batching for ML workflows."""
     
     def __init__(
         self,
@@ -33,15 +21,6 @@ class DataModule:
         normalize: NormMethod = NormMethod.STANDARD,
         random_seed: Optional[int] = 42
     ):
-        """
-        Initialize DataModule.
-        
-        Args:
-            dataset: Dataset instance
-            batch_size: Number of experiments per batch (None = single batch)
-            normalize: Default normalization method for features and parameters
-            random_seed: Random seed for reproducible splits (None = random)
-        """
         self.dataset = dataset
         self.batch_size = batch_size
         self._default_normalize = normalize
@@ -121,14 +100,7 @@ class DataModule:
     # === DATAMODULE OPERATIONS ===
 
     def prepare(self, val_size: float = 0.0, test_size: float = 0.0, recompute: bool = False) -> None:
-        """
-        Create initial splits and fit normalization.
-        
-        Args:
-            val_size: Fraction of data for validation set (0.0-1.0)
-            test_size: Fraction of data for test set (0.0-1.0)
-            recompute: If True, overwrite existing splits. If False, raises error if splits exist.
-        """
+        """Create train/val/test splits and fit normalization; raises if splits exist and recompute=False."""
         has_splits = any(len(c) > 0 for c in self._split_codes.values())
         
         if has_splits and not recompute:
@@ -142,13 +114,7 @@ class DataModule:
         self._fit_normalize()
 
     def update(self) -> int:
-        """
-        Update the training set with any new experiments found in the dataset.
-        Does not affect validation or test sets. Refits normalization.
-        
-        Returns:
-            Number of new experiments added to training set.
-        """
+        """Add newly populated experiments to the training set and refit normalization; returns count added."""
         # Get all valid codes in dataset
         valid_codes = set(self.dataset.get_populated_experiment_codes())
         
@@ -260,12 +226,19 @@ class DataModule:
     def fit_normalization(self, split: SplitType = SplitType.TRAIN) -> None:
         """Public wrapper for fitting normalization on a dataset split."""
         self._fit_normalize(split)
+
+    def fit_without_data(self) -> None:
+        """Mark as fitted with empty stats (identity normalization); enables encoding machinery without training data."""
+        if not self._initialized:
+            raise RuntimeError(
+                "DataModule must be initialized before calling fit_without_data()."
+            )
+        self._parameter_stats = {}
+        self._feature_stats = {}
+        self._is_fitted = True
     
     def get_batches(self, split: SplitType = SplitType.TRAIN) -> List[Tuple[np.ndarray, np.ndarray]]:
-        """
-        Get batched, normalized data for a split.
-        Returns list of (X_batch, y_batch) tuples.
-        """
+        """Return list of normalized (X, y) batch tuples for the given split."""
         codes = self._split_codes.get(split, [])
         if not codes:
             return []
@@ -378,12 +351,7 @@ class DataModule:
         self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
     def get_onehot_column_map(self) -> Dict[str, Tuple[str, Any]]:
-        """
-        Build a lookup map for one-hot encoded columns.
-        
-        Returns:
-            Dict mapping 'column_name' -> ('parent_parameter_code', 'category_value')
-        """
+        """Return mapping of one-hot column name → (parent_parameter_code, category_value)."""
         col_map = {}
         for parent, categories in self.categorical_mappings.items():
             for cat in categories:
@@ -533,10 +501,7 @@ class DataModule:
     # === CALIBRATION HELPERS ===
 
     def params_to_array(self, params: Dict[str, Any]) -> np.ndarray:
-        """
-        Convert parameter dictionary to normalized 1D array.
-        Wraps prepare_input for single sample.
-        """
+        """Convert a parameter dict to a normalized 1D input array."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
             
@@ -545,10 +510,7 @@ class DataModule:
         return arr[0]
 
     def array_to_params(self, array: np.ndarray) -> Dict[str, Any]:
-        """
-        Convert normalized 1D array back to parameter dictionary.
-        Handles reverse normalization and reverse one-hot encoding.
-        """
+        """Reverse-normalize and decode a 1D input array back to a parameter dict."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
             
@@ -583,15 +545,7 @@ class DataModule:
         split: SplitType = SplitType.TRAIN,
         strict: bool = True
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Build (X, y) arrays for calibration/surrogate training from a dataset split.
-
-        Args:
-            performance_order: Ordered performance attribute codes for y columns.
-            split: Dataset split to extract from (default: train).
-            strict: If True, raise when required performance values are missing.
-                    If False, skip experiments with missing required values.
-        """
+        """Build (X, y) arrays for calibration training; strict=True raises on missing performance values."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
         if split not in self._split_codes:
@@ -661,7 +615,6 @@ class DataModule:
         }
     
     def __repr__(self) -> str:
-        """String representation."""
         fitted_str = "fitted" if self._is_fitted else "not fitted"
         batch_str = f"batch_size={self.batch_size}" if self.batch_size else "no batching"
         

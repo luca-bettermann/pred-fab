@@ -10,15 +10,9 @@ from ..utils import PfabLogger
 
 
 class IFeatureModel(BaseInterface):
-    """
-    Abstract base class for feature extraction models.
-    
-    Uses Dataset memoization to avoid redundant feature computation.
-    Models declare their parameters as dataclass fields (DataObjects).
-    """
+    """Abstract base for feature extraction models that iterate over dimension combinations."""
 
     def __init__(self, logger: PfabLogger):
-        """Initialize evaluation system."""
         super().__init__(logger)
     
     # === ABSTRACT METHODS ===
@@ -30,41 +24,18 @@ class IFeatureModel(BaseInterface):
 
     @abstractmethod
     def _load_data(self, params: Dict, **dimensions) -> Any:
-        """
-        Load domain-specific data for feature extraction at specific parameter values.
-        
-        Uses parameter values to locate/load required data. May access external
-        databases, files, or other data sources not managed by Dataset.
-        
-        Args:
-            params: Parameter name-value pairs defining the context
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Loaded data object (format depends on domain)
-        """
+        """Load domain-specific raw data for the given parameter context (files, DB, etc.)."""
         ...
 
     @abstractmethod
     def _compute_feature_logic(
-        self, 
-        data: Any, 
-        params: Dict, 
+        self,
+        data: Any,
+        params: Dict,
         visualize: bool = False,
         **dimensions
         ) -> Dict[str, float]:
-        """
-        Extract feature value(s) from loaded data.
-        
-        Args:
-            data: Raw data object from _load_data (unstructured)
-            params: Parameter name-value pairs
-            visualize: Enable visualizations if True
-            **dimensions: Additional dimension parameters
-            
-        Returns:
-            Computed feature values as a dict mapping feature codes to numeric values
-        """
+        """Extract feature values from loaded data; returns dict mapping feature codes to numeric values."""
         ...
     
     # Pre-define input features as empty. Features can not have other features as inputs.
@@ -76,13 +47,17 @@ class IFeatureModel(BaseInterface):
 
     @final
     def compute_features(
-        self, 
+        self,
         parameters: Parameters,
         evaluate_from: int,
         evaluate_to: Optional[int] = None,
         visualize: bool = False
         ) -> NDArray:
-        """Iterate over parameter combinations to compute feature array."""
+        """Iterate over every dimension combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
+
+        Returns a 2-D array of shape (n_combinations, n_dims + n_outputs) where the first
+        n_dims columns are the dimension iterator values and the remaining columns are feature values.
+        """
 
         self.logger.info(f"Starting evaluation for '{self.outputs}'")
         

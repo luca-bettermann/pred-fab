@@ -7,9 +7,11 @@ Integrates with DataModule for normalization and batching.
 """
 
 from typing import Dict, List, Optional, Type, Any, Tuple
+import copy
 import pandas as pd
 import numpy as np
 import pickle
+from scipy.stats import gaussian_kde
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDimension, DataArray
@@ -38,6 +40,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
         self.datamodule: Optional[DataModule] = None  # Stored after training
+
+        # KDE state for NatPN-light uncertainty estimation (set after training)
+        self._kde: Optional[gaussian_kde] = None
+        self._q_max: Optional[float] = None
+        self._n_exp: int = 0
+        self._kde_bandwidth: Optional[float] = None
+        self._kde_active_mask: Optional[np.ndarray] = None  # Boolean mask of non-constant dims
 
     def get_system_input_parameters(self) -> List[str]:
         """Get the parameter codes of all model inputs."""
@@ -81,8 +90,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "Reduce test_size and/or val_size in DataModule configuration."
             )
         
+        # Validate dimensional coherence for all registered models
+        for model in self.models:
+            model.validate_dimensional_coherence(self.schema)
+
         self.logger.console_info("Starting prediction model training...")
-        
+
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
         self.datamodule.fit_normalization(SplitType.TRAIN)
@@ -109,11 +122,248 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.console_success(
             f"Training complete: {trained_count}/{len(self.models)} models trained"
         )
+
+        # Fit KDE on latent representations of training configs (NatPN-light)
+        self._fit_kde(datamodule)
     
+    # === UNCERTAINTY ESTIMATION (NatPN-light) ===
+
+    def _fit_kde(self, datamodule: DataModule) -> None:
+        """Fit weighted KDE on latent representations of all unique training configs.
+
+        Option B: one latent point per unique effective parameter configuration.
+        Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
+        Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
+        Bandwidth: Silverman's rule.
+        """
+        if not self.models:
+            return
+
+        latent_points: List[np.ndarray] = []
+        weights: List[float] = []
+        n_exp = 0
+
+        for code in datamodule.get_split_codes(SplitType.TRAIN):
+            exp = datamodule.dataset.get_experiment(code)
+            n_exp += 1
+            n_rows = exp.get_num_rows()
+
+            if not exp.parameter_updates:
+                # Non-trajectory: single config
+                params = exp.parameters.get_values_dict().copy()
+                z = self._encode_params(params, datamodule)
+                if z is not None:
+                    latent_points.append(z)
+                    weights.append(float(np.sqrt(max(n_rows, 1))))
+            else:
+                # Trajectory: one point per segment (initial + each update event)
+                events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
+                seg_start = 0
+                for event in events:
+                    seg_end = exp._event_start_index(event)
+                    seg_rows = seg_end - seg_start
+                    if seg_rows > 0:
+                        params = exp.get_effective_parameters_for_row(seg_start)
+                        z = self._encode_params(params, datamodule)
+                        if z is not None:
+                            latent_points.append(z)
+                            weights.append(float(np.sqrt(max(seg_rows, 1))))
+                    seg_start = seg_end
+                # Last segment
+                seg_rows = n_rows - seg_start
+                if seg_rows > 0:
+                    params = exp.get_effective_parameters_for_row(seg_start)
+                    z = self._encode_params(params, datamodule)
+                    if z is not None:
+                        latent_points.append(z)
+                        weights.append(float(np.sqrt(max(seg_rows, 1))))
+
+        if len(latent_points) < 2:
+            self.logger.info("Too few training configs for KDE — uncertainty defaults to 1.0.")
+            return
+
+        latent_array = np.array(latent_points)   # (n_configs, n_latent)
+        weights_array = np.array(weights)
+        weights_array = weights_array / weights_array.sum()  # normalize
+
+        # Drop constant dimensions to avoid a singular covariance matrix.
+        # Dimensions where all training configs have the same latent value carry no
+        # discriminative information and would cause gaussian_kde to fail.
+        per_dim_std = np.std(latent_array, axis=0)
+        active_mask = per_dim_std > 1e-8
+        if not np.any(active_mask):
+            self.logger.info("All latent dimensions are constant across training configs — uncertainty defaults to 1.0.")
+            return
+
+        projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
+        n_samples, n_active_dims = projected.shape
+        if n_samples <= n_active_dims:
+            self.logger.info(
+                f"Too few training configs ({n_samples}) for {n_active_dims}D KDE — uncertainty defaults to 1.0."
+            )
+            return
+
+        try:
+            # gaussian_kde expects (n_dims, n_samples)
+            self._kde = gaussian_kde(projected.T, bw_method='silverman', weights=weights_array)
+            self._kde_active_mask = active_mask
+            # Scalar bandwidth: Silverman factor * mean std across active latent dimensions
+            self._kde_bandwidth = float(self._kde.factor * np.mean(per_dim_std[active_mask] + 1e-8))
+            # q_max for normalization: max KDE density over all training points
+            densities = self._kde(projected.T)
+            self._q_max = float(np.max(densities)) if len(densities) > 0 else 1.0
+            self._n_exp = n_exp
+            self.logger.info(
+                f"KDE fitted on {len(latent_points)} latent configs from {n_exp} experiments "
+                f"({n_active_dims}/{latent_array.shape[1]} active dims, "
+                f"h={self._kde_bandwidth:.4f}, q_max={self._q_max:.6f})."
+            )
+        except Exception as e:
+            self.logger.warning(f"KDE fitting failed: {e}. Uncertainty defaults to 1.0.")
+            self._kde = None
+
+    def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
+        """Encode a params dict to latent representation via the first PM's encode()."""
+        try:
+            X_norm = datamodule.params_to_array(params)
+            return self._encode_from_norm_array(X_norm)
+        except Exception:
+            return None
+
+    def _encode_from_norm_array(self, X_norm: np.ndarray) -> np.ndarray:
+        """Encode a 1-D normalized parameter array to latent space via first PM's encode()."""
+        if not self.models or self.datamodule is None:
+            return X_norm
+        model = self.models[0]
+        input_cols = model.input_parameters + model.input_features
+        input_indices = [
+            self.datamodule.input_columns.index(f)
+            for f in input_cols
+            if f in self.datamodule.input_columns
+        ]
+        if not input_indices:
+            return X_norm
+        X_model = X_norm[input_indices].reshape(1, -1)
+        return model.encode(X_model)[0]
+
+    def encode(self, X: np.ndarray) -> np.ndarray:
+        """Encode a batch of normalized parameter arrays to latent space.
+
+        Uses the first registered PM's encode() method.  Falls back to identity
+        if no models are registered or the system is not yet trained.
+
+        Args:
+            X: Normalized parameter array (batch_size, n_inputs)
+
+        Returns:
+            Latent array (batch_size, n_latent)
+        """
+        if not self.models or self.datamodule is None:
+            return X
+        model = self.models[0]
+        input_cols = model.input_parameters + model.input_features
+        input_indices = [
+            self.datamodule.input_columns.index(f)
+            for f in input_cols
+            if f in self.datamodule.input_columns
+        ]
+        if not input_indices:
+            return X
+        X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
+        return model.encode(X_model)
+
+    def uncertainty(self, X: np.ndarray) -> float:
+        """Compute epistemic uncertainty at a normalized parameter vector.
+
+        Returns a value in [0, 1]:
+            u = 1 / (1 + n_post)
+        where n_post = N_exp * q_KDE(z) / q_max  (NatPN evidence posterior).
+
+        Returns 1.0 (maximum uncertainty) before KDE is fitted.
+
+        Args:
+            X: Normalized parameter array of shape (1, n_inputs) or (n_inputs,)
+        """
+        if self._kde is None or self._q_max is None or self._q_max <= 0:
+            return 1.0
+        z = self._encode_from_norm_array(X.reshape(-1))
+        if self._kde_active_mask is not None:
+            z = z[self._kde_active_mask]
+        q = float(self._kde(z.reshape(-1, 1))[0])
+        n_post = self._n_exp * q / self._q_max
+        return float(1.0 / (1.0 + n_post))
+
+    def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
+        """Gaussian kernel similarity between two parameter vectors in latent space.
+
+        sim(X1, X2) = exp(-||z1 - z2||^2 / h^2)
+
+        Returns 0.0 if KDE has not been fitted yet (no bandwidth available).
+
+        Args:
+            X1, X2: Normalized parameter arrays of shape (n_inputs,) or (1, n_inputs)
+        """
+        if self._kde_bandwidth is None or self._kde_bandwidth < 1e-10:
+            return 0.0
+        z1 = self._encode_from_norm_array(X1.reshape(-1))
+        z2 = self._encode_from_norm_array(X2.reshape(-1))
+        if self._kde_active_mask is not None:
+            z1 = z1[self._kde_active_mask]
+            z2 = z2[self._kde_active_mask]
+        h = self._kde_bandwidth
+        return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+
+    def predict_for_calibration(self, params: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Any]:
+        """Predict feature arrays for all dimensional positions for calibration use.
+
+        Runs the full dimensional prediction for the given parameter configuration
+        and converts each feature tensor to a tabular array suitable for evaluation
+        models (rows = [dim_iter_vals..., feature_val]).
+
+        Args:
+            params: Raw (denormalized) parameter dict for the virtual experiment.
+
+        Returns:
+            Tuple of:
+                - feature_arrays: Dict mapping feature code to 2-D array
+                  where each row is [dim_iter_1, ..., feature_value].
+                - params_block: A copy of the schema Parameters block with values
+                  set from ``params``.
+
+        Raises:
+            RuntimeError: If the system has not been trained yet.
+        """
+        if self.datamodule is None:
+            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+
+        predictions = self._predict_from_params(params=params, batch_size=1000)
+
+        # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
+        feature_arrays: Dict[str, np.ndarray] = {}
+        for feat_name, tensor in predictions.items():
+            feat_shape = tensor.shape
+            flat = tensor.reshape(-1)
+            rows = []
+            for pos, feat_val in enumerate(flat):
+                idx = np.unravel_index(pos, feat_shape) if feat_shape else ()
+                rows.append(list(idx) + [float(feat_val)])
+            feature_arrays[feat_name] = np.array(rows, dtype=np.float64)
+
+        # Build Parameters block with values from params
+        params_block = copy.deepcopy(self.schema.parameters)
+        for code, val in params.items():
+            if code in params_block.data_objects:
+                try:
+                    params_block.set_value(code, val)
+                except Exception:
+                    pass
+
+        return feature_arrays, params_block
+
     def tune(
-            self, 
-            exp_data: ExperimentData, 
-            start: int, 
+            self,
+            exp_data: ExperimentData,
+            start: int,
             end: Optional[int] = None,
             batch_size: Optional[int] = None,
             **kwargs
@@ -169,8 +419,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if end_index <= start or end_index > len(X_df_all):
             raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {len(X_df_all)} rows.")
 
-        X_df = X_df_all.iloc[start:end_index].copy()
-        y_df = y_df_all.iloc[start:end_index].copy()
+        X_df: pd.DataFrame = X_df_all.iloc[start:end_index].copy() # type: ignore
+        y_df: pd.DataFrame = y_df_all.iloc[start:end_index].copy() # type: ignore
 
         # Prepare tune arrays with training-fitted normalization.
         X_tune = temp_datamodule.prepare_input(X_df)
@@ -324,6 +574,65 @@ class PredictionSystem(BaseOrchestrationSystem):
         # self._store_predictions_in_exp_data(exp_data, predictions)
         return predictions
     
+    def _get_feature_shape(self, feat_code: str, params: Dict[str, Any]) -> Tuple[int, ...]:
+        """Get the output tensor shape for a feature given current dimensional parameters."""
+        feat_obj = self.schema.features.data_objects.get(feat_code)
+        # data_objects stores DataArray instances; Pyright sees DataObject which lacks .columns.
+        if feat_obj is None or not hasattr(feat_obj, "columns") or not feat_obj.columns:  # type: ignore[union-attr]
+            return ()
+        iterator_cols = feat_obj.columns[:-1]  # type: ignore[union-attr]
+        if not iterator_cols:
+            return ()
+        iter_to_dim_code = {
+            dim.iterator_code: dim.code
+            for dim in self.schema.parameters.get_sorted_dimensions()
+        }
+        shape = []
+        for ic in iterator_cols:
+            size_code = iter_to_dim_code.get(ic)
+            if size_code is None or size_code not in params:
+                raise ValueError(
+                    f"Cannot resolve size for iterator '{ic}' — "
+                    f"check that '{size_code}' is present in params."
+                )
+            shape.append(int(params[size_code]))
+        return tuple(shape)
+
+    def _get_model_dim_info(self, model: IPredictionModel, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Build dimensional iteration structure for a specific model based on its depth."""
+        depth = model.depth
+        all_sorted_dims = self.schema.parameters.get_sorted_dimensions()
+        model_dims = all_sorted_dims[:depth]
+
+        dim_sizes: List[int] = []
+        dim_iterators: List[str] = []
+        dim_codes_ordered: List[str] = []
+        dim_codes: set = set()
+
+        for dim_obj in model_dims:
+            name = dim_obj.code
+            if name not in params:
+                raise ValueError(
+                    f"Missing dimensional parameter '{name}' for model "
+                    f"{model.__class__.__name__}"
+                )
+            dim_sizes.append(int(params[name]))
+            dim_iterators.append(dim_obj.iterator_code)
+            dim_codes_ordered.append(name)
+            dim_codes.add(name)
+
+        shape = tuple(dim_sizes)
+        total_positions = int(np.prod(shape)) if shape else 1
+        param_base = {k: v for k, v in params.items() if k not in dim_codes}
+
+        return {
+            'shape': shape,
+            'dim_iterators': dim_iterators,
+            'dim_codes_ordered': dim_codes_ordered,
+            'param_base': param_base,
+            'total_positions': total_positions,
+        }
+
     def _predict_from_params(
         self,
         params: Dict[str, Any],
@@ -332,36 +641,38 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_size: int = 1000,
         overlap: int = 0
     ) -> Dict[str, np.ndarray]:
-        """Core prediction logic from raw parameters with shape determined by dimensional params."""
+        """Core prediction logic: per-model iteration with per-feature tensor shapes."""
         if self.datamodule is None:
             raise RuntimeError("PredictionSystem not trained. Call train() first.")
-        
-        # Extract dimensional structure from params
-        dim_info = self._extract_dimensional_structure_from_params(params)
-        
-        # Validate prediction range
-        total_positions = dim_info['total_positions']
-        if predict_from < 0 or predict_from > total_positions:
-            raise ValueError(f"predict_from {predict_from} out of range [0, {total_positions}]")
-        if predict_to is None:
-            predict_to = total_positions
-        elif predict_to < 0 or predict_to > total_positions:
-            raise ValueError(f"predict_to {predict_to} out of range [0, {total_positions}]")
-        
-        # Initialize prediction arrays
-        predictions = self._initialize_prediction_dict(dim_info['shape'])
-        
-        # Execute batched predictions
-        self._execute_batched_predictions_to_dict(
-            predictions=predictions,
-            dim_info=dim_info,
-            predict_from=predict_from,
-            predict_to=predict_to, # type: ignore
-            batch_size=batch_size,
-            overlap=overlap
-        )
-        
-        self.logger.info(f"✓ Predicted {predict_to - predict_from} positions") # type: ignore
+
+        predictions: Dict[str, np.ndarray] = {}
+
+        for model in self.models:
+            model_dim_info = self._get_model_dim_info(model, params)
+            total_positions = model_dim_info['total_positions']
+
+            p_from = max(0, predict_from)
+            p_to = min(predict_to if predict_to is not None else total_positions, total_positions)
+            if p_from > total_positions:
+                continue
+
+            # Initialize output arrays with per-feature shapes
+            for feat in model.outputs:
+                if feat not in predictions:
+                    feat_shape = self._get_feature_shape(feat, params)
+                    predictions[feat] = np.full(feat_shape, np.nan)
+
+            self._execute_batched_predictions_to_dict(
+                predictions=predictions,
+                dim_info=model_dim_info,
+                predict_from=p_from,
+                predict_to=p_to,
+                batch_size=batch_size,
+                overlap=overlap,
+                model=model,
+            )
+
+        self.logger.info(f"✓ Predicted features for {len(self.models)} model(s)")
         return predictions
     
     # def _store_predictions_in_exp_data(
@@ -376,57 +687,6 @@ class PredictionSystem(BaseOrchestrationSystem):
     #             exp_data.predicted_features.add(feature_name, arr)
     #         exp_data.predicted_features.set_value(feature_name, pred_array)
     
-    def _extract_dimensional_structure_from_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract dimensional info (shape, params, positions) from schema and params dict."""
-        # Use schema parameters to get dimensions sorted correctly by level
-        sorted_dims = self.schema.parameters.get_sorted_dimensions()
-        
-        if not sorted_dims:
-            raise ValueError("No dimensional parameters in schema - cannot predict dimensional features")
-        
-        dim_sizes = []
-        dim_iterators = []
-        dim_codes = set()
-        
-        for dim_obj in sorted_dims:
-            name = dim_obj.code
-            if name not in params:
-                raise ValueError(f"Missing dimensional parameter in params: {name}")
-            
-            size = int(params[name])
-            dim_sizes.append(size)
-            dim_iterators.append(dim_obj.iterator_code)
-            dim_codes.add(name)
-        
-        shape = tuple(dim_sizes)
-        total_positions = int(np.prod(shape))
-        
-        # Extract non-dimensional parameters for feature matrix base
-        param_base = {}
-        for name in self.schema.parameters.keys():
-            if name not in dim_codes and name in params:
-                param_base[name] = params[name]
-        
-        return {
-            'shape': shape,
-            'dim_iterators': dim_iterators,
-            'param_base': param_base,
-            'total_positions': total_positions
-        }
-    
-    def _initialize_prediction_dict(self, shape: Tuple[int, ...]) -> Dict[str, np.ndarray]:
-        """Create prediction dictionary with NaN-initialized arrays for each feature."""
-        predictions = {}
-        
-        # Collect all feature names from registered models
-        for model in self.models:
-            for feature_name in model.outputs:
-                if feature_name not in predictions:
-                    # Initialize with NaN (positions will be filled during prediction)
-                    predictions[feature_name] = np.full(shape, np.nan)
-        
-        return predictions
-    
     def _execute_batched_predictions_to_dict(
         self,
         predictions: Dict[str, np.ndarray],
@@ -434,7 +694,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         predict_from: int,
         predict_to: int,
         batch_size: int,
-        overlap: int = 0
+        overlap: int = 0,
+        model: Optional[IPredictionModel] = None,
     ) -> None:
         """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap."""
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")
@@ -461,11 +722,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                 dim_info=dim_info
             )
 
-            # Run predictions for all models
+            # Run predictions for the specified model (or all models if None)
             self._predict_and_store_batch_to_dict(
                 predictions=predictions,
                 X_batch=X_batch,
-                batch_indices=batch_indices
+                batch_indices=batch_indices,
+                model=model,
             )
     
     def _build_batch_features(
@@ -474,23 +736,29 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_end: int,
         dim_info: Dict[str, Any]
     ) -> Tuple[pd.DataFrame, List[Tuple[int, ...]]]:
-        """Build feature matrix X with params + dimensional indices for batch positions."""
+        """Build feature matrix X with params + dimensional indices for batch positions.
+
+        Uses dimension size-parameter codes (e.g. "dim_1") as column keys to match
+        the column structure produced by Dataset.export_to_dataframe() during training.
+        """
         shape = dim_info['shape']
         param_base = dim_info['param_base']
-        dim_iterators = dim_info['dim_iterators']
-        
+        dim_codes_ordered = dim_info['dim_codes_ordered']
+
         X_batch_rows = []
         batch_indices = []
-        
+
         for pos in range(batch_start, batch_end):
             # Convert linear position to multi-dimensional index
             idx = np.unravel_index(pos, shape)
             batch_indices.append(idx)
-            
-            # Create feature row: non-dimensional params + dimensional indices
+
+            # Create feature row: non-dimensional params + dimensional indices.
+            # Keys are size-parameter codes ("dim_1", "dim_2") to match training columns,
+            # while values are the iterator indices (0, 1, ...) matching export_to_dataframe.
             row = param_base.copy()
-            for i, iterator_name in enumerate(dim_iterators):
-                row[iterator_name] = idx[i]
+            for i, dim_code in enumerate(dim_codes_ordered):
+                row[dim_code] = idx[i]
             
             X_batch_rows.append(row)
         
@@ -501,32 +769,36 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         predictions: Dict[str, np.ndarray],
         X_batch: pd.DataFrame,
-        batch_indices: List[Tuple[int, ...]]
+        batch_indices: List[Tuple[int, ...]],
+        model: Optional[IPredictionModel] = None,
     ) -> None:
-        """Run all model predictions on X_batch, denormalize, and store in predictions dict."""
+        """Run model prediction on X_batch and store results with per-feature index truncation."""
         if self.datamodule is None:
-             raise RuntimeError("DataModule not set")
+            raise RuntimeError("DataModule not set")
 
         # Prepare input (one-hot + normalize)
         X_norm = self.datamodule.prepare_input(X_batch)
-        
-        for model in self.models:
+
+        models_to_run = [model] if model is not None else self.models
+        for m in models_to_run:
             # Predict in normalized space
-            y_pred_norm = model.forward_pass(X_norm)
-            
+            y_pred_norm = m.forward_pass(X_norm)
+
             # Denormalize to original scale
-            y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
-            
-            # Store predictions in arrays
-            for i, feature_name in enumerate(model.outputs):
+            y_pred = self.datamodule.denormalize_values(y_pred_norm, m.outputs)
+
+            # Store predictions in arrays with per-feature index truncation
+            for i, feature_name in enumerate(m.outputs):
                 if feature_name not in predictions:
                     continue
-                
+
                 # y_pred is (batch, n_outputs)
                 values = y_pred[:, i]
-                
+                feat_depth = len(predictions[feature_name].shape)
+
                 for j, idx in enumerate(batch_indices):
-                    predictions[feature_name][idx] = float(values[j])
+                    feat_idx = idx[:feat_depth]  # truncate to this feature's depth
+                    predictions[feature_name][feat_idx] = float(values[j])
     
     # === EXPORT FOR PRODUCTION INFERENCE ===
     

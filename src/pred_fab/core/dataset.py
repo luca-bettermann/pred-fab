@@ -1,14 +1,9 @@
-"""
-Dataset class for data container with schema validation.
-
-Dataset is an independent entity holding experiment data and validating
-against a DatasetSchema. It does NOT handle persistence (that's LocalData's job).
-"""
+"""Dataset — in-memory experiment container validated against a DatasetSchema; persistence delegated to LocalData."""
 
 import numpy as np
 import pandas as pd
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 import functools
 
@@ -88,15 +83,57 @@ class ParameterUpdateEvent:
             source_step=data.get("source_step"),
         )
 
+@dataclass
+class ParameterSchedule:
+    """Sparse ordered schedule of runtime parameter changes for one dimension level."""
+    dimension: str
+    entries: List[Tuple[int, 'ParameterProposal']] = field(default_factory=list)
+
+    def apply(self, experiment: 'ExperimentData') -> None:
+        """Record all schedule entries as ParameterUpdateEvents on the experiment."""
+        for step_index, proposal in self.entries:
+            experiment.record_parameter_update(
+                proposal, dimension=self.dimension, step_index=step_index
+            )
+
+
+@dataclass
+class ExperimentSpec:
+    """Initial parameter proposal plus optional per-dimension runtime schedules."""
+    initial_params: 'ParameterProposal'
+    schedules: Dict[str, 'ParameterSchedule'] = field(default_factory=dict)
+
+    def apply_schedules(self, experiment: 'ExperimentData') -> None:
+        """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
+        for schedule in self.schedules.values():
+            schedule.apply(experiment)
+
+    # dict-like delegation to initial_params for backward compatibility.
+
+    def __getitem__(self, key: str) -> Any:
+        return self.initial_params[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.initial_params
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.initial_params.get(key, default)
+
+    def keys(self):
+        return self.initial_params.keys()
+
+    def items(self):
+        return self.initial_params.items()
+
+    def __iter__(self):
+        return iter(self.initial_params)
+
+    def __len__(self) -> int:
+        return len(self.initial_params)
+
+
 class ExperimentData:
-    """
-    Complete data for a single experiment.
-    
-    - Parameters
-    - Performance
-    - Features
-    - Predicted Features
-    """
+    """All data for a single experiment: parameters, features, performance, and parameter update log."""
 
     def __init__(self, 
                  exp_code: str, 
@@ -292,26 +329,12 @@ class ExperimentData:
     #     return self.predicted_features.is_populated(feature_name)
 
 class Dataset:
-    """
-    Data container with schema validation.
-    
-    - Schema reference and static parameter values
-    - Experiment records with hierarchical load/save
-    - Feature memoization cache for IFeatureModel efficiency
-    """
-    
-    def __init__(self, 
-                 schema: DatasetSchema, 
+    """Schema-validated experiment container with hierarchical load/save (memory → local → external)."""
+
+    def __init__(self,
+                 schema: DatasetSchema,
                  external_data: Optional[IExternalData] = None,
                  debug_flag: bool = False):
-        """
-        Initialize Dataset.
-        
-        Args:
-            schema: DatasetSchema defining structure
-            external_data: IExternalData instance for external storage
-            debug_flag: Skip external operations if True (local-only mode)
-        """
         self.schema = schema
         self.local_data = schema.local_data
         self.external_data = external_data
@@ -406,19 +429,7 @@ class Dataset:
         parameter_updates: Optional[List[Dict[str, Any]]] = None,
         recompute: bool = False
     ) -> ExperimentData:
-        """
-        Create a new experiment manually.
-        
-        Args:
-            exp_code: Unique experiment code
-            parameters: Dictionary of parameter values (Mandatory)
-            performance: Optional performance metrics
-            metric_arrays: Optional feature arrays
-            recompute: If True, overwrite existing experiment in memory
-            
-        Raises:
-            ValueError: If experiment already exists and recompute is False
-        """
+        """Create and register a new experiment; raises ValueError if it already exists and recompute=False."""
         # Check memory
         if exp_code in self._experiments and not recompute:
             raise ValueError(f"Experiment {exp_code} already exists in memory")
@@ -873,10 +884,7 @@ class Dataset:
             self.logger.warning(f"Skipped pushing {dtype} to external source due missing ExternalData source.")
 
     def export_to_dataframe(self, experiment_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Export experiment data to DataFrames (X, y).
-        Uses Parameters block logic for dimension iteration.
-        """
+        """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows."""
         if not experiment_codes:
             return pd.DataFrame(), pd.DataFrame()
         

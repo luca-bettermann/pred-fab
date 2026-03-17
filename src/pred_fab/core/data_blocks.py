@@ -1,9 +1,4 @@
-"""
-DataBlock collections for organizing related parameters.
-
-DataBlocks group DataObjects into logical collections and store their values.
-They provide both schema structure and data storage.
-"""
+"""DataBlock collections grouping DataObjects into logical collections with value storage."""
 
 from abc import abstractmethod, ABC
 import itertools
@@ -17,14 +12,9 @@ from ..utils.logger import PfabLogger
 
 
 class DataBlock(ABC):
-    """
-    Container for DataObjects with value storage.
-    
-    Provides validation, access methods, and value management for typed parameter collections.
-    """
+    """Abstract container for typed DataObjects with value storage, validation, and access methods."""
     
     def __init__(self):
-        """Initialize empty DataBlock."""
         self.data_objects: Dict[str, DataObject] = {}  # Schema structure
         self.values: Dict[str, Any] = {}  # Actual values
         self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized
@@ -171,17 +161,9 @@ class DataBlock(ABC):
 
 
 class Parameters(DataBlock):
-    """
-    Unified parameter block for ALL parameters.
-    
-    Parameters may be:
-    - Static: Same value across all experiments in dataset
-    - Dynamic: Vary per experiment
-    - Dimensional: Subset of parameters used for iteration
-    """
+    """Unified parameter block holding static, dynamic, and dimensional parameters."""
     
     def __init__(self):
-        """Initialize Parameters block."""
         super().__init__()
     
     @property
@@ -233,12 +215,7 @@ class Parameters(DataBlock):
         return dim_objs
 
     def _get_dimension_strides(self) -> Dict[str, int]:
-        """
-        Calculate stride (block size) for each dimension level.
-        
-        Stride for level L is the product of sizes of all levels > L.
-        Lowest level (highest index) has stride 1.
-        """
+        """Compute stride per dimension level; stride[L] = product of sizes of all levels > L."""
         sorted_dims = self.get_sorted_dimensions()
         strides = {}
         current_stride = 1
@@ -301,15 +278,9 @@ class Parameters(DataBlock):
         return sanitized
 
 class Features(DataBlock):
-    """
-    Multi-dimensional metric arrays using DataArray objects.
-    
-    Stores numpy arrays with validation for feature extraction and evaluation results.
-    Each Feature wraps a numpy array with shape/dtype constraints.
-    """
-    
+    """DataBlock for multi-dimensional feature arrays backed by DataArray objects."""
+
     def __init__(self):
-        """Initialize MetricArrays block."""
         super().__init__()
     
     @property
@@ -481,15 +452,9 @@ class Features(DataBlock):
 
 
 class PerformanceAttributes(DataBlock):
-    """
-    Evaluation outputs (performance metrics).
-    
-    Includes calibration weights for multi-objective optimization.
-    Examples: temperature deviation, path accuracy, energy consumption.
-    """
-    
+    """Evaluation output block storing normalized performance scores (0–1)."""
+
     def __init__(self):
-        """Initialize PerformanceAttributes block."""
         super().__init__()
     
     @property

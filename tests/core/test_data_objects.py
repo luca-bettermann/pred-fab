@@ -458,3 +458,133 @@ def test_performance_attribute_score_rejects_value_below_0():
     p = PerformanceAttribute.score("accuracy")
     with pytest.raises(ValueError):
         p.validate(-0.001)
+
+
+# ===== Runtime-adjustable parameters (Roles.RUNTIME) =====
+
+def test_roles_enum_contains_only_block_membership_values():
+    """Roles is solely a block-membership enum; sub-classifications are attributes on DataObject."""
+    role_values = {r.value for r in Roles}
+    assert role_values == {"parameter", "performance", "feature"}
+
+
+def test_datareal_runtime_adjustable_false_by_default():
+    obj = DataReal("speed", Roles.PARAMETER, min_val=0.0, max_val=100.0)
+    assert obj.runtime_adjustable is False
+
+
+def test_dataint_runtime_adjustable_false_by_default():
+    obj = DataInt("n", Roles.PARAMETER, min_val=1, max_val=10)
+    assert obj.runtime_adjustable is False
+
+
+def test_databool_runtime_adjustable_false():
+    obj = DataBool("flag", Roles.PARAMETER)
+    assert obj.runtime_adjustable is False
+
+
+def test_datacategorical_runtime_adjustable_false():
+    obj = DataCategorical("material", ["PLA", "ABS"], Roles.PARAMETER)
+    assert obj.runtime_adjustable is False
+
+
+def test_datadimension_runtime_adjustable_false():
+    obj = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
+    assert obj.runtime_adjustable is False
+
+
+# --- Parameter.real(runtime=True) ---
+
+def test_parameter_real_runtime_true_keeps_parameter_role():
+    """runtime=True sets runtime_adjustable; role stays Roles.PARAMETER for DataBlock compatibility."""
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=True)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_real_runtime_true_sets_runtime_adjustable():
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=True)
+    assert p.runtime_adjustable is True
+
+
+def test_parameter_real_runtime_false_keeps_parameter_role():
+    """Default (runtime=False) must not change existing role assignment."""
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=False)
+    assert p.role == Roles.PARAMETER
+    assert p.runtime_adjustable is False
+
+
+def test_parameter_real_runtime_preserves_type():
+    """runtime=True still produces a DataReal, not a different type."""
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=True)
+    assert isinstance(p, DataReal)
+
+
+def test_parameter_real_runtime_validation_unchanged():
+    """runtime flag must not affect validation behavior."""
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=True)
+    assert p.validate(100.0) is True
+    with pytest.raises(ValueError):
+        p.validate(5.0)   # below min
+
+
+def test_parameter_real_runtime_coerce_unchanged():
+    p = Parameter.real("speed", min_val=0.0, max_val=200.0, round_digits=1, runtime=True)
+    assert p.coerce(75.678) == pytest.approx(75.7)
+
+
+def test_parameter_real_runtime_roundtrip_preserves_role():
+    """Serialise → deserialise must keep role=Roles.PARAMETER and restore runtime_adjustable=True."""
+    from pred_fab.core.data_objects import DataObject
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, runtime=True)
+    restored = DataObject.from_dict(p.to_dict())
+    assert restored.role == Roles.PARAMETER
+    assert restored.runtime_adjustable is True
+
+
+def test_parameter_real_runtime_roundtrip_preserves_bounds():
+    from pred_fab.core.data_objects import DataObject
+    p = Parameter.real("speed", min_val=10.0, max_val=200.0, round_digits=2, runtime=True)
+    restored = DataObject.from_dict(p.to_dict())
+    assert restored.constraints["min"] == pytest.approx(10.0)
+    assert restored.constraints["max"] == pytest.approx(200.0)
+    assert restored.round_digits == 2
+
+
+# --- Parameter.integer(runtime=True) ---
+
+def test_parameter_integer_runtime_true_keeps_parameter_role():
+    """runtime=True sets runtime_adjustable; role stays Roles.PARAMETER for DataBlock compatibility."""
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=True)
+    assert p.role == Roles.PARAMETER
+
+
+def test_parameter_integer_runtime_true_sets_runtime_adjustable():
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=True)
+    assert p.runtime_adjustable is True
+
+
+def test_parameter_integer_runtime_false_keeps_parameter_role():
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=False)
+    assert p.role == Roles.PARAMETER
+    assert p.runtime_adjustable is False
+
+
+def test_parameter_integer_runtime_preserves_type():
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=True)
+    assert isinstance(p, DataInt)
+
+
+def test_parameter_integer_runtime_validation_unchanged():
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=True)
+    assert p.validate(1500) is True
+    with pytest.raises(ValueError):
+        p.validate(3001)
+
+
+def test_parameter_integer_runtime_roundtrip_preserves_role():
+    """Serialise → deserialise must keep role=Roles.PARAMETER and restore runtime_adjustable=True."""
+    from pred_fab.core.data_objects import DataObject
+    p = Parameter.integer("fan_rpm", min_val=0, max_val=3000, runtime=True)
+    restored = DataObject.from_dict(p.to_dict())
+    assert restored.role == Roles.PARAMETER
+    assert restored.runtime_adjustable is True

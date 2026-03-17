@@ -6,17 +6,9 @@ from ..utils import PfabLogger
 
 
 class BaseInterface(ABC):
-    """
-    Base class for interface models (Evaluation, Prediction).
-    
-    Provides shared functionality:
-    - Dataset and logger initialization
-    - DataObject extraction from model fields
-    - Parameter extraction from ExperimentData
-    """
+    """Shared base for interface models — logger setup, DataObject references, and property validation."""
     
     def __init__(self, logger: PfabLogger):
-        """Initialize interface model with dataset and logger."""
         self.logger = logger
 
         # reference to DataObjects from schema
@@ -30,37 +22,19 @@ class BaseInterface(ABC):
     @property
     @abstractmethod
     def input_parameters(self) -> List[str]:
-        """
-        Define the parameters this model needs as input.
-        
-        Returns:
-            List of strings that match DataObject codes in Dataset.
-            Example: ["param_1", "param_2", "dim_1"]
-        """
+        """Parameter codes required as model input (must match schema DataObject codes)."""
         ...
 
     @property
     @abstractmethod
     def input_features(self) -> List[str]:
-        """
-        Define the features this model needs as input.
-        
-        Returns:
-            List of strings that match DataObject codes in Dataset.
-            Example: ["feature_1"]
-        """
+        """Feature codes required as model input (must match schema DataObject codes)."""
         ...
 
     @property
     @abstractmethod
     def outputs(self) -> List[str]:
-        """
-        Define the output features or performance attributes this model produces.
-        
-        Returns:
-            List of feature and evaluation codes as strings.
-            Example: ["feature_1", "feature_2"] or ["perf_attr_1"]
-        """
+        """Feature or performance attribute codes produced by this model."""
         ...
 
     @final

@@ -1,73 +1,41 @@
-# Orchestration Context
-
-High-level architecture and long-horizon risks for `src/pred_fab/orchestration`.
-Keep this concise and synchronized with implementation.
+# Orchestration — Context
 
 ## Purpose
+Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-systems handle specific concerns.
 
-`orchestration` coordinates models and data flow across feature extraction, evaluation,
-training, inference, and calibration:
-- top-level workflow API (`agent.py`)
-- system wrappers (`features.py`, `evaluation.py`, `prediction.py`, `calibration.py`)
-- exportable runtime inference wrapper (`inference_bundle.py`)
+## Systems
 
-## Structure
+| Class | File | Role |
+|-------|------|------|
+| `PfabAgent` | `agent.py` | Registration, initialization, step methods |
+| `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
+| `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
+| `PredictionSystem` | `prediction.py` | Trains/infers prediction models; provides uncertainty + similarity |
+| `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC |
 
-1. `agent.py`
-- Main integration surface (`PfabAgent`).
-- Owns model registration, system initialization, workflow steps, and calibration config.
-- Step methods return typed `ParameterProposal` outputs for parameter suggestions.
-- API taxonomy:
-  - step methods: `exploration_step`, `inference_step`, `adaptation_step`
-  - operation methods: `evaluate`, `train`, `predict`, `configure_calibration`, `sample_baseline_experiments`
+## Calibration Architecture
+`run_calibration(mode, current_params, target_indices, mpc_lookahead, …)` is the single optimization entry point.
 
-2. `base_system.py`
-- Shared helpers for model specs and schema reference wiring.
+- **Offline** (no `current_params`/`target_indices`): global bounds + random restarts
+- **Online** (`current_params` + `target_indices`): trust-region bounds, single-shot
+- **Step-grid** (`configure_step_parameter` + `current_params`): iterates over Cartesian product of dimension steps; only params whose mapped dimension transitions are free at each step
+- **MPC** (`mpc_lookahead > 0`): wraps objective with N-step discounted lookahead via `_wrap_mpc_objective`; default 0 = greedy
 
-3. `features.py`
-- Runs feature models and writes canonical tensors into experiment data.
+`run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
 
-4. `evaluation.py`
-- Runs evaluation models from computed features to performance attributes.
+## Step Methods on PfabAgent
 
-5. `prediction.py`
-- Handles prediction model training/tuning/validation/inference and inference bundle export.
-- Online tuning now respects requested slice boundaries (`start:end`) for step-local adaptation.
+| Method | Mode | Notes |
+|--------|------|-------|
+| `baseline_step(n)` | BASELINE | Greedy maximin, no trained model needed |
+| `exploration_step(…)` | EXPLORATION | UCB acquisition |
+| `inference_step(…)` | INFERENCE | Feature extraction + perf-max |
+| `adaptation_step(…)` | INFERENCE | Online tuning + trust-region calibration; batch_size via `**kwargs` |
 
-6. `calibration.py`
-- Handles surrogate training, acquisition/inference objectives, sampling, and optimization.
-- Adaptation uses current effective parameters (initial + recorded updates) as optimization center.
+## Return Type
+All step methods return `ExperimentSpec(initial_params, schedules)`.
+`schedules` is non-empty only when trajectory dimensions are configured.
 
-7. `inference_bundle.py`
-- Lightweight deployed inference wrapper (prediction + normalization + schema validation).
-
-## Calibration and Tuning Semantics
-
-1. Exploration vs inference objective split
-- `Mode.EXPLORATION`: surrogate-driven acquisition objective combining weighted mean + uncertainty.
-- `Mode.INFERENCE`: direct prediction + evaluation objective (with optional residual correction).
-
-2. Offline vs online optimization domains
-- Offline calibration (`run_calibration`) uses global bounds/fixed params.
-- Online adaptation (`run_adaptation`) uses trust-region bounds around current effective parameters.
-
-3. Online residual adaptation lifecycle
-- `PredictionSystem.tune(...)` trains residual correction on selected row slices only.
-- Residual model uses base inputs + base predictions as tuning input.
-- Applied online parameter changes are persisted as `ParameterUpdateEvent` records, then replayed in export/datamodule flows.
-
-## Open Refactor Risks (Large-Scope Only)
-
-1. Use of private DataModule internals across systems
-- Orchestration systems still rely on internal DataModule methods/fields (normalization internals).
-- Risk: tight coupling makes independent evolution/testing of modules harder.
-
-2. Inference bundle schema/input validation depth
-- Bundle validates unknown columns but does not yet enforce full schema constraint checks.
-- Risk: invalid but schema-shaped requests can pass until deeper model/runtime stages.
-
-## Agent Update Rule
-
-When changing orchestration APIs or workflow semantics:
-- update this file for cross-system behavior changes.
-- fix small bugs immediately; keep only larger migration/refactor risks here.
+## perf_fn Closure
+CalibrationSystem never calls PredictionSystem or EvaluationSystem directly.
+PfabAgent wires them together via a `_perf_fn` closure at initialization time.

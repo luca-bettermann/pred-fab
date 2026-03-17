@@ -14,7 +14,6 @@ from pred_fab.interfaces import (
     IFeatureModel,
     IPredictionModel,
     IResidualModel,
-    ISurrogateModel,
 )
 
 
@@ -129,22 +128,6 @@ class MixedPredictionModel(IPredictionModel):
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
-
-
-class CapturingSurrogateModel(ISurrogateModel):
-    """Surrogate interface that records fit calls and observed shapes."""
-
-    def __init__(self, logger):
-        super().__init__(logger)
-        self.fit_calls = 0
-        self.last_shapes = None
-
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        self.fit_calls += 1
-        self.last_shapes = (X.shape, y.shape)
-
-    def predict(self, X: np.ndarray):
-        return np.zeros((X.shape[0], 1)), np.zeros((X.shape[0], 1))
 
 
 class CapturingResidualModel(IResidualModel):
