@@ -481,6 +481,12 @@ class PfabAgent:
             self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
 
+    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
+        """Declare that a runtime parameter should be re-optimised at each step of the given dimension."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
+
     def baseline_step(
         self,
         n: int,
