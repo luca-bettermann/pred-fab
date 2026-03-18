@@ -355,9 +355,35 @@ class DataModule:
         col_map = {}
         for parent, categories in self.categorical_mappings.items():
             for cat in categories:
-                col_name = f"{parent}_{cat}" 
+                col_name = f"{parent}_{cat}"
                 col_map[col_name] = (parent, cat)
         return col_map
+
+    def get_input_indices(self, codes: List[str], skip_missing: bool = False) -> List[int]:
+        """Return input_columns indices for the given schema codes, expanding categoricals to one-hot.
+
+        Categorical codes (e.g. "design") are expanded to all their one-hot column indices
+        (e.g. design_A, design_B, design_C) in sorted category order.
+        When skip_missing=True, codes that cannot be resolved are silently ignored;
+        otherwise a ValueError is raised.
+        """
+        indices: List[int] = []
+        for code in codes:
+            if code in self.categorical_mappings:
+                for cat in sorted(self.categorical_mappings[code]):
+                    col = f"{code}_{cat}"
+                    if col in self.input_columns:
+                        indices.append(self.input_columns.index(col))
+                    elif not skip_missing:
+                        raise ValueError(
+                            f"One-hot column '{col}' for categorical '{code}' not found in input_columns."
+                        )
+            else:
+                if code in self.input_columns:
+                    indices.append(self.input_columns.index(code))
+                elif not skip_missing:
+                    raise ValueError(f"Column '{code}' not found in input_columns.")
+        return indices
 
     # === SHARED NORMALIZATION HELPERS ===
     

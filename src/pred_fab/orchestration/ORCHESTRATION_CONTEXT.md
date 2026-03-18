@@ -31,6 +31,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `exploration_step(…)` | EXPLORATION | UCB acquisition |
 | `inference_step(…)` | INFERENCE | Feature extraction + perf-max |
 | `adaptation_step(…)` | INFERENCE | Online tuning + trust-region calibration; batch_size via `**kwargs` |
+| `configure_step_parameter(code, dimension_code)` | — | Delegates to CalibrationSystem; declares runtime param to re-optimise per dimension step |
 
 ## Return Type
 All step methods return `ExperimentSpec(initial_params, schedules)`.
