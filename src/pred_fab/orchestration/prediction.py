@@ -70,10 +70,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         return codes
     
     def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
-        """Filter batch targets to only include model outputs."""
+        """Filter batch X/y to the columns required by this model, expanding categoricals to one-hot."""
         if self.datamodule is None:
             raise RuntimeError("DataModule not set")
-        input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
+        input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
         output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
         return [(X[:, input_indices], y[:, output_indices]) for X, y in batches]
 
@@ -236,11 +236,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return X_norm
         model = self.models[0]
         input_cols = model.input_parameters + model.input_features
-        input_indices = [
-            self.datamodule.input_columns.index(f)
-            for f in input_cols
-            if f in self.datamodule.input_columns
-        ]
+        input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
         if not input_indices:
             return X_norm
         X_model = X_norm[input_indices].reshape(1, -1)
@@ -262,11 +258,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return X
         model = self.models[0]
         input_cols = model.input_parameters + model.input_features
-        input_indices = [
-            self.datamodule.input_columns.index(f)
-            for f in input_cols
-            if f in self.datamodule.input_columns
-        ]
+        input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
         if not input_indices:
             return X
         X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
@@ -437,7 +429,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
             
             # Get model inputs (filter X columns)
-            input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
+            input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
             X_model = X_tune[:, input_indices]
             
             # Predict (normalized)
@@ -498,7 +490,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         results = {}
         for model in self.models:
             # Get indices for this model
-            input_indices = [self.datamodule.input_columns.index(f) for f in model.input_parameters + model.input_features]
+            input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
             indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
             
             # Get ground truth (denormalized)
