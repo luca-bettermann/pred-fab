@@ -283,7 +283,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             z = z[self._kde_active_mask]
         q = float(self._kde(z.reshape(-1, 1))[0])
         n_post = self._n_exp * q / self._q_max
-        return float(1.0 / (1.0 + n_post))
+        u = float(1.0 / (1.0 + n_post))
+        self.logger.debug(f"uncertainty: q={q:.6f}, n_post={n_post:.3f} -> u={u:.4f}")
+        return u
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
         """Gaussian kernel similarity between two parameter vectors in latent space.

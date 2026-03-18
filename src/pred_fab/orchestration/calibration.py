@@ -292,6 +292,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values)
+        perf_str = ", ".join(f"{k}={perf_dict.get(k, 'N/A')}" for k in self.perf_names_order)
+        self.logger.debug(f"inference_func: [{perf_str}], sys_perf={sys_perf:.4f} -> obj={-sys_perf:.4f}")
         return -sys_perf
 
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
@@ -312,6 +314,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
         u = self.uncertainty_fn(X.reshape(-1))
         score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
+        self.logger.debug(
+            f"acquisition_func: perf={sys_perf:.4f}, u={u:.4f}, w_explore={w_explore:.2f} -> score={score:.4f}"
+        )
         return -score
 
     def _baseline_func(self, X: np.ndarray, proposed_norm: List[np.ndarray]) -> float:
@@ -355,7 +360,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return base_objective
 
         def mpc_obj(X: np.ndarray) -> float:
-            total = base_objective(X)
+            base_score = base_objective(X)
+            total = base_score
+            self.logger.debug(f"mpc: base_score={base_score:.4f}")
             X_cur = X.copy()
             for j in range(depth):
                 try:
@@ -368,7 +375,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         method='L-BFGS-B',
                     )
                     X_cur = res.x
-                    total += (discount ** (j + 1)) * base_objective(X_cur)
+                    step_score = base_objective(X_cur)
+                    discount_factor = discount ** (j + 1)
+                    total += discount_factor * step_score
+                    self.logger.debug(
+                        f"  mpc step {j + 1}/{depth}: score={step_score:.4f}, "
+                        f"discount={discount_factor:.4f}, cumulative={total:.4f}"
+                    )
                 except Exception:
                     break
             return total
@@ -604,6 +617,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         if lookahead > 0:
             objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
+            self.logger.info(
+                f"MPC lookahead enabled: depth={lookahead}, discount={discount:.3f}"
+            )
 
         if mode == Mode.EXPLORATION:
             source_step: SourceStep = SourceStep.EXPLORATION
@@ -620,6 +636,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             step_grid = self._build_step_grid(current_params)
         else:
             step_grid = [{}]
+
+        self.logger.info(
+            f"run_calibration: mode={mode.name}, {'online (trust-region)' if is_online else 'offline (global)'}, "
+            f"w_explore={w_explore:.2f}, mpc_lookahead={lookahead}, step_grid={len(step_grid)} step(s)"
+        )
 
         # Validate trust regions for online/trust-region optimization
         if is_online:
@@ -652,9 +673,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: Optional[Dict[str, int]] = None
         proposals: List[Dict[str, Any]] = []
 
-        for curr_indices in step_grid:
+        for step_i, curr_indices in enumerate(step_grid):
             # Build fixed params for this step
             fixed_for_step = dict(self.fixed_params)
+            eligible: set = set()
             if working_params and self.trajectory_configs and curr_indices:
                 eligible = self._get_eligible_params(prev_indices, curr_indices)
                 for code in self.trajectory_configs:
@@ -674,9 +696,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if is_online or (working_params is not None and bool(curr_indices)):
                 bounds = self._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
                 n_rounds = 0
+                bounds_mode = "trust-region"
             else:
                 bounds = self._get_global_bounds(datamodule)
                 n_rounds = n_optimization_rounds
+                bounds_mode = "global"
+
+            self.logger.debug(
+                f"Step {step_i + 1}/{len(step_grid)}: indices={curr_indices}, "
+                f"bounds={bounds_mode}, eligible_traj={sorted(eligible) if eligible else '—'}, "
+                f"fixed={sorted(fixed_for_step.keys())}"
+            )
 
             result = self._run_optimization(
                 datamodule,
@@ -690,6 +720,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             working_params = result
             prev_indices = curr_indices
 
+        proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
+        self.logger.info(f"Calibration proposal: {proposal_summary}")
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
     def _run_optimization(
@@ -715,9 +747,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
              # Fallback if no x0_params and n_rounds=0 (unlikely)
              x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
 
+        n_starts = len(x0_list)
+        self.logger.info(f"Optimizing with {n_starts} starting point(s) (1 from x0, {n_starts - 1} random restarts)")
+
         # Run optimization from each starting point
         best_x, best_val = None, np.inf
-        for x0 in x0_list:
+        for i, x0 in enumerate(x0_list):
             try:
                 res = minimize(
                     fun=objective_func,
@@ -728,7 +763,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 if res.fun < best_val:
                     best_val = res.fun
                     best_x = res.x
-                self.logger.debug(f"Optimization round result: val={res.fun}, x={res.x}")
+                self.logger.debug(f"  start {i + 1}/{n_starts}: val={res.fun:.6f}, converged={res.success}")
             except Exception as e:
                 self.logger.warning(f"Optimization round failed with error: {e}")
                 continue
@@ -740,11 +775,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 return x0_params
             else:
                 raise RuntimeError("No valid parameters could be proposed.")
-        else:
-            self.logger.info(f"Optimization succeeded: best_val={best_val}, best_x={best_x}")
 
         # Convert result back
         proposed_params = datamodule.array_to_params(best_x)
+        self.logger.info(f"Optimization best_val={best_val:.6f}, proposed={proposed_params}")
         if fixed_param_values:
             proposed_params.update(fixed_param_values)
         # Carry over any params from the starting point that aren't in the
