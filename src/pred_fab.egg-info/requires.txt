@@ -6,3 +6,4 @@ scikit-optimize>=0.10.2
 
 [dev]
 pytest>=8.4.1
+pyright>=1.1.0

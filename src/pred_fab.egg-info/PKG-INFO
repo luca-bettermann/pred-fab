@@ -12,537 +12,399 @@ Requires-Dist: scikit-learn>=1.6.1
 Requires-Dist: scikit-optimize>=0.10.2
 Provides-Extra: dev
 Requires-Dist: pytest>=8.4.1; extra == "dev"
+Requires-Dist: pyright>=1.1.0; extra == "dev"
 Dynamic: license-file
 
-# PFAB: A Predictive Layer for Digital Fabrication Systems
+# pred-fab
 
-A Python framework for iterative manufacturing process improvement through automated performance evaluation and optimization.
+A Python framework for iterative parameter optimization in digital fabrication systems.
 
-**Current package version**: 1.0.0  
-**Architecture**: Phase 10 - Dimensional Prediction (November 2025)
+`pred-fab` provides a structured loop between **feature extraction**, **performance evaluation**, **predictive modelling**, and **parameter calibration**. It supports offline experiment design, online process adaptation, and inference-guided proposals — all through a single orchestration agent.
+
+**Package**: `pred-fab` v0.1.0
+**Python**: 3.9+
+
+---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Framework Structure](#framework-structure)
-- [Architecture Overview](#architecture-overview)
 - [Installation](#installation)
-  - [Prerequisites](#prerequisites)
-  - [Install from Source](#install-from-source)
-  - [Dependencies](#dependencies)
-- [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
-  - [Parameter Management System](#parameter-management-system)
-  - [Dynamic Dimensionality System](#dynamic-dimensionality-system)
-  - [Hierarchical Data Flow](#hierarchical-data-flow)
-  - [Data Separation of Concerns](#data-separation-of-concerns)
-- [API Reference](#api-reference)
-  - [Interface APIs](#interface-apis)
-    - [IExternalData](#iexternaldata-optional---databaseapi-integration)
-    - [IFeatureModel](#ifeaturemodel-core---domain-specific-data-loading)
-    - [IEvaluationModel](#ievaluationmodel-core---performance-assessment)
-    - [IPredictionModel](#ipredictionmodel-optional---ml-workflows)
-    - [ICalibrationStrategy](#icalibrationstrategy-optional---process-optimization)
-  - [Orchestration APIs](#orchestration-apis)
-    - [LBPAgent](#lbpagent-orchestration)
-  - [Utility APIs](#utility-apis)
-    - [Parameter Decorators](#parameter-decorators)
-    - [Logging System](#logging-system)
-    - [Local Data Operations](#local-data-operations)
-- [Configuration](#configuration)
-  - [Data Structure (Standalone Operation)](#data-structure-standalone-operation)
-- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Interfaces](#interfaces)
+- [Agent API](#agent-api)
+- [Calibration Configuration](#calibration-configuration)
+- [Workflow Modes](#workflow-modes)
 - [License](#license)
-- [Support](#support)
+
+---
 
 ## Overview
 
-Learning by Printing is an iterative manufacturing optimization approach that systematically improves printing processes through automated performance evaluation and parameter adjustment. The framework enables closed-loop learning where each experiment provides feedback for process refinement.
-
-For detailed methodology, see: [An Introduction to Learning by Printing](https://mediatum.ub.tum.de/doc/1781543/1781543.pdf)
-
-## Repository Structure
+The framework is built around a dataset-centric architecture with a clear separation between domain-specific logic (user-implemented interfaces) and orchestration (handled by the framework):
 
 ```
-lbp_package/
-├── interfaces/              # Abstract base classes defining contracts
-│   ├── external_data.py     # Data source interface
-│   ├── features.py          # Feature extraction interface  
-│   ├── evaluation.py        # Performance evaluation interface
-│   ├── prediction.py        # ML prediction interface
-│   └── calibration.py       # Optimization interface
-├── orchestration/           # Workflow management classes
-│   ├── management.py        # LBPManager - main orchestrator
-│   ├── evaluation.py        # EvaluationSystem
-│   └── prediction.py        # PredictionSystem  
-└── utils/                   # Supporting utilities
-    ├── parameter_handler.py # Parameter management system
-    ├── local_data.py        # File operations
-    └── logger.py            # Logging utilities
+DatasetSchema          — defines parameters, features, and performance attributes
+├── IFeatureModel      — extracts numerical features from raw fabrication data
+├── IEvaluationModel   — scores features against targets to compute performance
+└── IPredictionModel   — predicts features from parameters (enables calibration)
+
+PfabAgent              — orchestrates the full loop
+├── evaluate()         — run feature extraction + evaluation on recorded experiments
+├── train()            — train prediction models on evaluated data
+├── exploration_step() — propose next experiment parameters (UCB acquisition)
+├── inference_step()   — evaluate + propose next parameters (performance-guided)
+└── adaptation_step()  — online trust-region adaptation during fabrication
 ```
 
-## Architecture Overview
-
-![LBP Framework Architecture](UML_diagram.png)
-
-This diagram illustrates the interface-based architecture of the LBP framework, showing the relationships between core interfaces and orchestration components.
+---
 
 ## Installation
 
-### Prerequisites
-- Python 3.9+
-- Git
-
-### Install from Source
-
 ```bash
-# Clone repository
 git clone <repository-url>
-cd lbp-package
+cd pred-fab
 
-# Setup virtual environment and install dependencies
 uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv sync
-
-# Or with pip
-pip install -e .
+source .venv/bin/activate
+uv pip install -e ".[dev]"
 ```
 
-### Dependencies
+---
 
-The framework has minimal core dependencies:
-- `numpy` - Array operations and numerical computing
-- `pandas` - Data structure handling for CSV export
+## Core Concepts
 
-**Note**: The [examples repository](https://github.com/your-org/lbp-examples) may have additional dependencies for visualization and domain-specific implementations, but the core framework is lightweight.
+### Schema
+
+The `DatasetSchema` describes everything the framework needs to know about your process: which parameters are controllable, which features are measurable, and which performance attributes matter.
+
+```python
+from pred_fab.core.schema import DatasetSchema
+from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+from pred_fab.core.data_objects import Parameter, Feature, PerformanceAttribute
+
+schema = DatasetSchema(
+    root_folder="./data",
+    name="my_process",
+    parameters=Parameters.from_list([
+        Parameter.real("speed", min_val=20.0, max_val=120.0),
+        Parameter.integer("layer_count", min_val=1, max_val=10),
+        Parameter.categorical("material", categories=["A", "B", "C"]),
+        Parameter.dimension("n_layers", iterator_code="layer_idx", level=0),
+        Parameter.dimension("n_segments", iterator_code="seg_idx", level=1),
+        Parameter.real("feed_rate", min_val=10.0, max_val=80.0, runtime=True),
+    ]),
+    features=Features.from_list([
+        Feature.array("width_profile"),
+        Feature.scalar("mean_width"),
+    ]),
+    performance=PerformanceAttributes.from_list([
+        PerformanceAttribute.score("width_accuracy"),
+    ]),
+)
+```
+
+**Parameter types:**
+
+| Type | Constructor | Notes |
+|------|-------------|-------|
+| Continuous | `Parameter.real(code, min_val, max_val)` | Float-valued |
+| Integer | `Parameter.integer(code, min_val, max_val)` | Int-valued |
+| Categorical | `Parameter.categorical(code, categories)` | One-hot encoded for prediction |
+| Boolean | `Parameter.boolean(code)` | True/False |
+| Dimension | `Parameter.dimension(code, iterator_code, level)` | Defines iteration structure |
+
+Set `runtime=True` on any parameter that can be adjusted mid-fabrication. This enables online adaptation and trajectory-based exploration.
+
+### Dataset and Experiments
+
+```python
+from pred_fab.core.dataset import Dataset
+
+dataset = Dataset(schema=schema)
+dataset.load_experiments(["exp_001", "exp_002", "exp_003"])
+
+exp = dataset.get_experiment("exp_001")
+params = exp.parameters.get_values_dict()
+```
+
+### DataModule
+
+`DataModule` prepares data for training and prediction, handling normalization and train/val/test splits:
+
+```python
+datamodule = agent.create_datamodule(dataset)
+datamodule.prepare(val_size=0.15, test_size=0.1)
+```
+
+---
 
 ## Quick Start
 
 ```python
-from lbp_package import LBPManager
+from pred_fab import PfabAgent
+from pred_fab.core.dataset import Dataset
 
-# Initialize system (external data interface is optional)
-manager = LBPManager(
-    root_folder=".",
-    local_folder="./data",
-    log_folder="./logs"
-    # external_data_interface=YourDataInterface()  # Optional
+# 1. Define schema (see above)
+schema = DatasetSchema(...)
+
+# 2. Create agent, register models, and initialize
+agent = PfabAgent(root_folder="./data")
+agent.register_feature_model(WidthFeatureModel)
+agent.register_evaluation_model(WidthEvaluationModel)
+agent.register_prediction_model(WidthPredictionModel)
+agent.initialize_systems(schema)
+
+# 3. Configure calibration bounds
+agent.configure_calibration(
+    bounds={"speed": (20.0, 100.0), "feed_rate": (10.0, 60.0)},
 )
 
-# Add your evaluation models (with weights for calibration)
-manager.add_evaluation_model("performance_code", YourEvaluationModel, weight=1.0)
+# 4. Sample initial experiments via Latin Hypercube Sampling
+baseline_specs = agent.sample_baseline_experiments(n_samples=10)
+# → run physical experiments for each spec, record results
 
-# Run workflows with optional flag overrides
-manager.initialize_for_study("study_001")
-manager.run_evaluation(
-    "study_001",
-    exp_nrs=[1, 2, 3], 
-    debug_flag=True,  # Override default
-    visualize_flag=True
+# 5. Evaluate and train on recorded experiments
+dataset = Dataset(schema=schema)
+dataset.load_experiments([...])
+datamodule = agent.create_datamodule(dataset)
+
+for exp in dataset.experiments:
+    agent.evaluate(exp_data=exp)
+datamodule.prepare()
+agent.train(datamodule)
+
+# 6. Propose next experiment
+spec = agent.exploration_step(datamodule, w_explore=0.6)
+print(spec.initial_params)  # → {"speed": 72.4, "feed_rate": 38.1, ...}
+```
+
+---
+
+## Interfaces
+
+Implement these abstract classes to connect your domain logic to the framework. Each model declares its `input_parameters`, `input_features`, and `outputs` as class attributes so the framework can validate the data flow at initialization.
+
+### IFeatureModel
+
+Extracts numerical features from raw fabrication data.
+
+```python
+from pred_fab import IFeatureModel
+
+class WidthFeatureModel(IFeatureModel):
+    input_parameters = ["speed", "feed_rate", "n_layers", "n_segments"]
+    input_features = []
+    outputs = ["width_profile", "mean_width"]
+
+    def _load_data(self, params: dict, **dimensions) -> Any:
+        # Load raw data (files, sensor streams, etc.) — full control over format
+        layer_idx = dimensions["layer_idx"]
+        seg_idx = dimensions["seg_idx"]
+        return load_scan(params, layer_idx, seg_idx)
+
+    def _compute_feature_logic(self, data: Any, params: dict, **dimensions) -> dict:
+        profile = compute_width_profile(data)
+        return {
+            "width_profile": profile,
+            "mean_width": float(np.mean(profile)),
+        }
+```
+
+### IEvaluationModel
+
+Scores a single feature against a target to produce a normalized performance value in [0, 1].
+
+```python
+from pred_fab import IEvaluationModel
+
+class WidthEvaluationModel(IEvaluationModel):
+    input_parameters = ["speed"]
+
+    @property
+    def input_feature(self) -> str:
+        return "mean_width"
+
+    @property
+    def output_performance(self) -> str:
+        return "width_accuracy"
+
+    def _compute_target_value(self, params: dict, **dimensions) -> float:
+        return 2.0  # target width in mm
+
+    def _compute_scaling_factor(self, params: dict, **dimensions) -> Optional[float]:
+        return None  # use default scoring curve
+```
+
+### IPredictionModel
+
+Predicts features from parameters. Enables the framework to score hypothetical parameter combinations without running physical experiments.
+
+```python
+from pred_fab import IPredictionModel
+
+class WidthPredictionModel(IPredictionModel):
+    input_parameters = ["speed", "feed_rate"]
+    input_features = []
+    outputs = ["mean_width"]
+
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        # X: (n_samples, n_inputs) normalized
+        # Returns: (n_samples, n_outputs) normalized
+        return self.model.predict(X)
+
+    def train(self, train_batches, val_batches, **kwargs) -> None:
+        X = np.vstack([x for x, _ in train_batches])
+        y = np.vstack([y for _, y in train_batches])
+        self.model.fit(X, y)
+```
+
+For online adaptation, implement `tuning()` to update the model on a small recent slice:
+
+```python
+    def tuning(self, tune_batches, **kwargs) -> None:
+        # Fine-tune on recent measurements (residual learning, etc.)
+        ...
+```
+
+---
+
+## Agent API
+
+### Initialization
+
+```python
+agent = PfabAgent(
+    root_folder="./data",
+    debug_flag=False,       # skip external data operations if True
+    recompute_flag=False,   # force recomputation of cached results if True
+    visualize_flag=True,    # enable model visualizations if True
 )
+agent.register_feature_model(MyFeatureModel)
+agent.register_evaluation_model(MyEvaluationModel)
+agent.register_prediction_model(MyPredictionModel)   # optional, needed for calibration
+agent.initialize_systems(schema, verbose_flag=True)
 ```
 
-For complete working examples, see the [LBP Examples Repository](https://github.com/your-org/lbp-examples).
-
-## Core Concepts
-
-### Parameter Management System
-Elegant decorator-based system distinguishing three parameter types:
-
-```python
-@dataclass
-class MyEvaluationModel(IEvaluationModel):
-    # Study-level parameters (constant across all experiments)
-    power_rating: float = study_parameter(50.0)
-    max_speed: float = study_parameter(100.0)
-    
-    # Experiment-level parameters (vary between experiments)  
-    layer_time: float = exp_parameter()
-    temperature: float = exp_parameter(200.0)
-    
-    # Dimensional parameters (change during execution)
-    layer_id: int = dim_parameter()
-    segment_id: int = dim_parameter()
-```
-
-**Parameter Types:**
-- **`@study_parameter`**: Study-wide constants shared across all experiments (numerical model configuration, equipment limits)
-- **`@exp_parameter`**: Experiment-specific parameters that vary between experiments (numerical process settings, material properties)  
-- **`@dim_parameter`**: Dynamic runtime parameters that change during execution to track current dimensional position
-
-**Critical Parameter Requirements**:
-- **Numerical types only**: Use `float` and `int` types for all parameters
-- **No string parameters**: String parameters will cause errors in prediction and calibration workflows  
-- **Default values**: Provide defaults for `@study_parameter` and `@exp_parameter` where possible
-- **Type consistency**: Parameter types must match between record data and model declarations
-
-**Automatic Parameter Access**: Once declared with decorators, parameters become automatically available as `self` attributes in all model methods.
-
-### Dynamic Dimensionality System
-Framework creates and manages multi-dimensional arrays automatically based on your dimension configuration:
-
-**Concept**: Dimensionality defines the discrete evaluation structure - how your analysis is segmented (layers, segments, time steps, spatial regions, etc.). The framework dynamically creates and manages multi-dimensional arrays based on your dimension definitions.
-
-**Key Benefits**:
-- **Automatic Array Creation**: Framework creates feature and performance arrays sized `[n_layers, n_segments, ...]`
-- **Dynamic Iteration**: Automatically loops through all dimensional combinations `(0,0), (0,1), (1,0), (1,1)`  
-- **Database Alignment**: Dimension parameter names must match fields in your data records for dynamic configuration
-- **Scalable**: Works with any number of dimensions - add new dimensions just by extending the lists
-
-### Hierarchical Data Flow
-Three-tier data management system providing complete database independence while enabling seamless integration:
-
-**Data Loading Hierarchy** (Memory → Local → External):
-1. **Memory First**: Check if data already loaded in current session
-2. **Local Files**: Load from JSON/CSV files in local filesystem  
-3. **External Source**: Query database/API only if data missing from local cache
-4. **Automatic Caching**: Once loaded from external, automatically saved locally for future use
-
-**Data Loading Control**:
-- **`recompute_flag=False`**: Use hierarchical loading (memory → local → external)
-- **`recompute_flag=True`**: Force loading from external source, bypassing local cache. Force overwritting of local files.
-
-**Complete Database Independence**: Framework works fully without any external data interface. Manual data creation with JSON files supported. Add external data interface later without changing existing workflows.
-
-### Data Separation of Concerns
-Clear boundary between structured and unstructured data handling:
-
-**Structured Data** (Handled by framework): Study/experiment records, feature arrays, performance results with standardized JSON/CSV format.
-
-**Unstructured Data** (Complete user control): Domain-specific raw data (CAD files, sensor streams, images, proprietary formats) loaded via `FeatureModel._load_data()`.
-
-## API Reference
-
-The framework uses **interface-based design** with five core interfaces and supporting orchestration/utility classes.
-
-### Interface APIs
-
-#### IExternalData (Optional - Database/API Integration)
-
-**Purpose**: Interface structured metadata access when integrating with databases/APIs. Framework works completely standalone without this interface.
-
-**Required Methods:**
-
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `pull_study_record(study_code)` | Fetch study metadata from external source | Dict with id, Code, Parameters, Performance |
-| `pull_exp_record(exp_code)` | Fetch experiment metadata from external source | Dict with id, Code, Parameters |
-
-**Required Record Structure:**
-
-Study records must contain these fields:
-```python
-{
-    "id": int,                    # Unique study identifier
-    "Code": str,                  # Study code (matches study_code parameter)
-    "Parameters": Dict[str, Any], # Study-level parameters (@study_parameter values)
-    "Performance": List[str]      # List of performance metric codes
-}
-```
-
-Experiment records must contain these fields:
-```python
-{
-    "id": int,                    # Unique experiment identifier  
-    "Code": str,                  # Experiment code (matches exp_code parameter)
-    "Parameters": Dict[str, Any]  # Experiment-level parameters (@exp_parameter values)
-}
-```
-
-**Optional Methods** (default implementations provided):
-
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `push_study_records(study_codes, data, recompute)` | Save study records to external source | bool |
-| `push_exp_records(exp_codes, data, recompute)` | Save experiment records to external source | bool |
-| `pull_aggr_metrics(exp_codes)` | Fetch aggregated metrics from external source | Tuple[missing_codes, data_dict] |
-| `push_aggr_metrics(exp_codes, data, recompute)` | Save aggregated metrics to external source | bool |
-
-**Import**: `from lbp_package import IExternalData`
-
-#### IFeatureModel (Core - Domain-Specific Feature Extraction)
-
-**Purpose**: Extract numerical features from domain-specific raw data. You have complete control over data format and loading mechanism.
-
-**Required Methods:**
-
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `_load_data(exp_code, exp_folder, debug_flag)` | Load raw data from experiment folder | Any (your custom data format) |
-| `_compute_features(data, visualize_flag)` | Extract numerical features from loaded data | Dict[str, float] |
-
-**Return Structure Requirements**:
-- `_compute_features()` must return `Dict[str, float]` with string keys and numerical values
-- Feature keys become available for use in `IPredictionModel.input` field
-- All values must be finite numbers (no NaN, inf) - framework validates automatically
-
-**Key Responsibility**: Load unstructured data (CAD files, sensor streams, proprietary formats) and convert to numerical features.
-
-**Parameter Access**: Use `@study_parameter`, `@exp_parameter`, `@dim_parameter` decorators - automatically available as `self.attribute_name`.
-
-**Import**: `from lbp_package import IFeatureModel`
-
-#### IEvaluationModel (Core - Performance Assessment)
-
-**Purpose**: Evaluate feature values against target values with automatic dimensionality handling.
-
-**Required Properties:**
-
-| Property | Description | Example |
-|----------|-------------|---------|
-| `dim_names` | Dimension names for arrays | `['layers', 'segments']` |
-| `dim_param_names` | Parameter names in exp records | `['n_layers', 'n_segments']` |
-| `dim_iterator_names` | Your @dim_parameter attribute names | `['layer_id', 'segment_id']` |
-| `feature_model_type` | Associated feature model class | `ThermalFeatureModel` |
-| `target_value` | Performance target for evaluation | `100.0` |
-
-**Critical Naming Requirements**:
-- `dim_param_names` must **exactly match** field names in experiment record `"Parameters"` section
-- `dim_iterator_names` must **exactly match** `@dim_parameter` attribute names in your class
-- Mismatch will cause runtime errors during dimension configuration
-
-**Key Responsibility**: Framework automatically creates multi-dimensional arrays and iterates through all combinations based on your dimension configuration.
-
-**Import**: `from lbp_package import IEvaluationModel`
-
-#### IPredictionModel (Optional - ML Workflows)
-
-**Purpose**: Train ML models to predict features from parameters, enabling performance forecasting.
-
-**Required Properties:**
-
-| Property | Description | Example |
-|----------|-------------|---------|
-| `feature_names` | List of feature names to predict | `['filament_width', 'layer_height']` |
-| `required_features` | List of external features needed for prediction | `['temperature_measured']` |
-
-**Required Methods:**
-
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `train(X, y, **kwargs)` | Train ML model on parameters (X) and features (y) | None |
-| `forward_pass(X)` | Predict features for new parameters | pd.DataFrame |
-
-**Training with Hyperparameters**:
-The `**kwargs` parameter allows passing custom hyperparameters to your model:
-```python
-# User code
-agent.train(
-    datamodule,
-    learning_rate=0.001,
-    epochs=100,
-    batch_size=32,
-    verbose=True
-)
-
-# Your model implementation
-def train(self, X: pd.DataFrame, y: pd.DataFrame, **kwargs):
-    lr = kwargs.get('learning_rate', 0.01)
-    epochs = kwargs.get('epochs', 50)
-    # Implement training logic
-```
-
-**DataModule Integration**:
-- Features (y) are automatically normalized by DataModule before training
-- Predictions are automatically denormalized before returning to user
-- User specifies normalization method: `'standard'`, `'minmax'`, `'robust'`, or `'none'`
-
-**Import**: `from lbp_package import IPredictionModel`
-
-#### ICalibrationModel (Optional - Process Optimization)
-
-**Purpose**: Optimize process parameters using any optimization algorithm of your choice.
-
-**Required Method:**
-
-| Method | Description | Returns |
-|--------|-------------|---------|
-| `optimize(param_ranges, objective_fn)` | Find optimal parameters using your chosen algorithm | Dict[str, float] |
-
-**Key Responsibility**: Implement optimization logic. Framework provides objective function based on evaluation model weights. You choose the optimization algorithm (scipy, scikit-optimize, genetic algorithms, etc.).
-
-**Import**: `from lbp_package import ICalibrationModel`
-
-### Orchestration APIs
-
-#### LBPManager (Orchestration)
-
-**Purpose**: Main orchestration class coordinating the complete learning workflow.
-
-**Initialization:**
-```python
-from lbp_package import LBPManager
-
-manager = LBPManager(
-    root_folder=".", local_folder="./data", log_folder="./logs",
-    external_data_interface=None,  # Optional
-    debug_flag=False, recompute_flag=False, visualize_flag=True
-)
-```
-
-**Model Registration:**
+### Core Methods
 
 | Method | Description |
 |--------|-------------|
-| `add_evaluation_model(performance_code, model_class, weight=None, **kwargs)` | Register evaluation model for specific performance metric |
-| `add_prediction_model(performance_codes, model_class, **kwargs)` | Register ML model for multiple performance metrics |
-| `set_calibration_model(model_class, **kwargs)` | Register optimization model for parameter tuning |
+| `evaluate(exp_data)` | Run feature extraction and performance evaluation on an experiment |
+| `train(datamodule, validate, test)` | Train prediction models; returns validation metrics if requested |
+| `predict(exp_data, dimension, step_index)` | Predict features for an experiment or a specific step slice |
+| `sample_baseline_experiments(n_samples, param_bounds)` | Generate LHS-sampled initial experiment parameters |
+| `exploration_step(datamodule, w_explore, n_optimization_rounds, current_params)` | UCB-acquisition proposal for the next experiment |
+| `inference_step(exp_data, datamodule, w_explore, n_optimization_rounds, current_params)` | Evaluate current experiment + propose next parameters |
+| `adaptation_step(dimension, step_index, exp_data, mode, w_explore, record)` | Online trust-region adaptation for a single fabrication step |
+| `configure_calibration(bounds, fixed_params, adaptation_delta, performance_weights)` | Configure the calibration system |
+| `state_report()` | Print a summary of registered models and their I/O |
+| `calibration_state_report()` | Print current bounds and trust-region configuration |
 
-**Custom Model Arguments:**
-All registration methods accept `**kwargs` to pass additional arguments to your model constructors:
+---
+
+## Calibration Configuration
+
 ```python
-# Pass custom arguments to your model instances
-manager.add_evaluation_model("temperature", MyTempModel, weight=1.0, 
-                           custom_param=42, tolerance=0.1)
-manager.add_prediction_model(["temp", "pressure"], MyMLModel, 
-                           learning_rate=0.01, n_estimators=100)
-manager.set_calibration_model(MyOptimizerModel, algorithm="genetic", 
-                            population_size=50)
+agent.configure_calibration(
+    # Hard bounds for offline optimization
+    bounds={"speed": (20.0, 100.0), "feed_rate": (10.0, 60.0)},
+
+    # Parameters held constant during optimization
+    fixed_params={"material": "A"},
+
+    # Trust-region deltas for online/adaptation steps (runtime=True params only)
+    adaptation_delta={"feed_rate": 5.0},
+
+    # Performance weighting (default 1.0 for all)
+    performance_weights={"width_accuracy": 2.0},
+)
 ```
 
-**Registration Requirements**:
-- **`performance_code`**: Must match codes listed in study record `"Performance"` array
-- **`weight`**: Required for calibration workflow - defines relative importance in multi-objective optimization
-- **`performance_codes`** (prediction): Must be subset of registered evaluation model codes
-- **Calibration dependency**: Requires at least one evaluation model with `weight > 0`
+### Trajectory Exploration
 
-**Workflow Execution:**
+For runtime parameters that change along a fabrication dimension (e.g. feed rate per layer), configure trajectories to have the framework optimize a per-step schedule:
 
-| Method | Description |
-|--------|-------------|
-| `initialize_for_study(study_code)` | Set up framework for specific study |
-| `run_evaluation(study_code, exp_nrs, **flag_overrides)` | Execute evaluation workflow for experiments |
-| `run_training(study_code, exp_nrs, **flag_overrides)` | Execute ML training workflow |
-| `run_calibration(exp_nr, param_ranges)` | Execute optimization workflow |
-
-**Flag System Requirements**:
-- **`debug_flag`**: `True` = skip external data operations, `False` = use external data interface if available  
-- **`recompute_flag`**: `True` = force recomputation and overwrite existing results, `False` = use cached results
-- **`visualize_flag`**: `True` = enable visualizations during processing, `False` = skip visualizations
-- **Flag precedence**: Method-level overrides > initialization defaults
-
-**Parameter Range Requirements** (for calibration):
-- Keys must match parameter names in experiment records
-- Values must be `(min_value, max_value)` tuples with `min_value < max_value`
-- Only numerical parameters supported - framework validates against `@exp_parameter` types
-
-### Utility APIs
-
-The framework provides utility classes for advanced users who need direct access to internal operations.
-
-#### Parameter Decorators
-
-**Access**: `from lbp_package.utils import study_parameter, exp_parameter, dim_parameter`
-
-Use these decorators in your `@dataclass` interface implementations to mark parameter types. Parameter management is handled automatically by the framework.
-
-#### Logging System
-
-**Access**: `manager.logger` (LBPLogger instance)
-
-Provides dual logging to file and console with automatic session files and ANSI code handling.
-
-| Method | Description |
-|--------|-------------|
-| `debug(message)` | Log debug message to file only |
-| `info(message)` | Log info message to file only |
-| `warning(message)` | Log warning message to file only |
-| `error(message)` | Log error message to file only |
-| `console_info(message)` | Print to console and log as info |
-| `console_success(message)` | Print success message with ✅ formatting |
-| `console_warning(message)` | Print warning message with ⚠️ formatting |
-| `console_summary(message)` | Print formatted summary (strips ANSI codes in log) |
-
-#### Local Data Operations
-
-**Access**: `manager.local_data` (LocalData instance)
-
-Direct file system operations for custom data management workflows.
-
-| Method | Description |
-|--------|-------------|
-| `set_study_code(study_code)` | Set study context (required for most operations) |
-| `get_experiment_code(exp_nr)` | Generate experiment code from number |
-| `get_experiment_folder(exp_code)` | Get full path to experiment folder |
-| `get_server_experiment_folder(exp_code)` | Get server experiment folder path |
-| `get_experiment_file_path(exp_code, filename)` | Get full path to file in experiment |
-| `list_experiments()` | List all experiment folders in study |
-| `copy_to_folder(src_path, target_folder)` | Copy file/folder to target directory |
-| `check_folder_access(folder_path)` | Verify folder accessibility |
-| `check_availability(code, memory)` | Check if code exists in memory dict |
-
-
-## Configuration
-
-### Data Structure (Standalone Operation)
-
-If working without external data interface, create these JSON structures manually:
-
-**Study Record** (`./data/thermal_study/study_record.json`):
-```json
-{
-    "id": 1,
-    "Code": "thermal_study", 
-    "Parameters": {
-        "target_temp": 200.0,
-        "sampling_rate": 1000.0
-    },
-    "Performance": [
-        "temperature_control"
-    ]
-}
+```python
+agent.calibration_system.configure_trajectory("feed_rate", dimension_code="n_layers")
+agent.calibration_system.configure_adaptation_delta({"feed_rate": 5.0})
 ```
 
-**Experiment Record** (`./data/thermal_study/thermal_study_001/exp_record.json`):  
-```json
-{
-    "id": 1,
-    "Code": "thermal_study_001",
-    "Parameters": {
-        "n_layers": 5,
-        "n_segments": 8,
-        "print_speed": 50.0
-    }
-}
+`exploration_step` and `inference_step` then return an `ExperimentSpec` with both `initial_params` and per-dimension `schedules`.
+
+### MPC Lookahead
+
+Reduce greedy myopia during trajectory optimization by simulating steps ahead:
+
+```python
+agent.calibration_system.default_mpc_lookahead_depth = 2   # simulate 2 steps ahead
+agent.calibration_system.default_mpc_discount = 0.9        # geometric discount factor
 ```
 
-The framework automatically creates the folder structure and manages all result files.
+---
 
-## Key Features
+## Workflow Modes
 
-- **Interface-Based Design**: Clean contracts for feature extraction, evaluation, prediction, and calibration
-- **Type-Safe Data Model**: DataObject instances define schema/validation rules, DataBlock instances store actual values with clean separation to prevent data corruption
-- **Database Independence**: Works standalone with JSON files or integrates with existing databases  
-- **Hierarchical Data Flow**: Automatic caching (memory → local → external) with recompute control
-- **Train/Val/Test Splits**: Built-in data splitting for proper ML evaluation with reproducible random seeds
-- **Model Validation**: Automatic computation of MAE, RMSE, and R² metrics on validation/test sets
-- **Dynamic Dimensionality**: Automatic multi-dimensional array management for complex analysis
-- **Batched Prediction**: Memory-efficient processing with configurable batch sizes and overlap for context-aware models
-- **Normalization**: Configurable feature normalization (standard, minmax, robust) fitted on training data
-- **Declarative Rounding**: Configure rounding at the data definition level (e.g., `Parameter.real(round_digits=3)`)
-- **Flag-Based Configuration**: Runtime control without configuration files - pure programmatic setup
-- **Parameter Management**: Type-safe parameter system with validation and automatic rounding
+### Offline Exploration
+
+Propose the next experiment using UCB acquisition (balances exploration vs. exploitation). Use when you want to explore broadly or have no trained model yet:
+
+```python
+spec = agent.exploration_step(
+    datamodule=datamodule,
+    w_explore=0.7,             # 0.0 = exploit, 1.0 = explore
+    n_optimization_rounds=20,  # random restarts for global search
+    current_params=None,       # optional: provide to initialize search from known state
+)
+```
+
+### Inference-Guided Proposal
+
+Evaluate the current experiment first, then propose the next parameters based on updated performance estimates:
+
+```python
+spec = agent.inference_step(
+    exp_data=current_exp,
+    datamodule=datamodule,
+    w_explore=0.3,
+)
+```
+
+### Online Adaptation
+
+Adapt runtime parameters step-by-step during a live fabrication run. The prediction model is fine-tuned on the latest slice before proposing new values:
+
+```python
+spec = agent.adaptation_step(
+    exp_data=current_exp,
+    dimension="n_layers",
+    step_index=3,
+    mode=Mode.INFERENCE,  # or Mode.EXPLORATION
+    w_explore=0.0,
+    record=True,          # persist the proposed update to the experiment record
+)
+```
+
+### ExperimentSpec
+
+All step methods return an `ExperimentSpec`:
+
+```python
+spec = agent.exploration_step(datamodule)
+
+# Experiment-level parameters
+speed = spec["speed"]               # dict-like access on initial_params
+params = spec.initial_params        # full ParameterProposal
+
+# Trajectory schedules (when trajectory params are configured)
+for dim_code, schedule in spec.schedules.items():
+    for step_idx, proposal in schedule.entries:
+        print(f"  layer {step_idx}: feed_rate = {proposal['feed_rate']:.2f}")
+```
+
+---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-<!-- ## Citation
-
-If you use this framework in your research, please cite:
-
-```bibtex
-@article{learning_by_printing,
-  title={An Introduction to Learning by Printing},
-  author={Your Authors},
-  journal={Your Journal},
-  year={2024},
-  url={https://mediatum.ub.tum.de/doc/1781543/1781543.pdf}
-}
-``` -->
-
-## Support
-
-- **Examples Repository**: [LBP Examples](https://gitlab.lrz.de/cms/dev/robotlab/learning-by-printing/lbp_package_examples) - Complete working implementations
-
+MIT License — see [LICENSE](LICENSE) for details.
