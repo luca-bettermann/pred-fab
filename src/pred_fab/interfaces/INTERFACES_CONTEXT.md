@@ -15,8 +15,10 @@ Abstract contracts that user-implemented models must satisfy. Each system instan
 | `BaseInterface` | `base_interface.py` | All of the above |
 
 ## Key Points
+- `IFeatureModel` and `IPredictionModel` declare `input_domain: str` (the domain code they operate in); `IEvaluationModel` has no domain (aggregates over full feature tensors)
+- `IFeatureModel.depth` (optional int) limits how many domain axes are iterated; default `None` = full domain depth
+- `IPredictionModel.depth` is computed from output feature column depths; coherence validated at train time
 - Uncertainty estimation is via KDE on the prediction model's latent space (NatPN-light), not a separate GP surrogate
-- `IPredictionModel.depth` declares output dimensionality; coherence is validated at initialization
 - `IResidualModel` / `MLPResidualModel` are used for online residual tuning in adaptation steps
 - `IExternalData` is optional — omitting it disables remote data sync
 
