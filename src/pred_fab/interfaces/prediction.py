@@ -27,12 +27,19 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
-    def validate_dimensional_coherence(self, schema: Any) -> None:
-        """Enforce three structural rules on the model's dimension declarations:
+    @property
+    @abstractmethod
+    def input_domain(self) -> Optional[str]:
+        """Domain code this model predicts features for; None for scalar models."""
+        ...
 
-        1. Output features may not mix depths (warning — shallower outputs are overwritten at deeper steps).
-        2. Declared dimension levels must form a consecutive prefix starting at 1 (error).
-        3. Input features may not exceed the model's operational depth (error).
+    def validate_dimensional_coherence(self, schema: Any) -> None:
+        """Enforce structural rules on the model's domain declarations.
+
+        1. Output features may not mix depths (warning).
+        2. All output features must share the same domain (error).
+        3. input_domain must match the domain of output features (error).
+        4. Input features may not exceed the model's operational depth (error).
         """
         name = self.__class__.__name__
         op_depth = self.depth
@@ -42,7 +49,6 @@ class IPredictionModel(BaseInterface):
             output_depths = {}
             for code in self.outputs:
                 feat = self._ref_features.get(code)
-                # _ref_features stores DataArray instances; Pyright sees Feature (factory).
                 cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
                 d = (len(cols) - 1) if cols else 0
                 output_depths[code] = d
@@ -53,35 +59,30 @@ class IPredictionModel(BaseInterface):
                     f"will be overwritten on each deeper iteration step."
                 )
 
-        # Rule 2: declared dimension codes must form a consecutive prefix
-        schema_dim_by_code = {dim.code: dim for dim in schema.parameters.get_sorted_dimensions()}
-        declared_dim_levels = sorted(
-            schema_dim_by_code[code].level
-            for code in self.input_parameters
-            if code in schema_dim_by_code
-        )
-        if declared_dim_levels:
-            expected = list(range(1, max(declared_dim_levels) + 1))
-            if declared_dim_levels != expected:
-                raise ValueError(
-                    f"{name}: input_parameters declare dimension levels "
-                    f"{declared_dim_levels}, which are not a consecutive prefix from 1 "
-                    f"(expected {expected}). Declared dimensions must start at level 1 "
-                    f"with no gaps."
-                )
-            declared_max = max(declared_dim_levels)
-            if op_depth > 0 and declared_max != op_depth:
-                raise ValueError(
-                    f"{name}: input_parameters declare dimensions up to level "
-                    f"{declared_max}, but output features require operational depth "
-                    f"{op_depth}. Declare dimensions matching the depth of your output "
-                    f"features, or remove explicit dimension declarations."
-                )
+        # Rule 2: all output features must share the same named domain (None = scalar, allowed alongside any domain).
+        output_domains = set()
+        for code in self.outputs:
+            feat_obj = schema.features.data_objects.get(code)
+            domain_code = feat_obj.domain_code if (feat_obj is not None and hasattr(feat_obj, "domain_code")) else None  # type: ignore[union-attr]
+            output_domains.add(domain_code)
+        named_domains = {d for d in output_domains if d is not None}
+        if len(named_domains) > 1:
+            raise ValueError(
+                f"{name}: output features span multiple named domains {named_domains}. "
+                f"A prediction model must operate within a single domain."
+            )
 
-        # Rule 3: input features must not exceed operational depth
+        # Rule 3: input_domain must match the domain of output features
+        declared_domain = self.input_domain
+        feature_domain = next(iter(named_domains)) if named_domains else None
+        if feature_domain and declared_domain and declared_domain != feature_domain:
+            raise ValueError(
+                f"{name}: input_domain='{declared_domain}' does not match output feature domain '{feature_domain}'."
+            )
+
+        # Rule 4: input features must not exceed operational depth
         for code in self.input_features:
             feat = self._ref_features.get(code)
-            # _ref_features stores DataArray instances; Pyright sees Feature (factory).
             feat_cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
             if feat_cols:
                 input_feat_depth = len(feat_cols) - 1

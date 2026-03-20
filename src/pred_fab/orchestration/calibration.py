@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any, Set, Tuple, Callable, cast
+from typing import Dict, List, Optional, Any, Set, Tuple, Callable
 import numpy as np
 from scipy.optimize import minimize
 
@@ -6,7 +6,7 @@ import warnings
 import functools
 
 from ..core import DataModule, Dataset, DatasetSchema
-from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDimension
+from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
 from ..utils import PfabLogger, Mode, NormMethod, SourceStep
 from .base_system import BaseOrchestrationSystem
@@ -220,9 +220,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"Dimension '{dimension_code}' not found in schema."
             )
         dim_obj = self.data_objects[dimension_code]
-        if not isinstance(dim_obj, DataDimension):
+        if not isinstance(dim_obj, DataDomainAxis):
             raise ValueError(
-                f"'{dimension_code}' is not a DataDimension parameter "
+                f"'{dimension_code}' is not a DataDomainAxis parameter "
                 f"(got {type(dim_obj).__name__})."
             )
 
@@ -407,9 +407,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         import itertools as _it
 
+        dim_key_order = {code: i for i, code in enumerate(self.data_objects.keys())}
         dim_codes = sorted(
             {dc for dc in self.trajectory_configs.values()},
-            key=lambda dc: cast(DataDimension, self.data_objects[dc]).level,
+            key=lambda dc: dim_key_order.get(dc, 999),
         )
         if not dim_codes:
             return [{}]
@@ -447,9 +448,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         schedules: Dict[str, ParameterSchedule] = {}
         if len(proposals) > 1 and step_grid and step_grid[0]:
             # Collect unique dims
+            dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
             dim_codes = sorted(
                 {dc for dc in self.trajectory_configs.values()},
-                key=lambda dc: cast(DataDimension, self.data_objects[dc]).level,
+                key=lambda dc: dim_key_order_spec.get(dc, 999),
             )
             for dim_code in dim_codes:
                 traj_codes = [

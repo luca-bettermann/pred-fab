@@ -29,7 +29,7 @@ def test_record_parameter_update_rejects_dimension_updates(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     proposal = ParameterProposal.from_dict({"dim_1": 1}, source_step="adaptation_step")
-    with pytest.raises(ValueError, match="dimension parameter"):
+    with pytest.raises(ValueError, match="domain axis parameter"):
         exp.record_parameter_update(proposal, dimension="dim_1", step_index=1)
 
 

@@ -50,7 +50,9 @@ def test_workflow_exploration_step_runs_from_configured_calibration(tmp_path):
     result = agent.exploration_step(datamodule=datamodule)
 
     assert result.initial_params.source_step == "exploration_step"
-    assert set(["param_1", "param_2", "dim_1", "dim_2", "param_3"]).issubset(set(result.keys()))
+    # Domain axis params (n_layers, n_segments) are structural and not proposed by calibration;
+    # calibration only proposes the continuously optimizable params and fixed params.
+    assert set(["param_1", "param_2", "param_3"]).issubset(set(result.keys()))
     assert result["param_3"] == "B"
     assert agent.calibration_system.fixed_params["param_3"] == "B"
     assert agent.calibration_system.param_bounds["param_2"] == (1, 4)

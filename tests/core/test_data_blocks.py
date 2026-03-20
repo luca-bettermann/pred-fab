@@ -5,25 +5,31 @@ Parameters dimension stride/combination logic, and Features value_at.
 import pytest
 import numpy as np
 
-from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
 from pred_fab.core.data_objects import (
     Parameter,
     Feature,
     PerformanceAttribute,
     DataReal,
-    DataCategorical,
+    DataDomainAxis,
+    Domain,
 )
 from pred_fab.utils.enum import Roles
 
 
 # ===== Helpers =====
 
+def _make_domain_axis(code: str, iterator_code: str, max_val: int = 10) -> DataDomainAxis:
+    """Create a DataDomainAxis with PARAMETER role for test helpers."""
+    return DataDomainAxis(code, iterator_code, Roles.PARAMETER, min_val=1, max_val=max_val)
+
+
 def _make_two_dim_params() -> Parameters:
-    """Parameters with dim_1 (size 3, level 1) and dim_2 (size 4, level 2)."""
+    """Parameters with dim_1 (size 3) and dim_2 (size 4) as DataDomainAxis objects."""
     params = Parameters()
     params.add("param_1", Parameter.real("param_1", min_val=0.0, max_val=10.0))
-    params.add("dim_1", Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=10))
-    params.add("dim_2", Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=10))
+    params.add("dim_1", _make_domain_axis("dim_1", "d1"))
+    params.add("dim_2", _make_domain_axis("dim_2", "d2"))
     params.set_value("param_1", 5.0)
     params.set_value("dim_1", 3)
     params.set_value("dim_2", 4)
@@ -31,11 +37,11 @@ def _make_two_dim_params() -> Parameters:
 
 
 def _make_three_dim_params() -> Parameters:
-    """Parameters with dim_1(2), dim_2(3), dim_3(4)."""
+    """Parameters with dim_1(2), dim_2(3), dim_3(4) as DataDomainAxis objects."""
     params = Parameters()
-    params.add("dim_1", Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=10))
-    params.add("dim_2", Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=10))
-    params.add("dim_3", Parameter.dimension("dim_3", iterator_code="d3", level=3, max_val=10))
+    params.add("dim_1", _make_domain_axis("dim_1", "d1"))
+    params.add("dim_2", _make_domain_axis("dim_2", "d2"))
+    params.add("dim_3", _make_domain_axis("dim_3", "d3"))
     params.set_value("dim_1", 2)
     params.set_value("dim_2", 3)
     params.set_value("dim_3", 4)
@@ -202,6 +208,39 @@ def test_features_from_list_creates_block():
     assert feats.has("f2")
 
 
+# ===== Parameters domain axis accessors =====
+
+def test_get_domain_axis_objects_returns_only_axis_objects():
+    params = _make_two_dim_params()
+    axes = params._get_domain_axis_objects()
+    assert len(axes) == 2
+    assert all(isinstance(ax, DataDomainAxis) for ax in axes)
+
+
+def test_get_domain_axis_names_returns_axis_codes():
+    params = _make_two_dim_params()
+    names = params._get_domain_axis_names()
+    assert names == ["dim_1", "dim_2"]
+
+
+def test_get_domain_axis_iterator_codes_returns_iterator_codes():
+    params = _make_two_dim_params()
+    codes = params._get_domain_axis_iterator_codes()
+    assert codes == ["d1", "d2"]
+
+
+def test_get_domain_axis_values_returns_current_values():
+    params = _make_two_dim_params()
+    values = params._get_domain_axis_values()
+    assert values == [3, 4]
+
+
+def test_get_sorted_domain_axes_preserves_insertion_order():
+    params = _make_three_dim_params()
+    axes = params._get_sorted_domain_axes()
+    assert [ax.code for ax in axes] == ["dim_1", "dim_2", "dim_3"]
+
+
 # ===== Parameters dimension stride calculation =====
 
 def test_get_dimension_strides_two_dims():
@@ -295,44 +334,6 @@ def test_get_dim_combinations_single_dim():
     assert len(combos) == 3
     assert combos[0] == (0,)
     assert combos[2] == (2,)
-
-
-# ===== Parameters.validate_dimensions() =====
-
-def test_validate_dimensions_raises_for_skipped_level():
-    params = Parameters()
-    params.add("dim_1", Parameter.dimension("dim_1", "d1", level=1, max_val=5))
-    params.add("dim_3", Parameter.dimension("dim_3", "d3", level=3, max_val=5))
-    with pytest.raises(ValueError, match="consecutive"):
-        params.validate_dimensions()
-
-
-def test_validate_dimensions_passes_for_sequential_levels():
-    params = _make_two_dim_params()
-    params.validate_dimensions()  # Should not raise
-
-
-def test_validate_dimensions_passes_for_single_dim():
-    params = Parameters()
-    params.add("dim_1", Parameter.dimension("dim_1", "d1", level=1, max_val=5))
-    params.set_value("dim_1", 3)
-    params.validate_dimensions()  # Should not raise
-
-
-def test_get_dim_by_level_returns_correct_object():
-    params = _make_two_dim_params()
-    d1 = params.get_dim_by_level(1)
-    d2 = params.get_dim_by_level(2)
-    assert d1 is not None
-    assert d1.code == "dim_1"
-    assert d2 is not None
-    assert d2.code == "dim_2"
-
-
-def test_get_dim_by_level_returns_none_for_missing_level():
-    params = _make_two_dim_params()
-    result = params.get_dim_by_level(99)
-    assert result is None
 
 
 # ===== Features.value_at() =====
@@ -471,3 +472,35 @@ def test_sanitize_values_coerces_types():
     result = params.sanitize_values({"dim_1": 2.7})
     assert result["dim_1"] == 3  # round to nearest int
     assert isinstance(result["dim_1"], int)
+
+
+# ===== Domains container =====
+
+def test_domains_add_and_get():
+    domains = Domains()
+    d = Domain("spatial", [("n_layers", "layer_idx", 1, 5), ("n_segments", "seg_idx", 1, 3)])
+    domains.add(d)
+    assert domains.has("spatial")
+    assert domains.get("spatial") is d
+
+
+def test_domains_get_raises_for_unknown():
+    domains = Domains()
+    with pytest.raises(KeyError):
+        domains.get("nonexistent")
+
+
+def test_domains_has_returns_false_for_unknown():
+    domains = Domains()
+    assert domains.has("nonexistent") is False
+
+
+def test_domains_to_dict_from_dict_roundtrip():
+    domains = Domains()
+    domains.add(Domain("spatial", [("n_layers", "layer_idx", 1, 5), ("n_segments", "seg_idx", 1, 3)]))
+    d = domains.to_dict()
+    restored = Domains.from_dict(d)
+    assert restored.has("spatial")
+    restored_domain = restored.get("spatial")
+    assert len(restored_domain.axes) == 2
+    assert restored_domain.axes[0].param_code == "n_layers"

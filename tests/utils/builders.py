@@ -6,8 +6,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from pred_fab.core import DataModule, Dataset, DatasetSchema
-from pred_fab.core.data_blocks import Features, Parameters, PerformanceAttributes
-from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute
+from pred_fab.core.data_blocks import Features, Parameters, PerformanceAttributes, Domains
+from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute, Domain
 from pred_fab.orchestration.agent import PfabAgent
 from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.prediction import PredictionSystem
@@ -34,23 +34,25 @@ def build_test_logger(tmp_path) -> PfabLogger:
 def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSchema:
     """Create a mixed-dimensional schema for tensor/table conversion tests."""
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
 
-    f_grid = Feature.array("feature_grid")
-    f_d1 = Feature.array("feature_d1")
+    f_grid = Feature.array("feature_grid", domain="spatial")
+    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
     f_scalar = Feature.array("feature_scalar")
 
     perf = PerformanceAttribute.score("performance_1")
 
-    params = Parameters.from_list([p1, d1, d2])
+    params = Parameters.from_list([p1])
     feats = Features.from_list([f_grid, f_d1, f_scalar])
     perfs = PerformanceAttributes.from_list([perf])
 
     # Mirror FeatureSystem write paths for stable csv export/import boundaries.
-    feats.get("feature_grid").set_columns(["d1", "d2", "feature_grid"])
-    feats.get("feature_d1").set_columns(["d1", "feature_d1"])
     feats.get("feature_scalar").set_columns(["feature_scalar"])
+
+    domains = Domains()
+    domains.add(Domain("spatial", [
+        ("dim_1", "d1", 1, 2),
+        ("dim_2", "d2", 1, 3),
+    ]))
 
     return DatasetSchema(
         root_folder=str(tmp_path),
@@ -58,6 +60,7 @@ def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSc
         parameters=params,
         features=feats,
         performance=perfs,
+        domains=domains,
     )
 
 
@@ -65,25 +68,30 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
     """Create the end-to-end workflow schema previously used by manual workflow."""
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     p2 = Parameter.integer("param_2", min_val=1, max_val=5)
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=5)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=5)
     p3 = Parameter.categorical("param_3", categories=["A", "B", "C"])
     # Runtime-adjustable parameter for adaptation / trajectory tests.
     speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
-    f1 = Feature.array("feature_1")
-    f2 = Feature.array("feature_2")
+    f1 = Feature.array("feature_1", domain="spatial")
+    f2 = Feature.array("feature_2", domain="spatial")
     f3 = Feature.array("feature_3")
 
     perf1 = PerformanceAttribute.score("performance_1")
     perf2 = PerformanceAttribute.score("performance_2")
 
+    domains = Domains()
+    domains.add(Domain("spatial", [
+        ("n_layers", "d1", 1, 5),
+        ("n_segments", "d2", 1, 5),
+    ]))
+
     return DatasetSchema(
         root_folder=str(tmp_path),
         name=name,
-        parameters=Parameters.from_list([p1, p2, d1, d2, p3, speed]),
+        parameters=Parameters.from_list([p1, p2, p3, speed]),
         features=Features.from_list([f1, f2, f3]),
         performance=PerformanceAttributes.from_list([perf1, perf2]),
+        domains=domains,
     )
 
 
@@ -141,7 +149,7 @@ def configure_default_workflow_calibration(agent: PfabAgent) -> None:
     """
     agent.configure_calibration(
         performance_weights={"performance_1": 2.0, "performance_2": 1.3},
-        bounds={"param_1": (0.0, 10.0), "param_2": (1, 4), "dim_1": (1, 3), "dim_2": (1, 3)},
+        bounds={"param_1": (0.0, 10.0), "param_2": (1, 4), "n_layers": (1, 3), "n_segments": (1, 3)},
         fixed_params={"param_3": "B"},
         adaptation_delta={"speed": 10.0},  # only runtime-adjustable params may have deltas
     )
@@ -271,38 +279,37 @@ def build_runtime_agent_stack(tmp_path):
     """Build a real orchestration stack with a runtime-adjustable ``speed`` parameter.
 
     Used by adaptation / trajectory tests that need a schema containing at least one
-    ``runtime=True`` parameter. The schema is identical to the mixed-feature schema
-    (feature_grid, feature_d1, feature_scalar) but adds ``speed`` (runtime=True, 0–200).
+    ``runtime=True`` parameter.
     """
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute
-    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Domain
+    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
     from pred_fab.core import Dataset, DatasetSchema
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
 
-    f_grid = Feature.array("feature_grid")
-    f_d1 = Feature.array("feature_d1")
+    f_grid = Feature.array("feature_grid", domain="spatial")
+    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
     f_scalar = Feature.array("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
-    params = Parameters.from_list([p1, speed, d1, d2])
     feats = Features.from_list([f_grid, f_d1, f_scalar])
     perfs = PerformanceAttributes.from_list([perf])
-
-    # Mirror FeatureSystem write paths — same column setup as build_mixed_feature_schema.
-    feats.get("feature_grid").set_columns(["d1", "d2", "feature_grid"])
-    feats.get("feature_d1").set_columns(["d1", "feature_d1"])
     feats.get("feature_scalar").set_columns(["feature_scalar"])
+
+    domains = Domains()
+    domains.add(Domain("spatial", [
+        ("dim_1", "d1", 1, 2),
+        ("dim_2", "d2", 1, 3),
+    ]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
         name="schema_runtime",
-        parameters=params,
+        parameters=Parameters.from_list([p1, speed]),
         features=feats,
         performance=perfs,
+        domains=domains,
     )
     dataset = Dataset(schema=schema, debug_flag=True)
     dataset.create_experiment(

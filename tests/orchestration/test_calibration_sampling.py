@@ -65,7 +65,7 @@ def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
 
 
 def test_generate_baseline_integer_params_are_int_typed(tmp_path):
-    """Integer parameters (param_2, dim_1, dim_2) should be coerced to int type."""
+    """Integer parameters (param_2, n_layers, n_segments) should be coerced to int type."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
@@ -313,8 +313,8 @@ def test_configure_step_parameter_sets_config(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_step_parameter("speed", "dim_1")
-    assert calibration.trajectory_configs["speed"] == "dim_1"
+    calibration.configure_step_parameter("speed", "n_layers")
+    assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
 def test_configure_step_parameter_raises_for_non_runtime_param(tmp_path):
@@ -323,7 +323,7 @@ def test_configure_step_parameter_raises_for_non_runtime_param(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
 
     with pytest.raises(ValueError, match="not runtime-adjustable"):
-        calibration.configure_step_parameter("param_1", "dim_1")
+        calibration.configure_step_parameter("param_1", "n_layers")
 
 
 def test_configure_step_parameter_blocked_without_force(tmp_path):
@@ -331,11 +331,11 @@ def test_configure_step_parameter_blocked_without_force(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_step_parameter("speed", "dim_1")
-    calibration.configure_step_parameter("speed", "dim_2")  # blocked without force
+    calibration.configure_step_parameter("speed", "n_layers")
+    calibration.configure_step_parameter("speed", "n_segments")  # blocked without force
 
-    # Dimension code should remain dim_1, not overwritten by dim_2
-    assert calibration.trajectory_configs["speed"] == "dim_1"
+    # Dimension code should remain n_layers, not overwritten by n_segments
+    assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
 def test_configure_step_parameter_with_force_overwrites(tmp_path):
@@ -343,10 +343,10 @@ def test_configure_step_parameter_with_force_overwrites(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_step_parameter("speed", "dim_1")
-    calibration.configure_step_parameter("speed", "dim_2", force=True)
+    calibration.configure_step_parameter("speed", "n_layers")
+    calibration.configure_step_parameter("speed", "n_segments", force=True)
 
-    assert calibration.trajectory_configs["speed"] == "dim_2"
+    assert calibration.trajectory_configs["speed"] == "n_segments"
 
 
 def test_configure_step_parameter_ignores_unknown_param(tmp_path):
@@ -354,7 +354,7 @@ def test_configure_step_parameter_ignores_unknown_param(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_step_parameter("nonexistent", "dim_1")
+    calibration.configure_step_parameter("nonexistent", "n_layers")
     assert "nonexistent" not in calibration.trajectory_configs
 
 
@@ -499,7 +499,7 @@ def test_baseline_greedy_maximin_is_better_spaced_than_random(tmp_path):
     calibration.configure_param_bounds({"param_1": (0.0, 10.0)})
     # Fix everything else so the search space is purely 1D over param_1
     calibration.configure_fixed_params(
-        {"param_2": 2, "dim_1": 2, "dim_2": 2, "param_3": "B", "speed": 100.0}
+        {"param_2": 2, "n_layers": 2, "n_segments": 2, "param_3": "B", "speed": 100.0}
     )
     calibration.random_seed = 42
 

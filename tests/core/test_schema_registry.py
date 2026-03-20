@@ -103,40 +103,29 @@ def test_schema_from_dict_raises_for_missing_schema_id(tmp_path):
         DatasetSchema.from_dict(d, str(tmp_path / "restored"))
 
 
-# ===== Dimension validation during init =====
+# ===== Domain-based schema initialization =====
 
-def test_schema_raises_for_non_consecutive_dimension_levels(tmp_path):
-    params = Parameters()
-    params.add("dim_1", Parameter.dimension("dim_1", "d1", level=1, max_val=5))
-    params.add("dim_3", Parameter.dimension("dim_3", "d3", level=3, max_val=5))  # skips level 2
-
-    feats = Features.from_list([Feature.array("f1")])
+def test_schema_raises_for_feature_with_unknown_domain(tmp_path):
+    """Feature referencing an unregistered domain should raise ValueError during init."""
+    feats = Features.from_list([Feature.array("f1", domain="nonexistent")])
     perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("p1")])
+    params = Parameters.from_list([Parameter.real("param_1", 0.0, 10.0)])
 
-    with pytest.raises(ValueError, match="consecutive"):
+    with pytest.raises(ValueError, match="not registered"):
         DatasetSchema(
             root_folder=str(tmp_path),
-            name="schema_invalid_dims",
+            name="schema_bad_domain",
             parameters=params,
             features=feats,
             performance=perfs,
         )
 
 
-def test_schema_passes_for_single_dimension(tmp_path):
-    params = Parameters.from_list([Parameter.dimension("n_layers", "layer_id", level=1, max_val=10)])
-    feats = Features.from_list([Feature.array("f1")])
-    perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("p1")])
-
-    # Should not raise
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="schema_single_dim",
-        parameters=params,
-        features=feats,
-        performance=perfs,
-    )
-    assert schema.name == "schema_single_dim"
+def test_schema_registers_domain_axes_into_parameters(tmp_path):
+    """Domain axes should be automatically added to Parameters during init."""
+    schema = build_mixed_feature_schema(tmp_path, name="schema_domain_axes")
+    assert schema.parameters.has("dim_1")
+    assert schema.parameters.has("dim_2")
 
 
 # ===== SchemaRegistry internals =====

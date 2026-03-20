@@ -85,6 +85,7 @@ class TestOfflineExplorationExperimentLevel:
         assert result.schedules == {}
 
     def test_result_contains_all_schema_params(self, tmp_path):
+        from pred_fab.core.data_objects import DataDomainAxis
         agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
         agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
@@ -93,7 +94,12 @@ class TestOfflineExplorationExperimentLevel:
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
         )
-        for code in dataset.schema.parameters.keys():
+        # Domain axis params (DataDomainAxis) define grid sizes and are not proposed by calibration.
+        non_axis_codes = [
+            code for code, obj in dataset.schema.parameters.items()
+            if not isinstance(obj, DataDomainAxis)
+        ]
+        for code in non_axis_codes:
             assert code in result, f"Missing param in result: {code}"
 
     def test_fixed_params_respected(self, tmp_path):
@@ -532,6 +538,7 @@ class TestExperimentSpecIntegration:
         assert "nonexistent_key_xyz" not in result
 
     def test_initial_params_keys_returns_all_schema_keys(self, tmp_path):
+        from pred_fab.core.data_objects import DataDomainAxis
         agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
         agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
@@ -540,10 +547,14 @@ class TestExperimentSpecIntegration:
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
         )
-        schema_keys = set(dataset.schema.parameters.keys())
+        # Domain axis params define grid sizes and are not proposed by calibration.
+        non_axis_keys = {
+            code for code, obj in dataset.schema.parameters.items()
+            if not isinstance(obj, DataDomainAxis)
+        }
         result_keys = set(result.keys())
-        assert schema_keys.issubset(result_keys), (
-            f"Missing schema params in result: {schema_keys - result_keys}"
+        assert non_axis_keys.issubset(result_keys), (
+            f"Missing schema params in result: {non_axis_keys - result_keys}"
         )
 
 
@@ -679,14 +690,14 @@ class TestAgentStepMethodContracts:
 # ===========================================================================
 
 def _build_two_runtime_agent_stack(tmp_path):
-    """Schema with two runtime params on different dimension levels.
+    """Schema with two runtime params on different domain axes.
 
-    layer_height (runtime) → mapped to dim_1 (level 1, coarse)
-    speed        (runtime) → mapped to dim_2 (level 2, fine)
+    layer_height (runtime) → mapped to dim_1 (coarse outer axis)
+    speed        (runtime) → mapped to dim_2 (fine inner axis)
     dim_1=2 layers, dim_2=3 segments → 6-step Cartesian grid.
     """
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute
-    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Domain
+    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
     from pred_fab.core import Dataset, DatasetSchema
     from pred_fab.core.data_objects import Parameter as _Param
     from tests.utils.interfaces import MixedFeatureModel, ScalarEvaluationModel, MixedPredictionModel
@@ -695,28 +706,28 @@ def _build_two_runtime_agent_stack(tmp_path):
     p1 = _Param.real("param_1", min_val=0.0, max_val=10.0)
     layer_height = _Param.real("layer_height", min_val=0.05, max_val=0.4, runtime=True)
     speed = _Param.real("speed", min_val=0.0, max_val=200.0, runtime=True)
-    d1 = _Param.dimension("dim_1", iterator_code="d1", level=1, max_val=4)
-    d2 = _Param.dimension("dim_2", iterator_code="d2", level=2, max_val=4)
 
-    f_grid = Feature.array("feature_grid")
-    f_d1 = Feature.array("feature_d1")
+    f_grid = Feature.array("feature_grid", domain="spatial")
+    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
     f_scalar = Feature.array("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
-    params = Parameters.from_list([p1, layer_height, speed, d1, d2])
     feats = Features.from_list([f_grid, f_d1, f_scalar])
     perfs = PerformanceAttributes.from_list([perf])
 
-    feats.get("feature_grid").set_columns(["d1", "d2", "feature_grid"])
-    feats.get("feature_d1").set_columns(["d1", "feature_d1"])
-    feats.get("feature_scalar").set_columns(["feature_scalar"])
+    domains = Domains()
+    domains.add(Domain("spatial", [
+        ("dim_1", "d1", 1, 4),
+        ("dim_2", "d2", 1, 4),
+    ]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
         name="schema_two_runtime",
-        parameters=params,
+        parameters=Parameters.from_list([p1, layer_height, speed]),
         features=feats,
         performance=perfs,
+        domains=domains,
     )
     dataset = Dataset(schema=schema, debug_flag=True)
     dataset.create_experiment(

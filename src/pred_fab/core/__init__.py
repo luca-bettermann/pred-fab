@@ -6,8 +6,9 @@ from .data_objects import (
     DataInt,
     DataBool,
     DataCategorical,
-    DataDimension,
+    DataDomainAxis,
     DataArray,
+    Domain,
     Parameter,
     Feature,
     PerformanceAttribute
@@ -17,7 +18,8 @@ from .data_blocks import (
     DataBlock,
     Parameters,
     PerformanceAttributes,
-    Features
+    Features,
+    Domains,
 )
 
 from .schema import DatasetSchema, SchemaRegistry
@@ -30,8 +32,9 @@ __all__ = [
     'DataInt',
     'DataBool',
     'DataCategorical',
-    'DataDimension',
+    'DataDomainAxis',
     'DataArray',
+    'Domain',
 
     'Parameter',
     'Feature',
@@ -41,7 +44,8 @@ __all__ = [
     'Parameters',
     'PerformanceAttributes',
     'Features',
-    
+    'Domains',
+
     'DatasetSchema',
     'SchemaRegistry',
     'Dataset',
