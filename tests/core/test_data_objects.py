@@ -13,6 +13,7 @@ from pred_fab.core.data_objects import (
     DataBool,
     DataCategorical,
     DataDomainAxis,
+    Dimension,
     Domain,
     DataArray,
     Parameter,
@@ -349,44 +350,44 @@ def test_datadomainaxis_validates_rejects_non_int():
 # ===== Domain =====
 
 def test_domain_stores_code():
-    d = Domain("spatial", [("n_layers", "layer_idx", 1, 5)])
+    d = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5)])
     assert d.code == "spatial"
 
 
 def test_domain_axes_length():
     d = Domain("spatial", [
-        ("n_layers", "layer_idx", 1, 5),
-        ("n_segments", "seg_idx", 1, 4),
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
     ])
     assert len(d.axes) == 2
 
 
 def test_domain_depth():
     d = Domain("spatial", [
-        ("n_layers", "layer_idx", 1, 5),
-        ("n_segments", "seg_idx", 1, 4),
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
     ])
     assert d.depth == 2
 
 
 def test_domain_get_param_codes():
     d = Domain("spatial", [
-        ("n_layers", "layer_idx", 1, 5),
-        ("n_segments", "seg_idx", 1, 4),
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
     ])
     assert d.get_param_codes() == ["n_layers", "n_segments"]
 
 
 def test_domain_get_iterator_codes():
     d = Domain("spatial", [
-        ("n_layers", "layer_idx", 1, 5),
-        ("n_segments", "seg_idx", 1, 4),
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
     ])
     assert d.get_iterator_codes() == ["layer_idx", "seg_idx"]
 
 
 def test_domain_create_axis_params_types():
-    d = Domain("spatial", [("n_layers", "layer_idx", 1, 5)])
+    d = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5)])
     params = d.create_axis_params(Roles.PARAMETER)
     assert len(params) == 1
     assert isinstance(params[0], DataDomainAxis)
@@ -396,25 +397,25 @@ def test_domain_create_axis_params_types():
 
 def test_domain_to_dict_from_dict_roundtrip():
     d = Domain("spatial", [
-        ("n_layers", "layer_idx", 1, 5),
-        ("n_segments", "seg_idx", 1, 4),
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
     ])
     d2 = Domain.from_dict(d.to_dict())
     assert d2.code == d.code
     assert len(d2.axes) == len(d.axes)
-    assert d2.axes[0].param_code == "n_layers"
+    assert d2.axes[0].code == "n_layers"
     assert d2.axes[1].iterator_code == "seg_idx"
 
 
-def test_domain_axes_min_val_only():
-    """Domain axes with 3-tuple (no max_val) should have max_val=None."""
-    d = Domain("spatial", [("n_layers", "layer_idx", 1)])
-    assert d.axes[0].max_val is None
+def test_dimension_max_val_none_by_default():
+    """Dimension with no max_val should have max_val=None."""
+    dim = Dimension("n_layers", "layer_idx", 1)
+    assert dim.max_val is None
 
 
-def test_domain_axes_max_val_none_explicit():
-    d = Domain("spatial", [("n_layers", "layer_idx", 1, None)])
-    assert d.axes[0].max_val is None
+def test_dimension_max_val_none_explicit():
+    dim = Dimension("n_layers", "layer_idx", 1, None)
+    assert dim.max_val is None
 
 
 # ===== DataArray =====

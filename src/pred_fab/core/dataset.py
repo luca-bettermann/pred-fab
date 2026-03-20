@@ -361,10 +361,10 @@ class Dataset:
     
     # === Create ExperimentData Objects ===
 
-    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock, suffix: str = '') -> Any:
+    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock) -> Any:
         block = block_class()
-        for name, data_obj in schema_dict.items():
-            block.add(suffix + name, data_obj)
+        for _, data_obj in schema_dict.items():
+            block.add(data_obj)
         return block
         
     def _create_experiment_shell(self, exp_code: str) -> ExperimentData:

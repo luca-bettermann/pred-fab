@@ -81,7 +81,7 @@ class IFeatureModel(BaseInterface):
             axes = domain.axes[:max_depth]
 
         num_dims = len(axes)
-        dim_codes = [a.param_code for a in axes]
+        dim_codes = [a.code for a in axes]
         dim_iterator_codes = [a.iterator_code for a in axes]
 
         if axes:

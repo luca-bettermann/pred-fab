@@ -12,6 +12,7 @@ from pred_fab.core.data_objects import (
     PerformanceAttribute,
     DataReal,
     DataDomainAxis,
+    Dimension,
     Domain,
 )
 from pred_fab.utils.enum import Roles
@@ -27,9 +28,9 @@ def _make_domain_axis(code: str, iterator_code: str, max_val: int = 10) -> DataD
 def _make_two_dim_params() -> Parameters:
     """Parameters with dim_1 (size 3) and dim_2 (size 4) as DataDomainAxis objects."""
     params = Parameters()
-    params.add("param_1", Parameter.real("param_1", min_val=0.0, max_val=10.0))
-    params.add("dim_1", _make_domain_axis("dim_1", "d1"))
-    params.add("dim_2", _make_domain_axis("dim_2", "d2"))
+    params.add(Parameter.real("param_1", min_val=0.0, max_val=10.0))
+    params.add(_make_domain_axis("dim_1", "d1"))
+    params.add(_make_domain_axis("dim_2", "d2"))
     params.set_value("param_1", 5.0)
     params.set_value("dim_1", 3)
     params.set_value("dim_2", 4)
@@ -39,9 +40,9 @@ def _make_two_dim_params() -> Parameters:
 def _make_three_dim_params() -> Parameters:
     """Parameters with dim_1(2), dim_2(3), dim_3(4) as DataDomainAxis objects."""
     params = Parameters()
-    params.add("dim_1", _make_domain_axis("dim_1", "d1"))
-    params.add("dim_2", _make_domain_axis("dim_2", "d2"))
-    params.add("dim_3", _make_domain_axis("dim_3", "d3"))
+    params.add(_make_domain_axis("dim_1", "d1"))
+    params.add(_make_domain_axis("dim_2", "d2"))
+    params.add(_make_domain_axis("dim_3", "d3"))
     params.set_value("dim_1", 2)
     params.set_value("dim_2", 3)
     params.set_value("dim_3", 4)
@@ -54,55 +55,55 @@ def test_datablock_add_raises_for_wrong_role():
     params = Parameters()
     wrong_role_obj = DataReal("x", Roles.FEATURE)
     with pytest.raises(ValueError, match="role"):
-        params.add("x", wrong_role_obj)
+        params.add(wrong_role_obj)
 
 
 def test_datablock_add_raises_for_non_dataobject():
     params = Parameters()
     with pytest.raises(TypeError):
-        params.add("x", "not_a_dataobject")  # type: ignore
+        params.add("not_a_dataobject")  # type: ignore
 
 
 def test_performance_block_rejects_parameter_role():
     perfs = PerformanceAttributes()
     wrong_role = DataReal("score", Roles.PARAMETER)
     with pytest.raises(ValueError):
-        perfs.add("score", wrong_role)
+        perfs.add(wrong_role)
 
 
 def test_features_block_rejects_parameter_role():
     feats = Features()
     wrong_role = DataReal("f", Roles.PARAMETER)
     with pytest.raises(ValueError):
-        feats.add("f", wrong_role)
+        feats.add(wrong_role)
 
 
 # ===== Populated status =====
 
 def test_populated_status_is_false_after_set_value_with_as_populated_false():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     params.set_value("p", 5.0, as_populated=False)
     assert params.is_populated("p") is False
 
 
 def test_populated_status_is_true_after_set_value_with_as_populated_true():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     params.set_value("p", 5.0, as_populated=True)
     assert params.is_populated("p") is True
 
 
 def test_populated_status_defaults_to_true():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     params.set_value("p", 5.0)
     assert params.is_populated("p") is True
 
 
 def test_is_populated_returns_false_for_never_set():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     assert params.is_populated("p") is False
 
 
@@ -110,20 +111,20 @@ def test_is_populated_returns_false_for_never_set():
 
 def test_get_value_raises_for_unset_parameter():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     with pytest.raises(KeyError):
         params.get_value("p")
 
 
 def test_has_value_returns_false_before_set():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     assert params.has_value("p") is False
 
 
 def test_has_value_returns_true_after_set():
     params = Parameters()
-    params.add("p", Parameter.real("p", 0.0, 10.0))
+    params.add(Parameter.real("p", 0.0, 10.0))
     params.set_value("p", 5.0)
     assert params.has_value("p") is True
 
@@ -136,7 +137,7 @@ def test_validate_value_raises_for_unknown_key():
 
 def test_to_numpy_raises_for_categorical_values():
     params = Parameters()
-    params.add("cat", Parameter.categorical("cat", ["A", "B"]))
+    params.add(Parameter.categorical("cat", ["A", "B"]))
     params.set_value("cat", "A")
     with pytest.raises(ValueError):
         params.to_numpy()
@@ -144,8 +145,8 @@ def test_to_numpy_raises_for_categorical_values():
 
 def test_to_numpy_returns_correct_array():
     params = Parameters()
-    params.add("p1", Parameter.real("p1", 0.0, 10.0))
-    params.add("p2", Parameter.integer("p2", 1, 5))
+    params.add(Parameter.real("p1", 0.0, 10.0))
+    params.add(Parameter.integer("p2", 1, 5))
     params.set_value("p1", 3.0)
     params.set_value("p2", 2)
     arr = params.to_numpy()
@@ -158,31 +159,31 @@ def test_to_numpy_returns_correct_array():
 
 def test_is_compatible_returns_false_for_different_keys():
     block_a = Parameters()
-    block_a.add("p1", Parameter.real("p1", 0.0, 10.0))
+    block_a.add(Parameter.real("p1", 0.0, 10.0))
 
     block_b = Parameters()
-    block_b.add("p2", Parameter.real("p2", 0.0, 10.0))
+    block_b.add(Parameter.real("p2", 0.0, 10.0))
 
     assert block_a.is_compatible(block_b) is False
 
 
 def test_is_compatible_returns_true_for_same_keys():
     block_a = Parameters()
-    block_a.add("p1", Parameter.real("p1", 0.0, 10.0))
+    block_a.add(Parameter.real("p1", 0.0, 10.0))
 
     block_b = Parameters()
-    block_b.add("p1", Parameter.real("p1", 5.0, 20.0))  # same key, different constraints
+    block_b.add(Parameter.real("p1", 5.0, 20.0))  # same key, different constraints
 
     assert block_a.is_compatible(block_b) is True
 
 
 def test_is_compatible_returns_false_for_subset_keys():
     block_a = Parameters()
-    block_a.add("p1", Parameter.real("p1", 0.0, 10.0))
-    block_a.add("p2", Parameter.real("p2", 0.0, 10.0))
+    block_a.add(Parameter.real("p1", 0.0, 10.0))
+    block_a.add(Parameter.real("p2", 0.0, 10.0))
 
     block_b = Parameters()
-    block_b.add("p1", Parameter.real("p1", 0.0, 10.0))
+    block_b.add(Parameter.real("p1", 0.0, 10.0))
 
     assert block_a.is_compatible(block_b) is False
 
@@ -342,7 +343,7 @@ def test_features_value_at_returns_none_when_not_set():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     # No value set
@@ -354,7 +355,7 @@ def test_features_value_at_returns_correct_value_for_2d_tensor():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     feats.initialize_arrays(params)
@@ -371,7 +372,7 @@ def test_features_value_at_scalar_feature():
     feats = Features()
     arr = Feature.array("scalar_feat")
     arr.set_columns(["scalar_feat"])  # no iterators
-    feats.add("scalar_feat", arr)
+    feats.add(arr)
 
     params = Parameters()
     feats._initialize_array("scalar_feat", (), False)
@@ -386,7 +387,7 @@ def test_features_value_at_returns_none_for_missing_iterator_key():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     feats.initialize_arrays(params)
@@ -403,7 +404,7 @@ def test_features_initialize_arrays_raises_for_unset_columns():
     feats = Features()
     arr = Feature.array("feat_1")
     # No set_columns() call
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     with pytest.raises(ValueError, match="Columns not set"):
@@ -414,7 +415,7 @@ def test_features_initialize_arrays_produces_nan_filled_tensor():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     feats.initialize_arrays(params)
@@ -428,7 +429,7 @@ def test_features_initialize_arrays_skips_when_already_initialized():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     feats.initialize_arrays(params)
@@ -442,7 +443,7 @@ def test_features_initialize_arrays_resets_when_recompute():
     feats = Features()
     arr = Feature.array("feat_1")
     arr.set_columns(["d1", "feat_1"])
-    feats.add("feat_1", arr)
+    feats.add(arr)
 
     params = _make_two_dim_params()
     feats.initialize_arrays(params)
@@ -478,7 +479,7 @@ def test_sanitize_values_coerces_types():
 
 def test_domains_add_and_get():
     domains = Domains()
-    d = Domain("spatial", [("n_layers", "layer_idx", 1, 5), ("n_segments", "seg_idx", 1, 3)])
+    d = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5), Dimension("n_segments", "seg_idx", 1, 3)])
     domains.add(d)
     assert domains.has("spatial")
     assert domains.get("spatial") is d
@@ -497,10 +498,10 @@ def test_domains_has_returns_false_for_unknown():
 
 def test_domains_to_dict_from_dict_roundtrip():
     domains = Domains()
-    domains.add(Domain("spatial", [("n_layers", "layer_idx", 1, 5), ("n_segments", "seg_idx", 1, 3)]))
+    domains.add(Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5), Dimension("n_segments", "seg_idx", 1, 3)]))
     d = domains.to_dict()
     restored = Domains.from_dict(d)
     assert restored.has("spatial")
     restored_domain = restored.get("spatial")
     assert len(restored_domain.axes) == 2
-    assert restored_domain.axes[0].param_code == "n_layers"
+    assert restored_domain.axes[0].code == "n_layers"

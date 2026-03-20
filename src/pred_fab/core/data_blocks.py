@@ -24,15 +24,15 @@ class DataBlock(ABC):
     def role(self) -> Roles:
         ...
     
-    def add(self, name: str, data_obj: DataObject) -> None:
-        """Add a DataObject to the block."""
+    def add(self, data_obj: DataObject) -> None:
+        """Add a DataObject to the block using its code as the key."""
         if not issubclass(type(data_obj), DataObject):
             raise TypeError(f"data_obj must be a DataObject, got {type(data_obj)}")
-            
+
         if self.role and data_obj.role != self.role:
             raise ValueError(f"Expected data object with role '{self.role}', got '{data_obj.role}'")
-            
-        self.data_objects[name] = data_obj
+
+        self.data_objects[data_obj.code] = data_obj
     
     def get(self, name: str) -> DataObject:
         """Get a DataObject by name."""
@@ -140,7 +140,7 @@ class DataBlock(ABC):
         # Restore DataObjects
         for name, obj_data in data.get("data_objects", {}).items():
             data_obj = DataObject.from_dict(obj_data)
-            block.add(name, data_obj)
+            block.add(data_obj)
 
         # Restore values if present
         for name, value in data.get("values", {}).items():
@@ -156,7 +156,7 @@ class DataBlock(ABC):
 
         # Add DataObjects
         for data_obj in data_objs:
-            block.add(data_obj.code, data_obj)
+            block.add(data_obj)
         return block
 
 

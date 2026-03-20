@@ -1,7 +1,6 @@
 """DataObject type system for schema definitions — validation, typing, and value storage."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any, List, Optional, Dict, Tuple, Type, Union
 import numpy as np
 
@@ -252,13 +251,14 @@ class DataCategorical(DataObject):
         return cls(code, constraints["categories"], role)
 
 
-@dataclass
-class _DomainAxis:
-    """Internal value object for a domain axis definition."""
-    param_code: str
-    iterator_code: str
-    min_val: int
-    max_val: Optional[int]
+class Dimension:
+    """User-facing declaration of a single domain axis: a named integer iteration parameter."""
+
+    def __init__(self, code: str, iterator_code: str, min_val: int = 1, max_val: Optional[int] = None):
+        self.code = code
+        self.iterator_code = iterator_code
+        self.min_val = int(min_val)
+        self.max_val = int(max_val) if max_val is not None else None
 
 
 class DataDomainAxis(DataInt):
@@ -281,22 +281,17 @@ class DataDomainAxis(DataInt):
 class Domain:
     """Named ordered sequence of axes defining an iteration space for feature extraction."""
 
-    def __init__(self, code: str, axes: List[Tuple]):
-        """axes: list of (param_code, iterator_code, min_val) or (param_code, iterator_code, min_val, max_val)"""
+    def __init__(self, code: str, axes: List[Dimension]):
         self.code = code
-        self._axes: List[_DomainAxis] = []
-        for ax in axes:
-            param_code, iterator_code, min_val = str(ax[0]), str(ax[1]), int(ax[2])
-            max_val = int(ax[3]) if len(ax) > 3 and ax[3] is not None else None
-            self._axes.append(_DomainAxis(param_code, iterator_code, min_val, max_val))
+        self._axes: List[Dimension] = list(axes)
 
     @property
-    def axes(self) -> List[_DomainAxis]:
+    def axes(self) -> List[Dimension]:
         return self._axes
 
     def get_param_codes(self) -> List[str]:
-        """Return list of param_code strings for each axis."""
-        return [a.param_code for a in self._axes]
+        """Return list of param codes for each axis."""
+        return [a.code for a in self._axes]
 
     def get_iterator_codes(self) -> List[str]:
         """Return list of iterator_code strings for each axis."""
@@ -309,13 +304,13 @@ class Domain:
 
     def create_axis_params(self, role: Roles) -> List['DataDomainAxis']:
         """Instantiate DataDomainAxis objects for each axis in this domain."""
-        return [DataDomainAxis(a.param_code, a.iterator_code, role, a.min_val, a.max_val) for a in self._axes]
+        return [DataDomainAxis(a.code, a.iterator_code, role, a.min_val, a.max_val) for a in self._axes]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for schema storage."""
         return {
             "code": self.code,
-            "axes": [{"param_code": a.param_code, "iterator_code": a.iterator_code,
+            "axes": [{"code": a.code, "iterator_code": a.iterator_code,
                        "min_val": a.min_val, "max_val": a.max_val} for a in self._axes]
         }
 
@@ -326,7 +321,7 @@ class Domain:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Domain':
         """Reconstruct from dictionary."""
-        axes = [(a["param_code"], a["iterator_code"], a["min_val"], a.get("max_val")) for a in data["axes"]]
+        axes = [Dimension(a["code"], a["iterator_code"], a["min_val"], a.get("max_val")) for a in data["axes"]]
         return cls(data["code"], axes)
 
 

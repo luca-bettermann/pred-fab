@@ -612,15 +612,15 @@ class PredictionSystem(BaseOrchestrationSystem):
             model_axes = domain.axes[:depth]
 
             for ax in model_axes:
-                if ax.param_code not in params:
+                if ax.code not in params:
                     raise ValueError(
-                        f"Missing domain axis parameter '{ax.param_code}' for model "
+                        f"Missing domain axis parameter '{ax.code}' for model "
                         f"{model.__class__.__name__}"
                     )
-                dim_sizes.append(int(params[ax.param_code]))
+                dim_sizes.append(int(params[ax.code]))
                 dim_iterators.append(ax.iterator_code)
-                dim_codes_ordered.append(ax.param_code)
-                dim_codes.add(ax.param_code)
+                dim_codes_ordered.append(ax.code)
+                dim_codes.add(ax.code)
 
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape)) if shape else 1

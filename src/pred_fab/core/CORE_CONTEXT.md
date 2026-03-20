@@ -7,7 +7,7 @@ Canonical data model and ML data-prep layer. All other packages depend on core; 
 
 | Module | Role |
 |--------|------|
-| `data_objects.py` | Schema primitives: `DataReal`, `DataInt`, `DataBool`, `DataCategorical`, `DataArray`, `DataDomainAxis`, `Domain` |
+| `data_objects.py` | Schema primitives: `DataReal`, `DataInt`, `DataBool`, `DataCategorical`, `DataArray`, `DataDomainAxis`, `Dimension`, `Domain` |
 | `data_blocks.py` | Typed containers: `Parameters`, `Features`, `PerformanceAttributes`, `Domains` |
 | `schema.py` | `DatasetSchema` (owns parameters + features + performance + domains) + `SchemaRegistry` |
 | `dataset.py` | `ExperimentData` (one experiment's live data), `Dataset` (collection + persistence) |
@@ -17,7 +17,8 @@ Canonical data model and ML data-prep layer. All other packages depend on core; 
 Schema → Dataset → ExperimentData → DataModule (for training/calibration)
 
 ## Key Design Points
-- `Domain` declares named ordered iteration axes (e.g. `layers → segments`); `DataDomainAxis` params are auto-created by the schema and stored in `Parameters`. Users never instantiate `DataDomainAxis` directly.
+- `Dimension` is the user-facing class for declaring a single domain axis; `Domain` takes a `List[Dimension]`. `DataDomainAxis` params are auto-created by the schema and stored in `Parameters` — users never touch `DataDomainAxis` directly.
+- `DataBlock.add(obj)` uses `obj.code` as the key automatically — no explicit name argument needed.
 - Features declare `domain="<code>"` and optional `depth=<int>` — column structure is derived automatically from the domain axes at schema init time. The schema hash includes domain definitions.
 - `DataModule` is shared between PredictionSystem (training) and CalibrationSystem (bounds + encoding)
 - Categorical params are one-hot encoded; normalization is per-column via `NormMethod`

@@ -696,7 +696,7 @@ def _build_two_runtime_agent_stack(tmp_path):
     speed        (runtime) → mapped to dim_2 (fine inner axis)
     dim_1=2 layers, dim_2=3 segments → 6-step Cartesian grid.
     """
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Domain
+    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain
     from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
     from pred_fab.core import Dataset, DatasetSchema
     from pred_fab.core.data_objects import Parameter as _Param
@@ -717,8 +717,8 @@ def _build_two_runtime_agent_stack(tmp_path):
 
     domains = Domains()
     domains.add(Domain("spatial", [
-        ("dim_1", "d1", 1, 4),
-        ("dim_2", "d2", 1, 4),
+        Dimension("dim_1", "d1", 1, 4),
+        Dimension("dim_2", "d2", 1, 4),
     ]))
 
     schema = DatasetSchema(

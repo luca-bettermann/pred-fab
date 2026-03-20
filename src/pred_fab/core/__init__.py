@@ -8,6 +8,7 @@ from .data_objects import (
     DataCategorical,
     DataDomainAxis,
     DataArray,
+    Dimension,
     Domain,
     Parameter,
     Feature,
@@ -34,6 +35,7 @@ __all__ = [
     'DataCategorical',
     'DataDomainAxis',
     'DataArray',
+    'Dimension',
     'Domain',
 
     'Parameter',

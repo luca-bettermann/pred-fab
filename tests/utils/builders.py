@@ -7,7 +7,7 @@ import numpy as np
 
 from pred_fab.core import DataModule, Dataset, DatasetSchema
 from pred_fab.core.data_blocks import Features, Parameters, PerformanceAttributes, Domains
-from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute, Domain
+from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute, Dimension, Domain
 from pred_fab.orchestration.agent import PfabAgent
 from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.prediction import PredictionSystem
@@ -50,8 +50,8 @@ def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSc
 
     domains = Domains()
     domains.add(Domain("spatial", [
-        ("dim_1", "d1", 1, 2),
-        ("dim_2", "d2", 1, 3),
+        Dimension("dim_1", "d1", 1, 2),
+        Dimension("dim_2", "d2", 1, 3),
     ]))
 
     return DatasetSchema(
@@ -81,8 +81,8 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
 
     domains = Domains()
     domains.add(Domain("spatial", [
-        ("n_layers", "d1", 1, 5),
-        ("n_segments", "d2", 1, 5),
+        Dimension("n_layers", "d1", 1, 5),
+        Dimension("n_segments", "d2", 1, 5),
     ]))
 
     return DatasetSchema(
@@ -281,7 +281,7 @@ def build_runtime_agent_stack(tmp_path):
     Used by adaptation / trajectory tests that need a schema containing at least one
     ``runtime=True`` parameter.
     """
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Domain
+    from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain
     from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
     from pred_fab.core import Dataset, DatasetSchema
 
@@ -299,8 +299,8 @@ def build_runtime_agent_stack(tmp_path):
 
     domains = Domains()
     domains.add(Domain("spatial", [
-        ("dim_1", "d1", 1, 2),
-        ("dim_2", "d2", 1, 3),
+        Dimension("dim_1", "d1", 1, 2),
+        Dimension("dim_2", "d2", 1, 3),
     ]))
 
     schema = DatasetSchema(

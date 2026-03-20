@@ -67,7 +67,7 @@ class DatasetSchema:
         for domain in self.domains.values():
             for axis_param in domain.create_axis_params(Roles.PARAMETER):
                 if not self.parameters.has(axis_param.code):
-                    self.parameters.add(axis_param.code, axis_param)
+                    self.parameters.add(axis_param)
 
         # Set column names on feature DataArrays from domain definitions
         self._initialize_feature_columns()

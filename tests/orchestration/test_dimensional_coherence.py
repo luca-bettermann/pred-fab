@@ -5,7 +5,7 @@ from typing import Optional
 
 from pred_fab.interfaces import IPredictionModel
 from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
-from pred_fab.core.data_objects import Feature, PerformanceAttribute, Domain
+from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain
 from pred_fab.core import DatasetSchema
 from pred_fab.utils import PfabLogger
 from tests.utils.builders import (
@@ -93,7 +93,7 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains()
-    domains.add(Domain("spatial", [("dim_1", "d1", 1, 2), ("dim_2", "d2", 1, 3)]))
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
@@ -135,8 +135,8 @@ def test_coherence_error_when_input_domain_mismatches_output_domain(tmp_path):
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains()
-    domains.add(Domain("spatial", [("dim_1", "d1", 1, 2), ("dim_2", "d2", 1, 3)]))
-    domains.add(Domain("temporal", [("t_step", "t", 1, 5)]))
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
+    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
@@ -179,8 +179,8 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains()
-    domains.add(Domain("spatial", [("dim_1", "d1", 1, 2)]))
-    domains.add(Domain("temporal", [("t_step", "t", 1, 5)]))
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2)]))
+    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
