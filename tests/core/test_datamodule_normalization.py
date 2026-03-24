@@ -313,7 +313,7 @@ def test_one_hot_encode_includes_categorical_columns(tmp_path):
     # Explicitly include param_3 (categorical) as an input parameter
     datamodule = DataModule(dataset)
     datamodule.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1", "feature_2"],
     )
@@ -337,7 +337,7 @@ def test_one_hot_encode_handles_missing_categorical_column(tmp_path):
     from pred_fab.core import DataModule
     datamodule = DataModule(dataset)
     datamodule.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1", "feature_2"],
     )
@@ -360,7 +360,7 @@ def test_one_hot_encode_output_is_float32(tmp_path):
     from pred_fab.core import DataModule
     datamodule = DataModule(dataset)
     datamodule.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1", "feature_2"],
     )
@@ -472,7 +472,7 @@ def test_get_and_set_normalization_state_roundtrip(tmp_path):
     from pred_fab.core import DataModule
     dm2 = DataModule(dataset)
     dm2.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1", "feature_2"],
     )

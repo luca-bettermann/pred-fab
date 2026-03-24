@@ -1,7 +1,7 @@
 """
 Tests for DataObject subclasses: validation, coercion, serialization, and type contracts.
 
-Covers DataReal, DataInt, DataBool, DataCategorical, DataDimension, DataArray,
+Covers DataReal, DataInt, DataBool, DataCategorical, DataDomainAxis, Domain, DataArray,
 and the factory classes Parameter, Feature, PerformanceAttribute.
 """
 import pytest
@@ -12,7 +12,9 @@ from pred_fab.core.data_objects import (
     DataInt,
     DataBool,
     DataCategorical,
-    DataDimension,
+    DataDomainAxis,
+    Dimension,
+    Domain,
     DataArray,
     Parameter,
     Feature,
@@ -146,7 +148,6 @@ def test_dataint_coerce_rounds_0_6_up():
 def test_dataint_coerce_0_5_uses_python_rounding():
     """Python 3 uses banker's rounding: round(0.5) == 0, round(1.5) == 2."""
     obj = DataInt("n", Roles.PARAMETER)
-    # Document the exact behavior — not asserting specific value, just that it's an int
     result = obj.coerce(0.5)
     assert isinstance(result, int)
 
@@ -297,52 +298,124 @@ def test_datacategorical_case_sensitive():
         obj.validate("pla")
 
 
-# ===== DataDimension =====
+# ===== DataDomainAxis =====
 
-def test_datadimension_requires_non_negative_level():
-    with pytest.raises(ValueError, match="non-negative"):
-        DataDimension("n_layers", "layer_id", level=-1, role=Roles.PARAMETER)
-
-
-def test_datadimension_requires_integer_level():
-    with pytest.raises((ValueError, TypeError)):
-        DataDimension("n_layers", "layer_id", level=1.5, role=Roles.PARAMETER)  # type: ignore
+def test_datadomainaxis_stores_iterator_code():
+    d = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER, min_val=1, max_val=10)
+    assert d.iterator_code == "layer_idx"
 
 
-def test_datadimension_level_zero_is_valid():
-    d = DataDimension("n_layers", "layer_id", level=0, role=Roles.PARAMETER)
-    assert d.level == 0
+def test_datadomainaxis_iterator_code_in_constraints():
+    d = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER)
+    assert d.constraints["domain_iterator_code"] == "layer_idx"
 
 
-def test_datadimension_level_stored_in_constraints():
-    d = DataDimension("n_layers", "layer_id", level=2, role=Roles.PARAMETER, max_val=10)
-    assert d.constraints["level"] == 2
+def test_datadomainaxis_normalize_strategy_is_min_max():
+    from pred_fab.utils.enum import NormMethod
+    d = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER)
+    assert d.normalize_strategy == NormMethod.MIN_MAX
 
 
-def test_datadimension_stores_iterator_code():
-    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER, max_val=10)
-    assert d.iterator_code == "layer_id"
-
-
-def test_datadimension_iterator_code_in_constraints():
-    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
-    assert d.constraints["dim_iterator_code"] == "layer_id"
-
-
-def test_datadimension_to_dict_from_dict_roundtrip():
+def test_datadomainaxis_to_dict_from_dict_roundtrip():
     from pred_fab.core.data_objects import DataObject
-    obj = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER, min_val=1, max_val=10)
+    obj = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER, min_val=1, max_val=10)
     d = obj.to_dict()
     restored = DataObject.from_dict(d)
-    assert restored.iterator_code == "layer_id"  # type: ignore
-    assert restored.level == 1  # type: ignore
+    assert restored.iterator_code == "layer_idx"  # type: ignore
     assert restored.constraints.get("min") == 1
     assert restored.constraints.get("max") == 10
 
 
-def test_datadimension_min_val_default_is_1():
-    d = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
+def test_datadomainaxis_min_val_default_is_1():
+    d = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER)
     assert d.constraints.get("min") == 1
+
+
+def test_datadomainaxis_runtime_adjustable_false():
+    obj = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER)
+    assert obj.runtime_adjustable is False
+
+
+def test_datadomainaxis_validates_int():
+    obj = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER, min_val=1, max_val=10)
+    assert obj.validate(5) is True
+
+
+def test_datadomainaxis_validates_rejects_non_int():
+    obj = DataDomainAxis("n_layers", "layer_idx", Roles.PARAMETER)
+    with pytest.raises(TypeError):
+        obj.validate(3.0)
+
+
+# ===== Domain =====
+
+def test_domain_stores_code():
+    d = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5)])
+    assert d.code == "spatial"
+
+
+def test_domain_axes_length():
+    d = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
+    ])
+    assert len(d.axes) == 2
+
+
+def test_domain_depth():
+    d = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
+    ])
+    assert d.depth == 2
+
+
+def test_domain_get_param_codes():
+    d = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
+    ])
+    assert d.get_param_codes() == ["n_layers", "n_segments"]
+
+
+def test_domain_get_iterator_codes():
+    d = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
+    ])
+    assert d.get_iterator_codes() == ["layer_idx", "seg_idx"]
+
+
+def test_domain_create_axis_params_types():
+    d = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5)])
+    params = d.create_axis_params(Roles.PARAMETER)
+    assert len(params) == 1
+    assert isinstance(params[0], DataDomainAxis)
+    assert params[0].code == "n_layers"
+    assert params[0].iterator_code == "layer_idx"
+
+
+def test_domain_to_dict_from_dict_roundtrip():
+    d = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 5),
+        Dimension("n_segments", "seg_idx", 1, 4),
+    ])
+    d2 = Domain.from_dict(d.to_dict())
+    assert d2.code == d.code
+    assert len(d2.axes) == len(d.axes)
+    assert d2.axes[0].code == "n_layers"
+    assert d2.axes[1].iterator_code == "seg_idx"
+
+
+def test_dimension_max_val_none_by_default():
+    """Dimension with no max_val should have max_val=None."""
+    dim = Dimension("n_layers", "layer_idx", 1)
+    assert dim.max_val is None
+
+
+def test_dimension_max_val_none_explicit():
+    dim = Dimension("n_layers", "layer_idx", 1, None)
+    assert dim.max_val is None
 
 
 # ===== DataArray =====
@@ -393,6 +466,26 @@ def test_dataarray_to_dict_from_dict_roundtrip():
     assert restored.constraints.get("columns") == ["d1", "feat"]
 
 
+def test_dataarray_stores_domain_code():
+    obj = DataArray("feat", Roles.FEATURE, dtype=np.float64, domain_code="spatial")
+    assert obj.domain_code == "spatial"
+    assert obj.constraints.get("domain_code") == "spatial"
+
+
+def test_dataarray_stores_feature_depth():
+    obj = DataArray("feat", Roles.FEATURE, dtype=np.float64, domain_code="spatial", feature_depth=1)
+    assert obj.feature_depth == 1
+    assert obj.constraints.get("feature_depth") == 1
+
+
+def test_dataarray_roundtrip_with_domain_code():
+    from pred_fab.core.data_objects import DataObject
+    obj = DataArray("feat", Roles.FEATURE, dtype=np.float64, domain_code="spatial", feature_depth=1)
+    restored = DataObject.from_dict(obj.to_dict())
+    assert restored.domain_code == "spatial"  # type: ignore
+    assert restored.feature_depth == 1  # type: ignore
+
+
 # ===== Factories =====
 
 def test_parameter_factory_real_creates_correct_type():
@@ -424,16 +517,17 @@ def test_parameter_factory_boolean_creates_correct_type():
     assert p.role == Roles.PARAMETER
 
 
-def test_parameter_factory_dimension_creates_correct_type():
-    p = Parameter.dimension("n_layers", "layer_id", level=1, max_val=20)
-    assert isinstance(p, DataDimension)
-    assert p.role == Roles.PARAMETER
-
-
 def test_feature_factory_array_creates_correct_type():
     f = Feature.array("my_feature")
     assert isinstance(f, DataArray)
     assert f.role == Roles.FEATURE
+
+
+def test_feature_factory_array_with_domain():
+    f = Feature.array("my_feature", domain="spatial", depth=1)
+    assert isinstance(f, DataArray)
+    assert f.domain_code == "spatial"
+    assert f.feature_depth == 1
 
 
 def test_performance_attribute_factory_score_creates_correct_type():
@@ -485,11 +579,6 @@ def test_databool_runtime_adjustable_false():
 
 def test_datacategorical_runtime_adjustable_false():
     obj = DataCategorical("material", ["PLA", "ABS"], Roles.PARAMETER)
-    assert obj.runtime_adjustable is False
-
-
-def test_datadimension_runtime_adjustable_false():
-    obj = DataDimension("n_layers", "layer_id", level=1, role=Roles.PARAMETER)
     assert obj.runtime_adjustable is False
 
 

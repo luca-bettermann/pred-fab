@@ -70,12 +70,12 @@ def test_encode_custom_override_called_by_prediction_system(tmp_path):
     from tests.utils.interfaces import MixedPredictionModel
 
     class EncoderModel(MixedPredictionModel):
-        """Doubles the first two input columns as latent representation."""
+        """Doubles input columns as latent representation (column count varies with schema)."""
         encode_called = False
 
         def encode(self, X: np.ndarray) -> np.ndarray:
             EncoderModel.encode_called = True
-            return X[:, :2] * 2.0
+            return X * 2.0
 
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.pred_system.models[0].__class__ = EncoderModel  # monkey-patch for test isolation
@@ -92,7 +92,7 @@ def test_encode_custom_override_called_by_prediction_system(tmp_path):
     X_norm = datamodule.params_to_array(exp.parameters.get_values_dict())
     Z = agent.pred_system.encode(X_norm.reshape(1, -1))
     assert EncoderModel.encode_called
-    assert Z.shape[1] == 2  # output has 2 latent dims
+    assert Z.shape[1] == X_norm.reshape(1, -1).shape[1]  # output matches input width
 
 
 # ===========================================================================
@@ -354,7 +354,7 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
 
     datamodule = build_initialized_datamodule(
         dataset=dataset,
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "speed"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "speed"],
         input_features=[],
         output_columns=[],
         fitted=True,
@@ -363,7 +363,7 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
     calibration._active_datamodule = datamodule
 
     # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
-    valid_params = {"param_1": 2.0, "param_2": 2, "dim_1": 2, "dim_2": 2, "speed": 50.0}
+    valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)
     w = 0.4
     result = calibration._acquisition_func(X, w_explore=w)
@@ -388,7 +388,7 @@ def test_inference_func_uses_perf_fn(tmp_path):
 
     datamodule = build_initialized_datamodule(
         dataset=dataset,
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "speed"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "speed"],
         input_features=[],
         output_columns=[],
         fitted=True,
@@ -397,7 +397,7 @@ def test_inference_func_uses_perf_fn(tmp_path):
     calibration._active_datamodule = datamodule
 
     # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
-    valid_params = {"param_1": 2.0, "param_2": 2, "dim_1": 2, "dim_2": 2, "speed": 50.0}
+    valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)
     result = calibration._inference_func(X)
 
@@ -513,7 +513,7 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
-    cs.configure_step_parameter("speed", "dim_1")
+    cs.configure_step_parameter("speed", "n_layers")
     cs.configure_adaptation_delta({"speed": delta})
 
     first_exp = dataset.get_experiment(codes[0])
@@ -529,10 +529,10 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
 
     assert isinstance(result, ExperimentSpec)
 
-    # Schedule should be keyed by the dimension that 'speed' is linked to (dim_1).
-    assert "dim_1" in result.schedules, "Expected schedule for dim_1 dimension"
+    # Schedule should be keyed by the dimension that 'speed' is linked to (n_layers).
+    assert "n_layers" in result.schedules, "Expected schedule for n_layers dimension"
 
-    schedule = result.schedules["dim_1"]
+    schedule = result.schedules["n_layers"]
     seg0 = result.initial_params["speed"]
     waypoints = [proposal["speed"] for _, proposal in schedule.entries]
 
@@ -556,7 +556,7 @@ def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    agent.calibration_system.configure_step_parameter("speed", "dim_1")
+    agent.calibration_system.configure_step_parameter("speed", "n_layers")
     agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
     first_exp = dataset.get_experiment(codes[0])

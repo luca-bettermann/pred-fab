@@ -8,7 +8,7 @@ from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
 import functools
 
 from .schema import DatasetSchema
-from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDimension
+from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDomainAxis
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
@@ -249,8 +249,8 @@ class ExperimentData:
 
         for code in delta:
             obj = self.parameters.get(code)
-            if isinstance(obj, DataDimension):
-                raise ValueError(f"Recording updates for dimension parameter '{code}' is not supported.")
+            if isinstance(obj, DataDomainAxis):
+                raise ValueError(f"Recording updates for domain axis parameter '{code}' is not supported.")
 
         sanitized_delta = self.parameters.sanitize_values(delta, ignore_unknown=False)
         event = ParameterUpdateEvent(
@@ -361,10 +361,10 @@ class Dataset:
     
     # === Create ExperimentData Objects ===
 
-    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock, suffix: str = '') -> Any:
+    def _init_from_schema(self, block_class: Any, schema_dict: DataBlock) -> Any:
         block = block_class()
-        for name, data_obj in schema_dict.items():
-            block.add(suffix + name, data_obj)
+        for _, data_obj in schema_dict.items():
+            block.add(data_obj)
         return block
         
     def _create_experiment_shell(self, exp_code: str) -> ExperimentData:

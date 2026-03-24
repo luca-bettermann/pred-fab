@@ -5,7 +5,7 @@ import itertools
 from typing import Dict, Any, List, Optional, Tuple, Type
 import numpy as np
 import pandas as pd
-from .data_objects import DataObject, DataDimension, DataArray
+from .data_objects import DataObject, DataDomainAxis, DataArray, Domain
 from .data_objects import Parameter, Feature, PerformanceAttribute
 from ..utils.enum import Roles
 from ..utils.logger import PfabLogger
@@ -24,15 +24,15 @@ class DataBlock(ABC):
     def role(self) -> Roles:
         ...
     
-    def add(self, name: str, data_obj: DataObject) -> None:
-        """Add a DataObject to the block."""
+    def add(self, data_obj: DataObject) -> None:
+        """Add a DataObject to the block using its code as the key."""
         if not issubclass(type(data_obj), DataObject):
             raise TypeError(f"data_obj must be a DataObject, got {type(data_obj)}")
-            
+
         if self.role and data_obj.role != self.role:
             raise ValueError(f"Expected data object with role '{self.role}', got '{data_obj.role}'")
-            
-        self.data_objects[name] = data_obj
+
+        self.data_objects[data_obj.code] = data_obj
     
     def get(self, name: str) -> DataObject:
         """Get a DataObject by name."""
@@ -140,7 +140,7 @@ class DataBlock(ABC):
         # Restore DataObjects
         for name, obj_data in data.get("data_objects", {}).items():
             data_obj = DataObject.from_dict(obj_data)
-            block.add(name, data_obj)
+            block.add(data_obj)
 
         # Restore values if present
         for name, value in data.get("values", {}).items():
@@ -156,7 +156,7 @@ class DataBlock(ABC):
 
         # Add DataObjects
         for data_obj in data_objs:
-            block.add(data_obj.code, data_obj)
+            block.add(data_obj)
         return block
 
 
@@ -170,60 +170,51 @@ class Parameters(DataBlock):
     def role(self) -> Roles:
         return Roles.PARAMETER
 
-    def get_dim_objects(self, codes: Optional[List[str]] = None) -> List[DataDimension]:
-        """Get view of dimension DataObjects from parameters."""
+    def _get_domain_axis_objects(self, codes: Optional[List[str]] = None) -> List[DataDomainAxis]:
+        """Get domain axis DataObjects from parameters in insertion order."""
         return [
-            obj for name, obj in self.data_objects.items() 
-            if isinstance(obj, DataDimension) and (codes is None or name in codes)
+            obj for name, obj in self.data_objects.items()
+            if isinstance(obj, DataDomainAxis) and (codes is None or name in codes)
         ]
-        
+
+    def _get_domain_axis_names(self) -> List[str]:
+        """Get domain axis parameter codes in insertion order."""
+        return [name for name, obj in self.data_objects.items() if isinstance(obj, DataDomainAxis)]
+
+    def _get_domain_axis_iterator_codes(self, codes: Optional[List[str]] = None) -> List[str]:
+        """Get iterator codes for domain axes in insertion order."""
+        return [obj.iterator_code for obj in self._get_domain_axis_objects(codes)]
+
+    def _get_domain_axis_values(self, codes: Optional[List[str]] = None) -> List[int]:
+        """Get current values of domain axis parameters."""
+        return [self.get_value(dim.code) for dim in self._get_domain_axis_objects(codes)]
+
+    def _get_sorted_domain_axes(self) -> List[DataDomainAxis]:
+        """Return DataDomainAxis objects in dict insertion order (domain registration order)."""
+        return self._get_domain_axis_objects()
+
+    # Keep legacy aliases for compatibility with dataset.py export_to_dataframe
     def get_dim_names(self) -> List[str]:
-        """Get list of dimension parameter names."""
-        return [name for name, obj in self.data_objects.items() if isinstance(obj, DataDimension)]
-    
+        """Get domain axis parameter codes (alias for _get_domain_axis_names)."""
+        return self._get_domain_axis_names()
+
     def get_dim_iterator_codes(self, codes: Optional[List[str]] = None) -> List[str]:
-        """Get list of dimension iterator names."""
-        return [obj.iterator_code for obj in self.get_dim_objects(codes)]
+        """Get domain axis iterator codes (alias for _get_domain_axis_iterator_codes)."""
+        return self._get_domain_axis_iterator_codes(codes)
 
     def get_dim_values(self, codes: Optional[List[str]] = None) -> List[int]:
-        """Get view of dimension DataObjects from parameters."""
-        return [self.get_value(dim.code) for dim in self.get_dim_objects(codes)]
-
-    def validate_dimensions(self) -> None:
-        """Validate dimension levels."""
-        levels = []
-        for dim in self.get_dim_objects():
-            levels.append((dim.level, dim.code))
-        levels.sort()
-
-        for i, (level, name) in enumerate(levels, start=1):
-            if level != i:
-                raise ValueError(f"Dimension levels must be consecutive starting from 1. "
-                                 f"Expected level {i} for '{name}', got {level}")
-
-    def get_dim_by_level(self, level: int) -> Optional[DataDimension]:
-        """Get dimension object by level."""
-        for dim in self.get_dim_objects():
-            if dim.level == level:
-                return dim
-        return None
-
-    def get_sorted_dimensions(self) -> List[DataDimension]:
-        """Get dimensions sorted by level (ascending: 1, 2, ...)."""
-        dim_objs = list(self.get_dim_objects())
-        dim_objs.sort(key=lambda x: x.level)
-        return dim_objs
+        """Get domain axis values (alias for _get_domain_axis_values)."""
+        return self._get_domain_axis_values(codes)
 
     def _get_dimension_strides(self) -> Dict[str, int]:
-        """Compute stride per dimension level; stride[L] = product of sizes of all levels > L."""
-        sorted_dims = self.get_sorted_dimensions()
+        """Compute stride per domain axis; stride[axis] = product of sizes of all inner axes."""
+        sorted_dims = self._get_sorted_domain_axes()
         strides = {}
         current_stride = 1
-        
-        # Iterate backwards (from lowest level / highest index)
+
+        # Iterate backwards (from innermost axis outward)
         for dim in reversed(sorted_dims):
             strides[dim.code] = current_stride
-            # Get size of this dimension
             size = self.get_value(dim.code)
             current_stride *= size
         return strides
@@ -242,7 +233,7 @@ class Parameters(DataBlock):
     def get_dim_combinations(self, dim_codes: List[str], evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
         """Get all combinations of dimension indices for specified dimensions and the respective iterator names."""
         # Extract dimension values
-        dim_values = self.get_dim_values(dim_codes)
+        dim_values = self._get_domain_axis_values(dim_codes)
         if len(dim_values) < len(dim_codes):
             missing_dims = [dim for dim in dim_codes if dim not in dim_values]
             raise KeyError(f"Missing dimensions: {', '.join(missing_dims)}")
@@ -438,7 +429,7 @@ class Features(DataBlock):
         return float(np.asarray(arr)[tuple(idx)])
 
     def _get_dim_codes_from_iterators(self, parameters: Parameters, iterator_cols: List[str]) -> List[str]:
-        iterator_to_dim = {dim.iterator_code: dim.code for dim in parameters.get_dim_objects()}
+        iterator_to_dim = {dim.iterator_code: dim.code for dim in parameters._get_domain_axis_objects()}
         dim_codes = []
         for iterator in iterator_cols:
             if iterator not in iterator_to_dim:
@@ -456,7 +447,53 @@ class PerformanceAttributes(DataBlock):
 
     def __init__(self):
         super().__init__()
-    
+
     @property
     def role(self) -> Roles:
         return Roles.PERFORMANCE
+
+
+class Domains:
+    """Container for Domain objects indexed by code."""
+
+    def __init__(self):
+        self._domains: Dict[str, Domain] = {}
+
+    def add(self, domain: 'Domain') -> None:
+        """Register a domain by its code."""
+        self._domains[domain.code] = domain
+
+    def get(self, code: str) -> 'Domain':
+        """Retrieve a domain by code; raises KeyError if not found."""
+        if code not in self._domains:
+            raise KeyError(f"Domain '{code}' not found.")
+        return self._domains[code]
+
+    def has(self, code: str) -> bool:
+        """Check whether a domain with the given code is registered."""
+        return code in self._domains
+
+    def keys(self):
+        return self._domains.keys()
+
+    def items(self):
+        return self._domains.items()
+
+    def values(self):
+        return self._domains.values()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize all domains to a dictionary."""
+        return {code: domain.to_dict() for code, domain in self._domains.items()}
+
+    def to_hash_dict(self) -> Dict[str, Any]:
+        """Serialize structural identity for schema hashing."""
+        return {code: domain.to_hash_dict() for code, domain in self._domains.items()}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Domains':
+        """Reconstruct from dictionary."""
+        obj = cls()
+        for code, domain_data in data.items():
+            obj.add(Domain.from_dict(domain_data))
+        return obj

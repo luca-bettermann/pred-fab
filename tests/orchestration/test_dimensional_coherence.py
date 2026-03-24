@@ -1,8 +1,13 @@
 """Tests for prediction model dimensional coherence: depth property and validation."""
 import pytest
 import numpy as np
+from typing import Optional
 
 from pred_fab.interfaces import IPredictionModel
+from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
+from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain
+from pred_fab.core import DatasetSchema
+from pred_fab.utils import PfabLogger
 from tests.utils.builders import (
     build_mixed_feature_schema,
     build_real_agent_stack,
@@ -20,7 +25,6 @@ from tests.utils.interfaces import (
 
 def test_depth_is_zero_before_refs_set(tmp_path):
     """depth returns 0 when _ref_features is not yet populated."""
-    from pred_fab.utils import PfabLogger
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
 
     class SimpleModel(IPredictionModel):
@@ -30,6 +34,8 @@ def test_depth_is_zero_before_refs_set(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feature_grid"]
+        @property
+        def input_domain(self) -> Optional[str]: return "spatial"
         def forward_pass(self, X): return np.zeros((X.shape[0], 1))
         def train(self, train_batches, val_batches, **kwargs): pass
 
@@ -61,7 +67,7 @@ def test_depth_for_depth2_only_model(tmp_path):
 # === validate_dimensional_coherence ===
 
 def test_coherence_valid_depth2_model(tmp_path):
-    """A model declaring dim_1 and dim_2 with depth-2 outputs passes validation."""
+    """A model with depth-2 spatial domain outputs passes validation."""
     dataset = build_workflow_dataset(tmp_path)
     agent = build_workflow_agent(tmp_path, dataset.schema)
     model = agent.pred_system.models[0]  # WorkflowPredictionModel
@@ -77,128 +83,38 @@ def test_coherence_warns_on_mixed_output_depths(tmp_path, recwarn):
     model.validate_dimensional_coherence(dataset.schema)
 
 
-def test_coherence_error_on_gap_in_declared_dims(tmp_path):
-    """Declaring dim_1 and dim_3 (skipping dim_2) raises ValueError."""
-    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute
-    from pred_fab.core import DatasetSchema
-    from pred_fab.utils import PfabLogger
-    from pred_fab.core.data_objects import Parameter
-
-    # Build a 3-dim schema
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
-    d3 = Parameter.dimension("dim_3", iterator_code="d3", level=3, max_val=2)
-    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f1 = Feature.array("feat_3d")
-    perf = PerformanceAttribute.score("perf_1")
-
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="schema_3d",
-        parameters=Parameters.from_list([p1, d1, d2, d3]),
-        features=Features.from_list([f1]),
-        performance=PerformanceAttributes.from_list([perf]),
-    )
-    schema.features.get("feat_3d").set_columns(["d1", "d2", "d3", "feat_3d"])
-
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-
-    class GapModel(IPredictionModel):
-        @property
-        def input_parameters(self): return ["param_1", "dim_1", "dim_3"]  # gap at level 2
-        @property
-        def input_features(self): return []
-        @property
-        def outputs(self): return ["feat_3d"]
-        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-        def train(self, tb, vb, **kw): pass
-
-    model = GapModel(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
-
-    with pytest.raises(ValueError, match="consecutive"):
-        model.validate_dimensional_coherence(schema)
-
-
-def test_coherence_error_on_dims_not_starting_at_level1(tmp_path):
-    """Declaring only dim_2 (not starting at level 1) raises ValueError."""
-    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute
-    from pred_fab.core import DatasetSchema
-    from pred_fab.utils import PfabLogger
-    from pred_fab.core.data_objects import Parameter
-
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
-    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f1 = Feature.array("feat_2d")
-    perf = PerformanceAttribute.score("perf_1")
-
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="schema_2d_gap",
-        parameters=Parameters.from_list([p1, d1, d2]),
-        features=Features.from_list([f1]),
-        performance=PerformanceAttributes.from_list([perf]),
-    )
-    schema.features.get("feat_2d").set_columns(["d1", "d2", "feat_2d"])
-
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-
-    class NoLevel1Model(IPredictionModel):
-        @property
-        def input_parameters(self): return ["param_1", "dim_2"]  # starts at level 2, not 1
-        @property
-        def input_features(self): return []
-        @property
-        def outputs(self): return ["feat_2d"]
-        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-        def train(self, tb, vb, **kw): pass
-
-    model = NoLevel1Model(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
-
-    with pytest.raises(ValueError, match="consecutive"):
-        model.validate_dimensional_coherence(schema)
-
-
 def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
     """An input feature with depth > model's operational depth raises ValueError."""
-    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
-    from pred_fab.core.data_objects import Feature, PerformanceAttribute
-    from pred_fab.core import DatasetSchema
-    from pred_fab.utils import PfabLogger
     from pred_fab.core.data_objects import Parameter
 
-    d1 = Parameter.dimension("dim_1", iterator_code="d1", level=1, max_val=2)
-    d2 = Parameter.dimension("dim_2", iterator_code="d2", level=2, max_val=3)
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f_deep = Feature.array("feat_deep")   # depth 2 (input)
-    f_shallow = Feature.array("feat_shallow")  # depth 1 (output)
+    f_deep = Feature.array("feat_deep", domain="spatial")    # depth 2 (input)
+    f_shallow = Feature.array("feat_shallow", domain="spatial", depth=1)  # depth 1 (output)
     perf = PerformanceAttribute.score("perf_1")
+
+    domains = Domains()
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
         name="schema_depth_mismatch",
-        parameters=Parameters.from_list([p1, d1, d2]),
+        parameters=Parameters.from_list([p1]),
         features=Features.from_list([f_deep, f_shallow]),
         performance=PerformanceAttributes.from_list([perf]),
+        domains=domains,
     )
-    schema.features.get("feat_deep").set_columns(["d1", "d2", "feat_deep"])
-    schema.features.get("feat_shallow").set_columns(["d1", "feat_shallow"])
 
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
 
     class DeepInputShallowOutputModel(IPredictionModel):
         @property
-        def input_parameters(self): return ["param_1", "dim_1"]
+        def input_parameters(self): return ["param_1"]
         @property
         def input_features(self): return ["feat_deep"]  # depth 2 > output depth 1
         @property
         def outputs(self): return ["feat_shallow"]
+        @property
+        def input_domain(self) -> Optional[str]: return "spatial"
         def forward_pass(self, X): return np.zeros((X.shape[0], 1))
         def train(self, tb, vb, **kw): pass
 
@@ -207,6 +123,93 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
     model.set_ref_features(list(schema.features.data_objects.values()))
 
     with pytest.raises(ValueError, match="depth"):
+        model.validate_dimensional_coherence(schema)
+
+
+def test_coherence_error_when_input_domain_mismatches_output_domain(tmp_path):
+    """input_domain that doesn't match the output feature domain raises ValueError."""
+    from pred_fab.core.data_objects import Parameter
+
+    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
+    f1 = Feature.array("feat_spatial", domain="spatial")
+    perf = PerformanceAttribute.score("perf_1")
+
+    domains = Domains()
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
+    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
+
+    schema = DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_domain_mismatch",
+        parameters=Parameters.from_list([p1]),
+        features=Features.from_list([f1]),
+        performance=PerformanceAttributes.from_list([perf]),
+        domains=domains,
+    )
+
+    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
+
+    class WrongDomainModel(IPredictionModel):
+        @property
+        def input_parameters(self): return ["param_1"]
+        @property
+        def input_features(self): return []
+        @property
+        def outputs(self): return ["feat_spatial"]
+        @property
+        def input_domain(self) -> Optional[str]: return "temporal"  # mismatch
+        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
+        def train(self, tb, vb, **kw): pass
+
+    model = WrongDomainModel(logger)
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
+    model.set_ref_features(list(schema.features.data_objects.values()))
+
+    with pytest.raises(ValueError, match="input_domain"):
+        model.validate_dimensional_coherence(schema)
+
+
+def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
+    """A model outputting features from two different named domains raises ValueError."""
+    from pred_fab.core.data_objects import Parameter
+
+    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
+    f_spatial = Feature.array("feat_spatial", domain="spatial")
+    f_temporal = Feature.array("feat_temporal", domain="temporal")
+    perf = PerformanceAttribute.score("perf_1")
+
+    domains = Domains()
+    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2)]))
+    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
+
+    schema = DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_multi_domain_model",
+        parameters=Parameters.from_list([p1]),
+        features=Features.from_list([f_spatial, f_temporal]),
+        performance=PerformanceAttributes.from_list([perf]),
+        domains=domains,
+    )
+
+    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
+
+    class MultiDomainModel(IPredictionModel):
+        @property
+        def input_parameters(self): return ["param_1"]
+        @property
+        def input_features(self): return []
+        @property
+        def outputs(self): return ["feat_spatial", "feat_temporal"]
+        @property
+        def input_domain(self) -> Optional[str]: return "spatial"
+        def forward_pass(self, X): return np.zeros((X.shape[0], 2))
+        def train(self, tb, vb, **kw): pass
+
+    model = MultiDomainModel(logger)
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
+    model.set_ref_features(list(schema.features.data_objects.values()))
+
+    with pytest.raises(ValueError, match="multiple named domains"):
         model.validate_dimensional_coherence(schema)
 
 

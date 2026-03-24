@@ -54,7 +54,7 @@ def test_params_to_array_produces_correct_width(tmp_path):
     evaluate_loaded_workflow_experiments(agent, dataset)
     dm = build_prepared_workflow_datamodule(agent, dataset)
 
-    arr = dm.params_to_array({"param_1": 5.0, "param_2": 3, "dim_1": 2, "dim_2": 3, "param_3": "B"})
+    arr = dm.params_to_array({"param_1": 5.0, "param_2": 3, "n_layers": 2, "n_segments": 3, "param_3": "B"})
     assert arr.shape == (len(dm.input_columns),)
 
 
@@ -64,7 +64,7 @@ def test_params_to_array_array_to_params_continuous_roundtrip(tmp_path):
     evaluate_loaded_workflow_experiments(agent, dataset)
     dm = build_prepared_workflow_datamodule(agent, dataset)
 
-    params_in = {"param_1": 3.5, "param_2": 2, "dim_1": 2, "dim_2": 3, "param_3": "B"}
+    params_in = {"param_1": 3.5, "param_2": 2, "n_layers": 2, "n_segments": 3, "param_3": "B"}
     arr = dm.params_to_array(params_in)
     params_out = dm.array_to_params(arr)
 
@@ -81,14 +81,14 @@ def test_array_to_params_decodes_categorical_correctly(tmp_path):
     # Manually build a DataModule that includes param_3 (workflow agent excludes it)
     dm = DataModule(dataset)
     dm.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1"],
     )
     dm.prepare(val_size=0.0, test_size=0.0, recompute=True)
 
     for cat in ["A", "B", "C"]:
-        params_in = {"param_1": 4.0, "param_2": 2, "dim_1": 2, "dim_2": 3, "param_3": cat}
+        params_in = {"param_1": 4.0, "param_2": 2, "n_layers": 2, "n_segments": 3, "param_3": cat}
         arr = dm.params_to_array(params_in)
         params_out = dm.array_to_params(arr)
         assert params_out["param_3"] == cat, f"Expected category '{cat}', got '{params_out['param_3']}'"
@@ -170,7 +170,7 @@ def test_get_onehot_column_map_returns_correct_mapping(tmp_path):
     # Manually build a DataModule that includes param_3 (workflow agent excludes it)
     dm = DataModule(dataset)
     dm.initialize(
-        input_parameters=["param_1", "param_2", "dim_1", "dim_2", "param_3"],
+        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
         input_features=[],
         output_columns=["feature_1"],
     )

@@ -14,7 +14,7 @@ import pickle
 from scipy.stats import gaussian_kde
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
-from ..core.data_objects import DataDimension, DataArray
+from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, Metrics, LocalData, SplitType
@@ -579,7 +579,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return ()
         iter_to_dim_code = {
             dim.iterator_code: dim.code
-            for dim in self.schema.parameters.get_sorted_dimensions()
+            for dim in self.schema.parameters._get_domain_axis_objects()
         }
         shape = []
         for ic in iterator_cols:
@@ -593,27 +593,34 @@ class PredictionSystem(BaseOrchestrationSystem):
         return tuple(shape)
 
     def _get_model_dim_info(self, model: IPredictionModel, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Build dimensional iteration structure for a specific model based on its depth."""
+        """Build dimensional iteration structure for a specific model based on its domain and depth."""
         depth = model.depth
-        all_sorted_dims = self.schema.parameters.get_sorted_dimensions()
-        model_dims = all_sorted_dims[:depth]
+        domain_code = model.input_domain
 
         dim_sizes: List[int] = []
         dim_iterators: List[str] = []
         dim_codes_ordered: List[str] = []
         dim_codes: set = set()
 
-        for dim_obj in model_dims:
-            name = dim_obj.code
-            if name not in params:
+        if domain_code is not None and depth > 0:
+            if not self.schema.domains.has(domain_code):
                 raise ValueError(
-                    f"Missing dimensional parameter '{name}' for model "
-                    f"{model.__class__.__name__}"
+                    f"Domain '{domain_code}' declared by model {model.__class__.__name__} "
+                    f"is not registered in schema."
                 )
-            dim_sizes.append(int(params[name]))
-            dim_iterators.append(dim_obj.iterator_code)
-            dim_codes_ordered.append(name)
-            dim_codes.add(name)
+            domain = self.schema.domains.get(domain_code)
+            model_axes = domain.axes[:depth]
+
+            for ax in model_axes:
+                if ax.code not in params:
+                    raise ValueError(
+                        f"Missing domain axis parameter '{ax.code}' for model "
+                        f"{model.__class__.__name__}"
+                    )
+                dim_sizes.append(int(params[ax.code]))
+                dim_iterators.append(ax.iterator_code)
+                dim_codes_ordered.append(ax.code)
+                dim_codes.add(ax.code)
 
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape)) if shape else 1

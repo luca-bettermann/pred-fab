@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Type, final
+from typing import Any, Dict, List, Optional, Tuple, Type, final
 
-from ..core import Dataset, DataObject, DataDimension, Parameter, Feature, PerformanceAttribute
+from ..core import Dataset, DataObject, Parameter, Feature, PerformanceAttribute
 from ..utils import PfabLogger
 
 
 class BaseInterface(ABC):
     """Shared base for interface models — logger setup, DataObject references, and property validation."""
-    
+
     def __init__(self, logger: PfabLogger):
         self.logger = logger
 
@@ -69,8 +69,8 @@ class BaseInterface(ABC):
             if param.code in ref_property:
                 location[param.code] = param
                 
-    @final
-    def get_input_dimensions(self) -> List[DataDimension]:
-        """Get list of required dimension names from input_parameters."""
-        return [obj for obj in self._ref_parameters.values() if isinstance(obj, DataDimension)]
-    
+    @property
+    def input_domain(self) -> Optional[str]:
+        """Domain code this model operates in; None for experiment-level (scalar) models."""
+        return None
+

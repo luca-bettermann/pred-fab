@@ -4,7 +4,7 @@ These classes are lightweight implementations of framework interfaces
 used to compose real orchestration systems in tests.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -39,6 +39,10 @@ class ShapeCheckingPredictionModel(IPredictionModel):
     def outputs(self):
         return self._outputs
 
+    @property
+    def input_domain(self) -> Optional[str]:
+        return None
+
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         self.seen_widths.append(X.shape[1])
         self.seen_batch_sizes.append(X.shape[0])
@@ -59,7 +63,11 @@ class MixedFeatureModel(IFeatureModel):
 
     @property
     def input_parameters(self):
-        return ["dim_1", "dim_2"]
+        return ["param_1"]
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
 
     @property
     def outputs(self):
@@ -69,8 +77,8 @@ class MixedFeatureModel(IFeatureModel):
         return None
 
     def _compute_feature_logic(self, data, params, visualize: bool = False, **dimensions):
-        d1 = float(dimensions["d1"])
-        d2 = float(dimensions["d2"])
+        d1 = float(dimensions.get("d1", 0))
+        d2 = float(dimensions.get("d2", 0))
         return {
             "feature_grid": d1 * 10.0 + d2,
             "feature_d1": 100.0 + d1,
@@ -113,7 +121,7 @@ class MixedPredictionModel(IPredictionModel):
 
     @property
     def input_parameters(self):
-        return ["param_1", "dim_1", "dim_2"]
+        return ["param_1"]
 
     @property
     def input_features(self):
@@ -123,8 +131,14 @@ class MixedPredictionModel(IPredictionModel):
     def outputs(self):
         return ["feature_grid", "feature_d1", "feature_scalar"]
 
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
+
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        return np.dot(X[:, :3], self.weights)
+        n_in = X.shape[1]
+        w = self.weights[:n_in, :]
+        return np.dot(X, w)
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
@@ -148,7 +162,11 @@ class WorkflowFeatureModelA(IFeatureModel):
 
     @property
     def input_parameters(self) -> List[str]:
-        return ["param_1", "dim_1", "dim_2"]
+        return ["param_1"]
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
 
     @property
     def outputs(self) -> List[str]:
@@ -173,6 +191,10 @@ class WorkflowFeatureModelB(IFeatureModel):
     @property
     def input_parameters(self) -> List[str]:
         return ["param_2"]
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return None
 
     @property
     def outputs(self) -> List[str]:
@@ -240,7 +262,7 @@ class WorkflowPredictionModel(IPredictionModel):
 
     @property
     def input_parameters(self) -> List[str]:
-        return ["param_1", "param_2", "dim_1", "dim_2"]
+        return ["param_1", "param_2"]
 
     @property
     def input_features(self) -> List[str]:
@@ -249,6 +271,10 @@ class WorkflowPredictionModel(IPredictionModel):
     @property
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
 
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         if X.shape[1] != self.weights.shape[0]:
@@ -268,8 +294,8 @@ class WorkflowExternalData(IExternalData):
             found[code] = {
                 "param_1": float(i + 1),
                 "param_2": int(2 + i),
-                "dim_1": 2,
-                "dim_2": 3,
+                "n_layers": 2,
+                "n_segments": 3,
             }
         return [], found
 
@@ -279,7 +305,11 @@ class ContractFeatureModelOk(IFeatureModel):
 
     @property
     def input_parameters(self):
-        return ["dim_1", "dim_2"]
+        return []
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
 
     @property
     def outputs(self):
@@ -289,7 +319,7 @@ class ContractFeatureModelOk(IFeatureModel):
         return params, dimensions
 
     def _compute_feature_logic(self, data, params, visualize=False, **dimensions):
-        return {"feature_grid": dimensions["d1"] * 10 + dimensions["d2"]}
+        return {"feature_grid": dimensions.get("d1", 0) * 10 + dimensions.get("d2", 0)}
 
 
 class ContractFeatureModelBadOutputType(IFeatureModel):
@@ -297,7 +327,11 @@ class ContractFeatureModelBadOutputType(IFeatureModel):
 
     @property
     def input_parameters(self):
-        return ["dim_1"]
+        return []
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return "spatial"
 
     @property
     def outputs(self):
@@ -316,6 +350,10 @@ class ContractFeatureModelInvalidProps(IFeatureModel):
     @property
     def input_parameters(self):
         return "dim_1"
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return None
 
     @property
     def outputs(self):
@@ -361,6 +399,10 @@ class ContractPredictionModelDefaults(IPredictionModel):
     @property
     def outputs(self):
         return ["feature_scalar"]
+
+    @property
+    def input_domain(self) -> Optional[str]:
+        return None
 
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         return np.zeros((X.shape[0], 1), dtype=np.float64)

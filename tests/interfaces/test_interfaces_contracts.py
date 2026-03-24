@@ -18,7 +18,8 @@ def test_feature_interface_compute_features_orders_outputs_and_dimensions(tmp_pa
     params = schema.parameters.from_dict(schema.parameters.to_dict())
     params.set_values_from_dict({"param_1": 2.0, "dim_1": 2, "dim_2": 3}, logger=build_test_logger(tmp_path))
 
-    arr = model.compute_features(params, evaluate_from=0, evaluate_to=None)
+    domain = schema.domains.get("spatial")
+    arr = model.compute_features(params, domain=domain, evaluate_from=0, evaluate_to=None)
     assert arr.shape == (6, 3)
     assert float(arr[-1, -1]) == 12.0
 
@@ -31,8 +32,9 @@ def test_feature_interface_rejects_non_numeric_output_values(tmp_path):
     params = schema.parameters.from_dict(schema.parameters.to_dict())
     params.set_values_from_dict({"param_1": 2.0, "dim_1": 2, "dim_2": 3}, logger=build_test_logger(tmp_path))
 
+    domain = schema.domains.get("spatial")
     with pytest.raises(TypeError):
-        model.compute_features(params, evaluate_from=0, evaluate_to=1)
+        model.compute_features(params, domain=domain, evaluate_from=0, evaluate_to=1)
 
 
 def test_base_interface_validates_property_types(tmp_path):
