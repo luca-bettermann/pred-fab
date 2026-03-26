@@ -2,6 +2,8 @@
 ' Interface-focused UML diagram for LBP Package
 ' Generate PNG: plantuml -tpng "UML_diagram.puml"
 
+skinparam dpi 300
+
 !define ABSTRACT_CLASS abstract class
 
 ' === COLOR SCHEMES ===
@@ -42,6 +44,7 @@
 
 ' SCHEME 4: Minimalist Gray (Uniform)
 !define COL_AGENT      #fcfcfcff
+!define COL_SCHEMA     #fabb9e2f
 !define COL_SYS_FEAT   #e2e7e955
 !define COL_SYS_EVAL   #e2e7e955
 !define COL_SYS_PRED   #e2e7e955
@@ -72,6 +75,11 @@ skinparam roundcorner 14
 hide empty fields
 
 ' === TOP LAYER: AGENT ===
+class Schema COL_AGENT {
+    - specification
+    + initialize()
+}
+
 class PfabAgent COL_AGENT {
     + initialize()
     + configure()
@@ -143,6 +151,8 @@ PfabAgent -[hidden]down- EvaluationSystem
 PfabAgent -[hidden]down- PredictionSystem
 PfabAgent -[hidden]down- CalibrationSystem
 
+Schema -[hidden]down- FeatureSystem
+
 ' Middle -> Bottom
 FeatureSystem -[hidden]down- IFeatureModel
 EvaluationSystem -[hidden]down- IEvaluationModel
@@ -170,6 +180,8 @@ PfabAgent *-- FeatureSystem
 PfabAgent *-- EvaluationSystem
 PfabAgent *-- PredictionSystem
 PfabAgent *-- CalibrationSystem
+
+Schema <.. FeatureSystem
 
 ' Agent to Utils/External
 PfabAgent *-- utils
