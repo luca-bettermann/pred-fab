@@ -524,7 +524,8 @@ def test_feature_factory_array_creates_correct_type():
 
 
 def test_feature_factory_array_with_domain():
-    f = Feature.array("my_feature", domain="spatial", depth=1)
+    d = Domain("spatial", [Dimension("dim_1", "d1", 1, 2)])
+    f = Feature.array("my_feature", domain=d, depth=1)
     assert isinstance(f, DataArray)
     assert f.domain_code == "spatial"
     assert f.feature_depth == 1
