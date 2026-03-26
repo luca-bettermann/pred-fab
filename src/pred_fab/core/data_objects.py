@@ -425,9 +425,10 @@ class Feature:
 
     @staticmethod
     def array(code: str, dtype: Union[str, type, np.dtype] = np.float64,
-              domain: Optional[str] = None, depth: Optional[int] = None) -> DataArray:
+              domain: Optional[Union['Domain', str]] = None, depth: Optional[int] = None) -> DataArray:
         """Create a feature DataArray tied to a domain. depth=None means full domain depth."""
-        return DataArray(code=code, role=Roles.FEATURE, dtype=dtype, domain_code=domain, feature_depth=depth)
+        domain_code = domain.code if isinstance(domain, Domain) else domain
+        return DataArray(code=code, role=Roles.FEATURE, dtype=dtype, domain_code=domain_code, feature_depth=depth)
 
 
 class PerformanceAttribute:
