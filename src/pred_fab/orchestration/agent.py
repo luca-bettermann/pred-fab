@@ -8,7 +8,7 @@ from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
-from ..core import ParameterProposal, ExperimentSpec
+from ..core import ExperimentSpec
 from ..orchestration import (
     FeatureSystem,
     EvaluationSystem,
@@ -17,7 +17,8 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
+from ..interfaces.calibration import GaussianProcessSurrogate
+from ..utils import LocalData, PfabLogger, StepType, Mode, SplitType
 
 
 class PfabAgent:
@@ -56,7 +57,10 @@ class PfabAgent:
         
         # Initialization state guard
         self._initialized = False
-        
+
+        # GP surrogate for uncertainty estimation (fitted after each train() call)
+        self._gp_surrogate: Optional[GaussianProcessSurrogate] = None
+
         # Progress tracking
         self.active_exp: Optional[ExperimentData] = None
         
@@ -145,12 +149,29 @@ class PfabAgent:
             except Exception:
                 return {}
 
+        # GP surrogate for uncertainty estimation.
+        # is_fitted=False before train() — uncertainty_fn returns 1.0 (max) until fitted.
+        self._gp_surrogate = GaussianProcessSurrogate(self.logger)
+        _gp = self._gp_surrogate
+
+        def _gp_uncertainty_fn(X: np.ndarray) -> float:
+            """Return GP-based std as uncertainty ∈ [0, 1]; 1.0 before GP is fitted."""
+            if not _gp.is_fitted:
+                return 1.0
+            _, std = _gp.predict(X.reshape(1, -1))
+            return float(np.clip(np.mean(std), 0.0, 1.0))
+
+        def _gp_similarity_fn(X1: np.ndarray, X2: np.ndarray) -> float:
+            """Gaussian kernel similarity in normalized parameter space."""
+            diff = X1.reshape(-1) - X2.reshape(-1)
+            return float(np.exp(-float(np.dot(diff, diff))))
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
             logger=self.logger,
             perf_fn=_perf_fn,
-            uncertainty_fn=_pred.uncertainty,
-            similarity_fn=_pred.kernel_similarity,
+            uncertainty_fn=_gp_uncertainty_fn,
+            similarity_fn=_gp_similarity_fn,
         )
 
         # validate against schema
@@ -338,62 +359,6 @@ class PfabAgent:
         self.logger.console_success("Successfully completed inference step.")
         return result
 
-    def adaptation_step(
-        self,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
-        exp_data: Optional[ExperimentData] = None,
-        mode: Mode = Mode.INFERENCE,
-        w_explore: float = 0.0,
-        record: bool = False,
-        **kwargs
-    ) -> ExperimentSpec:
-        """Tune on a step slice then return an online calibration proposal.
-
-        batch_size is derived automatically (one batch per dimension step);
-        pass ``batch_size=N`` via ``**kwargs`` to override.
-        """
-        if self.pred_system is None:
-            raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
-        if self.calibration_system is None:
-            raise RuntimeError("CalibrationSystem not initialized. Call initialize() first.")
-
-        # Retrieve experiment data
-        exp_data, start, end = self._step_config(exp_data, dimension, step_index)
-
-        # Tune prediction system on the requested online slice.
-        temp_datamodule = self.pred_system.tune(
-            exp_data=exp_data,
-            start=start,
-            end=end,
-            **kwargs
-        )
-        self._log_step_completion(exp_data.code, start, end, action="used for tuning")
-
-        # Calibrate around effective current parameters (online = single step).
-        current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
-        target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
-        result = self.calibration_system.run_calibration(
-            datamodule=temp_datamodule,
-            mode=mode,
-            current_params=current_params,
-            target_indices=target_indices,
-            w_explore=w_explore,
-        )
-        # Tag as adaptation (run_calibration uses mode-derived source_step).
-        proposal = ParameterProposal.from_dict(
-            result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
-        )
-        result = ExperimentSpec(initial_params=proposal, schedules=result.schedules)
-
-        # Record only if user confirms that proposed changes were applied physically.
-        if record:
-            exp_data.record_parameter_update(proposal, dimension=dimension, step_index=step_index)
-            self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
-
-        self.logger.console_success("Successfully completed adaptation step.")
-        return result
-
     # === ADDITIONAL API CALLS ===
 
     def evaluate(
@@ -420,12 +385,15 @@ class PfabAgent:
         test: bool = False,
         **kwargs
     ) -> Optional[Dict[str, Any]]:
-        """Train prediction models and optionally validate/test."""
+        """Train prediction models, fit GP surrogate, and optionally validate/test."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
-        
+
         # Train prediction models using provided DataModule
         self.pred_system.train(datamodule, **kwargs)
+
+        # Fit GP surrogate on experiment-level (params → performance) data
+        self._fit_gp_surrogate(datamodule)
 
         # Run validation on trained models if requested
         if validate or test:
@@ -481,12 +449,6 @@ class PfabAgent:
             self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
 
-    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Declare that a runtime parameter should be re-optimised at each step of the given dimension."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
-
     def baseline_step(
         self,
         n: int,
@@ -505,6 +467,29 @@ class PfabAgent:
         return result
 
     # === Helper Functions ===
+
+    def _fit_gp_surrogate(self, datamodule: DataModule) -> None:
+        """Fit GP surrogate on experiment-level (params → performance) data from the training split."""
+        if self._gp_surrogate is None or self.calibration_system is None:
+            return
+        perf_names = self.calibration_system.perf_names_order
+        X_list, y_list = [], []
+        for code in datamodule.get_split_codes(SplitType.TRAIN):
+            exp = datamodule.dataset.get_experiment(code)
+            if not exp.performance:
+                continue
+            try:
+                params = exp.parameters.get_values_dict()
+                x = datamodule.params_to_array(params)
+                y = [float(exp.performance.get_value(name)) for name in perf_names]
+                X_list.append(x)
+                y_list.append(y)
+            except Exception as e:
+                self.logger.debug(f"Skipping experiment '{code}' for GP training: {e}")
+        if len(X_list) >= 2:
+            self._gp_surrogate.fit(np.array(X_list), np.array(y_list))
+        else:
+            self.logger.info("Not enough experiments with performance data to fit GP surrogate.")
 
     def _instantiate_model_group(
             self,

@@ -306,58 +306,6 @@ def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
     assert "param_1" in set(spec.keys())
 
 
-# ===== configure_step_parameter() =====
-
-def test_configure_step_parameter_sets_config(tmp_path):
-    """configure_step_parameter() stores the dimension code for the given runtime param."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration = build_calibration_system(tmp_path, dataset)
-
-    calibration.configure_step_parameter("speed", "n_layers")
-    assert calibration.trajectory_configs["speed"] == "n_layers"
-
-
-def test_configure_step_parameter_raises_for_non_runtime_param(tmp_path):
-    """configure_step_parameter() raises ValueError when the parameter is not runtime-adjustable."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration = build_calibration_system(tmp_path, dataset)
-
-    with pytest.raises(ValueError, match="not runtime-adjustable"):
-        calibration.configure_step_parameter("param_1", "n_layers")
-
-
-def test_configure_step_parameter_blocked_without_force(tmp_path):
-    """Calling configure_step_parameter twice without force is silently blocked."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration = build_calibration_system(tmp_path, dataset)
-
-    calibration.configure_step_parameter("speed", "n_layers")
-    calibration.configure_step_parameter("speed", "n_segments")  # blocked without force
-
-    # Dimension code should remain n_layers, not overwritten by n_segments
-    assert calibration.trajectory_configs["speed"] == "n_layers"
-
-
-def test_configure_step_parameter_with_force_overwrites(tmp_path):
-    """force=True overwrites an existing trajectory configuration."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration = build_calibration_system(tmp_path, dataset)
-
-    calibration.configure_step_parameter("speed", "n_layers")
-    calibration.configure_step_parameter("speed", "n_segments", force=True)
-
-    assert calibration.trajectory_configs["speed"] == "n_segments"
-
-
-def test_configure_step_parameter_ignores_unknown_param(tmp_path):
-    """configure_step_parameter() silently skips params not in the schema."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    calibration = build_calibration_system(tmp_path, dataset)
-
-    calibration.configure_step_parameter("nonexistent", "n_layers")
-    assert "nonexistent" not in calibration.trajectory_configs
-
-
 # ===== ParameterSchedule.apply() =====
 
 def test_parameter_schedule_apply_records_update_events(tmp_path):
@@ -393,53 +341,6 @@ def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
     spec.apply_schedules(exp)
 
     assert len(exp.parameter_updates) == initial_count + 1
-
-
-# ===== run_calibration() with trajectory configs (formerly run_trajectory_exploration) =====
-
-def test_run_calibration_offline_raises_without_trust_region_for_trajectory_param(tmp_path):
-    """run_calibration() raises RuntimeError when trajectory param lacks a trust region."""
-    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
-    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
-    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    cs = agent.calibration_system
-    cs.configure_step_parameter("speed", "dim_1")
-    # Intentionally NOT calling configure_adaptation_delta for "speed"
-
-    current_params = exp.parameters.get_values_dict()
-    with pytest.raises(RuntimeError, match="trust region"):
-        cs.run_calibration(
-            datamodule=datamodule,
-            mode=Mode.EXPLORATION,
-            current_params=current_params,
-        )
-
-
-def test_run_calibration_with_trajectory_returns_experiment_spec(tmp_path):
-    """run_calibration() with trajectory configs returns an ExperimentSpec with a schedule."""
-    agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
-    agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
-    datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    cs = agent.calibration_system
-    cs.configure_step_parameter("speed", "dim_1")
-    cs.configure_adaptation_delta({"speed": 50.0})
-
-    current_params = exp.parameters.get_values_dict()
-    result = cs.run_calibration(
-        datamodule=datamodule,
-        mode=Mode.EXPLORATION,
-        current_params=current_params,
-    )
-
-    assert isinstance(result, ExperimentSpec)
-    # "speed" should be in the initial params
-    assert "speed" in result.initial_params
-    # At least one schedule should be present (dim_1)
-    assert len(result.schedules) > 0
 
 
 # ===== BASELINE: categorical inclusion via DataModule one-hot encoding =====

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any, Set, Tuple, Callable
+from typing import Dict, List, Optional, Any, Tuple, Callable
 import numpy as np
 from scipy.optimize import minimize
 
@@ -6,8 +6,8 @@ import warnings
 import functools
 
 from ..core import DataModule, Dataset, DatasetSchema
-from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
-from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
+from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical
+from ..core import ParameterProposal, ExperimentSpec
 from ..utils import PfabLogger, Mode, NormMethod, SourceStep
 from .base_system import BaseOrchestrationSystem
 
@@ -15,7 +15,7 @@ from .base_system import BaseOrchestrationSystem
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: UCB exploration, inference, greedy-maximin baseline, and MPC lookahead."""
+    """Active-learning calibration engine: UCB exploration, inference, and greedy-maximin baseline."""
 
     def __init__(
         self,
@@ -32,7 +32,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.similarity_fn = similarity_fn
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
-        self.default_mpc_discount: float = 0.9
 
         # Active datamodule — set before each optimization run so that
         # _inference_func / _acquisition_func can call array_to_params.
@@ -50,7 +49,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.param_bounds: Dict[str, Tuple[float, float]] = {}
         self.fixed_params: Dict[str, Any] = {}
         self.trust_regions: Dict[str, float] = {}
-        self.trajectory_configs: Dict[str, str] = {}   # param_code → dimension_code
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -188,56 +186,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.trust_regions[code] = delta
 
 
-    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Declare that a runtime-adjustable parameter should be re-optimised at each step of the given dimension.
-
-        When run_calibration iterates over the step-grid, only parameters whose mapped dimension
-        transitions at that step are free to move; the rest are fixed to the previous result.
-        """
-        if code not in self.data_objects:
-            self.logger.console_warning(
-                f"Object '{code}' not found in schema; ignoring configure_step_parameter."
-            )
-            return
-
-        obj = self.data_objects[code]
-
-        if not obj.runtime_adjustable:
-            raise ValueError(
-                f"Parameter '{code}' is not runtime-adjustable. configure_step_parameter() "
-                f"requires a parameter declared with runtime=True in the schema."
-            )
-
-        if not isinstance(obj, (DataReal, DataInt)):
-            raise ValueError(
-                f"Parameter '{code}' type {type(obj).__name__} is not supported for "
-                f"dimension stepping. Only DataReal and DataInt parameters can be step parameters."
-            )
-
-        # Validate dimension_code
-        if dimension_code not in self.data_objects:
-            raise ValueError(
-                f"Dimension '{dimension_code}' not found in schema."
-            )
-        dim_obj = self.data_objects[dimension_code]
-        if not isinstance(dim_obj, DataDomainAxis):
-            raise ValueError(
-                f"'{dimension_code}' is not a DataDomainAxis parameter "
-                f"(got {type(dim_obj).__name__})."
-            )
-
-        if code in self.trajectory_configs and not force:
-            self.logger.console_warning(
-                f"Parameter '{code}' already has a trajectory configuration for "
-                f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
-            )
-            return
-
-        self.trajectory_configs[code] = dimension_code
-        self.logger.debug(
-            f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
-        )
-
     def _validate_and_clean_config(
         self,
         code: str,
@@ -345,49 +293,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === PRIVATE HELPERS ===
 
-    def _wrap_mpc_objective(
-        self,
-        base_objective: Callable,
-        datamodule: DataModule,
-        depth: int,
-        discount: float,
-    ) -> Callable:
-        """Wrap base_objective with MPC lookahead: MPC(X) = Σ γʲ·score(Xⱼ) over depth steps.
-
-        Returns base_objective unchanged when depth <= 0.
-        """
-        if depth <= 0:
-            return base_objective
-
-        def mpc_obj(X: np.ndarray) -> float:
-            base_score = base_objective(X)
-            total = base_score
-            self.logger.debug(f"mpc: base_score={base_score:.4f}")
-            X_cur = X.copy()
-            for j in range(depth):
-                try:
-                    params_cur = datamodule.array_to_params(X_cur)
-                    bounds_ahead = self._get_trust_region_bounds(datamodule, params_cur)
-                    res = minimize(
-                        fun=base_objective,
-                        x0=X_cur,
-                        bounds=bounds_ahead,
-                        method='L-BFGS-B',
-                    )
-                    X_cur = res.x
-                    step_score = base_objective(X_cur)
-                    discount_factor = discount ** (j + 1)
-                    total += discount_factor * step_score
-                    self.logger.debug(
-                        f"  mpc step {j + 1}/{depth}: score={step_score:.4f}, "
-                        f"discount={discount_factor:.4f}, cumulative={total:.4f}"
-                    )
-                except Exception:
-                    break
-            return total
-
-        return mpc_obj
-
     def _build_objective(self, mode: Mode, w_explore: float) -> Callable:
         """Return the objective function for the given calibration mode."""
         if mode == Mode.BASELINE:
@@ -399,87 +304,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         elif mode == Mode.INFERENCE:
             return self._inference_func
         raise ValueError(f"Unknown calibration mode: {mode}")
-
-    def _build_step_grid(self, current_params: Dict[str, Any]) -> List[Dict[str, int]]:
-        """Build flattened Cartesian grid of {dim_code: step_index} dicts, coarsest dimension first.
-
-        Returns [{}] when no trajectory configs are configured (experiment-level use case).
-        """
-        import itertools as _it
-
-        dim_key_order = {code: i for i, code in enumerate(self.data_objects.keys())}
-        dim_codes = sorted(
-            {dc for dc in self.trajectory_configs.values()},
-            key=lambda dc: dim_key_order.get(dc, 999),
-        )
-        if not dim_codes:
-            return [{}]
-
-        sizes = [int(current_params[dc]) for dc in dim_codes]
-        return [
-            dict(zip(dim_codes, idx))
-            for idx in _it.product(*(range(s) for s in sizes))
-        ]
-
-    def _get_eligible_params(
-        self,
-        prev_indices: Optional[Dict[str, int]],
-        curr_indices: Dict[str, int],
-    ) -> set:
-        """Return trajectory params whose mapped dimension transitions at this step."""
-        transitioning_dims: set = set()
-        for dim_code in curr_indices:
-            if prev_indices is None or curr_indices[dim_code] != prev_indices.get(dim_code):
-                transitioning_dims.add(dim_code)
-        return {
-            code for code, dim_code in self.trajectory_configs.items()
-            if dim_code in transitioning_dims
-        }
-
-    def _build_experiment_spec(
-        self,
-        proposals: List[Dict[str, Any]],
-        step_grid: List[Dict[str, int]],
-        source_step: str,
-    ) -> ExperimentSpec:
-        """Assemble per-step proposals into an ExperimentSpec with initial_params and dimension schedules."""
-        initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
-
-        schedules: Dict[str, ParameterSchedule] = {}
-        if len(proposals) > 1 and step_grid and step_grid[0]:
-            # Collect unique dims
-            dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
-            dim_codes = sorted(
-                {dc for dc in self.trajectory_configs.values()},
-                key=lambda dc: dim_key_order_spec.get(dc, 999),
-            )
-            for dim_code in dim_codes:
-                traj_codes = [
-                    c for c, dc in self.trajectory_configs.items() if dc == dim_code
-                ]
-                entries: List[Tuple[int, ParameterProposal]] = []
-                prev_idx: Optional[int] = None
-                for flat_i, indices in enumerate(step_grid):
-                    cur_idx = indices.get(dim_code, 0)
-                    if flat_i == 0:
-                        prev_idx = cur_idx
-                        continue
-                    if cur_idx != prev_idx:
-                        # Dimension transitioned — record schedule entry
-                        seg_vals = {c: proposals[flat_i][c] for c in traj_codes if c in proposals[flat_i]}
-                        if seg_vals:
-                            entries.append((
-                                cur_idx,
-                                ParameterProposal.from_dict(seg_vals, source_step=source_step),
-                            ))
-                    prev_idx = cur_idx
-
-                if entries:
-                    schedules[dim_code] = ParameterSchedule(
-                        dimension=dim_code, entries=entries,
-                    )
-
-        return ExperimentSpec(initial_params=initial, schedules=schedules)
 
     def _build_schema_datamodule(self) -> DataModule:
         """Build a schema-only DataModule (no training data) for baseline generation.
@@ -600,28 +424,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        level: int = 0,
-        depth: int = 0,
-        mpc_lookahead: int = 0,
-        mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
         """Run a single calibration pass and return an ExperimentSpec.
 
         Offline (global bounds + random restarts) when current_params/target_indices are omitted;
         online (trust-region) when both are provided.
-        mpc_lookahead=0 → greedy; mpc_lookahead=N → N steps of discounted lookahead.
         """
-        lookahead = mpc_lookahead
-        discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
-
         self._active_datamodule = datamodule
         objective = self._build_objective(mode, w_explore)
-
-        if lookahead > 0:
-            objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
-            self.logger.info(
-                f"MPC lookahead enabled: depth={lookahead}, discount={discount:.3f}"
-            )
 
         if mode == Mode.EXPLORATION:
             source_step: SourceStep = SourceStep.EXPLORATION
@@ -632,16 +442,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None
-        if target_indices is not None:
-            step_grid: List[Dict[str, int]] = [target_indices]  # type: ignore[list-item]
-        elif current_params is not None:
-            step_grid = self._build_step_grid(current_params)
-        else:
-            step_grid = [{}]
 
         self.logger.info(
             f"run_calibration: mode={mode.name}, {'online (trust-region)' if is_online else 'offline (global)'}, "
-            f"w_explore={w_explore:.2f}, mpc_lookahead={lookahead}, step_grid={len(step_grid)} step(s)"
+            f"w_explore={w_explore:.2f}"
         )
 
         # Validate trust regions for online/trust-region optimization
@@ -657,74 +461,33 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Call configure_adaptation_delta() for each."
                 )
 
-        # Validate trajectory params have trust regions if multi-step
-        if len(step_grid) > 1:
-            traj_without_delta = [
-                c for c in self.trajectory_configs if c not in self.trust_regions
-            ]
-            if traj_without_delta:
-                raise RuntimeError(
-                    f"Trajectory parameters {sorted(traj_without_delta)} have no "
-                    f"configured trust region. "
-                    f"Call configure_adaptation_delta() for each before running."
-                )
+        # Build fixed params for this pass
+        fixed_for_step = dict(self.fixed_params)
+        if is_online and current_params is not None:
+            for code, val in current_params.items():
+                if code not in self.trust_regions and code not in fixed_for_step:
+                    fixed_for_step[code] = val
 
-        working_params: Optional[Dict[str, Any]] = (
-            dict(current_params) if current_params else None
+        if is_online:
+            bounds = self._get_trust_region_bounds(datamodule, current_params)  # type: ignore[arg-type]
+            n_rounds = 0
+        else:
+            bounds = self._get_global_bounds(datamodule)
+            n_rounds = n_optimization_rounds
+
+        result = self._run_optimization(
+            datamodule,
+            x0_params=current_params,
+            bounds=bounds,
+            objective_func=objective,
+            n_rounds=n_rounds,
+            fixed_param_values=fixed_for_step,
         )
-        prev_indices: Optional[Dict[str, int]] = None
-        proposals: List[Dict[str, Any]] = []
 
-        for step_i, curr_indices in enumerate(step_grid):
-            # Build fixed params for this step
-            fixed_for_step = dict(self.fixed_params)
-            eligible: set = set()
-            if working_params and self.trajectory_configs and curr_indices:
-                eligible = self._get_eligible_params(prev_indices, curr_indices)
-                for code in self.trajectory_configs:
-                    if code not in eligible and code in working_params:
-                        fixed_for_step[code] = working_params[code]
-
-            # Online: explicitly pin all params outside the trust region to current values.
-            # This avoids denormalization drift for params that have zero-width bounds.
-            if is_online and working_params is not None:
-                for code, val in working_params.items():
-                    if code not in self.trust_regions and code not in fixed_for_step:
-                        fixed_for_step[code] = val
-
-            # Use trust-region when online (current_params + target_indices), or when we have a
-            # reference point on a non-experiment-level step (subsequent trajectory steps).
-            # Otherwise use global bounds with random restarts.
-            if is_online or (working_params is not None and bool(curr_indices)):
-                bounds = self._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
-                n_rounds = 0
-                bounds_mode = "trust-region"
-            else:
-                bounds = self._get_global_bounds(datamodule)
-                n_rounds = n_optimization_rounds
-                bounds_mode = "global"
-
-            self.logger.debug(
-                f"Step {step_i + 1}/{len(step_grid)}: indices={curr_indices}, "
-                f"bounds={bounds_mode}, eligible_traj={sorted(eligible) if eligible else '—'}, "
-                f"fixed={sorted(fixed_for_step.keys())}"
-            )
-
-            result = self._run_optimization(
-                datamodule,
-                x0_params=working_params,
-                bounds=bounds,
-                objective_func=objective,
-                n_rounds=n_rounds,
-                fixed_param_values=fixed_for_step,
-            )
-            proposals.append(result)
-            working_params = result
-            prev_indices = curr_indices
-
-        proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
+        proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in result.items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")
-        return self._build_experiment_spec(proposals, step_grid, source_step)
+        proposal = ParameterProposal.from_dict(result, source_step=source_step)
+        return ExperimentSpec(initial_params=proposal, schedules={})
 
     def _run_optimization(
         self,
