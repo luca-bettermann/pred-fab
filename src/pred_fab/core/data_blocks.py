@@ -13,11 +13,14 @@ from ..utils.logger import PfabLogger
 
 class DataBlock(ABC):
     """Abstract container for typed DataObjects with value storage, validation, and access methods."""
-    
-    def __init__(self):
+
+    def __init__(self, items: Optional[List[Any]] = None):
         self.data_objects: Dict[str, DataObject] = {}  # Schema structure
         self.values: Dict[str, Any] = {}  # Actual values
         self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized
+        if items:
+            for item in items:
+                self.add(item)
 
     @property
     @abstractmethod
@@ -162,9 +165,9 @@ class DataBlock(ABC):
 
 class Parameters(DataBlock):
     """Unified parameter block holding static, dynamic, and dimensional parameters."""
-    
-    def __init__(self):
-        super().__init__()
+
+    def __init__(self, items: Optional[List[Any]] = None):
+        super().__init__(items)
     
     @property
     def role(self) -> Roles:
@@ -271,8 +274,8 @@ class Parameters(DataBlock):
 class Features(DataBlock):
     """DataBlock for multi-dimensional feature arrays backed by DataArray objects."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, items: Optional[List[Any]] = None):
+        super().__init__(items)
     
     @property
     def role(self) -> Roles:
@@ -445,8 +448,8 @@ class Features(DataBlock):
 class PerformanceAttributes(DataBlock):
     """Evaluation output block storing normalized performance scores (0–1)."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, items: Optional[List[Any]] = None):
+        super().__init__(items)
 
     @property
     def role(self) -> Roles:
@@ -456,8 +459,11 @@ class PerformanceAttributes(DataBlock):
 class Domains:
     """Container for Domain objects indexed by code."""
 
-    def __init__(self):
+    def __init__(self, items: Optional[List['Domain']] = None):
         self._domains: Dict[str, Domain] = {}
+        if items:
+            for item in items:
+                self.add(item)
 
     def add(self, domain: 'Domain') -> None:
         """Register a domain by its code."""
