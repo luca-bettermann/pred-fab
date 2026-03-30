@@ -329,12 +329,14 @@ class DataArray(DataObject):
     """Numpy array DataObject with dtype validation, used for feature tensor storage."""
 
     def __init__(self, code: str, role: Roles, dtype: Union[str, type, np.dtype] = np.float64,
-                 domain_code: Optional[str] = None, feature_depth: Optional[int] = None):
+                 domain_code: Optional[str] = None, feature_depth: Optional[int] = None,
+                 context: bool = False):
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: List[str] = []
         self.domain_code: Optional[str] = domain_code
         self.feature_depth: Optional[int] = feature_depth
+        self.context: bool = context  # Observable but uncontrollable covariate; input-only, never optimized.
 
         constraints: Dict[str, Any] = {
             "dtype": resolved_dtype.name,
@@ -344,6 +346,8 @@ class DataArray(DataObject):
             constraints["domain_code"] = domain_code
         if feature_depth is not None:
             constraints["feature_depth"] = feature_depth
+        if context:
+            constraints["context"] = True
 
         super().__init__(code, np.ndarray, role, constraints)
 
@@ -383,6 +387,7 @@ class DataArray(DataObject):
             dtype=constraints.get("dtype", np.float64),
             domain_code=constraints.get("domain_code"),
             feature_depth=constraints.get("feature_depth"),
+            context=constraints.get("context", False),
         )
         obj.round_digits = round_digits
         if "columns" in constraints:
@@ -429,6 +434,18 @@ class Feature:
         """Create a feature DataArray tied to a domain. depth=None means full domain depth."""
         return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
                          domain_code=domain.code if domain is not None else None, feature_depth=depth)
+
+    @staticmethod
+    def context(code: str, dtype: Union[str, type, np.dtype] = np.float64,
+                domain: Optional['Domain'] = None, depth: Optional[int] = None) -> DataArray:
+        """Create a context feature DataArray — observable but uncontrollable covariate.
+
+        Context features are extracted like regular features but passed as fixed inputs
+        to the prediction model at calibration time; they are never optimized.
+        """
+        return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
+                         domain_code=domain.code if domain is not None else None,
+                         feature_depth=depth, context=True)
 
 
 class PerformanceAttribute:
