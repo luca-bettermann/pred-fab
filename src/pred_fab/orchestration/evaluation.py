@@ -54,7 +54,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
         else:
             self.logger.info("Partial evaluation detected; not updating ExperimentData performance values.")
             self.logger.info(f"{performance_dict}")
-
+        # COMMENT: is it even possible to have partial performance values? in online adaptation, we tune the prediction model, but we do not re-evaluate the performance of the features, right? As a matter of fact, we never use the evaluated values for anything, only the functions to evaluate predictions, correct? It makes sense, just want to double-check the logic.
+        # COMMENT: this means, we should never run_evaluation with partial data? and we only do this to document how well an experiment performed, but we never use these values again.
         return performance_dict
 
     def _evaluate_feature_dict(

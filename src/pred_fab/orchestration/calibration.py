@@ -611,8 +611,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         online (trust-region) when both are provided.
         mpc_lookahead=0 → greedy; mpc_lookahead=N → N steps of discounted lookahead.
         """
+        # COMMENT: Level and depth arguments are not used; why is that?
         lookahead = mpc_lookahead
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
+        # COMMENT: what does the discount do?
 
         self._active_datamodule = datamodule
         objective = self._build_objective(mode, w_explore)

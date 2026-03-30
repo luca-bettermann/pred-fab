@@ -28,6 +28,7 @@ class IFeatureModel(BaseInterface):
     def input_domain(self) -> Optional[str]:
         """Domain code for iteration; None means scalar (no dimensional iteration)."""
         ...
+        # COMMENT: why is this needed, if we already add the domains to the features? this can be derived directly from there, right?
 
     @property
     def depth(self) -> Optional[int]:

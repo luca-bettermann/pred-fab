@@ -32,6 +32,7 @@ class DatasetSchema:
             domains: Optional[Domains] = None
             ):
         """Initialize schema from DataBlocks; domains optional (defaults to empty Domains)."""
+        # COMMENT: lets make domains not optional. lets be explicit here.
 
         self.name = name
         self.parameters = parameters

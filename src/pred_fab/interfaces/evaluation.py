@@ -55,6 +55,8 @@ class IEvaluationModel(BaseInterface):
         # Derive iterator codes from the DataArray columns registered for the input feature.
         # Columns are [iterator_code, ..., feature_code]; all except the last are iterators.
         from ..core.data_objects import DataArray  # local import to avoid circular dependency
+        # COMMENT: sure there is no better option here for the import?
+        
         input_feat_obj = self._ref_features.get(self.input_feature)
         if input_feat_obj is not None and isinstance(input_feat_obj, DataArray):
             dim_iterator_codes = list(input_feat_obj.columns[:-1])

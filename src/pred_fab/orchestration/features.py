@@ -108,6 +108,7 @@ class FeatureSystem(BaseOrchestrationSystem):
                     schema: DatasetSchema = self._schema  # type: ignore[assignment]
                     if schema.domains.has(feature_model.input_domain):
                         domain = schema.domains.get(feature_model.input_domain)
+            # COMMENT: This whole part looks a bit hacky; can you follow up with me and see whether this can be simplified/solved more elegantly?
 
             # Run feature extraction and return 2d feature array
             feature_array = feature_model.compute_features(
@@ -124,6 +125,7 @@ class FeatureSystem(BaseOrchestrationSystem):
                 depth = feature_model.depth
                 max_depth = len(domain.axes) if depth is None else min(depth, len(domain.axes))
                 num_dims = max_depth
+            # COMMENT: domain should never be None
 
             for i, code in enumerate(feature_model.outputs):
                 # Slice [iterators..., selected-feature] from model output table.
