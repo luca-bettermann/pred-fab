@@ -35,8 +35,13 @@ def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSc
     """Create a mixed-dimensional schema for tensor/table conversion tests."""
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
 
-    f_grid = Feature.array("feature_grid", domain="spatial")
-    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
+    spatial = Domain("spatial", [
+        Dimension("dim_1", "d1", 1, 2),
+        Dimension("dim_2", "d2", 1, 3),
+    ])
+
+    f_grid = Feature.array("feature_grid", domain=spatial)
+    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
     f_scalar = Feature.array("feature_scalar")
 
     perf = PerformanceAttribute.score("performance_1")
@@ -48,11 +53,7 @@ def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSc
     # Mirror FeatureSystem write paths for stable csv export/import boundaries.
     feats.get("feature_scalar").set_columns(["feature_scalar"])
 
-    domains = Domains()
-    domains.add(Domain("spatial", [
-        Dimension("dim_1", "d1", 1, 2),
-        Dimension("dim_2", "d2", 1, 3),
-    ]))
+    domains = Domains([spatial])
 
     return DatasetSchema(
         root_folder=str(tmp_path),
@@ -72,18 +73,19 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
     # Runtime-adjustable parameter for adaptation / trajectory tests.
     speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
-    f1 = Feature.array("feature_1", domain="spatial")
-    f2 = Feature.array("feature_2", domain="spatial")
+    spatial = Domain("spatial", [
+        Dimension("n_layers", "d1", 1, 5),
+        Dimension("n_segments", "d2", 1, 5),
+    ])
+
+    f1 = Feature.array("feature_1", domain=spatial)
+    f2 = Feature.array("feature_2", domain=spatial)
     f3 = Feature.array("feature_3")
 
     perf1 = PerformanceAttribute.score("performance_1")
     perf2 = PerformanceAttribute.score("performance_2")
 
-    domains = Domains()
-    domains.add(Domain("spatial", [
-        Dimension("n_layers", "d1", 1, 5),
-        Dimension("n_segments", "d2", 1, 5),
-    ]))
+    domains = Domains([spatial])
 
     return DatasetSchema(
         root_folder=str(tmp_path),
@@ -288,8 +290,13 @@ def build_runtime_agent_stack(tmp_path):
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
-    f_grid = Feature.array("feature_grid", domain="spatial")
-    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
+    spatial = Domain("spatial", [
+        Dimension("dim_1", "d1", 1, 2),
+        Dimension("dim_2", "d2", 1, 3),
+    ])
+
+    f_grid = Feature.array("feature_grid", domain=spatial)
+    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
     f_scalar = Feature.array("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
@@ -297,11 +304,7 @@ def build_runtime_agent_stack(tmp_path):
     perfs = PerformanceAttributes.from_list([perf])
     feats.get("feature_scalar").set_columns(["feature_scalar"])
 
-    domains = Domains()
-    domains.add(Domain("spatial", [
-        Dimension("dim_1", "d1", 1, 2),
-        Dimension("dim_2", "d2", 1, 3),
-    ]))
+    domains = Domains([spatial])
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),

@@ -88,12 +88,12 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
     from pred_fab.core.data_objects import Parameter
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f_deep = Feature.array("feat_deep", domain="spatial")    # depth 2 (input)
-    f_shallow = Feature.array("feat_shallow", domain="spatial", depth=1)  # depth 1 (output)
+    spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
+    f_deep = Feature.array("feat_deep", domain=spatial)    # depth 2 (input)
+    f_shallow = Feature.array("feat_shallow", domain=spatial, depth=1)  # depth 1 (output)
     perf = PerformanceAttribute.score("perf_1")
 
-    domains = Domains()
-    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
+    domains = Domains([spatial])
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
@@ -131,12 +131,11 @@ def test_coherence_error_when_input_domain_mismatches_output_domain(tmp_path):
     from pred_fab.core.data_objects import Parameter
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f1 = Feature.array("feat_spatial", domain="spatial")
+    spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
+    f1 = Feature.array("feat_spatial", domain=spatial)
     perf = PerformanceAttribute.score("perf_1")
 
-    domains = Domains()
-    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)]))
-    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
+    domains = Domains([spatial, Domain("temporal", [Dimension("t_step", "t", 1, 5)])])
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
@@ -174,13 +173,13 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
     from pred_fab.core.data_objects import Parameter
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    f_spatial = Feature.array("feat_spatial", domain="spatial")
-    f_temporal = Feature.array("feat_temporal", domain="temporal")
+    spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2)])
+    temporal = Domain("temporal", [Dimension("t_step", "t", 1, 5)])
+    f_spatial = Feature.array("feat_spatial", domain=spatial)
+    f_temporal = Feature.array("feat_temporal", domain=temporal)
     perf = PerformanceAttribute.score("perf_1")
 
-    domains = Domains()
-    domains.add(Domain("spatial", [Dimension("dim_1", "d1", 1, 2)]))
-    domains.add(Domain("temporal", [Dimension("t_step", "t", 1, 5)]))
+    domains = Domains([spatial, temporal])
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),

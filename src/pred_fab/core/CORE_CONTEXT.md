@@ -19,7 +19,7 @@ Schema → Dataset → ExperimentData → DataModule (for training/calibration)
 ## Key Design Points
 - `Dimension` is the user-facing class for declaring a single domain axis; `Domain` takes a `List[Dimension]`. `DataDomainAxis` params are auto-created by the schema and stored in `Parameters` — users never touch `DataDomainAxis` directly.
 - `DataBlock.add(obj)` uses `obj.code` as the key automatically — no explicit name argument needed.
-- Features declare `domain="<code>"` and optional `depth=<int>` — column structure is derived automatically from the domain axes at schema init time. The schema hash includes domain definitions.
+- Features declare `domain=<Domain>` and optional `depth=<int>` — column structure is derived automatically from the domain axes at schema init time. The schema hash includes domain definitions.
 - `DataModule` is shared between PredictionSystem (training) and CalibrationSystem (bounds + encoding)
 - Categorical params are one-hot encoded; normalization is per-column via `NormMethod`
 - `fit_without_data()` sets up column mappings without any training rows (used by baseline generation)
