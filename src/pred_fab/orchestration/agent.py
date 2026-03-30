@@ -56,7 +56,10 @@ class PfabAgent:
         
         # Initialization state guard
         self._initialized = False
-        
+
+        # Context snapshot: current measured values of context features, injected into perf_fn.
+        self._context_snapshot: Dict[str, float] = {}
+
         # Progress tracking
         self.active_exp: Optional[ExperimentData] = None
         
@@ -137,10 +140,15 @@ class PfabAgent:
         # CalibrationSystem never calls internal PM/EM methods directly.
         _pred = self.pred_system
         _eval = self.eval_system
+        _ctx = self._context_snapshot  # mutable dict; closure captures reference
 
         def _perf_fn(params_dict):
             try:
-                feature_arrays, params_block = _pred.predict_for_calibration(params_dict)
+                # Merge current context snapshot so prediction model receives observed covariates.
+                merged = dict(params_dict)
+                if _ctx:
+                    merged.update(_ctx)
+                feature_arrays, params_block = _pred.predict_for_calibration(merged)
                 return _eval._evaluate_feature_dict(feature_arrays, params_block)
             except Exception:
                 return {}
@@ -486,6 +494,27 @@ class PfabAgent:
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
         self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
+
+    def update_context_snapshot(self, values: Dict[str, float]) -> None:
+        """Update the context feature snapshot injected into the calibration perf_fn.
+
+        Call this with the latest measured context values (e.g. temperature, humidity)
+        before running exploration or inference steps so the prediction model receives
+        correct observed covariate inputs during calibration.
+        """
+        self._context_snapshot.clear()
+        self._context_snapshot.update(values)
+
+    def configure_ofat_strategy(self, codes: List[str]) -> None:
+        """Configure One-Factor-At-a-Time cycling for online calibration steps.
+
+        Each online calibration call will vary only the currently active parameter in
+        ``codes`` (cycling in order), holding all other trust-region parameters fixed.
+        Call after configure_calibration() so trust regions are already set.
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        self.calibration_system.configure_ofat_strategy(codes)
 
     def baseline_step(
         self,

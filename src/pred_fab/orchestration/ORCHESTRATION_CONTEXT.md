@@ -23,6 +23,18 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 
 `run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
 
+### OFAT (One-Factor-At-a-Time) Strategy
+`CalibrationSystem.configure_ofat_strategy(codes)` enables layer-level OFAT cycling for online steps:
+only the currently active param (cycled in order through `codes`) is freed within its trust region;
+all other trust-region params are fixed to current. Index auto-advances after each online call.
+Configure via `PfabAgent.configure_ofat_strategy(codes)` (requires trust regions already set).
+
+### Context Features
+`PfabAgent._context_snapshot` holds current measured context feature values (e.g. temperature, humidity).
+Call `agent.update_context_snapshot(values)` before exploration/inference steps; the `_perf_fn` closure
+merges these values into every parameter proposal before calling the prediction model — so context
+covariates are correctly injected at calibration time without being part of the optimization space.
+
 ## Step Methods on PfabAgent
 
 | Method | Mode | Notes |

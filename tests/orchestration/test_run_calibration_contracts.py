@@ -707,19 +707,18 @@ def _build_two_runtime_agent_stack(tmp_path):
     layer_height = _Param.real("layer_height", min_val=0.05, max_val=0.4, runtime=True)
     speed = _Param.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
-    f_grid = Feature.array("feature_grid", domain="spatial")
-    f_d1 = Feature.array("feature_d1", domain="spatial", depth=1)
+    spatial = Domain("spatial", [
+        Dimension("dim_1", "d1", 1, 4),
+        Dimension("dim_2", "d2", 1, 4),
+    ])
+    f_grid = Feature.array("feature_grid", domain=spatial)
+    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
     f_scalar = Feature.array("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
     feats = Features.from_list([f_grid, f_d1, f_scalar])
     perfs = PerformanceAttributes.from_list([perf])
-
-    domains = Domains()
-    domains.add(Domain("spatial", [
-        Dimension("dim_1", "d1", 1, 4),
-        Dimension("dim_2", "d2", 1, 4),
-    ]))
+    domains = Domains([spatial])
 
     schema = DatasetSchema(
         root_folder=str(tmp_path),
