@@ -75,10 +75,10 @@ skinparam roundcorner 14
 hide empty fields
 
 ' === TOP LAYER: AGENT ===
-class Schema COL_AGENT {
-    - specification
-    + initialize()
-}
+' class Schema COL_AGENT {
+'     - specification
+'     + initialize()
+' }
 
 class PfabAgent COL_AGENT {
     + initialize()
@@ -96,6 +96,12 @@ note as utils #F8F8F820
 end note
 
 ' === MIDDLE LAYER: ORCHESTRATION ===
+' class Dataset COL_SYS_FEAT {
+'     - experiments: ExpData
+'     + add_experiment()
+'     + get_experiment()
+' }
+
 class FeatureSystem COL_SYS_FEAT {
     + compute_features()
 }
@@ -129,10 +135,10 @@ ABSTRACT_CLASS IPredictionModel COL_IFACE_PRED {
     + {abstract} forward_pass()
 }
 
-class GPSurrogateModel COL_GPS {
-    + train()
-    + forward_pass()
-}
+' class GPSurrogateModel COL_GPS {
+'     + train()
+'     + forward_pass()
+' }
 
 class MLPResidualModel COL_MLP {
     + train()
@@ -151,13 +157,12 @@ PfabAgent -[hidden]down- EvaluationSystem
 PfabAgent -[hidden]down- PredictionSystem
 PfabAgent -[hidden]down- CalibrationSystem
 
-Schema -[hidden]down- FeatureSystem
-
 ' Middle -> Bottom
 FeatureSystem -[hidden]down- IFeatureModel
 EvaluationSystem -[hidden]down- IEvaluationModel
 PredictionSystem -[hidden]down- IPredictionModel
-CalibrationSystem -[hidden]down- GPSurrogateModel
+' CalibrationSystem -[hidden]down- GPSurrogateModel
+
 
 ' Horizontal ordering Middle
 FeatureSystem -[hidden]right- EvaluationSystem
@@ -169,9 +174,9 @@ PredictionSystem -[hidden]right- CalibrationSystem
 ' IExternalData -[hidden]right- IFeatureModel
 IFeatureModel -[hidden]right- IEvaluationModel
 IEvaluationModel -[hidden]right- IPredictionModel
-IPredictionModel -[hidden]right- GPSurrogateModel
+' IPredictionModel -[hidden]right- GPSurrogateModel
 IPredictionModel -[hidden]right- MLPResidualModel
-MLPResidualModel -[hidden]right- GPSurrogateModel
+' MLPResidualModel -[hidden]right- GPSurrogateModel
 
 ' === RELATIONSHIPS ===
 
@@ -180,8 +185,6 @@ PfabAgent *-- FeatureSystem
 PfabAgent *-- EvaluationSystem
 PfabAgent *-- PredictionSystem
 PfabAgent *-- CalibrationSystem
-
-Schema <.. FeatureSystem
 
 ' Agent to Utils/External
 PfabAgent *-- utils
@@ -192,6 +195,6 @@ FeatureSystem *-- IFeatureModel
 EvaluationSystem *-- IEvaluationModel
 PredictionSystem *-- IPredictionModel
 PredictionSystem *-- MLPResidualModel
-CalibrationSystem *-- GPSurrogateModel
+' CalibrationSystem *-- GPSurrogateModel
 
 @enduml
