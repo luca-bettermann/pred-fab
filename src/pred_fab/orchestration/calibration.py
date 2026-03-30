@@ -52,6 +52,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.trust_regions: Dict[str, float] = {}
         self.trajectory_configs: Dict[str, str] = {}   # param_code → dimension_code
 
+        # OFAT (One-Factor-At-a-Time) state for online calibration.
+        # Empty list = all_at_once (default); populated via configure_ofat_strategy().
+        self._ofat_codes: List[str] = []
+        self._ofat_index: int = 0
+
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
 
@@ -237,6 +242,39 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.debug(
             f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
         )
+
+    def configure_ofat_strategy(self, codes: List[str]) -> None:
+        """Configure OFAT cycling: only one parameter in ``codes`` is freed per online step.
+
+        Parameters must already have trust regions configured. An empty list resets to
+        all_at_once (default). The cycle index resets to 0 on each call.
+        """
+        for code in codes:
+            if code not in self.trust_regions:
+                raise ValueError(
+                    f"OFAT parameter '{code}' must have a trust region configured first. "
+                    f"Call configure_adaptation_delta() before configure_ofat_strategy()."
+                )
+        self._ofat_codes = list(codes)
+        self._ofat_index = 0
+        if codes:
+            self.logger.info(f"OFAT strategy configured: {codes} (starting at index 0)")
+        else:
+            self.logger.info("OFAT strategy cleared (all_at_once mode).")
+
+    def _get_active_ofat_code(self) -> Optional[str]:
+        """Return the currently active OFAT parameter code, or None if OFAT is not active."""
+        if not self._ofat_codes:
+            return None
+        return self._ofat_codes[self._ofat_index % len(self._ofat_codes)]
+
+    def _advance_ofat(self) -> None:
+        """Advance the OFAT cycle to the next parameter."""
+        if self._ofat_codes:
+            prev = self._ofat_codes[self._ofat_index % len(self._ofat_codes)]
+            self._ofat_index = (self._ofat_index + 1) % len(self._ofat_codes)
+            next_code = self._ofat_codes[self._ofat_index]
+            self.logger.debug(f"OFAT advance: {prev} -> {next_code}")
 
     def _validate_and_clean_config(
         self,
@@ -726,6 +764,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")
+
+        # Advance OFAT cycle after each online step so the next call targets the next parameter.
+        if is_online:
+            self._advance_ofat()
+
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
     def _run_optimization(
@@ -848,9 +891,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Determine Bounds from Trust Region
             # Note: Trust Regions (deltas) are typically only for continuous parameters.
             # If a parameter is not in trust_regions, it is fixed to current.
+            # OFAT: if active, only the currently active parameter is freed; others fixed.
+            active_ofat = self._get_active_ofat_code()
             if code in self.trust_regions:
-                delta = self.trust_regions[code]
-                low, high = curr - delta, curr + delta
+                if active_ofat is not None and code != active_ofat:
+                    # OFAT mode: this param has a trust region but is not the active one → fix.
+                    low, high = curr, curr
+                else:
+                    delta = self.trust_regions[code]
+                    low, high = curr - delta, curr + delta
             else:
                 # No trust region -> Fixed to current
                 low, high = curr, curr

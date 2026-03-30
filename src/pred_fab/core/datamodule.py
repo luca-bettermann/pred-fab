@@ -6,7 +6,7 @@ import numpy as np
 import copy
 from sklearn.model_selection import train_test_split
 
-from .data_objects import DataCategorical
+from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
 from ..utils import NormMethod, SplitType
 
@@ -40,6 +40,8 @@ class DataModule:
         self.input_columns: List[str] = []  # Processed columns (after one-hot)
         self.output_columns: List[str] = []
         self.categorical_mappings: Dict[str, List[str]] = {}
+        # Context features: observed but uncontrollable — input only, never in output_columns.
+        self._context_feature_codes: List[str] = []
         # self.original_input_columns: List[str] = []  # Before one-hot
         
         # Column normalization methods map (for X)
@@ -90,11 +92,16 @@ class DataModule:
             else:
                 self.input_columns.append(col)
 
-        # Store feature methods
+        # Store feature methods; track context features separately.
         for col in input_features:
             method = self._get_feature_normalize_method(col)
             self._col_norm_methods[col] = method
             self.input_columns.append(col)
+            # Detect context features via schema lookup.
+            if self.dataset.schema.features.has(col):
+                feat_obj = self.dataset.schema.features.get(col)
+                if isinstance(feat_obj, DataArray) and feat_obj.context:
+                    self._context_feature_codes.append(col)
                 
 
     # === DATAMODULE OPERATIONS ===
@@ -187,6 +194,16 @@ class DataModule:
             SplitType.TEST: [exp_codes[i] for i in test_idx]
         }
     
+    def _inject_context_features(self, X_df: pd.DataFrame, y_df: pd.DataFrame) -> pd.DataFrame:
+        """Copy context feature columns from y_df into X_df so they appear in input during training."""
+        if not self._context_feature_codes:
+            return X_df
+        X_df = X_df.copy()
+        for code in self._context_feature_codes:
+            if code in y_df.columns:
+                X_df[code] = y_df[code].values
+        return X_df
+
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
         if not self._initialized:
@@ -194,14 +211,16 @@ class DataModule:
 
         if split not in self._split_codes:
             raise ValueError(f"Unknown split: {split}")
-            
+
         codes = self._split_codes[split]
         if not codes:
             return
-            
+
         X_df, y_df = self.dataset.export_to_dataframe(codes)
         if X_df.empty:
             return
+
+        X_df = self._inject_context_features(X_df, y_df)
             
         # Process X (One-hot)
         X_arr = self._one_hot_encode(X_df)
@@ -246,7 +265,8 @@ class DataModule:
         X_df, y_df = self.dataset.export_to_dataframe(codes)
         if X_df.empty:
             return []
-            
+
+        X_df = self._inject_context_features(X_df, y_df)
         X = self._one_hot_encode(X_df)
         y = y_df.values.astype(np.float32)
         
