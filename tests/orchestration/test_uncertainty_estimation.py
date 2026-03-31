@@ -67,9 +67,9 @@ def test_encode_returns_same_shape_after_training(tmp_path):
 def test_encode_custom_override_called_by_prediction_system(tmp_path):
     """A custom encode() override on IPredictionModel should be respected."""
     import numpy as np
-    from tests.utils.interfaces import MixedPredictionModel
+    from tests.utils.interfaces import MixedPredictionModelGrid
 
-    class EncoderModel(MixedPredictionModel):
+    class EncoderModel(MixedPredictionModelGrid):
         """Doubles input columns as latent representation (column count varies with schema)."""
         encode_called = False
 
@@ -221,8 +221,8 @@ def test_predict_for_calibration_raises_before_training(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
     logger = build_test_logger(tmp_path)
     pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
-    from tests.utils.interfaces import MixedPredictionModel
-    pred.models.append(MixedPredictionModel(logger))
+    from tests.utils.interfaces import MixedPredictionModelGrid
+    pred.models.append(MixedPredictionModelGrid(logger))
 
     with pytest.raises(RuntimeError, match="train"):
         pred.predict_for_calibration({"param_1": 2.5, "dim_1": 2, "dim_2": 3})

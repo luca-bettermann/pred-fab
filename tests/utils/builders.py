@@ -16,7 +16,9 @@ from tests.utils.interfaces import (
     MixedFeatureModelGrid,
     MixedFeatureModelD1,
     MixedFeatureModelScalar,
-    MixedPredictionModel,
+    MixedPredictionModelGrid,
+    MixedPredictionModelD1,
+    MixedPredictionModelScalar,
     ScalarEvaluationModel,
     ShapeCheckingPredictionModel,
     WorkflowEvaluationModelA,
@@ -274,7 +276,9 @@ def build_real_agent_stack(tmp_path):
     agent.register_feature_model(MixedFeatureModelD1)
     agent.register_feature_model(MixedFeatureModelScalar)
     agent.register_evaluation_model(ScalarEvaluationModel)
-    agent.register_prediction_model(MixedPredictionModel)
+    agent.register_prediction_model(MixedPredictionModelGrid)
+    agent.register_prediction_model(MixedPredictionModelD1)
+    agent.register_prediction_model(MixedPredictionModelScalar)
     agent.initialize_systems(schema, verbose_flag=False)
 
     datamodule = agent.create_datamodule(dataset)
@@ -331,7 +335,9 @@ def build_runtime_agent_stack(tmp_path):
     agent.register_feature_model(MixedFeatureModelD1)
     agent.register_feature_model(MixedFeatureModelScalar)
     agent.register_evaluation_model(ScalarEvaluationModel)
-    agent.register_prediction_model(MixedPredictionModel)
+    agent.register_prediction_model(MixedPredictionModelGrid)
+    agent.register_prediction_model(MixedPredictionModelD1)
+    agent.register_prediction_model(MixedPredictionModelScalar)
     agent.initialize_systems(schema, verbose_flag=False)
 
     datamodule = agent.create_datamodule(dataset)

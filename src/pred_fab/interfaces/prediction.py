@@ -10,7 +10,12 @@ from ..core import DataObject, Dataset
 
 
 class IPredictionModel(BaseInterface):
-    """Abstract base for prediction models: train on experiments, predict features, support export/import."""
+    """Abstract base for prediction models: train on experiments, predict features, support export/import.
+
+    Domain is derived from the schema during PredictionSystem initialization; all outputs must
+    share the same domain_code and feature_depth. Do not declare input_domain — it is inferred
+    from the output features registered in the schema.
+    """
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
@@ -27,24 +32,21 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
-    @property
-    @abstractmethod
-    def input_domain(self) -> Optional[str]:
-        """Domain code this model predicts features for; None for scalar models."""
-        ...
+    def validate_dimensional_coherence(self, schema: Any) -> Optional[str]:
+        """Enforce structural rules on the model's domain declarations and derive the domain code.
 
-    def validate_dimensional_coherence(self, schema: Any) -> None:
-        """Enforce structural rules on the model's domain declarations.
+        1. Output features may not mix depths (error).
+        2. All output features must share the same named domain (error). This is also the
+           derivation step: the returned domain code is the single named domain, or None for
+           scalar models.
+        3. Input features may not exceed the model's operational depth (error).
 
-        1. Output features may not mix depths (warning).
-        2. All output features must share the same domain (error).
-        3. input_domain must match the domain of output features (error).
-        4. Input features may not exceed the model's operational depth (error).
+        Returns the derived domain code (single named domain, or None for scalar models).
         """
         name = self.__class__.__name__
         op_depth = self.depth
 
-        # Rule 1: warn on mixed output depths
+        # Rule 1: mixed output depths are an error
         if self.outputs:
             output_depths = {}
             for code in self.outputs:
@@ -53,13 +55,14 @@ class IPredictionModel(BaseInterface):
                 d = (len(cols) - 1) if cols else 0
                 output_depths[code] = d
             if len(set(output_depths.values())) > 1:
-                self.logger.warning(
+                raise ValueError(
                     f"{name}: output features have mixed depths {output_depths}. "
                     f"The model will iterate at depth {op_depth}. Shallower outputs "
                     f"will be overwritten on each deeper iteration step."
                 )
 
         # Rule 2: all output features must share the same named domain (None = scalar, allowed alongside any domain).
+        # The single named domain is also the derived domain_code returned to the caller.
         output_domains = set()
         for code in self.outputs:
             feat_obj = schema.features.data_objects.get(code)
@@ -72,15 +75,9 @@ class IPredictionModel(BaseInterface):
                 f"A prediction model must operate within a single domain."
             )
 
-        # Rule 3: input_domain must match the domain of output features
-        declared_domain = self.input_domain
-        feature_domain = next(iter(named_domains)) if named_domains else None
-        if feature_domain and declared_domain and declared_domain != feature_domain:
-            raise ValueError(
-                f"{name}: input_domain='{declared_domain}' does not match output feature domain '{feature_domain}'."
-            )
+        derived_domain = next(iter(named_domains)) if named_domains else None
 
-        # Rule 4: input features must not exceed operational depth
+        # Rule 3: input features must not exceed operational depth
         for code in self.input_features:
             feat = self._ref_features.get(code)
             feat_cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
@@ -92,6 +89,8 @@ class IPredictionModel(BaseInterface):
                         f"which exceeds the model's operational depth {op_depth}. A "
                         f"model cannot consume inputs at finer granularity than its outputs."
                     )
+
+        return derived_domain
 
     # === ABSTRACT METHODS ===
 

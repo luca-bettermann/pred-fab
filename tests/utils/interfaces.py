@@ -39,10 +39,6 @@ class ShapeCheckingPredictionModel(IPredictionModel):
     def outputs(self):
         return self._outputs
 
-    @property
-    def input_domain(self) -> Optional[str]:
-        return None
-
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         self.seen_widths.append(X.shape[1])
         self.seen_batch_sizes.append(X.shape[0])
@@ -149,16 +145,21 @@ class ScalarEvaluationModel(IEvaluationModel):
         return 7.0
 
 
-class MixedPredictionModel(IPredictionModel):
-    """Prediction interface aligned with mixed-dimensional schema fixtures."""
+class MixedPredictionModelGrid(IPredictionModel):
+    """Prediction interface for feature_grid (depth 2, spatial domain).
+
+    All outputs of a prediction model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
 
     def __init__(self, logger):
         super().__init__(logger)
         self.weights = np.array(
             [
-                [0.2, 0.1, 0.0],
-                [0.1, 0.2, 0.0],
-                [0.3, 0.0, 0.0],
+                [0.2],
+                [0.1],
+                [0.3],
             ],
             dtype=np.float64,
         )
@@ -173,11 +174,87 @@ class MixedPredictionModel(IPredictionModel):
 
     @property
     def outputs(self):
-        return ["feature_grid", "feature_d1", "feature_scalar"]
+        return ["feature_grid"]
+
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        n_in = X.shape[1]
+        w = self.weights[:n_in, :]
+        return np.dot(X, w)
+
+    def train(self, train_batches, val_batches, **kwargs):
+        return None
+
+
+class MixedPredictionModelD1(IPredictionModel):
+    """Prediction interface for feature_d1 (depth 1, spatial domain).
+
+    All outputs of a prediction model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
+
+    def __init__(self, logger):
+        super().__init__(logger)
+        self.weights = np.array(
+            [
+                [0.1],
+                [0.2],
+                [0.0],
+            ],
+            dtype=np.float64,
+        )
 
     @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def input_features(self):
+        return []
+
+    @property
+    def outputs(self):
+        return ["feature_d1"]
+
+    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+        n_in = X.shape[1]
+        w = self.weights[:n_in, :]
+        return np.dot(X, w)
+
+    def train(self, train_batches, val_batches, **kwargs):
+        return None
+
+
+class MixedPredictionModelScalar(IPredictionModel):
+    """Prediction interface for feature_scalar (depth 0, no domain).
+
+    All outputs of a prediction model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
+
+    def __init__(self, logger):
+        super().__init__(logger)
+        self.weights = np.array(
+            [
+                [0.0],
+                [0.0],
+                [0.0],
+            ],
+            dtype=np.float64,
+        )
+
+    @property
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def input_features(self):
+        return []
+
+    @property
+    def outputs(self):
+        return ["feature_scalar"]
 
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         n_in = X.shape[1]
@@ -308,10 +385,6 @@ class WorkflowPredictionModel(IPredictionModel):
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
-    @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
-
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         if X.shape[1] != self.weights.shape[0]:
             return np.dot(X[:, : self.weights.shape[0]], self.weights)
@@ -423,10 +496,6 @@ class ContractPredictionModelDefaults(IPredictionModel):
     @property
     def outputs(self):
         return ["feature_scalar"]
-
-    @property
-    def input_domain(self) -> Optional[str]:
-        return None
 
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         return np.zeros((X.shape[0], 1), dtype=np.float64)

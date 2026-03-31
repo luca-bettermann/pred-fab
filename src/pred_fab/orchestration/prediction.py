@@ -41,6 +41,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.local_data: LocalData = local_data
         self.datamodule: Optional[DataModule] = None  # Stored after training
 
+        # Domain map populated during train(): model id → derived domain code
+        self._model_domain_map: Dict[int, Optional[str]] = {}
+
         # KDE state for NatPN-light uncertainty estimation (set after training)
         self._kde: Optional[gaussian_kde] = None
         self._q_max: Optional[float] = None
@@ -90,9 +93,10 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "Reduce test_size and/or val_size in DataModule configuration."
             )
         
-        # Validate dimensional coherence for all registered models
+        # Validate dimensional coherence and derive domain codes for all registered models
         for model in self.models:
-            model.validate_dimensional_coherence(self.schema)
+            domain_code = model.validate_dimensional_coherence(self.schema)
+            self._model_domain_map[id(model)] = domain_code
 
         self.logger.console_info("Starting prediction model training...")
 
@@ -595,7 +599,12 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _get_model_dim_info(self, model: IPredictionModel, params: Dict[str, Any]) -> Dict[str, Any]:
         """Build dimensional iteration structure for a specific model based on its domain and depth."""
         depth = model.depth
-        domain_code = model.input_domain
+        if id(model) not in self._model_domain_map:
+            raise RuntimeError(
+                f"Model {model.__class__.__name__} has not been trained yet. "
+                f"Call train() before predicting."
+            )
+        domain_code = self._model_domain_map[id(model)]
 
         dim_sizes: List[int] = []
         dim_iterators: List[str] = []

@@ -1,7 +1,6 @@
 """Tests for prediction model dimensional coherence: depth property and validation."""
 import pytest
 import numpy as np
-from typing import Optional
 
 from pred_fab.interfaces import IPredictionModel
 from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
@@ -16,7 +15,9 @@ from tests.utils.builders import (
     build_workflow_dataset,
 )
 from tests.utils.interfaces import (
-    MixedPredictionModel,
+    MixedPredictionModelGrid,
+    MixedPredictionModelD1,
+    MixedPredictionModelScalar,
     WorkflowPredictionModel,
 )
 
@@ -34,8 +35,6 @@ def test_depth_is_zero_before_refs_set(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feature_grid"]
-        @property
-        def input_domain(self) -> Optional[str]: return "spatial"
         def forward_pass(self, X): return np.zeros((X.shape[0], 1))
         def train(self, train_batches, val_batches, **kwargs): pass
 
@@ -47,11 +46,10 @@ def test_depth_reflects_output_feature_columns(tmp_path):
     """depth equals max number of iterator columns across output features."""
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     # After initialize_systems, _ref_features is populated with column-set DataArrays
-    pred_model = agent.pred_system.models[0]  # MixedPredictionModel
+    grid_model = agent.pred_system.models[0]  # MixedPredictionModelGrid
 
-    # MixedPredictionModel outputs: feature_grid (depth 2), feature_d1 (depth 1), feature_scalar (depth 0)
-    # operational depth = max = 2
-    assert pred_model.depth == 2
+    # MixedPredictionModelGrid outputs: feature_grid (depth 2)
+    assert grid_model.depth == 2
 
 
 def test_depth_for_depth2_only_model(tmp_path):
@@ -75,12 +73,45 @@ def test_coherence_valid_depth2_model(tmp_path):
     model.validate_dimensional_coherence(dataset.schema)
 
 
-def test_coherence_warns_on_mixed_output_depths(tmp_path, recwarn):
-    """A model with mixed-depth outputs emits a warning but does not raise."""
-    agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
-    model = agent.pred_system.models[0]  # MixedPredictionModel — mixed depths
-    # Should not raise (Rule 1 is a warning)
-    model.validate_dimensional_coherence(dataset.schema)
+def test_coherence_error_on_mixed_output_depths(tmp_path):
+    """A model with mixed-depth outputs raises ValueError (Rule 1 is now an error)."""
+    from pred_fab.core.data_objects import Parameter
+
+    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
+    spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
+    f_deep = Feature.array("feat_deep", domain=spatial)       # depth 2
+    f_shallow = Feature.array("feat_shallow", domain=spatial, depth=1)  # depth 1
+    perf = PerformanceAttribute.score("perf_1")
+
+    domains = Domains([spatial])
+
+    schema = DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_mixed_depth",
+        parameters=Parameters.from_list([p1]),
+        features=Features.from_list([f_deep, f_shallow]),
+        performance=PerformanceAttributes.from_list([perf]),
+        domains=domains,
+    )
+
+    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
+
+    class MixedDepthModel(IPredictionModel):
+        @property
+        def input_parameters(self): return ["param_1"]
+        @property
+        def input_features(self): return []
+        @property
+        def outputs(self): return ["feat_deep", "feat_shallow"]  # mixed depths
+        def forward_pass(self, X): return np.zeros((X.shape[0], 2))
+        def train(self, tb, vb, **kw): pass
+
+    model = MixedDepthModel(logger)
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
+    model.set_ref_features(list(schema.features.data_objects.values()))
+
+    with pytest.raises(ValueError, match="mixed depths"):
+        model.validate_dimensional_coherence(schema)
 
 
 def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
@@ -113,8 +144,6 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
         def input_features(self): return ["feat_deep"]  # depth 2 > output depth 1
         @property
         def outputs(self): return ["feat_shallow"]
-        @property
-        def input_domain(self) -> Optional[str]: return "spatial"
         def forward_pass(self, X): return np.zeros((X.shape[0], 1))
         def train(self, tb, vb, **kw): pass
 
@@ -126,46 +155,13 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
         model.validate_dimensional_coherence(schema)
 
 
-def test_coherence_error_when_input_domain_mismatches_output_domain(tmp_path):
-    """input_domain that doesn't match the output feature domain raises ValueError."""
-    from pred_fab.core.data_objects import Parameter
-
-    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
-    spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
-    f1 = Feature.array("feat_spatial", domain=spatial)
-    perf = PerformanceAttribute.score("perf_1")
-
-    domains = Domains([spatial, Domain("temporal", [Dimension("t_step", "t", 1, 5)])])
-
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="schema_domain_mismatch",
-        parameters=Parameters.from_list([p1]),
-        features=Features.from_list([f1]),
-        performance=PerformanceAttributes.from_list([perf]),
-        domains=domains,
-    )
-
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-
-    class WrongDomainModel(IPredictionModel):
-        @property
-        def input_parameters(self): return ["param_1"]
-        @property
-        def input_features(self): return []
-        @property
-        def outputs(self): return ["feat_spatial"]
-        @property
-        def input_domain(self) -> Optional[str]: return "temporal"  # mismatch
-        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-        def train(self, tb, vb, **kw): pass
-
-    model = WrongDomainModel(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
-
-    with pytest.raises(ValueError, match="input_domain"):
-        model.validate_dimensional_coherence(schema)
+def test_coherence_returns_derived_domain_code(tmp_path):
+    """validate_dimensional_coherence returns the domain code derived from output features."""
+    dataset = build_workflow_dataset(tmp_path)
+    agent = build_workflow_agent(tmp_path, dataset.schema)
+    model = agent.pred_system.models[0]  # WorkflowPredictionModel — outputs in "spatial" domain
+    domain_code = model.validate_dimensional_coherence(dataset.schema)
+    assert domain_code == "spatial"
 
 
 def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
@@ -199,8 +195,6 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feat_spatial", "feat_temporal"]
-        @property
-        def input_domain(self) -> Optional[str]: return "spatial"
         def forward_pass(self, X): return np.zeros((X.shape[0], 2))
         def train(self, tb, vb, **kw): pass
 
