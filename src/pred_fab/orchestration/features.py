@@ -1,7 +1,7 @@
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 import numpy as np
 
-from pred_fab.core.data_objects import DataArray
+from pred_fab.core.data_objects import DataArray, Domain
 from pred_fab.interfaces.features import IFeatureModel
 
 
@@ -17,32 +17,70 @@ class FeatureSystem(BaseOrchestrationSystem):
         super().__init__(logger)
         self.models: List[IFeatureModel] = []
         self._schema: Optional[DatasetSchema] = None
+        self._model_domain_map: Dict[int, Tuple[Optional[Domain], Optional[int]]] = {}
 
     def _set_feature_column_names(self, schema: DatasetSchema) -> None:
-        """Set domain axis iterator column names on each model's DataArray outputs, and store schema ref."""
+        """Derive and validate domain+depth from schema outputs, then set column names on DataArrays.
+
+        For each feature model, all outputs must share the same ``domain_code`` and ``feature_depth``
+        in the schema; raises ValueError if they diverge.  The resolved Domain object and depth are
+        stored in ``_model_domain_map`` keyed by ``id(model)`` for use during feature extraction.
+        """
         self._schema = schema
         for model in self.models:
-            for output_code in model.outputs:
+            domain_codes: List[Optional[str]] = []
+            feature_depths: List[Optional[int]] = []
 
+            for output_code in model.outputs:
                 # get data array
                 if output_code not in schema.features.data_objects:
                     raise ValueError(f"Output '{output_code}' from model '{model.__class__}' is not in schema.")
                 data_array = schema.features.data_objects[output_code]
                 if not isinstance(data_array, DataArray):
                     raise ValueError(f"Expected obj of type 'DataArray', got {data_array.__class__} instead.")
+                domain_codes.append(data_array.domain_code)
+                feature_depths.append(data_array.feature_depth)
 
-                # Set column names only if not already explicitly set.
-                if not data_array.columns:
-                    domain_code = data_array.domain_code
-                    if domain_code is None:
-                        # Scalar feature: no iterator columns
-                        data_array.set_columns([output_code])
+            # Validate all outputs share the same domain_code
+            if len(set(domain_codes)) > 1:
+                raise ValueError(
+                    f"Feature model '{model.__class__.__name__}' has outputs with mixed domain_codes: "
+                    f"{dict(zip(model.outputs, domain_codes))}. All outputs must share the same domain_code."
+                )
+
+            # Validate all outputs share the same feature_depth
+            if len(set(feature_depths)) > 1:
+                raise ValueError(
+                    f"Feature model '{model.__class__.__name__}' has outputs with mixed feature_depths: "
+                    f"{dict(zip(model.outputs, feature_depths))}. All outputs must share the same feature_depth."
+                )
+
+            derived_domain_code = domain_codes[0] if domain_codes else None
+            derived_depth = feature_depths[0] if feature_depths else None
+
+            # Resolve the Domain object from the schema
+            domain: Optional[Domain] = None
+            if derived_domain_code is not None:
+                domain = schema.domains.get(derived_domain_code)
+                if domain is None:
+                    raise ValueError(
+                        f"Feature model '{model.__class__.__name__}' outputs reference domain_code "
+                        f"'{derived_domain_code}', but this domain is not registered in the schema."
+                    )
+
+            # Store derived (domain, depth) for use during feature extraction
+            self._model_domain_map[id(model)] = (domain, derived_depth)
+
+            # Set column names only if not already explicitly set.
+            for output_code in model.outputs:
+                data_array = schema.features.data_objects[output_code]  # type: ignore[assignment]
+                if not data_array.columns:  # type: ignore[union-attr]
+                    if domain is None:
+                        data_array.set_columns([output_code])  # type: ignore[union-attr]
                     else:
-                        domain = schema.domains.get(domain_code)
-                        feature_depth = data_array.feature_depth
-                        axes = domain.axes if feature_depth is None else domain.axes[:feature_depth]
+                        axes = domain.axes if derived_depth is None else domain.axes[:derived_depth]
                         col_names = [ax.iterator_code for ax in axes] + [output_code]
-                        data_array.set_columns(col_names)
+                        data_array.set_columns(col_names)  # type: ignore[union-attr]
 
     # === FEATURE EXTRACTION ===
 
@@ -99,22 +137,13 @@ class FeatureSystem(BaseOrchestrationSystem):
                 self.logger.info(f"Skipping feature extraction for '{feature_model.outputs}' as features already complete")
                 continue
 
-            # Resolve domain for this model.
-            # _schema is set by _set_feature_column_names(), called during PfabAgent init.
-            domain = None
-            if feature_model.input_domain is not None:
-                if self._schema is None:
-                    raise RuntimeError(
-                        f"FeatureSystem has no schema reference. "
-                        f"Ensure PfabAgent is fully initialized before running feature extraction."
-                    )
-                domain = self._schema.domains.get(feature_model.input_domain)
-                if domain is None:
-                    raise ValueError(
-                        f"Feature model '{feature_model.__class__.__name__}' declares "
-                        f"input_domain='{feature_model.input_domain}', but this domain is not "
-                        f"registered in the schema."
-                    )
+            # Look up domain and depth derived during _set_feature_column_names.
+            if id(feature_model) not in self._model_domain_map:
+                raise RuntimeError(
+                    f"FeatureSystem has no domain mapping for '{feature_model.__class__.__name__}'. "
+                    f"Ensure PfabAgent is fully initialized before running feature extraction."
+                )
+            domain, depth = self._model_domain_map[id(feature_model)]
 
             # Run feature extraction and return 2d feature array
             feature_array = feature_model.compute_features(
@@ -122,13 +151,13 @@ class FeatureSystem(BaseOrchestrationSystem):
                 domain=domain,
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
-                visualize=visualize
+                visualize=visualize,
+                depth=depth
             )
 
             # Determine number of dimension columns from domain
             num_dims = 0
             if domain is not None:
-                depth = feature_model.depth
                 max_depth = len(domain.axes) if depth is None else min(depth, len(domain.axes))
                 num_dims = max_depth
 

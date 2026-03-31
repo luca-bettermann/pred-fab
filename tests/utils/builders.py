@@ -13,7 +13,9 @@ from pred_fab.orchestration.calibration import CalibrationSystem
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, PfabLogger, SplitType
 from tests.utils.interfaces import (
-    MixedFeatureModel,
+    MixedFeatureModelGrid,
+    MixedFeatureModelD1,
+    MixedFeatureModelScalar,
     MixedPredictionModel,
     ScalarEvaluationModel,
     ShapeCheckingPredictionModel,
@@ -268,7 +270,9 @@ def build_real_agent_stack(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     agent = PfabAgent(root_folder=str(tmp_path), debug_flag=True)
-    agent.register_feature_model(MixedFeatureModel)
+    agent.register_feature_model(MixedFeatureModelGrid)
+    agent.register_feature_model(MixedFeatureModelD1)
+    agent.register_feature_model(MixedFeatureModelScalar)
     agent.register_evaluation_model(ScalarEvaluationModel)
     agent.register_prediction_model(MixedPredictionModel)
     agent.initialize_systems(schema, verbose_flag=False)
@@ -323,7 +327,9 @@ def build_runtime_agent_stack(tmp_path):
 
     from pred_fab.orchestration.agent import PfabAgent as _PfabAgent
     agent = _PfabAgent(root_folder=str(tmp_path), debug_flag=True)
-    agent.register_feature_model(MixedFeatureModel)
+    agent.register_feature_model(MixedFeatureModelGrid)
+    agent.register_feature_model(MixedFeatureModelD1)
+    agent.register_feature_model(MixedFeatureModelScalar)
     agent.register_evaluation_model(ScalarEvaluationModel)
     agent.register_prediction_model(MixedPredictionModel)
     agent.initialize_systems(schema, verbose_flag=False)

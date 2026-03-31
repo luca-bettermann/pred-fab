@@ -700,7 +700,7 @@ def _build_two_runtime_agent_stack(tmp_path):
     from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
     from pred_fab.core import Dataset, DatasetSchema
     from pred_fab.core.data_objects import Parameter as _Param
-    from tests.utils.interfaces import MixedFeatureModel, ScalarEvaluationModel, MixedPredictionModel
+    from tests.utils.interfaces import MixedFeatureModelGrid, MixedFeatureModelD1, MixedFeatureModelScalar, ScalarEvaluationModel, MixedPredictionModel
     from pred_fab.orchestration.agent import PfabAgent as _PfabAgent
 
     p1 = _Param.real("param_1", min_val=0.0, max_val=10.0)
@@ -736,7 +736,9 @@ def _build_two_runtime_agent_stack(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     agent = _PfabAgent(root_folder=str(tmp_path), debug_flag=True)
-    agent.register_feature_model(MixedFeatureModel)
+    agent.register_feature_model(MixedFeatureModelGrid)
+    agent.register_feature_model(MixedFeatureModelD1)
+    agent.register_feature_model(MixedFeatureModelScalar)
     agent.register_evaluation_model(ScalarEvaluationModel)
     agent.register_prediction_model(MixedPredictionModel)
     agent.initialize_systems(schema, verbose_flag=False)

@@ -58,20 +58,21 @@ class ShapeCheckingPredictionModel(IPredictionModel):
         return None
 
 
-class MixedFeatureModel(IFeatureModel):
-    """Feature interface aligned with mixed-dimensional schema test fixtures."""
+class MixedFeatureModelGrid(IFeatureModel):
+    """Feature model for the 2-D grid feature (depth=2).
+
+    All outputs of a feature model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
 
     @property
     def input_parameters(self):
         return ["param_1"]
 
     @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
-
-    @property
     def outputs(self):
-        return ["feature_grid", "feature_d1", "feature_scalar"]
+        return ["feature_grid"]
 
     def _load_data(self, params, **dimensions):
         return None
@@ -79,11 +80,54 @@ class MixedFeatureModel(IFeatureModel):
     def _compute_feature_logic(self, data, params, visualize: bool = False, **dimensions):
         d1 = float(dimensions.get("d1", 0))
         d2 = float(dimensions.get("d2", 0))
-        return {
-            "feature_grid": d1 * 10.0 + d2,
-            "feature_d1": 100.0 + d1,
-            "feature_scalar": 7.0,
-        }
+        return {"feature_grid": d1 * 10.0 + d2}
+
+
+class MixedFeatureModelD1(IFeatureModel):
+    """Feature model for the depth-1 feature (feature_d1).
+
+    All outputs of a feature model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
+
+    @property
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def outputs(self):
+        return ["feature_d1"]
+
+    def _load_data(self, params, **dimensions):
+        return None
+
+    def _compute_feature_logic(self, data, params, visualize: bool = False, **dimensions):
+        d1 = float(dimensions.get("d1", 0))
+        return {"feature_d1": 100.0 + d1}
+
+
+class MixedFeatureModelScalar(IFeatureModel):
+    """Feature model for the scalar feature (feature_scalar, depth=0).
+
+    All outputs of a feature model must share the same domain and depth; feature_grid lives at
+    depth 2, feature_d1 at depth 1, and feature_scalar at depth 0 — hence the split into three
+    separate classes.
+    """
+
+    @property
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def outputs(self):
+        return ["feature_scalar"]
+
+    def _load_data(self, params, **dimensions):
+        return None
+
+    def _compute_feature_logic(self, data, params, visualize: bool = False, **dimensions):
+        return {"feature_scalar": 7.0}
 
 
 class ScalarEvaluationModel(IEvaluationModel):
@@ -165,10 +209,6 @@ class WorkflowFeatureModelA(IFeatureModel):
         return ["param_1"]
 
     @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
-
-    @property
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
@@ -191,10 +231,6 @@ class WorkflowFeatureModelB(IFeatureModel):
     @property
     def input_parameters(self) -> List[str]:
         return ["param_2"]
-
-    @property
-    def input_domain(self) -> Optional[str]:
-        return None
 
     @property
     def outputs(self) -> List[str]:
@@ -308,10 +344,6 @@ class ContractFeatureModelOk(IFeatureModel):
         return []
 
     @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
-
-    @property
     def outputs(self):
         return ["feature_grid"]
 
@@ -330,10 +362,6 @@ class ContractFeatureModelBadOutputType(IFeatureModel):
         return []
 
     @property
-    def input_domain(self) -> Optional[str]:
-        return "spatial"
-
-    @property
     def outputs(self):
         return ["feature_d1"]
 
@@ -350,10 +378,6 @@ class ContractFeatureModelInvalidProps(IFeatureModel):
     @property
     def input_parameters(self):
         return "dim_1"
-
-    @property
-    def input_domain(self) -> Optional[str]:
-        return None
 
     @property
     def outputs(self):

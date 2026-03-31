@@ -11,7 +11,14 @@ from ..utils import PfabLogger
 
 
 class IFeatureModel(BaseInterface):
-    """Abstract base for feature extraction models that iterate over domain axis combinations."""
+    """Abstract base for feature extraction models that iterate over domain axis combinations.
+
+    Domain and depth are NOT declared on the model — they are derived from the schema during
+    FeatureSystem initialization (``_set_feature_column_names``).  The constraint is that all
+    outputs of a single feature model must share the same ``domain_code`` and ``feature_depth``
+    in the schema; this is a structural requirement because a single ``compute_features`` call
+    iterates one domain at one depth.
+    """
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
@@ -22,22 +29,6 @@ class IFeatureModel(BaseInterface):
     # - input_parameters
     # - input_features
     # - outputs
-
-    @property
-    @abstractmethod
-    def input_domain(self) -> Optional[str]:
-        """Domain code for iteration; None means scalar (no dimensional iteration).
-
-        This must be declared explicitly: the model has no access to the schema, so it
-        cannot derive the domain from the output features. FeatureSystem uses this code
-        to look up the Domain object and iterate its axes during feature extraction.
-        """
-        ...
-
-    @property
-    def depth(self) -> Optional[int]:
-        """How many axes of the domain to iterate; None = full domain depth."""
-        return None
 
     @abstractmethod
     def _load_data(self, params: Dict, **dimensions) -> Any:
@@ -69,7 +60,8 @@ class IFeatureModel(BaseInterface):
         domain: Optional['Domain'],
         evaluate_from: int,
         evaluate_to: Optional[int] = None,
-        visualize: bool = False
+        visualize: bool = False,
+        depth: Optional[int] = None
         ) -> NDArray:
         """Iterate over every domain axis combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
 
@@ -82,7 +74,7 @@ class IFeatureModel(BaseInterface):
         if domain is None or len(domain.axes) == 0:
             axes = []
         else:
-            max_depth = len(domain.axes) if self.depth is None else min(self.depth, len(domain.axes))
+            max_depth = len(domain.axes) if depth is None else min(depth, len(domain.axes))
             axes = domain.axes[:max_depth]
 
         num_dims = len(axes)
