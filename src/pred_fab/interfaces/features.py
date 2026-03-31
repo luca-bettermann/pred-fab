@@ -26,9 +26,13 @@ class IFeatureModel(BaseInterface):
     @property
     @abstractmethod
     def input_domain(self) -> Optional[str]:
-        """Domain code for iteration; None means scalar (no dimensional iteration)."""
+        """Domain code for iteration; None means scalar (no dimensional iteration).
+
+        This must be declared explicitly: the model has no access to the schema, so it
+        cannot derive the domain from the output features. FeatureSystem uses this code
+        to look up the Domain object and iterate its axes during feature extraction.
+        """
         ...
-        # COMMENT: why is this needed, if we already add the domains to the features? this can be derived directly from there, right?
 
     @property
     def depth(self) -> Optional[int]:

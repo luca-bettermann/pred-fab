@@ -326,13 +326,11 @@ class PfabAgent:
         """Extract features, evaluate, then return an inference-guided proposal."""
         self._check_systems(StepType.FULL)
 
-        start, end = 0, None
-
         # 1. Extract Features
-        self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute, visualize=visualize)
+        self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
 
         # 2. Evaluate Performance
-        self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute)
+        self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
         # 3. Calibrate
         result = self.calibration_system.run_calibration(
@@ -413,12 +411,9 @@ class PfabAgent:
         """Evaluate an experiment and mutate features/performance in place."""
         self._check_systems(StepType.EVAL)
 
-        # Set start and end values
-        start, end = 0, None
-        
         # Extract Features and Evaluate Performance
-        self.feature_system.run_feature_extraction(exp_data, start, end, recompute=recompute_flag, visualize=visualize)
-        self.eval_system.run_evaluation(exp_data, start, end, recompute=recompute_flag)
+        self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute_flag, visualize=visualize)
+        self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
         self.logger.console_success(f"Successfully evaluated experiment '{exp_data.code}'.")
 
     def train(
@@ -520,15 +515,13 @@ class PfabAgent:
         self,
         n: int,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        n_optimization_rounds: int = 10,
     ) -> List[ExperimentSpec]:
-        """Generate n space-filling baseline proposals (greedy maximin). No trained model required."""
+        """Generate n space-filling baseline proposals using LHS. No trained model required."""
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
         result = self.calibration_system.run_baseline(
             n=n,
             param_bounds=param_bounds,
-            n_optimization_rounds=n_optimization_rounds,
         )
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
         return result

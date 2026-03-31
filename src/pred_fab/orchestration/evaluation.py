@@ -19,43 +19,36 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def run_evaluation(
         self,
         exp_data: ExperimentData,
-        evaluate_from: int = 0,
-        evaluate_to: Optional[int] = None,
         recompute: bool = False
     ) -> Dict[str, Optional[float]]:
-        """Execute all evaluations for an experiment and mutate exp_data with results."""
+        """Score all features for a completed experiment and store results in exp_data.
 
+        This is post-experiment documentation only — the resulting performance values are
+        not consumed by any calibration or prediction logic. Calibration uses
+        _evaluate_feature_dict directly via a closure for its internal scoring.
+        """
         # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
         # so that evaluation models can iterate rows uniformly regardless of feature depth.
         features_dict: Dict[str, np.ndarray] = {}
         for code, tensor in exp_data.features.get_values_dict().items():
             features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
-        # Check if the there are any incomplete feature arrays
-        incomplete_features = {code: not exp_data.is_complete(code, evaluate_from, evaluate_to) 
+        # Mark features that were never computed so their eval models can be skipped.
+        incomplete_features = {code: not exp_data.is_complete(code, 0, None)
                                for code in exp_data.features.keys()}
-        
+
         # Determine which performance codes to skip based on existing values
         skip_for_code = {code: exp_data.performance.has_value(code)
                          for code in exp_data.performance.keys() if not recompute}
 
-        # Compute performance from features
+        # Compute and store performance
         performance_dict = self._evaluate_feature_dict(
             features_dict=features_dict,
             parameters=exp_data.parameters,
             incomplete_features=incomplete_features,
             skip_for_code=skip_for_code
         )
-
-        # Update exp_data with results
-        # We only set performance if the full experiment was evaluated
-        if evaluate_from == 0 and evaluate_to is None:
-            exp_data.performance.set_values_from_dict(performance_dict, self.logger)
-        else:
-            self.logger.info("Partial evaluation detected; not updating ExperimentData performance values.")
-            self.logger.info(f"{performance_dict}")
-        # COMMENT: is it even possible to have partial performance values? in online adaptation, we tune the prediction model, but we do not re-evaluate the performance of the features, right? As a matter of fact, we never use the evaluated values for anything, only the functions to evaluate predictions, correct? It makes sense, just want to double-check the logic.
-        # COMMENT: this means, we should never run_evaluation with partial data? and we only do this to document how well an experiment performed, but we never use these values again.
+        exp_data.performance.set_values_from_dict(performance_dict, self.logger)
         return performance_dict
 
     def _evaluate_feature_dict(

@@ -15,7 +15,7 @@ from .base_system import BaseOrchestrationSystem
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: UCB exploration, inference, greedy-maximin baseline, and MPC lookahead."""
+    """Active-learning calibration engine: UCB exploration, inference, LHS baseline, and MPC lookahead."""
 
     def __init__(
         self,
@@ -357,11 +357,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
         return -score
 
-    def _baseline_func(self, X: np.ndarray, proposed_norm: List[np.ndarray]) -> float:
-        """BASELINE objective: negative min-distance from all previously proposed points (greedy maximin)."""
-        dists = [float(np.linalg.norm(X - ref)) for ref in proposed_norm]
-        return -min(dists)
-
     def _compute_system_performance(self, performance: List[float]) -> float:
         """Compute weighted system performance [0, 1]."""
         if not performance:
@@ -562,69 +557,74 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         n: int,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        n_optimization_rounds: int = 10,
     ) -> List["ExperimentSpec"]:
-        """Generate n greedy-maximin baseline proposals. First proposal is random (flat objective)."""
-        self.logger.info(
-            f"Generating {n} baseline experiments using greedy maximin spacing..."
-        )
+        """Generate n baseline proposals using Latin Hypercube Sampling (LHS).
+
+        Continuous parameters are stratified across their bounds; categorical parameters
+        are stratified across their categories. This guarantees balanced coverage
+        regardless of the number or mix of parameter types.
+        """
+        from scipy.stats.qmc import LatinHypercube
 
         if n == 0:
             return []
 
-        # Apply per-call bounds overrides temporarily so _build_schema_datamodule
-        # and _get_global_bounds see the correct bounds, then restore on exit.
         _saved_param_bounds = dict(self.param_bounds)
         if param_bounds:
             self.param_bounds.update(param_bounds)
 
         try:
-            datamodule = self._build_schema_datamodule()
-            if not datamodule.input_columns:
+            # Collect active parameters (skip fixed and infinite-bounds).
+            continuous_params: List[Tuple[str, float, float]] = []  # (code, lo, hi)
+            categorical_params: List[Tuple[str, List[Any]]] = []    # (code, categories)
+
+            for code, data_obj in self.data_objects.items():
+                if code in self.fixed_params:
+                    continue
+                if isinstance(data_obj, DataCategorical):
+                    categorical_params.append((code, list(data_obj.constraints["categories"])))
+                elif isinstance(data_obj, DataBool):
+                    categorical_params.append((code, [False, True]))
+                else:
+                    try:
+                        lo, hi = self._get_hierarchical_bounds_for_code(code)
+                    except ValueError:
+                        continue
+                    if lo == -np.inf or hi == np.inf:
+                        self.logger.warning(
+                            f"Parameter '{code}' has infinite bounds; "
+                            "skipping in baseline generation."
+                        )
+                        continue
+                    continuous_params.append((code, lo, hi))
+
+            if not continuous_params and not categorical_params:
                 self.logger.warning("No valid parameters for baseline generation.")
                 return []
 
-            bounds = self._get_global_bounds(datamodule)
-            proposed_norm: List[np.ndarray] = []
+            d = len(continuous_params) + len(categorical_params)
+            sampler = LatinHypercube(d=d, seed=self._random_seed)
+            samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
+
             specs: List[ExperimentSpec] = []
+            for row in samples:
+                params: Dict[str, Any] = dict(self.fixed_params)
 
-            def _flat_objective(X: np.ndarray) -> float:
-                return 0.0
+                for i, (code, lo, hi) in enumerate(continuous_params):
+                    params[code] = lo + row[i] * (hi - lo)
 
-            for i in range(n):
-                if not proposed_norm:
-                    # First proposal: objective is flat — any point is equally good.
-                    # Pass n_rounds=0 so _run_optimization picks a single random point.
-                    objective: Callable = _flat_objective
-                    n_rounds = 0
-                else:
-                    _refs = list(proposed_norm)
-                    objective = functools.partial(self._baseline_func, proposed_norm=_refs)
-                    n_rounds = n_optimization_rounds
+                offset = len(continuous_params)
+                for j, (code, categories) in enumerate(categorical_params):
+                    k = len(categories)
+                    idx = min(int(np.floor(row[offset + j] * k)), k - 1)
+                    params[code] = categories[idx]
 
-                result = self._run_optimization(
-                    datamodule=datamodule,
-                    x0_params=None,
-                    bounds=bounds,
-                    objective_func=objective,
-                    n_rounds=n_rounds,
-                    fixed_param_values=dict(self.fixed_params),
-                )
-
-                # Re-encode to build the maximin reference set for the next proposal.
-                try:
-                    proposed_norm.append(datamodule.params_to_array(result).copy())
-                except Exception:
-                    self.logger.warning(
-                        f"Could not re-encode proposal {i + 1} into normalised space; "
-                        "subsequent spacing may degrade."
-                    )
-
-                proposal = ParameterProposal.from_dict(result, source_step=SourceStep.BASELINE)
+                params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
+                proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-                self.logger.debug(f"Baseline proposal {i + 1}/{n}: {result}")
+                self.logger.debug(f"Baseline LHS proposal: {params}")
 
-            self.logger.info(f"Generated {n} baseline experiments.")
+            self.logger.info(f"Generated {n} baseline experiments using LHS.")
             return specs
 
         finally:
@@ -638,8 +638,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        level: int = 0,
-        depth: int = 0,
         mpc_lookahead: int = 0,
         mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
@@ -647,12 +645,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Offline (global bounds + random restarts) when current_params/target_indices are omitted;
         online (trust-region) when both are provided.
-        mpc_lookahead=0 → greedy; mpc_lookahead=N → N steps of discounted lookahead.
+        mpc_lookahead=0 → greedy single-step; mpc_lookahead=N → N-step discounted lookahead.
+        mpc_discount (γ): weight for future steps in the MPC sum Σ γʲ·score(Xⱼ).
+          γ=0.9 means step j=1 counts at 90%, j=2 at 81%, etc. — nearer steps matter more.
         """
-        # COMMENT: Level and depth arguments are not used; why is that?
         lookahead = mpc_lookahead
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
-        # COMMENT: what does the discount do?
 
         self._active_datamodule = datamodule
         objective = self._build_objective(mode, w_explore)

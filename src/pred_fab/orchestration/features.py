@@ -99,16 +99,22 @@ class FeatureSystem(BaseOrchestrationSystem):
                 self.logger.info(f"Skipping feature extraction for '{feature_model.outputs}' as features already complete")
                 continue
 
-            # Resolve domain for this model
+            # Resolve domain for this model.
+            # _schema is set by _set_feature_column_names(), called during PfabAgent init.
             domain = None
             if feature_model.input_domain is not None:
-                # domain will be injected by agent via schema — here we get it from the schema ref
-                # via the _ref_features or caller must pass it; use _schema_ref if available
-                if hasattr(self, '_schema') and self._schema is not None:
-                    schema: DatasetSchema = self._schema  # type: ignore[assignment]
-                    if schema.domains.has(feature_model.input_domain):
-                        domain = schema.domains.get(feature_model.input_domain)
-            # COMMENT: This whole part looks a bit hacky; can you follow up with me and see whether this can be simplified/solved more elegantly?
+                if self._schema is None:
+                    raise RuntimeError(
+                        f"FeatureSystem has no schema reference. "
+                        f"Ensure PfabAgent is fully initialized before running feature extraction."
+                    )
+                domain = self._schema.domains.get(feature_model.input_domain)
+                if domain is None:
+                    raise ValueError(
+                        f"Feature model '{feature_model.__class__.__name__}' declares "
+                        f"input_domain='{feature_model.input_domain}', but this domain is not "
+                        f"registered in the schema."
+                    )
 
             # Run feature extraction and return 2d feature array
             feature_array = feature_model.compute_features(
@@ -125,7 +131,6 @@ class FeatureSystem(BaseOrchestrationSystem):
                 depth = feature_model.depth
                 max_depth = len(domain.axes) if depth is None else min(depth, len(domain.axes))
                 num_dims = max_depth
-            # COMMENT: domain should never be None
 
             for i, code in enumerate(feature_model.outputs):
                 # Slice [iterators..., selected-feature] from model output table.

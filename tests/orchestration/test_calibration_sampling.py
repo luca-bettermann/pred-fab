@@ -242,7 +242,7 @@ def test_configure_calibration_sets_all_system_fields(tmp_path):
 # ===== Baseline determinism =====
 
 def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
-    """Same random seed must produce identical greedy maximin samples."""
+    """Same random seed must produce identical LHS samples."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
 
     cal1 = build_calibration_system(tmp_path / "a", dataset)
@@ -445,11 +445,7 @@ def test_run_calibration_with_trajectory_returns_experiment_spec(tmp_path):
 # ===== BASELINE: categorical inclusion via DataModule one-hot encoding =====
 
 def test_baseline_unfixed_categorical_produces_valid_category_values(tmp_path):
-    """Unfixed categorical params must appear in every proposal with a valid category value.
-
-    This verifies the DataModule-based baseline: param_3 ∈ {A, B, C} is one-hot
-    encoded during optimisation and decoded back to a valid category string.
-    """
+    """Unfixed categorical params must appear in every proposal with a valid category value."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
@@ -465,10 +461,9 @@ def test_baseline_unfixed_categorical_produces_valid_category_values(tmp_path):
 
 
 def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
-    """With n=9 baseline proposals and an unfixed 3-category param, at least 2 categories appear.
+    """With n=9 proposals and a 3-category param, LHS guarantees all 3 categories appear.
 
-    The one-hot optimisation distributes proposals across the categorical space rather
-    than collapsing to a single category.
+    LHS stratifies each dimension: with n=9 and k=3, each category gets exactly 3 samples.
     """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -478,44 +473,38 @@ def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
     results = calibration.run_baseline(n=9)
 
     categories_seen = {spec["param_3"] for spec in results}
-    assert len(categories_seen) >= 2, (
-        f"Expected at least 2 categories across 9 proposals, got: {categories_seen}"
+    assert categories_seen == {"A", "B", "C"}, (
+        f"Expected all 3 categories across 9 LHS proposals, got: {categories_seen}"
     )
 
 
-# ===== BASELINE: greedy maximin spacing =====
+# ===== BASELINE: LHS stratification =====
 
-def test_baseline_greedy_maximin_is_better_spaced_than_random(tmp_path):
-    """Greedy maximin proposals should be more spread out than a random draw.
+def test_baseline_lhs_stratifies_continuous_params(tmp_path):
+    """LHS stratifies continuous params: each of n equal-width bins contains exactly one sample.
 
-    Fix all params except param_1 so the DataModule operates in 1D [0, 10].
-    Compute the minimum pairwise distance of greedy maximin proposals and
-    compare against the expected min distance for purely random points.
-    For n=6 proposals in [0, 10], greedy maximin should produce a min
-    pairwise distance substantially larger than 0.
+    Fix all params except param_1 so sampling is 1D over [0, 6].
+    With n=6 samples and bin width=1, each bin [i, i+1) must contain exactly one proposal.
     """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
-    calibration.configure_param_bounds({"param_1": (0.0, 10.0)})
-    # Fix everything else so the search space is purely 1D over param_1
+    calibration.configure_param_bounds({"param_1": (0.0, 6.0)})
     calibration.configure_fixed_params(
         {"param_2": 2, "n_layers": 2, "n_segments": 2, "param_3": "B", "speed": 100.0}
     )
     calibration.random_seed = 42
 
-    results = calibration.run_baseline(n=6, n_optimization_rounds=20)
-    values = sorted([spec["param_1"] for spec in results])
+    n = 6
+    results = calibration.run_baseline(n=n)
+    values = [spec["param_1"] for spec in results]
 
-    # Min gap between adjacent sorted proposals — greedy maximin should space these out
-    gaps = [values[i + 1] - values[i] for i in range(len(values) - 1)]
-    min_gap = min(gaps)
-
-    # For 6 proposals in [0, 10] with good spacing, the minimum gap should be > 1.0
-    # (a uniform grid would give gaps of 2.0; we allow for the random first proposal)
-    assert min_gap > 1.0, (
-        f"Proposals are not well-spaced: min gap = {min_gap:.2f}, "
-        f"sorted values = {[round(v, 2) for v in values]}"
-    )
+    bin_width = 6.0 / n
+    for i in range(n):
+        in_bin = [v for v in values if i * bin_width <= v < (i + 1) * bin_width]
+        assert len(in_bin) == 1, (
+            f"Bin [{i * bin_width:.1f}, {(i+1) * bin_width:.1f}) should contain exactly 1 sample, "
+            f"got {len(in_bin)}: {sorted(round(v, 3) for v in values)}"
+        )
 
 
 # ===== EXPLORATION: follows the acquisition signal =====

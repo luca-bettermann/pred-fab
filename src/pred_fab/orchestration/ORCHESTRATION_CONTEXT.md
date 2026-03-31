@@ -21,7 +21,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 - **Step-grid** (`configure_step_parameter` + `current_params`): iterates over Cartesian product of dimension steps; only params whose mapped dimension transitions are free at each step
 - **MPC** (`mpc_lookahead > 0`): wraps objective with N-step discounted lookahead via `_wrap_mpc_objective`; default 0 = greedy
 
-`run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
+`run_baseline(n)` is a separate entry point for LHS space-filling proposals (no model required).
 
 ### OFAT (One-Factor-At-a-Time) Strategy
 `CalibrationSystem.configure_ofat_strategy(codes)` enables layer-level OFAT cycling for online steps:
@@ -39,7 +39,7 @@ covariates are correctly injected at calibration time without being part of the 
 
 | Method | Mode | Notes |
 |--------|------|-------|
-| `baseline_step(n)` | BASELINE | Greedy maximin, no trained model needed |
+| `baseline_step(n)` | BASELINE | Latin Hypercube Sampling, no trained model needed |
 | `exploration_step(…)` | EXPLORATION | UCB acquisition |
 | `inference_step(…)` | INFERENCE | Feature extraction + perf-max |
 | `adaptation_step(…)` | INFERENCE | Online tuning + trust-region calibration; batch_size via `**kwargs` |

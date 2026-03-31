@@ -78,7 +78,7 @@ def test_train_executes_real_training_method(tmp_path):
 
 
 def test_baseline_step_returns_experiment_specs(tmp_path):
-    """baseline_step returns ExperimentSpec instances with greedy maximin spacing."""
+    """baseline_step returns ExperimentSpec instances with LHS spacing."""
     agent, _, _, _ = build_real_agent_stack(tmp_path)
     sampled = agent.baseline_step(n=3)
 

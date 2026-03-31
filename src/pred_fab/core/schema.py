@@ -29,16 +29,14 @@ class DatasetSchema:
             parameters: Parameters,
             features: Features,
             performance: PerformanceAttributes,
-            domains: Optional[Domains] = None
+            domains: Domains = Domains()
             ):
-        """Initialize schema from DataBlocks; domains optional (defaults to empty Domains)."""
-        # COMMENT: lets make domains not optional. lets be explicit here.
-
+        """Initialize schema from DataBlocks."""
         self.name = name
         self.parameters = parameters
         self.features = features
         self.performance_attrs = performance
-        self.domains = domains if domains is not None else Domains()
+        self.domains = domains
 
         # Initialize local data handler and logger
         self.local_data = LocalData(root_folder)
