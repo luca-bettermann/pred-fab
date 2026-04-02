@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Dict, List, Optional, final
+from typing import Any, Callable, Dict, List, Optional, final
 from numpy.typing import NDArray
 from dataclasses import dataclass
 
@@ -61,12 +61,18 @@ class IFeatureModel(BaseInterface):
         evaluate_from: int,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
-        depth: Optional[int] = None
+        depth: Optional[int] = None,
+        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None,
         ) -> NDArray:
         """Iterate over every domain axis combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
 
         Returns a 2-D array of shape (n_combinations, n_dims + n_outputs) where the first
         n_dims columns are the domain axis iterator values and the remaining columns are feature values.
+
+        If ``get_params_for_row`` is provided, it is called with the global flat row index for
+        each iteration step and its result is used as the parameter dict.  This enables feature
+        extraction to reflect per-row effective parameters (e.g. adapted runtime parameters
+        recorded on an ExperimentData) rather than the single initial parameter snapshot.
         """
         self.logger.info(f"Starting evaluation for '{self.outputs}'")
 
@@ -94,13 +100,18 @@ class IFeatureModel(BaseInterface):
         shape = (len(dim_combinations), num_dims + len(self.outputs))
         feature_array = np.empty(shape)
 
-        # Unpack DataBlocks
-        params = parameters.get_values_dict()
+        # Snapshot of initial parameters used when no per-row override is provided.
+        params_snapshot = parameters.get_values_dict()
 
         # Process each combination
         i_end = evaluate_to if evaluate_to is not None else len(dim_combinations)
         for i, current_dim in enumerate(dim_combinations):
             i_global = evaluate_from + i
+
+            # Resolve effective parameters: use the per-row callable when available so that
+            # runtime parameter updates recorded on the experiment (e.g. adapted print_speed
+            # during online adaptation) are reflected in the feature extraction.
+            params = get_params_for_row(i_global) if get_params_for_row is not None else params_snapshot
 
             # merge dims and params into single dict
             current_dim_dict = dict(zip(dim_iterator_codes, current_dim)) if axes else {}

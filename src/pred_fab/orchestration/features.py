@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List, Tuple
+from typing import Any, Callable, Dict, Optional, List, Tuple
 import numpy as np
 
 from pred_fab.core.data_objects import DataArray, Domain
@@ -101,6 +101,14 @@ class FeatureSystem(BaseOrchestrationSystem):
         skip_for_code = {code: exp_data.is_complete(code, evaluate_from, evaluate_to)
                          for code in exp_data.features.keys() if not recompute}
 
+        # Provide per-row effective parameter resolution so that runtime parameter updates
+        # recorded on the experiment (e.g. adapted print_speed during online adaptation) are
+        # reflected in feature extraction.  ExperimentData.get_effective_parameters_for_row
+        # applies all recorded ParameterUpdateEvents that start at or before the given row.
+        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None
+        if exp_data.parameter_updates:
+            get_params_for_row = exp_data.get_effective_parameters_for_row
+
         # Get feature extraction results from core logic
         feature_dict = self._compute_features_from_params(
             parameters=exp_data.parameters,
@@ -108,7 +116,8 @@ class FeatureSystem(BaseOrchestrationSystem):
             evaluate_from=evaluate_from,
             evaluate_to=evaluate_to,
             visualize=visualize,
-            skip_feature_code=skip_for_code
+            skip_feature_code=skip_for_code,
+            get_params_for_row=get_params_for_row,
         )
 
         # Update exp_data with results
@@ -123,7 +132,8 @@ class FeatureSystem(BaseOrchestrationSystem):
         evaluate_from: int = 0,
         evaluate_to: Optional[int] = None,
         visualize: bool = False,
-        skip_feature_code: Dict[str, bool] = {}
+        skip_feature_code: Dict[str, bool] = {},
+        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None,
     ) -> Dict[str, np.ndarray]:
         """Run all feature models and return {code: tensor} dict."""
 
@@ -152,7 +162,8 @@ class FeatureSystem(BaseOrchestrationSystem):
                 evaluate_from=evaluate_from,
                 evaluate_to=evaluate_to,
                 visualize=visualize,
-                depth=depth
+                depth=depth,
+                get_params_for_row=get_params_for_row,
             )
 
             # Determine number of dimension columns from domain
