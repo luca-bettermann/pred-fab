@@ -221,18 +221,19 @@ class DataModule:
             return
 
         X_df = self._inject_context_features(X_df, y_df)
-            
+
         # Process X (One-hot)
         X_arr = self._one_hot_encode(X_df)
-        y_arr = y_df.values.astype(np.float32)
-        
+        # Restrict y to output_columns only so that index-based operations below stay aligned.
+        y_arr = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
+
         # Fit X
         self._parameter_stats = {}
         for i, col in enumerate(self.input_columns):
             method = self._col_norm_methods.get(col, NormMethod.NONE)
             if method != NormMethod.NONE:
                 self._parameter_stats[col] = self._compute_normalization_stats(X_arr[:, i], method)
-        
+
         # Fit y
         self._feature_stats = {}
         for i, col in enumerate(self.output_columns):
@@ -268,7 +269,8 @@ class DataModule:
 
         X_df = self._inject_context_features(X_df, y_df)
         X = self._one_hot_encode(X_df)
-        y = y_df.values.astype(np.float32)
+        # Restrict to output_columns to keep index-based normalization and model-filtering aligned.
+        y = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
         
         # Normalize
         if self._is_fitted:

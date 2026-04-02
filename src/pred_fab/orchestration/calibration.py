@@ -803,7 +803,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     fun=objective_func,
                     x0=x0,
                     bounds=bounds,
-                    method='L-BFGS-B'
+                    method='L-BFGS-B',
+                    options={'eps': 1e-3},  # float32 in prepare_input loses sub-1e-7 changes
                 )
                 if res.fun < best_val:
                     best_val = res.fun

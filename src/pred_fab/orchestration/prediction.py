@@ -791,8 +791,11 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         models_to_run = [model] if model is not None else self.models
         for m in models_to_run:
+            # Filter to the columns this model was trained on (same as _filter_batches_for_model).
+            input_indices = self.datamodule.get_input_indices(m.input_parameters + m.input_features)
+            X_model = X_norm[:, input_indices]
             # Predict in normalized space
-            y_pred_norm = m.forward_pass(X_norm)
+            y_pred_norm = m.forward_pass(X_model)
 
             # Denormalize to original scale
             y_pred = self.datamodule.denormalize_values(y_pred_norm, m.outputs)
