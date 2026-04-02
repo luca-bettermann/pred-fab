@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional, Any, Set, Tuple, Callable
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 
 import warnings
 import functools
@@ -748,14 +748,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"fixed={sorted(fixed_for_step.keys())}"
             )
 
-            result = self._run_optimization(
-                datamodule,
-                x0_params=working_params,
-                bounds=bounds,
-                objective_func=objective,
-                n_rounds=n_rounds,
-                fixed_param_values=fixed_for_step,
-            )
+            # Offline exploration uses gradient-free DE; everything else uses L-BFGS-B.
+            use_de = (mode == Mode.EXPLORATION and bounds_mode == "global")
+            if use_de:
+                result = self._run_exploration_optimization(
+                    datamodule,
+                    bounds=bounds,
+                    objective_func=objective,
+                    fixed_param_values=fixed_for_step,
+                )
+            else:
+                result = self._run_optimization(
+                    datamodule,
+                    x0_params=working_params,
+                    bounds=bounds,
+                    objective_func=objective,
+                    n_rounds=n_rounds,
+                    fixed_param_values=fixed_for_step,
+                )
             proposals.append(result)
             working_params = result
             prev_indices = curr_indices
@@ -768,6 +778,52 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self._advance_ofat()
 
         return self._build_experiment_spec(proposals, step_grid, source_step)
+
+    def _run_exploration_optimization(
+        self,
+        datamodule: DataModule,
+        bounds: np.ndarray,
+        objective_func: Callable,
+        fixed_param_values: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Global exploration via differential evolution — gradient-free, population-based.
+
+        Used for offline exploration (mode=EXPLORATION, global bounds) where the
+        mixed acquisition landscape may be flat in gradients (high uncertainty everywhere)
+        and L-BFGS-B would converge to the performance optimum regardless of w_explore.
+        """
+        bounds_list = [(float(lo), float(hi)) for lo, hi in bounds]
+        n_dims = len(bounds_list)
+        self.logger.info(
+            f"Exploration: differential_evolution over {n_dims} dims "
+            f"(popsize=5, maxiter=50)"
+        )
+        try:
+            res = differential_evolution(
+                func=objective_func,
+                bounds=bounds_list,
+                seed=self._random_seed,
+                popsize=5,
+                maxiter=50,
+                tol=1e-3,
+                mutation=(0.5, 1.0),
+                recombination=0.7,
+                workers=1,     # no forking — memory-constrained environment
+                polish=True,   # L-BFGS-B polish of best result
+            )
+            best_x = res.x
+            self.logger.info(f"DE converged={res.success}, best_val={res.fun:.6f}")
+        except Exception as e:
+            self.logger.warning(f"Differential evolution failed: {e}. Falling back to random proposal.")
+            best_x = self.rng.uniform(bounds[:, 0], bounds[:, 1])
+
+        proposed_params = datamodule.array_to_params(best_x)
+        self.logger.info(f"Exploration proposal: {proposed_params}")
+        if fixed_param_values:
+            proposed_params.update(fixed_param_values)
+        return datamodule.dataset.schema.parameters.sanitize_values(
+            proposed_params, ignore_unknown=True
+        )
 
     def _run_optimization(
         self,
