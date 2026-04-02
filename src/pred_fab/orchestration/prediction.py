@@ -185,28 +185,27 @@ class PredictionSystem(BaseOrchestrationSystem):
                         latent_points.append(z)
                         weights.append(float(np.sqrt(max(seg_rows, 1))))
 
-        if len(latent_points) < 2:
-            self.logger.info("Too few training configs for evidence model — uncertainty defaults to 1.0.")
+        if len(latent_points) < 1:
+            self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
 
         latent_array = np.array(latent_points)   # (n_configs, n_latent)
         weights_array = np.array(weights)
         weights_array = weights_array / weights_array.sum()  # normalize
 
-        # Drop constant dimensions — no discriminative information.
-        per_dim_std = np.std(latent_array, axis=0)
-        active_mask = per_dim_std > 1e-8
-        if not np.any(active_mask):
-            self.logger.info("All latent dimensions are constant across training configs — uncertainty defaults to 1.0.")
-            return
+        # Drop constant dimensions across configs — no discriminative information.
+        # With a single config all dims are trivially "constant", so skip masking.
+        if latent_array.shape[0] > 1:
+            per_dim_std = np.std(latent_array, axis=0)
+            active_mask = per_dim_std > 1e-8
+            if not np.any(active_mask):
+                self.logger.info("All latent dimensions are constant across training configs — uncertainty defaults to 1.0.")
+                return
+        else:
+            active_mask = np.ones(latent_array.shape[1], dtype=bool)
 
         projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
-        n_samples, n_active_dims = projected.shape
-        if n_samples < 2:
-            self.logger.info(
-                f"Too few training configs ({n_samples}) for {n_active_dims}D evidence model — uncertainty defaults to 1.0."
-            )
-            return
+        n_active_dims = projected.shape[1]
 
         h = self._exploration_radius / np.sqrt(float(n_exp))
         self._latent_points = projected
