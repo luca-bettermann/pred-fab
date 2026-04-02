@@ -465,12 +465,19 @@ class PfabAgent:
         bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         fixed_params: Optional[Dict[str, Any]] = None,
         adaptation_delta: Optional[Dict[str, float]] = None,
+        exploration_radius: Optional[float] = None,
         force: bool = False
     ) -> None:
-        """Configure calibration system parameters."""
+        """Configure calibration and exploration parameters.
+
+        exploration_radius (c): controls the NatPN-light evidence model bubble size
+        and edge sharpness.  h = c/√N (radius), γ = max(1, c·√N) (steepness).
+        Larger c → more aggressive coverage per observation → slower transition to
+        exploitation.  Default 0.5 works well for normalized [0,1] parameter spaces.
+        """
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
-            
+
         if performance_weights:
             self.calibration_system.set_performance_weights(performance_weights)
             self.logger.info("Configured performance weights for calibration system.")
@@ -483,6 +490,9 @@ class PfabAgent:
         if adaptation_delta:
             self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
             self.logger.info("Configured adaptation delta for calibration system.")
+        if exploration_radius is not None:
+            self.pred_system.configure_exploration(exploration_radius)
+            self.logger.info(f"Configured exploration radius: c={exploration_radius}")
 
     def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
         """Declare that a runtime parameter should be re-optimised at each step of the given dimension."""

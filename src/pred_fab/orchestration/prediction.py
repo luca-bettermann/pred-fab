@@ -11,7 +11,6 @@ import copy
 import pandas as pd
 import numpy as np
 import pickle
-from scipy.stats import gaussian_kde
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
@@ -44,12 +43,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Domain map populated during train(): model id → derived domain code
         self._model_domain_map: Dict[int, Optional[str]] = {}
 
-        # KDE state for NatPN-light uncertainty estimation (set after training)
-        self._kde: Optional[gaussian_kde] = None
+        # Evidence model state for NatPN-light uncertainty estimation (set after training)
+        self._latent_points: Optional[np.ndarray] = None   # (n_configs, n_active_dims)
+        self._latent_weights: Optional[np.ndarray] = None  # (n_configs,) normalized
         self._q_max: Optional[float] = None
         self._n_exp: int = 0
-        self._kde_bandwidth: Optional[float] = None
-        self._kde_active_mask: Optional[np.ndarray] = None  # Boolean mask of non-constant dims
+        self._kde_bandwidth: Optional[float] = None        # h = c/√N after fitting
+        self._kde_active_mask: Optional[np.ndarray] = None
+        self._exploration_radius: float = 0.5              # c: bubble radius at N=1
 
     def get_system_input_parameters(self) -> List[str]:
         """Get the parameter codes of all model inputs."""
@@ -133,12 +134,14 @@ class PredictionSystem(BaseOrchestrationSystem):
     # === UNCERTAINTY ESTIMATION (NatPN-light) ===
 
     def _fit_kde(self, datamodule: DataModule) -> None:
-        """Fit weighted KDE on latent representations of all unique training configs.
+        """Fit NatPN-light evidence model on latent representations of all training configs.
 
-        Option B: one latent point per unique effective parameter configuration.
+        One latent point per unique effective parameter configuration.
         Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
         Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
-        Bandwidth: Silverman's rule.
+
+        Bandwidth:  h = c / √N   where c = exploration_radius, N = n_experiments.
+        Sharpness:  γ = max(1, c·√N)  — both adapt dynamically as data accumulates.
         """
         if not self.models:
             return
@@ -183,16 +186,14 @@ class PredictionSystem(BaseOrchestrationSystem):
                         weights.append(float(np.sqrt(max(seg_rows, 1))))
 
         if len(latent_points) < 2:
-            self.logger.info("Too few training configs for KDE — uncertainty defaults to 1.0.")
+            self.logger.info("Too few training configs for evidence model — uncertainty defaults to 1.0.")
             return
 
         latent_array = np.array(latent_points)   # (n_configs, n_latent)
         weights_array = np.array(weights)
         weights_array = weights_array / weights_array.sum()  # normalize
 
-        # Drop constant dimensions to avoid a singular covariance matrix.
-        # Dimensions where all training configs have the same latent value carry no
-        # discriminative information and would cause gaussian_kde to fail.
+        # Drop constant dimensions — no discriminative information.
         per_dim_std = np.std(latent_array, axis=0)
         active_mask = per_dim_std > 1e-8
         if not np.any(active_mask):
@@ -201,30 +202,50 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
         n_samples, n_active_dims = projected.shape
-        if n_samples <= n_active_dims:
+        if n_samples < 2:
             self.logger.info(
-                f"Too few training configs ({n_samples}) for {n_active_dims}D KDE — uncertainty defaults to 1.0."
+                f"Too few training configs ({n_samples}) for {n_active_dims}D evidence model — uncertainty defaults to 1.0."
             )
             return
 
-        try:
-            # gaussian_kde expects (n_dims, n_samples)
-            self._kde = gaussian_kde(projected.T, bw_method='silverman', weights=weights_array)
-            self._kde_active_mask = active_mask
-            # Scalar bandwidth: Silverman factor * mean std across active latent dimensions
-            self._kde_bandwidth = float(self._kde.factor * np.mean(per_dim_std[active_mask] + 1e-8))
-            # q_max for normalization: max KDE density over all training points
-            densities = self._kde(projected.T)
-            self._q_max = float(np.max(densities)) if len(densities) > 0 else 1.0
-            self._n_exp = n_exp
+        h = self._exploration_radius / np.sqrt(float(n_exp))
+        self._latent_points = projected
+        self._latent_weights = weights_array
+        self._kde_active_mask = active_mask
+        self._kde_bandwidth = h
+        self._n_exp = n_exp
+        self._q_max = self._compute_q_max(projected, weights_array, h)
+        self.logger.info(
+            f"Evidence model fitted on {len(latent_points)} latent configs from {n_exp} experiments "
+            f"({n_active_dims}/{latent_array.shape[1]} active dims, "
+            f"c={self._exploration_radius}, h={h:.4f}, γ={max(1.0, self._exploration_radius * np.sqrt(float(n_exp))):.2f}, "
+            f"q_max={self._q_max:.6f})."
+        )
+
+    def _compute_q_max(self, points: np.ndarray, weights: np.ndarray, h: float) -> float:
+        """Max weighted KDE density over all training latent points."""
+        dists_sq = np.sum((points[:, None, :] - points[None, :, :]) ** 2, axis=2)  # (N, N)
+        q_vals = np.exp(-dists_sq / (2.0 * h ** 2)) @ weights                       # (N,)
+        return float(np.max(q_vals))
+
+    def configure_exploration(self, exploration_radius: float) -> None:
+        """Set the exploration radius c that governs KDE bandwidth and sharpness.
+
+        h = c/√N  (bubble radius shrinks as data accumulates)
+        γ = max(1, c·√N)  (edge steepness increases as data accumulates)
+
+        Call before train() to take effect immediately, or after train() to
+        update the evidence model in place with the new radius.
+        """
+        self._exploration_radius = exploration_radius
+        if self._latent_points is not None and self._latent_weights is not None and self._n_exp > 0:
+            h = exploration_radius / np.sqrt(float(self._n_exp))
+            self._kde_bandwidth = h
+            self._q_max = self._compute_q_max(self._latent_points, self._latent_weights, h)
             self.logger.info(
-                f"KDE fitted on {len(latent_points)} latent configs from {n_exp} experiments "
-                f"({n_active_dims}/{latent_array.shape[1]} active dims, "
-                f"h={self._kde_bandwidth:.4f}, q_max={self._q_max:.6f})."
+                f"Evidence model updated: exploration_radius={exploration_radius}, "
+                f"h={h:.4f}, γ={max(1.0, exploration_radius * np.sqrt(float(self._n_exp))):.2f}."
             )
-        except Exception as e:
-            self.logger.warning(f"KDE fitting failed: {e}. Uncertainty defaults to 1.0.")
-            self._kde = None
 
     def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
         """Encode a params dict to latent representation via the first PM's encode()."""
@@ -271,25 +292,40 @@ class PredictionSystem(BaseOrchestrationSystem):
     def uncertainty(self, X: np.ndarray) -> float:
         """Compute epistemic uncertainty at a normalized parameter vector.
 
-        Returns a value in [0, 1]:
-            u = 1 / (1 + n_post)
-        where n_post = N_exp * q_KDE(z) / q_max  (NatPN evidence posterior).
+        Returns u_norm ∈ [0, 1]:
+            h      = c / √N              (dynamic bubble radius)
+            γ      = max(1, c·√N)        (dynamic edge sharpness)
+            q      = Σ w_i · K_h(z, zᵢ) (weighted Gaussian KDE)
+            n_post = N · (q / q_max)^γ   (NatPN evidence posterior)
+            u_norm = (1/(1+n_post) − u_min) / (1 − u_min)
 
-        Returns 1.0 (maximum uncertainty) before KDE is fitted.
+        Returns 1.0 (maximum uncertainty) before the evidence model is fitted.
 
         Args:
             X: Normalized parameter array of shape (1, n_inputs) or (n_inputs,)
         """
-        if self._kde is None or self._q_max is None or self._q_max <= 0:
+        if self._latent_points is None or self._latent_weights is None \
+                or self._q_max is None or self._q_max <= 0:
             return 1.0
         z = self._encode_from_norm_array(X.reshape(-1))
         if self._kde_active_mask is not None:
             z = z[self._kde_active_mask]
-        q = float(self._kde(z.reshape(-1, 1))[0])
-        n_post = self._n_exp * q / self._q_max
-        u = float(1.0 / (1.0 + n_post))
-        self.logger.debug(f"uncertainty: q={q:.6f}, n_post={n_post:.3f} -> u={u:.4f}")
-        return u
+
+        h     = self._exploration_radius / np.sqrt(float(self._n_exp))
+        gamma = max(1.0, self._exploration_radius * np.sqrt(float(self._n_exp)))
+
+        dists_sq = np.sum((self._latent_points - z) ** 2, axis=1)
+        q = float(np.dot(self._latent_weights, np.exp(-dists_sq / (2.0 * h ** 2))))
+
+        ratio  = float(np.clip(q / self._q_max, 0.0, 1.0))
+        n_post = float(self._n_exp) * (ratio ** gamma)
+        u      = 1.0 / (1.0 + n_post)
+        u_min  = 1.0 / (1.0 + float(self._n_exp))
+        u_norm = float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
+        self.logger.debug(
+            f"uncertainty: h={h:.4f}, γ={gamma:.2f}, q={q:.6f}, n_post={n_post:.3f} -> u_norm={u_norm:.4f}"
+        )
+        return u_norm
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
         """Gaussian kernel similarity between two parameter vectors in latent space.
