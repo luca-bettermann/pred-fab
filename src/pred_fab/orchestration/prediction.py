@@ -140,7 +140,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
         Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
 
-        Bandwidth:  h = c / √N   where c = exploration_radius, N = n_experiments.
+        Bandwidth:  h = c · √d / √N  where c = exploration_radius, N = n_experiments, d = n_active_dims.
         Sharpness:  γ = max(1, c·√N)  — both adapt dynamically as data accumulates.
         """
         if not self.models:
@@ -207,7 +207,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
         n_active_dims = projected.shape[1]
 
-        h = self._exploration_radius / np.sqrt(float(n_exp))
+        # Dimension-aware bandwidth: h = c · √d / √N.
+        # Keeps volumetric bubble coverage ~constant regardless of latent dimension d,
+        # so c=0.5 behaves the same in 2D, 6D, etc.
+        h = self._exploration_radius * np.sqrt(float(n_active_dims)) / np.sqrt(float(n_exp))
         self._latent_points = projected
         self._latent_weights = weights_array
         self._kde_active_mask = active_mask
@@ -230,7 +233,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     def configure_exploration(self, exploration_radius: float) -> None:
         """Set the exploration radius c that governs KDE bandwidth and sharpness.
 
-        h = c/√N  (bubble radius shrinks as data accumulates)
+        h = c·√d / √N  (dimension-aware bubble radius, d = n_active_latent_dims)
         γ = max(1, c·√N)  (edge steepness increases as data accumulates)
 
         Call before train() to take effect immediately, or after train() to
@@ -238,12 +241,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         """
         self._exploration_radius = exploration_radius
         if self._latent_points is not None and self._latent_weights is not None and self._n_exp > 0:
-            h = exploration_radius / np.sqrt(float(self._n_exp))
+            d = float(self._latent_points.shape[1])
+            h = exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
             self._kde_bandwidth = h
             self._q_max = self._compute_q_max(self._latent_points, self._latent_weights, h)
             self.logger.info(
                 f"Evidence model updated: exploration_radius={exploration_radius}, "
-                f"h={h:.4f}, γ={max(1.0, exploration_radius * np.sqrt(float(self._n_exp))):.2f}."
+                f"d={int(d)}, h={h:.4f}, γ={max(1.0, exploration_radius * np.sqrt(float(self._n_exp))):.2f}."
             )
 
     def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
@@ -292,7 +296,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Compute epistemic uncertainty at a normalized parameter vector.
 
         Returns u_norm ∈ [0, 1]:
-            h      = c / √N              (dynamic bubble radius)
+            h      = c · √d / √N         (dimension-aware dynamic bubble radius)
             γ      = max(1, c·√N)        (dynamic edge sharpness)
             q      = Σ w_i · K_h(z, zᵢ) (weighted Gaussian KDE)
             n_post = N · (q / q_max)^γ   (NatPN evidence posterior)
@@ -310,7 +314,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if self._kde_active_mask is not None:
             z = z[self._kde_active_mask]
 
-        h     = self._exploration_radius / np.sqrt(float(self._n_exp))
+        d     = float(self._latent_points.shape[1])
+        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
         gamma = max(1.0, self._exploration_radius * np.sqrt(float(self._n_exp)))
 
         dists_sq = np.sum((self._latent_points - z) ** 2, axis=1)
