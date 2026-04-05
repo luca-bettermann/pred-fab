@@ -38,6 +38,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # _inference_func / _acquisition_func can call array_to_params.
         self._active_datamodule: Optional[DataModule] = None
 
+        # Set after each _run_optimization call for external inspection.
+        self.last_opt_nfev: int = 0
+        self.last_opt_n_starts: int = 0
+
         # Set ordered weights
         self.schema = schema
         self.perf_names_order = list(schema.performance_attrs.keys())
@@ -56,6 +60,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Empty list = all_at_once (default); populated via configure_ofat_strategy().
         self._ofat_codes: List[str] = []
         self._ofat_index: int = 0
+
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -330,8 +335,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values)
-        perf_str = ", ".join(f"{k}={perf_dict.get(k, 'N/A')}" for k in self.perf_names_order)
-        self.logger.debug(f"inference_func: [{perf_str}], sys_perf={sys_perf:.4f} -> obj={-sys_perf:.4f}")
+        self.logger.debug(f"inference_func: sys_perf={sys_perf:.4f} -> obj={-sys_perf:.4f}")
         return -sys_perf
 
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
@@ -795,8 +799,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_starts = len(x0_list)
         self.logger.info(f"Optimizing with {n_starts} starting point(s) (1 from x0, {n_starts - 1} random restarts)")
 
-        # Run optimization from each starting point
+        # Run optimization from each starting point.
+        # Cap function evaluations per start: ~10 gradient steps for a d-dim problem
+        # (each step needs d+1 finite-diff evals), which is enough for a smooth landscape.
+        # Without a cap, L-BFGS-B defaults to 15000*d evaluations — prohibitive when the
+        # objective is expensive (e.g. ML model inference over all dimensional positions).
+        n_dims = len(x0_list[0]) if x0_list else 1
+        max_fun = max(100, 10 * (n_dims + 1))  # at least 100, or 10 gradient steps
+
         best_x, best_val = None, np.inf
+        total_nfev = 0
         for i, x0 in enumerate(x0_list):
             try:
                 res = minimize(
@@ -804,15 +816,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     x0=x0,
                     bounds=bounds,
                     method='L-BFGS-B',
-                    options={'eps': 1e-3},  # float32 in prepare_input loses sub-1e-7 changes
+                    options={
+                        'eps': 1e-3,     # float32 in prepare_input loses sub-1e-7 changes
+                        'maxfun': max_fun,
+                    },
                 )
+                total_nfev += res.nfev
                 if res.fun < best_val:
                     best_val = res.fun
                     best_x = res.x
-                self.logger.debug(f"  start {i + 1}/{n_starts}: val={res.fun:.6f}, converged={res.success}")
+                self.logger.debug(f"  start {i + 1}/{n_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}")
             except Exception as e:
                 self.logger.warning(f"Optimization round failed with error: {e}")
                 continue
+        self.logger.info(f"Optimization total: {n_starts} starts, {total_nfev} function evaluations")
+        self.last_opt_nfev = total_nfev
+        self.last_opt_n_starts = n_starts
 
         # Handle failure
         if best_x is None:

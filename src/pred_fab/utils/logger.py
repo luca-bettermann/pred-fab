@@ -42,6 +42,7 @@ class PfabLogger:
         
         self._initialized = True
         self._console_new_line = False
+        self._console_output_enabled = True
     
     @classmethod
     def get_logger(cls, log_folder: str) -> 'PfabLogger':
@@ -50,6 +51,10 @@ class PfabLogger:
             # Create default instance if none exists
             return cls(log_folder=log_folder)
         return cls._instance
+
+    def set_console_output(self, enabled: bool) -> None:
+        """Enable or disable console printing for info/success methods (warnings always shown)."""
+        self._console_output_enabled = enabled
 
     # === PUBLIC API METHODS ===
     def debug(self, message: str) -> None:
@@ -70,14 +75,16 @@ class PfabLogger:
     
     def console_info(self, message: str) -> None:
         """Print to console and log as info."""
-        print(message)
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(message)
+            self._console_new_line = False
         self.logger.info(f"CONSOLE: \n\n{message}\n")
-    
+
     def console_success(self, message: str) -> None:
         """Print success message to console and log."""
-        print(f"✅ {message}")
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(f"✅ {message}")
+            self._console_new_line = False
         self.logger.info(f"CONSOLE SUCCESS: \n\n{message}\n")
     
     def console_warning(self, message: str) -> None:
@@ -87,47 +94,50 @@ class PfabLogger:
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
 
     def console_execute(self, message: str) -> None:
-        """Print warning to console and log."""
-        print(f"⏳ {message}")
-        self._console_new_line = False
+        """Print execute message to console and log."""
+        if self._console_output_enabled:
+            print(f"⏳ {message}")
+            self._console_new_line = False
         self.logger.warning(f"CONSOLE EXECUTE: \n\n{message}\n")
 
     def console_loaded(self, message: str) -> None:
         """Print loaded message to console and log."""
-        print(f"⬆️  {message}")
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(f"⬆️  {message}")
+            self._console_new_line = False
         self.logger.info(f"CONSOLE LOADED: \n\n{message}\n")
 
     def console_saved(self, message: str) -> None:
         """Print saved message to console and log."""
-        print(f"⬇️  {message}")
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(f"⬇️  {message}")
+            self._console_new_line = False
         self.logger.info(f"CONSOLE SAVED: \n\n{message}\n")
 
     def console_pushed(self, message: str) -> None:
         """Print pushed message to console and log."""
-        print(f"↗️  {message}")
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(f"↗️  {message}")
+            self._console_new_line = False
         self.logger.info(f"CONSOLE PUSHED: \n\n{message}\n")
 
     def console_pulled(self, message: str) -> None:
         """Print pulled message to console and log."""
-        print(f"↘️  {message}")
-        self._console_new_line = False
+        if self._console_output_enabled:
+            print(f"↘️  {message}")
+            self._console_new_line = False
         self.logger.info(f"CONSOLE PULLED: \n\n{message}\n")
 
     def console_summary(self, message: str) -> None:
         """Print formatted summary to console and clean version to log."""
-        # Display formatted version to console
-        print(message)
-
-        # Log clean version without ANSI codes
-        clean_message = self._strip_ansi_codes(message)  
+        if self._console_output_enabled:
+            print(message)
+        clean_message = self._strip_ansi_codes(message)
         self.logger.info(f"CONSOLE SUMMARY:\n\n{clean_message}")
 
     def console_new_line(self) -> None:
         """Print a new line to console."""
-        if not self._console_new_line:
+        if self._console_output_enabled and not self._console_new_line:
             print("")
             self._console_new_line = True
 

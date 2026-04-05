@@ -859,7 +859,7 @@ class Dataset:
                 self.logger.warning(f"No data to save for {dtype} '{code}'")
                     
         if not data_to_save:
-            self.logger.console_warning(f"No data in memory ({len(target_codes)} exps): {dtype}")
+            self.logger.info(f"No data in memory ({len(target_codes)} exps): {dtype}")
             return
         
         codes_to_save = list(data_to_save.keys())
