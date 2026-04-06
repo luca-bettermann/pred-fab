@@ -66,6 +66,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
         self._uncertainty_weights: Dict[str, float] = {}
 
+    def _assert_trained(self) -> DataModule:
+        """Raise if the system has not been trained yet; return the active DataModule."""
+        if self.datamodule is None or not self.datamodule._is_fitted:
+            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+        return self.datamodule
+
     def get_system_input_parameters(self) -> List[str]:
         """Get the parameter codes of all model inputs."""
         return self._get_unique_values('input_parameters')
@@ -89,10 +95,9 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Filter batch X/y to the columns required by this model, expanding categoricals to one-hot."""
-        if self.datamodule is None:
-            raise RuntimeError("DataModule not set")
-        input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
-        output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
+        dm = self._assert_trained()
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        output_indices = [dm.output_columns.index(f) for f in model.outputs]
         return [(X[:, input_indices], y[:, output_indices]) for X, y in batches]
 
     def train(self, datamodule: DataModule, **kwargs) -> None:
@@ -470,8 +475,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         Raises:
             RuntimeError: If the system has not been trained yet.
         """
-        if self.datamodule is None:
-            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+        self._assert_trained()
 
         predictions = self._predict_from_params(params=params, batch_size=1000)
 
@@ -520,12 +524,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         Returns:
             Temporary DataModule used for tuning
         """
-        if self.datamodule is None or not self.datamodule._is_fitted:
-            raise RuntimeError(
-                "PredictionSystem not trained yet. Call train() before tune(). "
-                "Tuning requires existing normalization parameters from training."
-            )
-                        
+        dm = self._assert_trained()
+
         # Create a temporary Dataset with only the tuning experiment
         self.logger.info(f"Preparing tuning data from positions {start} to {end}...")
         temp_dataset = Dataset(schema=self.schema)
@@ -543,7 +543,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         temp_datamodule.set_split_codes(train_codes=[exp_data.code], val_codes=[], test_codes=[])
 
         # Copy fitted normalization state from offline training.
-        temp_datamodule.set_normalization_state(self.datamodule.get_normalization_state())
+        temp_datamodule.set_normalization_state(dm.get_normalization_state())
 
         # Export full row-wise table and enforce requested online slice.
         X_df_all, y_df_all = temp_dataset.export_to_dataframe([exp_data.code])
@@ -571,10 +571,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info("Generating base predictions for residual learning...")
         for model in self.models:
             # Get indices for this model's outputs
-            output_indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
-            
+            output_indices = [dm.output_columns.index(f) for f in model.outputs]
+
             # Get model inputs (filter X columns)
-            input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
+            input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
             X_model = X_tune[:, input_indices]
             
             # Predict (normalized)
@@ -601,50 +601,47 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
         """Validate prediction models on validation or test set."""
-        if self.datamodule is None:
-            raise RuntimeError(
-                "PredictionSystem not trained yet. Call train(datamodule) first."
-            )
-        
+        dm = self._assert_trained()
+
         split =  SplitType.TEST if use_test else SplitType.VAL
-        
+
         # Check if split is empty before trying to extract
-        split_sizes = self.datamodule.get_split_sizes()
+        split_sizes = dm.get_split_sizes()
         if split_sizes[split] == 0:
             raise ValueError(
                 f"Cannot validate on {split} set: split is empty. "
                 f"Configure DataModule with {'test_size' if use_test else 'val_size'} > 0.0"
             )
-        
+
         self.logger.console_info(f"Validating models on {split} set...")
-        
+
         # Extract validation/test data
-        batches = self.datamodule.get_batches(split)
+        batches = dm.get_batches(split)
         if not batches:
             self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
-            
+
         # Concatenate batches
         X_list, y_list = zip(*batches)
         X_split = np.concatenate(X_list, axis=0)
         y_split = np.concatenate(y_list, axis=0)
-        
+
         self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
-        
+
         # Compute metrics for each model
         results = {}
         for model in self.models:
             # Get indices for this model
-            input_indices = self.datamodule.get_input_indices(model.input_parameters + model.input_features)
-            indices = [self.datamodule.output_columns.index(f) for f in model.outputs]
-            
+            input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+            indices = [dm.output_columns.index(f) for f in model.outputs]
+
             # Get ground truth (denormalized)
             y_true_norm = y_split[:, indices]
-            y_true = self.datamodule.denormalize_values(y_true_norm, model.outputs)
-            
+            y_true = dm.denormalize_values(y_true_norm, model.outputs)
+
             # Predict from the model-specific input slice.
             y_pred_norm = model.forward_pass(X_split[:, input_indices])
-            y_pred = self.datamodule.denormalize_values(y_pred_norm, model.outputs)
+            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
             
             # Calculate metrics and store
             model_metrics = Metrics.calculate_regression_metrics(y_true, y_pred)
@@ -791,8 +788,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         overlap: int = 0
     ) -> Dict[str, np.ndarray]:
         """Core prediction logic: per-model iteration with per-feature tensor shapes."""
-        if self.datamodule is None:
-            raise RuntimeError("PredictionSystem not trained. Call train() first.")
+        self._assert_trained()
 
         predictions: Dict[str, np.ndarray] = {}
 
@@ -922,22 +918,21 @@ class PredictionSystem(BaseOrchestrationSystem):
         model: Optional[IPredictionModel] = None,
     ) -> None:
         """Run model prediction on X_batch and store results with per-feature index truncation."""
-        if self.datamodule is None:
-            raise RuntimeError("DataModule not set")
+        dm = self._assert_trained()
 
         # Prepare input (one-hot + normalize)
-        X_norm = self.datamodule.prepare_input(X_batch)
+        X_norm = dm.prepare_input(X_batch)
 
         models_to_run = [model] if model is not None else self.models
         for m in models_to_run:
             # Filter to the columns this model was trained on (same as _filter_batches_for_model).
-            input_indices = self.datamodule.get_input_indices(m.input_parameters + m.input_features)
+            input_indices = dm.get_input_indices(m.input_parameters + m.input_features)
             X_model = X_norm[:, input_indices]
             # Predict in normalized space
             y_pred_norm = m.forward_pass(X_model)
 
             # Denormalize to original scale
-            y_pred = self.datamodule.denormalize_values(y_pred_norm, m.outputs)
+            y_pred = dm.denormalize_values(y_pred_norm, m.outputs)
 
             # Store predictions in arrays with per-feature index truncation
             for i, feature_name in enumerate(m.outputs):
@@ -960,9 +955,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         include_evaluation: bool = False
     ) -> str:
         """Export validated inference bundle with models, normalization, and schema."""
-        if self.datamodule is None:
-            raise RuntimeError("Cannot export before training. Call train() first.")
-        
+        self._assert_trained()
+
         self.logger.console_info("Validating models for export...")
         
         # Validate prediction models
@@ -1027,9 +1021,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _create_bundle_dict(self, include_evaluation: bool) -> Dict[str, Any]:
         """Assemble bundle with models, artifacts, normalization, and schema."""
-        if self.datamodule is None:
-            raise RuntimeError("DataModule not initialized")
-        
+        dm = self._assert_trained()
+
         bundle: Dict[str, Any] = {
             'prediction_models': [
                 {
@@ -1039,7 +1032,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 }
                 for model in self.models
             ],
-            'normalization': self.datamodule.get_normalization_state(),
+            'normalization': dm.get_normalization_state(),
             'schema': self.schema.to_dict()
         }
         
