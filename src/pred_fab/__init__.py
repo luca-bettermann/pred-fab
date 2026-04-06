@@ -1,4 +1,4 @@
-from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, IDeterministicModel
 from .orchestration import PfabAgent, InferenceBundle, Optimizer
 
 __all__ = [
@@ -9,4 +9,5 @@ __all__ = [
     "IFeatureModel",
     "IEvaluationModel",
     "IPredictionModel",
+    "IDeterministicModel",
 ]

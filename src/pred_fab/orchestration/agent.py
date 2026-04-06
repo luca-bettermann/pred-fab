@@ -499,6 +499,15 @@ class PfabAgent:
             self.calibration_system.configure_param_bounds(bounds, force=force)
         if performance_weights is not None:
             self.calibration_system.set_performance_weights(performance_weights)
+            # Map performance weights to feature names for per-model KDE aggregation.
+            feature_weights: Dict[str, float] = {}
+            for eval_model in self.eval_system.models:
+                perf_name = eval_model.output_performance
+                feat_name = eval_model.input_feature
+                if perf_name in performance_weights:
+                    feature_weights[feat_name] = performance_weights[perf_name]
+            if feature_weights:
+                self.pred_system.set_uncertainty_weights(feature_weights)
         if fixed_params is not None:
             self.calibration_system.configure_fixed_params(fixed_params, force=force)
         if adaptation_delta is not None:

@@ -6,6 +6,7 @@ Prediction models predict features, which can then be evaluated for performance.
 Integrates with DataModule for normalization and batching.
 """
 
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Type, Any, Tuple
 import copy
 import pandas as pd
@@ -14,11 +15,23 @@ import pickle
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
-from ..interfaces.prediction import IPredictionModel
+from ..interfaces.prediction import IPredictionModel, IDeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, Metrics, LocalData, SplitType
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
+
+
+@dataclass
+class _ModelKDE:
+    """Per-model KDE state for NatPN-light uncertainty estimation."""
+    model: IPredictionModel
+    latent_points: np.ndarray       # (n_configs, n_active_dims)
+    weights: np.ndarray             # (n_configs,) normalized
+    q_max: float
+    active_mask: np.ndarray         # bool mask over latent dims
+    n_active_dims: int
+    weight: float = 1.0             # performance weight for aggregation
 
 
 class PredictionSystem(BaseOrchestrationSystem):
@@ -43,14 +56,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Domain map populated during train(): model id → derived domain code
         self._model_domain_map: Dict[int, Optional[str]] = {}
 
-        # Evidence model state for NatPN-light uncertainty estimation (set after training)
-        self._latent_points: Optional[np.ndarray] = None   # (n_configs, n_active_dims)
-        self._latent_weights: Optional[np.ndarray] = None  # (n_configs,) normalized
-        self._q_max: Optional[float] = None
+        # Per-model KDE state for NatPN-light uncertainty estimation (populated after training).
+        # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
+        self._model_kdes: Dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._kde_bandwidth: Optional[float] = None        # h = c/√N after fitting
-        self._kde_active_mask: Optional[np.ndarray] = None
         self._exploration_radius: float = 0.5              # c: bubble radius at N=1
+
+        # Performance-based weights for uncertainty aggregation.
+        # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
+        self._uncertainty_weights: Dict[str, float] = {}
 
     def get_system_input_parameters(self) -> List[str]:
         """Get the parameter codes of all model inputs."""
@@ -104,11 +118,21 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
         self.datamodule.fit_normalization(SplitType.TRAIN)
-        
+
+        # Provide normalization context to deterministic models
+        for model in self.models:
+            if isinstance(model, IDeterministicModel):
+                norm_state = self.datamodule.get_normalization_state()
+                model.set_normalization_context(
+                    parameter_stats=norm_state.get('parameter_stats', {}),
+                    feature_stats=norm_state.get('feature_stats', {}),
+                    categorical_mappings=norm_state.get('categorical_mappings', {}),
+                )
+
         # Get batches
         train_batches = self.datamodule.get_batches(SplitType.TRAIN)
         val_batches = self.datamodule.get_batches(SplitType.VAL)
-        
+
         # Train each registered model
         trained_count = 0
         for model in self.models:
@@ -131,39 +155,55 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit KDE on latent representations of training configs (NatPN-light)
         self._fit_kde(datamodule)
     
-    # === UNCERTAINTY ESTIMATION (NatPN-light) ===
+    # === UNCERTAINTY ESTIMATION (NatPN-light, per-model KDE) ===
+
+    def set_uncertainty_weights(self, weights: Dict[str, float]) -> None:
+        """Set performance-based weights for per-model uncertainty aggregation.
+
+        Maps feature names (prediction model outputs) to their importance weight.
+        Used to compute a weighted average of per-model uncertainties.
+        If not set, all non-deterministic models contribute equally.
+        """
+        self._uncertainty_weights = dict(weights)
+
+    def _get_model_weight(self, model: IPredictionModel) -> float:
+        """Resolve the aggregation weight for a model from its output features."""
+        if not self._uncertainty_weights:
+            return 1.0
+        total = 0.0
+        for feat in model.outputs:
+            total += self._uncertainty_weights.get(feat, 0.0)
+        return total if total > 0 else 1.0
 
     def _fit_kde(self, datamodule: DataModule) -> None:
-        """Fit NatPN-light evidence model on latent representations of all training configs.
+        """Fit one KDE per non-deterministic model on latent representations of training configs.
 
-        One latent point per unique effective parameter configuration.
+        Each model gets its own KDE in its own latent space. Deterministic models are excluded
+        (zero epistemic uncertainty by definition). The per-model uncertainties are aggregated
+        into a single scalar by ``uncertainty()`` using performance-based weights.
+
+        One latent point per unique effective parameter configuration per model.
         Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
         Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
-
-        Bandwidth:  h = c · √d / √N  where c = exploration_radius, N = n_experiments, d = n_active_dims.
-        Sharpness:  γ = max(1, c·√N)  — both adapt dynamically as data accumulates.
         """
-        if not self.models:
+        self._model_kdes = {}
+        kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
+        if not kde_models:
+            self.logger.info("All models are deterministic — uncertainty defaults to 0.0.")
             return
 
-        latent_points: List[np.ndarray] = []
-        weights: List[float] = []
+        # Collect per-experiment config data (shared across models).
+        exp_configs: List[Tuple[Dict[str, Any], float]] = []  # (params, weight)
         n_exp = 0
-
         for code in datamodule.get_split_codes(SplitType.TRAIN):
             exp = datamodule.dataset.get_experiment(code)
             n_exp += 1
             n_rows = exp.get_num_rows()
 
             if not exp.parameter_updates:
-                # Non-trajectory: single config
                 params = exp.parameters.get_values_dict().copy()
-                z = self._encode_params(params, datamodule)
-                if z is not None:
-                    latent_points.append(z)
-                    weights.append(float(np.sqrt(max(n_rows, 1))))
+                exp_configs.append((params, float(np.sqrt(max(n_rows, 1)))))
             else:
-                # Trajectory: one point per segment (initial + each update event)
                 events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
                 seg_start = 0
                 for event in events:
@@ -171,60 +211,75 @@ class PredictionSystem(BaseOrchestrationSystem):
                     seg_rows = seg_end - seg_start
                     if seg_rows > 0:
                         params = exp.get_effective_parameters_for_row(seg_start)
-                        z = self._encode_params(params, datamodule)
-                        if z is not None:
-                            latent_points.append(z)
-                            weights.append(float(np.sqrt(max(seg_rows, 1))))
+                        exp_configs.append((params, float(np.sqrt(max(seg_rows, 1)))))
                     seg_start = seg_end
-                # Last segment
                 seg_rows = n_rows - seg_start
                 if seg_rows > 0:
                     params = exp.get_effective_parameters_for_row(seg_start)
-                    z = self._encode_params(params, datamodule)
-                    if z is not None:
-                        latent_points.append(z)
-                        weights.append(float(np.sqrt(max(seg_rows, 1))))
+                    exp_configs.append((params, float(np.sqrt(max(seg_rows, 1)))))
 
-        if len(latent_points) < 1:
+        self._n_exp = n_exp
+        if not exp_configs:
             self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
 
-        latent_array = np.array(latent_points)   # (n_configs, n_latent)
-        weights_array = np.array(weights)
-        weights_array = weights_array / weights_array.sum()  # normalize
+        # Fit one KDE per non-deterministic model.
+        for model in kde_models:
+            latent_points: List[np.ndarray] = []
+            point_weights: List[float] = []
 
-        # Drop constant dimensions across configs — no discriminative information.
-        # With a single config all dims are trivially "constant", so skip masking.
-        if latent_array.shape[0] > 1:
-            per_dim_std = np.std(latent_array, axis=0)
-            active_mask = per_dim_std > 1e-8
-            if not np.any(active_mask):
-                self.logger.info("All latent dimensions are constant across training configs — uncertainty defaults to 1.0.")
-                return
-        else:
-            active_mask = np.ones(latent_array.shape[1], dtype=bool)
+            for params, w in exp_configs:
+                z = self._encode_params_for_model(model, params, datamodule)
+                if z is not None:
+                    latent_points.append(z)
+                    point_weights.append(w)
 
-        projected = latent_array[:, active_mask]  # (n_samples, n_active_dims)
-        n_active_dims = projected.shape[1]
+            if not latent_points:
+                continue
 
-        # Dimension-aware bandwidth: h = c · √d / √N.
-        # Keeps volumetric bubble coverage ~constant regardless of latent dimension d,
-        # so c=0.5 behaves the same in 2D, 6D, etc.
-        h = self._exploration_radius * np.sqrt(float(n_active_dims)) / np.sqrt(float(n_exp))
-        self._latent_points = projected
-        self._latent_weights = weights_array
-        self._kde_active_mask = active_mask
-        self._kde_bandwidth = h
-        self._n_exp = n_exp
-        self._q_max = self._compute_q_max(projected, weights_array, h)
-        self.logger.info(
-            f"Evidence model fitted on {len(latent_points)} latent configs from {n_exp} experiments "
-            f"({n_active_dims}/{latent_array.shape[1]} active dims, "
-            f"c={self._exploration_radius}, h={h:.4f}, γ={max(1.0, self._exploration_radius * np.sqrt(float(n_exp))):.2f}, "
-            f"q_max={self._q_max:.6f})."
-        )
+            latent_array = np.array(latent_points)
+            weights_array = np.array(point_weights)
+            weights_array = weights_array / weights_array.sum()
 
-    def _compute_q_max(self, points: np.ndarray, weights: np.ndarray, h: float) -> float:
+            # Drop constant dimensions.
+            if latent_array.shape[0] > 1:
+                per_dim_std = np.std(latent_array, axis=0)
+                active_mask = per_dim_std > 1e-8
+                if not np.any(active_mask):
+                    continue
+            else:
+                active_mask = np.ones(latent_array.shape[1], dtype=bool)
+
+            projected = latent_array[:, active_mask]
+            n_active_dims = projected.shape[1]
+            h = self._exploration_radius * np.sqrt(float(n_active_dims)) / np.sqrt(float(n_exp))
+            q_max = self._compute_q_max(projected, weights_array, h)
+
+            self._model_kdes[id(model)] = _ModelKDE(
+                model=model,
+                latent_points=projected,
+                weights=weights_array,
+                q_max=q_max,
+                active_mask=active_mask,
+                n_active_dims=n_active_dims,
+                weight=self._get_model_weight(model),
+            )
+
+            self.logger.info(
+                f"Evidence KDE for {model.__class__.__name__}: "
+                f"{len(latent_points)} configs, {n_active_dims}/{latent_array.shape[1]} active dims, "
+                f"h={h:.4f}, weight={self._model_kdes[id(model)].weight:.2f}."
+            )
+
+        if self._model_kdes:
+            total_w = sum(k.weight for k in self._model_kdes.values())
+            self.logger.info(
+                f"Evidence model: {len(self._model_kdes)} per-model KDEs from {n_exp} experiments "
+                f"(c={self._exploration_radius}, total_weight={total_w:.2f})."
+            )
+
+    @staticmethod
+    def _compute_q_max(points: np.ndarray, weights: np.ndarray, h: float) -> float:
         """Max weighted KDE density over all training latent points."""
         dists_sq = np.sum((points[:, None, :] - points[None, :, :]) ** 2, axis=2)  # (N, N)
         q_vals = np.exp(-dists_sq / (2.0 * h ** 2)) @ weights                       # (N,)
@@ -237,32 +292,35 @@ class PredictionSystem(BaseOrchestrationSystem):
         γ = max(1, c·√N)  (edge steepness increases as data accumulates)
 
         Call before train() to take effect immediately, or after train() to
-        update the evidence model in place with the new radius.
+        update all per-model evidence KDEs in place with the new radius.
         """
         self._exploration_radius = exploration_radius
-        if self._latent_points is not None and self._latent_weights is not None and self._n_exp > 0:
-            d = float(self._latent_points.shape[1])
-            h = exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
-            self._kde_bandwidth = h
-            self._q_max = self._compute_q_max(self._latent_points, self._latent_weights, h)
+        if self._model_kdes and self._n_exp > 0:
+            for kde in self._model_kdes.values():
+                d = float(kde.n_active_dims)
+                h = exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+                kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
             self.logger.info(
                 f"Evidence model updated: exploration_radius={exploration_radius}, "
-                f"d={int(d)}, h={h:.4f}, γ={max(1.0, exploration_radius * np.sqrt(float(self._n_exp))):.2f}."
+                f"{len(self._model_kdes)} KDEs, N={self._n_exp}."
             )
 
-    def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
-        """Encode a params dict to latent representation via the first PM's encode()."""
+    def _encode_params_for_model(
+        self, model: IPredictionModel, params: Dict[str, Any], datamodule: DataModule,
+    ) -> Optional[np.ndarray]:
+        """Encode a params dict to latent representation via a specific model's encode()."""
         try:
             X_norm = datamodule.params_to_array(params)
-            return self._encode_from_norm_array(X_norm)
+            return self._encode_from_norm_array_for_model(model, X_norm)
         except Exception:
             return None
 
-    def _encode_from_norm_array(self, X_norm: np.ndarray) -> np.ndarray:
-        """Encode a 1-D normalized parameter array to latent space via first PM's encode()."""
-        if not self.models or self.datamodule is None:
+    def _encode_from_norm_array_for_model(
+        self, model: IPredictionModel, X_norm: np.ndarray,
+    ) -> np.ndarray:
+        """Encode a 1-D normalized parameter array via a specific model's encode()."""
+        if self.datamodule is None:
             return X_norm
-        model = self.models[0]
         input_cols = model.input_parameters + model.input_features
         input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
         if not input_indices:
@@ -270,21 +328,75 @@ class PredictionSystem(BaseOrchestrationSystem):
         X_model = X_norm[input_indices].reshape(1, -1)
         return model.encode(X_model)[0]
 
+    def _compute_model_uncertainty(self, kde: _ModelKDE, X_norm: np.ndarray) -> float:
+        """Compute uncertainty for a single model's KDE at a normalized parameter vector."""
+        z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
+        z = z[kde.active_mask]
+
+        d     = float(kde.n_active_dims)
+        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+        gamma = max(1.0, self._exploration_radius * np.sqrt(float(self._n_exp)))
+
+        dists_sq = np.sum((kde.latent_points - z) ** 2, axis=1)
+        q = float(np.dot(kde.weights, np.exp(-dists_sq / (2.0 * h ** 2))))
+
+        if kde.q_max <= 0:
+            return 1.0
+        ratio  = float(np.clip(q / kde.q_max, 0.0, 1.0))
+        n_post = float(self._n_exp) * (ratio ** gamma)
+        u      = 1.0 / (1.0 + n_post)
+        u_min  = 1.0 / (1.0 + float(self._n_exp))
+        return float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
+
+    def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
+        """Compute kernel similarity for a single model's latent space."""
+        z1 = self._encode_from_norm_array_for_model(kde.model, X1.reshape(-1))
+        z2 = self._encode_from_norm_array_for_model(kde.model, X2.reshape(-1))
+        z1 = z1[kde.active_mask]
+        z2 = z2[kde.active_mask]
+        d = float(kde.n_active_dims)
+        h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+        if h < 1e-10:
+            return 0.0
+        return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+
+    # --- Legacy encode helpers (kept for external callers) ---
+
+    def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
+        """Encode a params dict to latent representation via the primary model's encode()."""
+        model = self._primary_encode_model()
+        if model is None:
+            return None
+        return self._encode_params_for_model(model, params, datamodule)
+
+    def _encode_from_norm_array(self, X_norm: np.ndarray) -> np.ndarray:
+        """Encode a 1-D normalized parameter array via the primary model's encode()."""
+        model = self._primary_encode_model()
+        if model is None or self.datamodule is None:
+            return X_norm
+        return self._encode_from_norm_array_for_model(model, X_norm)
+
+    def _primary_encode_model(self) -> Optional[IPredictionModel]:
+        """Return the highest-weight non-deterministic model, or first model as fallback."""
+        best: Optional[IPredictionModel] = None
+        best_w = -1.0
+        for m in self.models:
+            if isinstance(m, IDeterministicModel):
+                continue
+            w = self._get_model_weight(m)
+            if w > best_w:
+                best, best_w = m, w
+        return best if best is not None else (self.models[0] if self.models else None)
+
     def encode(self, X: np.ndarray) -> np.ndarray:
         """Encode a batch of normalized parameter arrays to latent space.
 
-        Uses the first registered PM's encode() method.  Falls back to identity
-        if no models are registered or the system is not yet trained.
-
-        Args:
-            X: Normalized parameter array (batch_size, n_inputs)
-
-        Returns:
-            Latent array (batch_size, n_latent)
+        Uses the highest-weight non-deterministic model's encode(). Falls back to
+        identity if no models are registered or the system is not yet trained.
         """
-        if not self.models or self.datamodule is None:
+        model = self._primary_encode_model()
+        if model is None or self.datamodule is None:
             return X
-        model = self.models[0]
         input_cols = model.input_parameters + model.input_features
         input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
         if not input_indices:
@@ -292,64 +404,51 @@ class PredictionSystem(BaseOrchestrationSystem):
         X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
         return model.encode(X_model)
 
+    # --- Aggregated public API ---
+
     def uncertainty(self, X: np.ndarray) -> float:
         """Compute epistemic uncertainty at a normalized parameter vector.
 
-        Returns u_norm ∈ [0, 1]:
-            h      = c · √d / √N         (dimension-aware dynamic bubble radius)
-            γ      = max(1, c·√N)        (dynamic edge sharpness)
-            q      = Σ w_i · K_h(z, zᵢ) (weighted Gaussian KDE)
-            n_post = N · (q / q_max)^γ   (NatPN evidence posterior)
-            u_norm = (1/(1+n_post) − u_min) / (1 − u_min)
+        Aggregates per-model uncertainties as a performance-weighted average:
+            u(x) = Σ(w_i · u_i(x)) / Σ(w_i)
+        where u_i is the NatPN-light uncertainty from model i's KDE.
 
-        Returns 1.0 (maximum uncertainty) before the evidence model is fitted.
-
-        Args:
-            X: Normalized parameter array of shape (1, n_inputs) or (n_inputs,)
+        Deterministic models are excluded (zero epistemic uncertainty).
+        Returns 1.0 before the evidence model is fitted.
         """
-        if self._latent_points is None or self._latent_weights is None \
-                or self._q_max is None or self._q_max <= 0:
+        if not self._model_kdes:
             return 1.0
-        z = self._encode_from_norm_array(X.reshape(-1))
-        if self._kde_active_mask is not None:
-            z = z[self._kde_active_mask]
 
-        d     = float(self._latent_points.shape[1])
-        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
-        gamma = max(1.0, self._exploration_radius * np.sqrt(float(self._n_exp)))
+        total_w = 0.0
+        weighted_u = 0.0
+        for kde in self._model_kdes.values():
+            u_i = self._compute_model_uncertainty(kde, X)
+            weighted_u += kde.weight * u_i
+            total_w += kde.weight
 
-        dists_sq = np.sum((self._latent_points - z) ** 2, axis=1)
-        q = float(np.dot(self._latent_weights, np.exp(-dists_sq / (2.0 * h ** 2))))
-
-        ratio  = float(np.clip(q / self._q_max, 0.0, 1.0))
-        n_post = float(self._n_exp) * (ratio ** gamma)
-        u      = 1.0 / (1.0 + n_post)
-        u_min  = 1.0 / (1.0 + float(self._n_exp))
-        u_norm = float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
-        self.logger.debug(
-            f"uncertainty: h={h:.4f}, γ={gamma:.2f}, q={q:.6f}, n_post={n_post:.3f} -> u_norm={u_norm:.4f}"
-        )
-        return u_norm
+        u_agg = weighted_u / total_w if total_w > 0 else 1.0
+        self.logger.debug(f"uncertainty (aggregated): u={u_agg:.4f}")
+        return u_agg
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
-        """Gaussian kernel similarity between two parameter vectors in latent space.
+        """Performance-weighted kernel similarity between two parameter vectors.
 
-        sim(X1, X2) = exp(-||z1 - z2||^2 / h^2)
+        sim(x1, x2) = Σ(w_i · sim_i(x1, x2)) / Σ(w_i)
+        where sim_i is computed in model i's latent space.
 
-        Returns 0.0 if KDE has not been fitted yet (no bandwidth available).
-
-        Args:
-            X1, X2: Normalized parameter arrays of shape (n_inputs,) or (1, n_inputs)
+        Returns 0.0 if no KDEs are fitted.
         """
-        if self._kde_bandwidth is None or self._kde_bandwidth < 1e-10:
+        if not self._model_kdes or self._n_exp == 0:
             return 0.0
-        z1 = self._encode_from_norm_array(X1.reshape(-1))
-        z2 = self._encode_from_norm_array(X2.reshape(-1))
-        if self._kde_active_mask is not None:
-            z1 = z1[self._kde_active_mask]
-            z2 = z2[self._kde_active_mask]
-        h = self._kde_bandwidth
-        return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+
+        total_w = 0.0
+        weighted_sim = 0.0
+        for kde in self._model_kdes.values():
+            s_i = self._compute_model_similarity(kde, X1, X2)
+            weighted_sim += kde.weight * s_i
+            total_w += kde.weight
+
+        return weighted_sim / total_w if total_w > 0 else 0.0
 
     def predict_for_calibration(self, params: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Any]:
         """Predict feature arrays for all dimensional positions for calibration use.

@@ -2,7 +2,7 @@ from .external_data import IExternalData
 from .base_interface import BaseInterface
 from .features import IFeatureModel
 from .evaluation import IEvaluationModel
-from .prediction import IPredictionModel
+from .prediction import IPredictionModel, IDeterministicModel
 from .tuning import IResidualModel
 
 __all__ = [
@@ -11,5 +11,6 @@ __all__ = [
     "IFeatureModel",
     "IEvaluationModel",
     "IPredictionModel",
+    "IDeterministicModel",
     "IResidualModel"
 ]

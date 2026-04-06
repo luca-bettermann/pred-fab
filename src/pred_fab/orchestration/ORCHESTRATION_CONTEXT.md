@@ -10,7 +10,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `PfabAgent` | `agent.py` | Registration, initialization, step methods, single `configure()` entry point |
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
-| `PredictionSystem` | `prediction.py` | Trains/infers prediction models; provides uncertainty + similarity |
+| `PredictionSystem` | `prediction.py` | Trains/infers prediction models; per-model KDE uncertainty + similarity |
 | `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC |
 | `Optimizer` | `calibration.py` | Enum: `LBFGSB` (gradient multi-start, fast) / `DE` (differential evolution, global) |
 
