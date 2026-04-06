@@ -42,7 +42,9 @@ class DataModule:
         self.categorical_mappings: Dict[str, List[str]] = {}
         # Context features: observed but uncontrollable — input only, never in output_columns.
         self._context_feature_codes: List[str] = []
-        # self.original_input_columns: List[str] = []  # Before one-hot
+        # Precomputed extraction plan for fast numpy-based one-hot encoding.
+        # Each entry: (src_col, cat_val) — cat_val=None means plain numeric column.
+        self._col_extraction: List[Tuple[str, Optional[Any]]] = []
         
         # Column normalization methods map (for X)
         self._col_norm_methods: Dict[str, NormMethod] = {}
@@ -102,7 +104,17 @@ class DataModule:
                 feat_obj = self.dataset.schema.features.get(col)
                 if isinstance(feat_obj, DataArray) and feat_obj.context:
                     self._context_feature_codes.append(col)
-                
+
+        # Precompute per-column extraction plan for fast numpy one-hot encoding.
+        col_map = self.get_onehot_column_map()  # one_hot_col → (parent, cat_val)
+        self._col_extraction = []
+        for col in self.input_columns:
+            if col in col_map:
+                parent, cat_val = col_map[col]
+                self._col_extraction.append((parent, cat_val))
+            else:
+                self._col_extraction.append((col, None))
+
 
     # === DATAMODULE OPERATIONS ===
 
@@ -494,26 +506,18 @@ class DataModule:
                 data[:, i] = self._apply_normalization(data[:, i], stats[col])
     
     def _one_hot_encode(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Apply one-hot encoding and align columns to schema."""
-        X = X_df.copy()
-        
-        # One-hot encode
-        if self.categorical_mappings:
-            for col, categories in self.categorical_mappings.items():
-                if col not in X.columns:
-                    continue
-                for category in categories:
-                    col_name = f"{col}_{category}"
-                    X[col_name] = (X[col] == category).astype(float)
-                X = X.drop(columns=[col])
-        
-        # Ensure columns match and are ordered correctly
-        for col in self.input_columns:
-            if col not in X.columns:
-                X[col] = 0.0
-        
-        X = X[self.input_columns]
-        return X.values.astype(np.float32)
+        """Apply one-hot encoding and align columns to schema using a precomputed numpy extraction plan."""
+        n = len(X_df)
+        result = np.zeros((n, len(self.input_columns)), dtype=np.float32)
+        for j, (src_col, cat_val) in enumerate(self._col_extraction):
+            if src_col not in X_df.columns:
+                continue  # missing column stays 0.0
+            vals = X_df[src_col].values
+            if cat_val is None:
+                result[:, j] = vals.astype(np.float32)
+            else:
+                result[:, j] = (vals == cat_val).astype(np.float32)
+        return result
 
     def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> Dict[str, Any]:
         """Decode one-hot encoded categories from array."""

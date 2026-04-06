@@ -296,7 +296,7 @@ class PfabAgent:
         self,
         datamodule: DataModule,
         w_explore: float = 0.5,
-        n_optimization_rounds: int = 10,
+        n_optimization_rounds: int = 5,
         current_params: Optional[Dict[str, Any]] = None,
     ) -> ExperimentSpec:
         """UCB-based exploration proposal. Iterates over trajectory dimensions when configured."""
@@ -318,7 +318,7 @@ class PfabAgent:
         exp_data: ExperimentData,
         datamodule: DataModule,
         w_explore: float = 0.5,
-        n_optimization_rounds: int = 10,
+        n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
         current_params: Optional[Dict[str, Any]] = None,

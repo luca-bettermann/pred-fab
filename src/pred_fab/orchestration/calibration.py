@@ -41,6 +41,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Set after each _run_optimization call for external inspection.
         self.last_opt_nfev: int = 0
         self.last_opt_n_starts: int = 0
+        self.last_opt_score: float = 0.0
 
         # Set ordered weights
         self.schema = schema
@@ -335,7 +336,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values)
-        self.logger.debug(f"inference_func: sys_perf={sys_perf:.4f} -> obj={-sys_perf:.4f}")
         return -sys_perf
 
     def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
@@ -356,9 +356,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
         u = self.uncertainty_fn(X.reshape(-1))
         score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
-        self.logger.debug(
-            f"acquisition_func: perf={sys_perf:.4f}, u={u:.4f}, w_explore={w_explore:.2f} -> score={score:.4f}"
-        )
         return -score
 
     def _compute_system_performance(self, performance: List[float]) -> float:
@@ -832,6 +829,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.info(f"Optimization total: {n_starts} starts, {total_nfev} function evaluations")
         self.last_opt_nfev = total_nfev
         self.last_opt_n_starts = n_starts
+        self.last_opt_score = float(-best_val) if best_val != np.inf else 0.0
 
         # Handle failure
         if best_x is None:
