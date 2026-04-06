@@ -222,10 +222,10 @@ def test_run_calibration_online_trust_region_constrains_proposed_value(tmp_path)
     assert result["speed"] == pytest.approx(current_val, abs=delta + 0.1)
 
 
-# ===== CalibrationSystem.agent.configure_calibration integration =====
+# ===== agent.configure() integration =====
 
 def test_configure_calibration_sets_all_system_fields(tmp_path):
-    """agent.configure_calibration should correctly propagate all config to CalibrationSystem."""
+    """agent.configure() should correctly propagate all config to CalibrationSystem."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     configure_default_workflow_calibration(agent)
 

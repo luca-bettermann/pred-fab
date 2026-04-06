@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Dict, List, Optional, Any, Set, Tuple, Callable
 import numpy as np
 from scipy.optimize import minimize
@@ -10,6 +11,12 @@ from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, Dat
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
 from ..utils import PfabLogger, Mode, NormMethod, SourceStep
 from .base_system import BaseOrchestrationSystem
+
+
+class Optimizer(Enum):
+    """Optimization backend for the calibration acquisition function."""
+    LBFGSB = "lbfgsb"  # gradient-based multi-start (fast, local)
+    DE     = "de"       # differential evolution (global, slower)
 
 # Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -62,8 +69,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._ofat_codes: List[str] = []
         self._ofat_index: int = 0
 
-        # Optimizer backend: 'lbfgsb' (default, gradient-based) or 'de' (differential evolution).
-        self.optimizer: str = "lbfgsb"
+        self.optimizer: Optimizer = Optimizer.LBFGSB
 
 
         # Extract parameter constraints from schema
@@ -825,7 +831,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Run the acquisition function optimization."""
-        if self.optimizer == "de":
+        if self.optimizer == Optimizer.DE:
             return self._run_optimization_de(
                 datamodule, x0_params, bounds, objective_func, fixed_param_values
             )

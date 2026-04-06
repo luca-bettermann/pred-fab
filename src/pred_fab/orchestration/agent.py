@@ -13,7 +13,8 @@ from ..orchestration import (
     FeatureSystem,
     EvaluationSystem,
     PredictionSystem,
-    CalibrationSystem
+    CalibrationSystem,
+    Optimizer,
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
@@ -469,7 +470,7 @@ class PfabAgent:
         step_parameters: Optional[Dict[str, str]] = None,
         ofat_strategy: Optional[List[str]] = None,
         exploration_radius: Optional[float] = None,
-        optimizer: Optional[str] = None,
+        optimizer: Optional[Optimizer] = None,
         force: bool = False,
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
@@ -488,8 +489,7 @@ class PfabAgent:
         exploration_radius  — NatPN evidence model bubble size c:
                               h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
                               Larger c → slower transition from exploration to exploitation.
-        optimizer           — 'lbfgsb' (default, gradient-based multi-start) or
-                              'de' (differential evolution, global search, slower).
+        optimizer           — Optimizer.LBFGSB (default) or Optimizer.DE.
         force               — overwrite already-configured settings without warning.
         """
         if not self._initialized:
@@ -512,39 +512,6 @@ class PfabAgent:
             self.pred_system.configure_exploration(exploration_radius)
         if optimizer is not None:
             self.calibration_system.optimizer = optimizer
-
-    # ── Backward-compatible wrappers (kept for existing test code) ──────────────
-
-    def configure_calibration(
-        self,
-        performance_weights: Optional[Dict[str, float]] = None,
-        bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        fixed_params: Optional[Dict[str, Any]] = None,
-        adaptation_delta: Optional[Dict[str, float]] = None,
-        exploration_radius: Optional[float] = None,
-        force: bool = False,
-    ) -> None:
-        """Deprecated: use configure() instead."""
-        self.configure(
-            bounds=bounds,
-            performance_weights=performance_weights,
-            fixed_params=fixed_params,
-            adaptation_delta=adaptation_delta,
-            exploration_radius=exploration_radius,
-            force=force,
-        )
-
-    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Deprecated: use configure(step_parameters={code: dimension_code}) instead."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
-
-    def configure_ofat_strategy(self, codes: List[str]) -> None:
-        """Deprecated: use configure(ofat_strategy=codes) instead."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_ofat_strategy(codes)
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 

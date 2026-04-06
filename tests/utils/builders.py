@@ -153,7 +153,7 @@ def configure_default_workflow_calibration(agent: PfabAgent) -> None:
     in the workflow schema. Static parameters (``param_1``, ``param_2``) cannot receive
     trust regions as of Phase 2 validation.
     """
-    agent.configure_calibration(
+    agent.configure(
         performance_weights={"performance_1": 2.0, "performance_2": 1.3},
         bounds={"param_1": (0.0, 10.0), "param_2": (1, 4), "n_layers": (1, 3), "n_segments": (1, 3)},
         fixed_params={"param_3": "B"},

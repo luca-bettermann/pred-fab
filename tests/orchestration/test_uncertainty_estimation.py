@@ -556,8 +556,7 @@ def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    agent.calibration_system.configure_step_parameter("speed", "n_layers")
-    agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
+    agent.configure(step_parameters={"speed": "n_layers"}, adaptation_delta={"speed": 50.0})
 
     first_exp = dataset.get_experiment(codes[0])
     current_params = first_exp.parameters.get_values_dict()
