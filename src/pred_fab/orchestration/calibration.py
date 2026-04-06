@@ -348,8 +348,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sys_perf = self._compute_system_performance(perf_values)
         return -sys_perf
 
-    def _acquisition_func(self, X: np.ndarray, w_explore: float) -> float:
-        """EXPLORATION objective: negative UCB score = -(1−w)·perf + w·uncertainty."""
+    def _acquisition_func(
+        self,
+        X: np.ndarray,
+        w_explore: float,
+        perf_range: Optional[Tuple[float, float]] = None,
+        unc_range: Optional[Tuple[float, float]] = None,
+    ) -> float:
+        """EXPLORATION objective: negative UCB score with min-max normalized components."""
         dm = self._active_datamodule
         if dm is None:
             return 0.0
@@ -364,8 +370,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
-        u = self.uncertainty_fn(X.reshape(-1))
-        score = (1.0 - w_explore) * sys_perf + w_explore * float(u)
+        u = float(self.uncertainty_fn(X.reshape(-1)))
+
+        # Min-max normalize both components so w_explore has calibrated influence
+        if perf_range is not None:
+            pmin, pmax = perf_range
+            span = pmax - pmin
+            sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
+        if unc_range is not None:
+            umin, umax = unc_range
+            span = umax - umin
+            u = (u - umin) / span if span > 1e-10 else 0.5
+
+        score = (1.0 - w_explore) * sys_perf + w_explore * u
         return -score
 
     def _compute_system_performance(self, performance: List[float]) -> float:
@@ -432,14 +449,57 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return mpc_obj
 
-    def _build_objective(self, mode: Mode, w_explore: float) -> Callable:
+    def _estimate_acquisition_ranges(
+        self, bounds: np.ndarray, n_samples: int = 50,
+    ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        """Sample the search space to estimate performance and uncertainty ranges."""
+        dm = self._active_datamodule
+        if dm is None:
+            return (0.0, 1.0), (0.0, 1.0)
+
+        samples = self.rng.uniform(bounds[:, 0], bounds[:, 1], size=(n_samples, bounds.shape[0]))
+        perfs, uncs = [], []
+        for X in samples:
+            params_dict = dm.array_to_params(X)
+            try:
+                perf_dict = self.perf_fn(params_dict)
+                pv = [
+                    float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
+                    for name in self.perf_names_order if name in perf_dict
+                ]
+                perfs.append(self._compute_system_performance(pv) if pv else 0.0)
+            except Exception:
+                perfs.append(0.0)
+            try:
+                uncs.append(float(self.uncertainty_fn(X)))
+            except Exception:
+                uncs.append(1.0)
+
+        perf_range = (min(perfs), max(perfs))
+        unc_range = (min(uncs), max(uncs))
+        self.logger.debug(
+            f"Acquisition ranges — perf: [{perf_range[0]:.3f}, {perf_range[1]:.3f}], "
+            f"unc: [{unc_range[0]:.3f}, {unc_range[1]:.3f}]"
+        )
+        return perf_range, unc_range
+
+    def _build_objective(self, mode: Mode, w_explore: float, bounds: Optional[np.ndarray] = None) -> Callable:
         """Return the objective function for the given calibration mode."""
         if mode == Mode.BASELINE:
             raise ValueError(
                 "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
             )
         if mode == Mode.EXPLORATION:
-            return functools.partial(self._acquisition_func, w_explore=w_explore)
+            perf_range: Optional[Tuple[float, float]] = None
+            unc_range: Optional[Tuple[float, float]] = None
+            if bounds is not None:
+                perf_range, unc_range = self._estimate_acquisition_ranges(bounds)
+            return functools.partial(
+                self._acquisition_func,
+                w_explore=w_explore,
+                perf_range=perf_range,
+                unc_range=unc_range,
+            )
         elif mode == Mode.INFERENCE:
             return self._inference_func
         raise ValueError(f"Unknown calibration mode: {mode}")
@@ -664,7 +724,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
 
         self._active_datamodule = datamodule
-        objective = self._build_objective(mode, w_explore)
+
+        # For exploration, compute global bounds first so we can estimate ranges
+        global_bounds = self._get_global_bounds(datamodule) if mode == Mode.EXPLORATION else None
+        objective = self._build_objective(mode, w_explore, bounds=global_bounds)
 
         if lookahead > 0:
             objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
