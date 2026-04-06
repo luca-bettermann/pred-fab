@@ -13,6 +13,7 @@ from pred_fab.interfaces import (
     IEvaluationModel,
     IFeatureModel,
     IPredictionModel,
+    IDeterministicModel,
     IResidualModel,
 )
 
@@ -502,3 +503,22 @@ class ContractPredictionModelDefaults(IPredictionModel):
 
     def train(self, train_batches, val_batches, **kwargs) -> None:
         return None
+
+
+class ContractDeterministicModel(IDeterministicModel):
+    """Deterministic model for contract tests: formula = X[:, 0] * 2."""
+
+    @property
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def input_features(self):
+        return []
+
+    @property
+    def outputs(self):
+        return ["feature_scalar"]
+
+    def formula(self, X: np.ndarray) -> np.ndarray:
+        return (X[:, 0] * 2.0).reshape(-1, 1)
