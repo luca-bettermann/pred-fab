@@ -459,6 +459,62 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="predicted")
         return predictions
     
+    def configure(
+        self,
+        *,
+        bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        performance_weights: Optional[Dict[str, float]] = None,
+        fixed_params: Optional[Dict[str, Any]] = None,
+        adaptation_delta: Optional[Dict[str, float]] = None,
+        step_parameters: Optional[Dict[str, str]] = None,
+        ofat_strategy: Optional[List[str]] = None,
+        exploration_radius: Optional[float] = None,
+        optimizer: Optional[str] = None,
+        force: bool = False,
+    ) -> None:
+        """Configure the agent.  All parameters are keyword-only and optional.
+
+        Call configure() one or more times at any phase — only the supplied
+        arguments are applied; the rest remain unchanged.
+
+        bounds              — search space for offline calibration, keyed by parameter code.
+        performance_weights — relative importance of each performance attribute (default 1.0).
+        fixed_params        — parameters held constant during calibration (e.g. design intent).
+        adaptation_delta    — trust-region half-widths for online/layer-by-layer adaptation.
+        step_parameters     — {param_code: dimension_code} pairs declaring which runtime
+                              parameters are re-optimised at each step of the given dimension.
+        ofat_strategy       — cycle through these parameter codes one-at-a-time per adaptation
+                              step (OFAT).  Requires adaptation_delta to be set first.
+        exploration_radius  — NatPN evidence model bubble size c:
+                              h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
+                              Larger c → slower transition from exploration to exploitation.
+        optimizer           — 'lbfgsb' (default, gradient-based multi-start) or
+                              'de' (differential evolution, global search, slower).
+        force               — overwrite already-configured settings without warning.
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+
+        if bounds is not None:
+            self.calibration_system.configure_param_bounds(bounds, force=force)
+        if performance_weights is not None:
+            self.calibration_system.set_performance_weights(performance_weights)
+        if fixed_params is not None:
+            self.calibration_system.configure_fixed_params(fixed_params, force=force)
+        if adaptation_delta is not None:
+            self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
+        if step_parameters is not None:
+            for param_code, dim_code in step_parameters.items():
+                self.calibration_system.configure_step_parameter(param_code, dim_code, force=force)
+        if ofat_strategy is not None:
+            self.calibration_system.configure_ofat_strategy(ofat_strategy)
+        if exploration_radius is not None:
+            self.pred_system.configure_exploration(exploration_radius)
+        if optimizer is not None:
+            self.calibration_system.optimizer = optimizer
+
+    # ── Backward-compatible wrappers (kept for existing test code) ──────────────
+
     def configure_calibration(
         self,
         performance_weights: Optional[Dict[str, float]] = None,
@@ -466,39 +522,70 @@ class PfabAgent:
         fixed_params: Optional[Dict[str, Any]] = None,
         adaptation_delta: Optional[Dict[str, float]] = None,
         exploration_radius: Optional[float] = None,
-        force: bool = False
+        force: bool = False,
     ) -> None:
-        """Configure calibration and exploration parameters.
-
-        exploration_radius (c): controls the NatPN-light evidence model bubble size
-        and edge sharpness.  h = c/√N (radius), γ = max(1, c·√N) (steepness).
-        Larger c → more aggressive coverage per observation → slower transition to
-        exploitation.  Default 0.5 works well for normalized [0,1] parameter spaces.
-        """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-
-        if performance_weights:
-            self.calibration_system.set_performance_weights(performance_weights)
-            self.logger.info("Configured performance weights for calibration system.")
-        if bounds:
-            self.calibration_system.configure_param_bounds(bounds, force=force)
-            self.logger.info("Configured parameter bounds for calibration system.")
-        if fixed_params:
-            self.calibration_system.configure_fixed_params(fixed_params, force=force)
-            self.logger.info("Configured fixed parameters for calibration system.")
-        if adaptation_delta:
-            self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
-            self.logger.info("Configured adaptation delta for calibration system.")
-        if exploration_radius is not None:
-            self.pred_system.configure_exploration(exploration_radius)
-            self.logger.info(f"Configured exploration radius: c={exploration_radius}")
+        """Deprecated: use configure() instead."""
+        self.configure(
+            bounds=bounds,
+            performance_weights=performance_weights,
+            fixed_params=fixed_params,
+            adaptation_delta=adaptation_delta,
+            exploration_radius=exploration_radius,
+            force=force,
+        )
 
     def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Declare that a runtime parameter should be re-optimised at each step of the given dimension."""
+        """Deprecated: use configure(step_parameters={code: dimension_code}) instead."""
         if not self._initialized:
             raise RuntimeError("Agent not initialized.")
         self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
+
+    def configure_ofat_strategy(self, codes: List[str]) -> None:
+        """Deprecated: use configure(ofat_strategy=codes) instead."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        self.calibration_system.configure_ofat_strategy(codes)
+
+    # ── Optimizer telemetry (read-only, set after each calibration step) ────────
+
+    @property
+    def last_opt_score(self) -> float:
+        """Best acquisition score found in the most recent calibration step."""
+        return self.calibration_system.last_opt_score
+
+    @property
+    def last_opt_nfev(self) -> int:
+        """Number of objective evaluations in the most recent calibration step."""
+        return self.calibration_system.last_opt_nfev
+
+    @property
+    def last_opt_n_starts(self) -> int:
+        """Number of optimizer restarts used in the most recent calibration step."""
+        return self.calibration_system.last_opt_n_starts
+
+    # ── Acquisition introspection ───────────────────────────────────────────────
+
+    def predict_performance(self, params: Dict[str, Any]) -> Dict[str, Optional[float]]:
+        """Run the prediction + evaluation pipeline at params and return performance scores.
+
+        Uses the same perf_fn the optimizer uses internally — useful for logging what the
+        model predicts at a proposed point before committing to an experiment.
+        Requires the agent to be trained (pred_system must have a fitted model).
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        return self.calibration_system.perf_fn(params)
+
+    def predict_uncertainty(self, params: Dict[str, Any], datamodule: DataModule) -> float:
+        """Return the predicted uncertainty (0–1) at params.
+
+        Uses the same evidence model the acquisition function queries.
+        Pass the current datamodule so params are normalized consistently.
+        Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
+        """
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized.")
+        return float(self.pred_system.uncertainty(datamodule.params_to_array(params)))
 
     def update_context_snapshot(self, values: Dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.
@@ -509,17 +596,6 @@ class PfabAgent:
         """
         self._context_snapshot.clear()
         self._context_snapshot.update(values)
-
-    def configure_ofat_strategy(self, codes: List[str]) -> None:
-        """Configure One-Factor-At-a-Time cycling for online calibration steps.
-
-        Each online calibration call will vary only the currently active parameter in
-        ``codes`` (cycling in order), holding all other trust-region parameters fixed.
-        Call after configure_calibration() so trust regions are already set.
-        """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_ofat_strategy(codes)
 
     def baseline_step(
         self,
