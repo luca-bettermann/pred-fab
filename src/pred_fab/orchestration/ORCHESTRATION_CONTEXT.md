@@ -24,8 +24,10 @@ agent.configure(
     adaptation_delta={"speed": 10.0},    # trust-region half-width (runtime params only)
     step_parameters={"speed": "n_layers"},  # param → dimension for trajectory stepping
     ofat_strategy=["speed"],             # OFAT cycling order (requires trust regions)
-    exploration_radius=0.15,             # UCB exploration fraction
+    exploration_radius=0.15,             # KDE bubble size c: h=c·√d/√N, γ=max(1,c·√N)
     optimizer=Optimizer.DE,              # optimization backend
+    mpc_lookahead=0,                     # N-step MPC lookahead (0 = greedy)
+    mpc_discount=0.9,                    # MPC discount factor γ
     force=False,                         # re-configure after training if True
 )
 ```

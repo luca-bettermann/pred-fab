@@ -471,6 +471,8 @@ class PfabAgent:
         ofat_strategy: Optional[List[str]] = None,
         exploration_radius: Optional[float] = None,
         optimizer: Optional[Optimizer] = None,
+        mpc_lookahead: Optional[int] = None,
+        mpc_discount: Optional[float] = None,
         force: bool = False,
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
@@ -490,6 +492,8 @@ class PfabAgent:
                               h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
                               Larger c → slower transition from exploration to exploitation.
         optimizer           — Optimizer.LBFGSB (default) or Optimizer.DE.
+        mpc_lookahead       — N-step lookahead for MPC (default 0 = greedy single-step).
+        mpc_discount        — discount factor γ for MPC: step j counts as γʲ (default 0.9).
         force               — overwrite already-configured settings without warning.
         """
         if not self._initialized:
@@ -521,6 +525,10 @@ class PfabAgent:
             self.pred_system.configure_exploration(exploration_radius)
         if optimizer is not None:
             self.calibration_system.optimizer = optimizer
+        if mpc_lookahead is not None:
+            self.calibration_system.default_mpc_lookahead = mpc_lookahead
+        if mpc_discount is not None:
+            self.calibration_system.default_mpc_discount = mpc_discount
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 

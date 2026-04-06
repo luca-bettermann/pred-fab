@@ -39,6 +39,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.similarity_fn = similarity_fn
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
+        self.default_mpc_lookahead: int = 0
         self.default_mpc_discount: float = 0.9
 
         # Active datamodule — set before each optimization run so that
@@ -648,7 +649,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: Optional[Dict[str, int]] = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        mpc_lookahead: int = 0,
+        mpc_lookahead: Optional[int] = None,
         mpc_discount: Optional[float] = None,
     ) -> ExperimentSpec:
         """Run a single calibration pass and return an ExperimentSpec.
@@ -659,7 +660,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         mpc_discount (γ): weight for future steps in the MPC sum Σ γʲ·score(Xⱼ).
           γ=0.9 means step j=1 counts at 90%, j=2 at 81%, etc. — nearer steps matter more.
         """
-        lookahead = mpc_lookahead
+        lookahead = self.default_mpc_lookahead if mpc_lookahead is None else mpc_lookahead
         discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
 
         self._active_datamodule = datamodule
