@@ -62,6 +62,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._ofat_codes: List[str] = []
         self._ofat_index: int = 0
 
+        # Optimizer backend: 'lbfgsb' (default, gradient-based) or 'de' (differential evolution).
+        self.optimizer: str = "lbfgsb"
+
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -770,6 +773,48 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
+    def _run_optimization_de(
+        self,
+        datamodule: DataModule,
+        x0_params: Optional[Dict[str, Any]],
+        bounds: np.ndarray,
+        objective_func: Callable,
+        fixed_param_values: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run differential evolution (global, population-based) and return best parameters."""
+        from scipy.optimize import differential_evolution
+        seed = int(self.rng.randint(0, 2**31 - 1))
+        result = differential_evolution(
+            func=objective_func,
+            bounds=bounds.tolist(),
+            maxiter=50,
+            popsize=5,
+            seed=seed,
+            mutation=(0.5, 1.0),
+            recombination=0.7,
+            tol=1e-4,
+            polish=True,
+            init='latinhypercube',
+        )
+        self.last_opt_nfev = result.nfev
+        self.last_opt_n_starts = 1
+        self.last_opt_score = float(-result.fun)
+        self.logger.info(
+            f"DE optimization: nfev={result.nfev}, score={self.last_opt_score:.6f}, "
+            f"converged={result.success}"
+        )
+
+        proposed_params = datamodule.array_to_params(result.x)
+        if fixed_param_values:
+            proposed_params.update(fixed_param_values)
+        if x0_params:
+            for k, v in x0_params.items():
+                if k not in proposed_params:
+                    proposed_params[k] = v
+        return datamodule.dataset.schema.parameters.sanitize_values(
+            proposed_params, ignore_unknown=True
+        )
+
     def _run_optimization(
         self,
         datamodule: DataModule,
@@ -780,6 +825,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Run the acquisition function optimization."""
+        if self.optimizer == "de":
+            return self._run_optimization_de(
+                datamodule, x0_params, bounds, objective_func, fixed_param_values
+            )
+
         # Start from current params if available
         x0_list = []
         if x0_params:

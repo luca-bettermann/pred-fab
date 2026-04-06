@@ -104,11 +104,11 @@ def test_coherence_error_on_mixed_output_depths(tmp_path):
         @property
         def outputs(self): return ["feat_deep", "feat_shallow"]  # mixed depths
         def forward_pass(self, X): return np.zeros((X.shape[0], 2))
-        def train(self, tb, vb, **kw): pass
+        def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
     model = MixedDepthModel(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="mixed depths"):
         model.validate_dimensional_coherence(schema)
@@ -145,11 +145,11 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
         @property
         def outputs(self): return ["feat_shallow"]
         def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-        def train(self, tb, vb, **kw): pass
+        def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
     model = DeepInputShallowOutputModel(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="depth"):
         model.validate_dimensional_coherence(schema)
@@ -196,11 +196,11 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
         @property
         def outputs(self): return ["feat_spatial", "feat_temporal"]
         def forward_pass(self, X): return np.zeros((X.shape[0], 2))
-        def train(self, tb, vb, **kw): pass
+        def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
     model = MultiDomainModel(logger)
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
-    model.set_ref_features(list(schema.features.data_objects.values()))
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="multiple named domains"):
         model.validate_dimensional_coherence(schema)

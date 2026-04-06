@@ -116,7 +116,7 @@ def test_inject_context_features_copies_column(tmp_path):
     y_df = pd.DataFrame({"path_deviation": [0.1, 0.2], "temperature": [22.5, 23.0]})
     result = dm._inject_context_features(X_df, y_df)
     assert "temperature" in result.columns
-    np.testing.assert_array_almost_equal(result["temperature"].values, [22.5, 23.0])
+    np.testing.assert_array_almost_equal(result["temperature"].values, [22.5, 23.0])  # type: ignore[arg-type]
 
 
 def test_inject_context_features_no_context_noop(tmp_path):

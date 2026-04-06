@@ -23,13 +23,13 @@ def test_set_values_from_df_is_transform_boundary_for_feature_tables(tmp_path):
         for j in range(3):
             rows.append([i, j, i * 10 + j])
 
-    df = pd.DataFrame(rows, columns=["d1", "d2", "feature_grid"], dtype=np.float64)
+    df = pd.DataFrame(rows, columns=["d1", "d2", "feature_grid"], dtype=np.float64)  # type: ignore[call-overload]
     exp.features.set_values_from_df(df, logger=dataset.logger, parameters=exp.parameters)
 
     stored = exp.features.get_value("feature_grid")
     assert stored.shape == (2, 3)
     assert float(stored[1, 2]) == 12.0
-    assert exp.features.get("feature_grid").columns == ["d1", "d2", "feature_grid"]
+    assert exp.features.get("feature_grid").columns == ["d1", "d2", "feature_grid"]  # type: ignore[union-attr]
 
 
 def test_tensor_to_table_roundtrip_for_mixed_features(tmp_path):
@@ -67,7 +67,7 @@ def test_is_populated_true_after_set_values_from_df(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     rows = [[i, j, float(i * 10 + j)] for i in range(2) for j in range(3)]
-    df = pd.DataFrame(rows, columns=["d1", "d2", "feature_grid"], dtype=np.float64)
+    df = pd.DataFrame(rows, columns=["d1", "d2", "feature_grid"], dtype=np.float64)  # type: ignore[call-overload]
     exp.features.set_values_from_df(df, logger=dataset.logger, parameters=exp.parameters)
 
     assert exp.features.is_populated("feature_grid") is True

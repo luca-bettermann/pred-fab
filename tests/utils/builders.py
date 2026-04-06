@@ -217,7 +217,11 @@ def build_initialized_datamodule(
         output_columns=output_columns,
     )
     if split_codes is not None:
-        datamodule._split_codes = split_codes
+        datamodule.set_split_codes(
+            train_codes=split_codes.get(SplitType.TRAIN, []),
+            val_codes=split_codes.get(SplitType.VAL, []),
+            test_codes=split_codes.get(SplitType.TEST, []),
+        )
     if fitted:
         datamodule._is_fitted = True
     return datamodule
@@ -236,7 +240,7 @@ def build_shape_checking_prediction_system(
         ShapeCheckingPredictionModel(logger=logger, in_params=in_params, outputs=outputs)
         for in_params, outputs in model_specs
     ]
-    system.models = models
+    system.models = models  # type: ignore[assignment]
     system.datamodule = datamodule
     return system, models
 
@@ -259,7 +263,7 @@ def build_calibration_system(
     return CalibrationSystem(
         schema=schema,
         logger=logger,
-        perf_fn=perf_fn or _default_perf_fn,
+        perf_fn=perf_fn or _default_perf_fn,  # type: ignore[arg-type]
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
         similarity_fn=similarity_fn,
     )

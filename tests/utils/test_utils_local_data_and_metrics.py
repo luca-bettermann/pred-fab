@@ -11,7 +11,7 @@ def test_local_data_roundtrip_parameters_and_features(tmp_path):
     saved_params = local.save_parameters(["exp_001"], {"exp_001": {"a": 1, "b": 2.0}}, recompute=True)
     saved_feats = local.save_features(
         ["exp_001"],
-        {"exp_001": np.array([[0, 0, 1.1], [0, 1, 2.2]])},
+        {"exp_001": np.array([[0, 0, 1.1], [0, 1, 2.2]])},  # type: ignore[arg-type]
         recompute=True,
         feature_name="feature_x",
         column_names=["d1", "d2", "feature_x"],
@@ -25,8 +25,8 @@ def test_local_data_roundtrip_parameters_and_features(tmp_path):
     assert missing_p == ["exp_999"]
     assert missing_f == ["exp_999"]
     assert params["exp_001"]["a"] == 1
-    assert list(feats["exp_001"].columns) == ["d1", "d2", "feature_x"]
-    assert float(feats["exp_001"].iloc[1]["feature_x"]) == 2.2
+    assert list(feats["exp_001"].columns) == ["d1", "d2", "feature_x"]  # type: ignore[union-attr]
+    assert float(feats["exp_001"].iloc[1]["feature_x"]) == 2.2  # type: ignore[union-attr]
 
 
 def test_metrics_handles_constant_targets_and_shape_mismatch():

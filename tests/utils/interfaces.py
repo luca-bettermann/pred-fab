@@ -441,7 +441,7 @@ class ContractFeatureModelBadOutputType(IFeatureModel):
     def _load_data(self, params, **dimensions):
         return None
 
-    def _compute_feature_logic(self, data, params, visualize=False, **dimensions):
+    def _compute_feature_logic(self, data, params, visualize=False, **dimensions):  # type: ignore[override]
         return {"feature_d1": "non_numeric"}
 
 
@@ -449,7 +449,7 @@ class ContractFeatureModelInvalidProps(IFeatureModel):
     """Feature interface for contract tests with invalid property type."""
 
     @property
-    def input_parameters(self):
+    def input_parameters(self):  # type: ignore[override]
         return "dim_1"
 
     @property

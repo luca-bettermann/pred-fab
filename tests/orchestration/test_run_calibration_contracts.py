@@ -173,7 +173,7 @@ class TestOfflineInferenceExperimentLevel:
         agent, exp, datamodule = _setup_real_agent(tmp_path)
         with pytest.raises((ValueError, AttributeError)):
             agent.calibration_system.run_calibration(
-                datamodule=datamodule, mode="invalid_mode",
+                datamodule=datamodule, mode="invalid_mode",  # type: ignore[arg-type]
             )
 
     def test_explicit_offline_domain_behaves_same_as_default(self, tmp_path):
@@ -1288,7 +1288,7 @@ class TestMPCLookahead:
         def shaped_perf(params_dict):
             return {"performance_1": float(params_dict.get("speed", 0.0)) / 200.0}
 
-        cs.perf_fn = shaped_perf
+        cs.perf_fn = shaped_perf  # type: ignore[assignment]
         cs._active_datamodule = datamodule
 
         current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}

@@ -13,7 +13,7 @@ from tests.utils.interfaces import (
 def test_feature_interface_compute_features_orders_outputs_and_dimensions(tmp_path):
     schema = build_mixed_feature_schema(tmp_path, name="schema_interfaces_feature")
     model = ContractFeatureModelOk(build_test_logger(tmp_path))
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
 
     params = schema.parameters.from_dict(schema.parameters.to_dict())
     params.set_values_from_dict({"param_1": 2.0, "dim_1": 2, "dim_2": 3}, logger=build_test_logger(tmp_path))
@@ -27,7 +27,7 @@ def test_feature_interface_compute_features_orders_outputs_and_dimensions(tmp_pa
 def test_feature_interface_rejects_non_numeric_output_values(tmp_path):
     schema = build_mixed_feature_schema(tmp_path, name="schema_interfaces_bad_output")
     model = ContractFeatureModelBadOutputType(build_test_logger(tmp_path))
-    model.set_ref_parameters(list(schema.parameters.data_objects.values()))
+    model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
 
     params = schema.parameters.from_dict(schema.parameters.to_dict())
     params.set_values_from_dict({"param_1": 2.0, "dim_1": 2, "dim_2": 3}, logger=build_test_logger(tmp_path))

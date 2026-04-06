@@ -128,7 +128,7 @@ def test_uncertainty_lower_for_training_config_than_ood(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     pred = agent.pred_system
-    if pred._kde is None:
+    if pred._kde_bandwidth is None:
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     first_exp = dataset.get_experiment(codes[0])
@@ -156,7 +156,7 @@ def test_uncertainty_returns_one_for_single_training_config(tmp_path):
     pred = agent.pred_system
 
     # KDE is skipped when n_latent_points < 2
-    if pred._kde is None:
+    if pred._kde_bandwidth is None:
         X = datamodule.params_to_array(exp.parameters.get_values_dict())
         assert pred.uncertainty(X) == pytest.approx(1.0)
     else:
@@ -509,7 +509,7 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    if agent.pred_system._kde is None:
+    if agent.pred_system._kde_bandwidth is None:
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
