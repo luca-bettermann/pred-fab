@@ -64,6 +64,11 @@ class PfabAgent:
         # Progress tracking
         self.active_exp: Optional[ExperimentData] = None
         
+    def _assert_initialized(self) -> None:
+        """Raise if the agent has not been initialized yet."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized. Call initialize_systems() first.")
+
     # === MODEL REGISTRATION ===
 
     def _register_model(
@@ -229,8 +234,7 @@ class PfabAgent:
 
     def set_active_experiment(self, exp_data: ExperimentData) -> None:
         """Set the active experiment for online operations."""
-        if not self._initialized:
-             raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         
         self.active_exp = exp_data
         self.logger.info(f"Active experiment set to: {exp_data.code}")
@@ -496,8 +500,7 @@ class PfabAgent:
         mpc_discount        — discount factor γ for MPC: step j counts as γʲ (default 0.9).
         force               — overwrite already-configured settings without warning.
         """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
 
         if bounds is not None:
             self.calibration_system.configure_param_bounds(bounds, force=force)
@@ -556,8 +559,7 @@ class PfabAgent:
         model predicts at a proposed point before committing to an experiment.
         Requires the agent to be trained (pred_system must have a fitted model).
         """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         return self.calibration_system.perf_fn(params)
 
     def predict_uncertainty(self, params: Dict[str, Any], datamodule: DataModule) -> float:
@@ -567,8 +569,7 @@ class PfabAgent:
         Pass the current datamodule so params are normalized consistently.
         Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
         """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         return float(self.pred_system.uncertainty(datamodule.params_to_array(params)))
 
     def update_context_snapshot(self, values: Dict[str, float]) -> None:
@@ -587,8 +588,7 @@ class PfabAgent:
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> List[ExperimentSpec]:
         """Generate n space-filling baseline proposals using LHS. No trained model required."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         result = self.calibration_system.run_baseline(
             n=n,
             param_bounds=param_bounds,
@@ -647,8 +647,7 @@ class PfabAgent:
     
     def _check_systems(self, step: StepType) -> None:
         """Validate that all systems are initialized and active for a full step."""
-        if not self._initialized:
-            raise RuntimeError("Cannot perform step before initialize() is called.")
+        self._assert_initialized()
         
         if step == StepType.EVAL:
             rel_systems = [self.feature_system, self.eval_system]
