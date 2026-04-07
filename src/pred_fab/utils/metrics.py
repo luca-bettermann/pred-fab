@@ -50,24 +50,30 @@ class Metrics:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         importance: np.ndarray,
-        w_explore: float = 0.7,
+        alpha: float = 0.0,
+        symmetric: bool = True,
     ) -> Dict[str, float]:
-        """Performance-adjusted R² that measures whether prediction quality concentrates near high-importance samples.
+        """Performance-adjusted R² that up-weights high-importance samples.
 
         Returns dict with 'r2', 'r2_adj', and 'n_samples'.
 
         The *importance* array (one value per sample, in [0, 1]) expresses how
         relevant each sample is for the downstream optimization objective.
-        Typically ``importance_i = max(perf_true_i, perf_pred_i)`` so that both
-        actually-good and predicted-good samples count.
+        When *symmetric* is True (default), the caller should compute
+        ``importance_i = max(perf_true_i, perf_pred_i)`` so that both
+        actually-good and predicted-good samples count.  When False, only
+        ground-truth performance is used — better for cross-method comparison
+        since weights become model-independent.
 
-        Interpretation of the gap:
-          r2_adj > r2  →  high-importance samples are predicted worse
-          r2_adj < r2  →  high-importance samples are predicted better (exploration working)
-          r2_adj ≈ r2  →  prediction quality is uniform across the space
+        *alpha* ∈ [0, 1] sets the minimum weight floor:
+          ``weight_i = alpha + (1 − alpha) · importance_i``
+        At alpha=0 (default): weights = importance (pure importance weighting).
+        At alpha=1: weights = 1 for all samples (r2_adj = r2).
 
-        When *w_explore* = 1 the weights become uniform and r2_adj = r2.
-        The gap magnitude scales with (1 − w_explore).
+        Interpretation of the gap (r2_adj − r2):
+          gap > 0  →  high-importance samples predicted better (exploration working)
+          gap < 0  →  high-importance samples predicted worse
+          gap ≈ 0  →  prediction quality is uniform across the space
         """
         y_true = np.asarray(y_true, dtype=float)
         y_pred = np.asarray(y_pred, dtype=float)
@@ -83,10 +89,10 @@ class Metrics:
         if n == 0:
             return {'r2': 0.0, 'r2_adj': 0.0, 'n_samples': 0}
 
-        w_explore = float(np.clip(w_explore, 0.0, 1.0))
+        alpha = float(np.clip(alpha, 0.0, 1.0))
 
-        # Weights: down-weight important samples so the gap reveals where errors concentrate
-        weights = 1.0 - (1.0 - w_explore) * importance
+        # Up-weight important samples: floor at alpha, scale to 1 at importance=1
+        weights = alpha + (1.0 - alpha) * importance
 
         r2 = Metrics._r2(y_true, y_pred)
         r2_adj = Metrics._r2(y_true, y_pred, weights=weights)

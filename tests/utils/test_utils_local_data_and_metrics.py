@@ -92,14 +92,14 @@ def test_adjusted_r2_returns_expected_keys():
     assert result["n_samples"] == 4
 
 
-def test_adjusted_r2_equals_r2_when_w_explore_is_one():
-    """When w_explore=1, weights are uniform → r2_adj must equal r2."""
+def test_adjusted_r2_equals_r2_when_alpha_is_one():
+    """When alpha=1, weights are uniform → r2_adj must equal r2."""
     rng = np.random.default_rng(42)
     y_true = rng.normal(0, 1, 50)
     y_pred = y_true + rng.normal(0, 0.3, 50)
     importance = rng.uniform(0, 1, 50)
 
-    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=1.0)
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, alpha=1.0)
     assert result["r2_adj"] == pytest.approx(result["r2"], abs=1e-10)
 
 
@@ -110,13 +110,12 @@ def test_adjusted_r2_uniform_importance_equals_r2():
     y_pred = y_true + rng.normal(0, 0.5, 30)
     importance = np.full(30, 0.6)
 
-    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, alpha=0.0)
     assert result["r2_adj"] == pytest.approx(result["r2"], abs=1e-10)
 
 
-def test_adjusted_r2_lower_when_high_importance_predicted_better():
-    """If errors concentrate on low-importance samples, r2_adj > r2 (low-importance
-    samples dominate the adjusted score and they have larger errors)."""
+def test_adjusted_r2_higher_when_high_importance_predicted_better():
+    """If high-importance samples are predicted well, up-weighting them raises R²_adj."""
     n = 100
     rng = np.random.default_rng(123)
     y_true = rng.uniform(0, 10, n)
@@ -126,17 +125,13 @@ def test_adjusted_r2_lower_when_high_importance_predicted_better():
     noise = np.where(importance > 0.5, 0.0, rng.normal(0, 3.0, n))
     y_pred = y_true + noise
 
-    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
-    # r2_adj focuses on low-importance (noisy) samples → should be worse than r2
-    # Equivalently: high-importance predicted better → r2_adj < r2... wait, no.
-    # Down-weighting important (well-predicted) samples means the remaining
-    # noisy samples dominate → r2_adj should be LOWER than r2.
-    # But our formula: r2_adj < r2 means "high-importance predicted better" ✓
-    assert result["r2_adj"] < result["r2"]
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, alpha=0.0)
+    # Up-weighting well-predicted important samples → r2_adj > r2
+    assert result["r2_adj"] > result["r2"]
 
 
-def test_adjusted_r2_higher_when_high_importance_predicted_worse():
-    """If errors concentrate on high-importance samples, r2_adj > r2."""
+def test_adjusted_r2_lower_when_high_importance_predicted_worse():
+    """If high-importance samples are predicted poorly, up-weighting them lowers R²_adj."""
     n = 100
     rng = np.random.default_rng(456)
     y_true = rng.uniform(0, 10, n)
@@ -146,13 +141,13 @@ def test_adjusted_r2_higher_when_high_importance_predicted_worse():
     noise = np.where(importance > 0.5, rng.normal(0, 3.0, n), 0.0)
     y_pred = y_true + noise
 
-    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
-    # Down-weighting important (noisy) samples leaves the clean ones → r2_adj > r2
-    assert result["r2_adj"] > result["r2"]
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, alpha=0.0)
+    # Up-weighting poorly-predicted important samples → r2_adj < r2
+    assert result["r2_adj"] < result["r2"]
 
 
-def test_adjusted_r2_gap_scales_with_w_explore():
-    """The gap |r2_adj - r2| should shrink as w_explore increases toward 1."""
+def test_adjusted_r2_gap_scales_with_alpha():
+    """The gap |r2_adj - r2| should shrink as alpha increases toward 1."""
     n = 80
     rng = np.random.default_rng(789)
     y_true = rng.uniform(0, 10, n)
@@ -161,8 +156,8 @@ def test_adjusted_r2_gap_scales_with_w_explore():
     y_pred = y_true + noise
 
     gaps = []
-    for w in [0.0, 0.3, 0.7, 1.0]:
-        r = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=w)
+    for a in [0.0, 0.3, 0.7, 1.0]:
+        r = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, alpha=a)
         gaps.append(abs(r["r2_adj"] - r["r2"]))
 
     # Gaps should be monotonically non-increasing
@@ -175,6 +170,20 @@ def test_adjusted_r2_empty_arrays():
     assert result["r2"] == 0.0
     assert result["r2_adj"] == 0.0
     assert result["n_samples"] == 0
+
+
+def test_adjusted_r2_symmetric_flag_ignored_when_importance_precomputed():
+    """The symmetric flag is a caller hint; the method itself just uses the importance array.
+    Verify it doesn't change the result when the same importance is passed."""
+    rng = np.random.default_rng(99)
+    y_true = rng.normal(5, 2, 30)
+    y_pred = y_true + rng.normal(0, 0.5, 30)
+    importance = rng.uniform(0, 1, 30)
+
+    r_sym = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, symmetric=True)
+    r_asym = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, symmetric=False)
+    # Same importance → same result regardless of flag
+    assert r_sym["r2_adj"] == pytest.approx(r_asym["r2_adj"], abs=1e-10)
 
 
 def test_adjusted_r2_length_mismatch_raises():
