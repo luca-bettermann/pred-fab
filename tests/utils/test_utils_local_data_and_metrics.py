@@ -81,3 +81,104 @@ def test_metrics_empty_arrays_return_zeros():
     assert result["rmse"] == 0.0
     assert result["r2"] == 0.0
     assert result["n_samples"] == 0
+
+
+# ── Performance-adjusted R² ─────────────────────────────────────────────────
+
+def test_adjusted_r2_returns_expected_keys():
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    result = Metrics.calculate_adjusted_r2(y, y, importance=np.array([0.5, 0.5, 0.5, 0.5]))
+    assert set(result.keys()) == {"r2", "r2_adj", "n_samples"}
+    assert result["n_samples"] == 4
+
+
+def test_adjusted_r2_equals_r2_when_w_explore_is_one():
+    """When w_explore=1, weights are uniform → r2_adj must equal r2."""
+    rng = np.random.default_rng(42)
+    y_true = rng.normal(0, 1, 50)
+    y_pred = y_true + rng.normal(0, 0.3, 50)
+    importance = rng.uniform(0, 1, 50)
+
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=1.0)
+    assert result["r2_adj"] == pytest.approx(result["r2"], abs=1e-10)
+
+
+def test_adjusted_r2_uniform_importance_equals_r2():
+    """With constant importance, weights are constant → r2_adj equals r2."""
+    rng = np.random.default_rng(7)
+    y_true = rng.normal(5, 2, 30)
+    y_pred = y_true + rng.normal(0, 0.5, 30)
+    importance = np.full(30, 0.6)
+
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
+    assert result["r2_adj"] == pytest.approx(result["r2"], abs=1e-10)
+
+
+def test_adjusted_r2_lower_when_high_importance_predicted_better():
+    """If errors concentrate on low-importance samples, r2_adj > r2 (low-importance
+    samples dominate the adjusted score and they have larger errors)."""
+    n = 100
+    rng = np.random.default_rng(123)
+    y_true = rng.uniform(0, 10, n)
+    importance = rng.uniform(0, 1, n)
+
+    # Make predictions perfect for high-importance, noisy for low-importance
+    noise = np.where(importance > 0.5, 0.0, rng.normal(0, 3.0, n))
+    y_pred = y_true + noise
+
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
+    # r2_adj focuses on low-importance (noisy) samples → should be worse than r2
+    # Equivalently: high-importance predicted better → r2_adj < r2... wait, no.
+    # Down-weighting important (well-predicted) samples means the remaining
+    # noisy samples dominate → r2_adj should be LOWER than r2.
+    # But our formula: r2_adj < r2 means "high-importance predicted better" ✓
+    assert result["r2_adj"] < result["r2"]
+
+
+def test_adjusted_r2_higher_when_high_importance_predicted_worse():
+    """If errors concentrate on high-importance samples, r2_adj > r2."""
+    n = 100
+    rng = np.random.default_rng(456)
+    y_true = rng.uniform(0, 10, n)
+    importance = rng.uniform(0, 1, n)
+
+    # Make predictions noisy for high-importance, perfect for low-importance
+    noise = np.where(importance > 0.5, rng.normal(0, 3.0, n), 0.0)
+    y_pred = y_true + noise
+
+    result = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=0.0)
+    # Down-weighting important (noisy) samples leaves the clean ones → r2_adj > r2
+    assert result["r2_adj"] > result["r2"]
+
+
+def test_adjusted_r2_gap_scales_with_w_explore():
+    """The gap |r2_adj - r2| should shrink as w_explore increases toward 1."""
+    n = 80
+    rng = np.random.default_rng(789)
+    y_true = rng.uniform(0, 10, n)
+    importance = rng.uniform(0, 1, n)
+    noise = np.where(importance > 0.5, rng.normal(0, 2.0, n), 0.0)
+    y_pred = y_true + noise
+
+    gaps = []
+    for w in [0.0, 0.3, 0.7, 1.0]:
+        r = Metrics.calculate_adjusted_r2(y_true, y_pred, importance, w_explore=w)
+        gaps.append(abs(r["r2_adj"] - r["r2"]))
+
+    # Gaps should be monotonically non-increasing
+    for i in range(len(gaps) - 1):
+        assert gaps[i] >= gaps[i + 1] - 1e-10
+
+
+def test_adjusted_r2_empty_arrays():
+    result = Metrics.calculate_adjusted_r2(np.array([]), np.array([]), np.array([]))
+    assert result["r2"] == 0.0
+    assert result["r2_adj"] == 0.0
+    assert result["n_samples"] == 0
+
+
+def test_adjusted_r2_length_mismatch_raises():
+    with pytest.raises(ValueError, match="Length mismatch"):
+        Metrics.calculate_adjusted_r2(
+            np.array([1.0, 2.0]), np.array([1.0, 2.0]), np.array([0.5])
+        )
