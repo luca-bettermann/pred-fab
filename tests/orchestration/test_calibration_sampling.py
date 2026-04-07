@@ -242,7 +242,7 @@ def test_configure_calibration_sets_all_system_fields(tmp_path):
 # ===== Baseline determinism =====
 
 def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
-    """Same random seed must produce identical LHS samples."""
+    """Same random seed must produce identical Sobol samples."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
 
     cal1 = build_calibration_system(tmp_path / "a", dataset)
@@ -461,10 +461,7 @@ def test_baseline_unfixed_categorical_produces_valid_category_values(tmp_path):
 
 
 def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
-    """With n=9 proposals and a 3-category param, LHS guarantees all 3 categories appear.
-
-    LHS stratifies each dimension: with n=9 and k=3, each category gets exactly 3 samples.
-    """
+    """With n=9 proposals and a 3-category param, Sobol guarantees all 3 categories appear."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
@@ -478,13 +475,14 @@ def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
     )
 
 
-# ===== BASELINE: LHS stratification =====
+# ===== BASELINE: Sobol space-filling =====
 
-def test_baseline_lhs_stratifies_continuous_params(tmp_path):
-    """LHS stratifies continuous params: each of n equal-width bins contains exactly one sample.
+def test_baseline_sobol_covers_parameter_range(tmp_path):
+    """Sobol sequence covers the parameter range with low discrepancy.
 
     Fix all params except param_1 so sampling is 1D over [0, 6].
-    With n=6 samples and bin width=1, each bin [i, i+1) must contain exactly one proposal.
+    With n=8 samples, each half [0,3) and [3,6) must contain at least one sample,
+    and samples must span most of the range.
     """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -494,17 +492,19 @@ def test_baseline_lhs_stratifies_continuous_params(tmp_path):
     )
     calibration.random_seed = 42
 
-    n = 6
+    n = 8  # power of 2 for optimal Sobol properties
     results = calibration.run_baseline(n=n)
-    values = [spec["param_1"] for spec in results]
+    values = sorted(spec["param_1"] for spec in results)
 
-    bin_width = 6.0 / n
-    for i in range(n):
-        in_bin = [v for v in values if i * bin_width <= v < (i + 1) * bin_width]
-        assert len(in_bin) == 1, (
-            f"Bin [{i * bin_width:.1f}, {(i+1) * bin_width:.1f}) should contain exactly 1 sample, "
-            f"got {len(in_bin)}: {sorted(round(v, 3) for v in values)}"
-        )
+    # Must cover both halves of the range
+    lower_half = [v for v in values if v < 3.0]
+    upper_half = [v for v in values if v >= 3.0]
+    assert len(lower_half) >= 1, f"No samples in [0, 3): {values}"
+    assert len(upper_half) >= 1, f"No samples in [3, 6): {values}"
+
+    # Span should cover most of the range
+    span = values[-1] - values[0]
+    assert span > 4.0, f"Samples should span most of [0, 6], span={span:.2f}: {values}"
 
 
 # ===== EXPLORATION: follows the acquisition signal =====

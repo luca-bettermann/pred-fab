@@ -56,9 +56,14 @@ class DataModule:
             SplitType.TEST: [],
         }
 
+    @property
+    def context_feature_codes(self) -> List[str]:
+        """Schema codes of context features (observable but uncontrollable)."""
+        return list(self._context_feature_codes)
+
     def initialize(
-            self, 
-            input_parameters: List[str], 
+            self,
+            input_parameters: List[str],
             input_features: List[str],
             output_columns: List[str]
             ) -> None:
@@ -580,9 +585,10 @@ class DataModule:
         # 1. Handle Categorical (Reverse One-Hot)
         params = self._decode_one_hot(denorm_array, consumed_cols)
         
-        # 2. Handle Continuous
+        # 2. Handle Continuous (skip context features — they are not controllable)
+        ctx = set(self._context_feature_codes)
         for i, col in enumerate(self.input_columns):
-            if self.input_columns[i] not in consumed_cols:
+            if self.input_columns[i] not in consumed_cols and col not in ctx:
                 params[col] = float(denorm_array[i])
 
         # Apply canonical parameter coercion/rounding at the array->dict boundary.

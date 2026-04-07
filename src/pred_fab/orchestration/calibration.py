@@ -629,13 +629,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n: int,
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> List["ExperimentSpec"]:
-        """Generate n baseline proposals using Latin Hypercube Sampling (LHS).
+        """Generate n baseline proposals using a Sobol quasi-random sequence.
 
         Continuous parameters are stratified across their bounds; categorical parameters
-        are stratified across their categories. This guarantees balanced coverage
-        regardless of the number or mix of parameter types.
+        are stratified across their categories. Sobol sequences provide better
+        low-discrepancy coverage than LHS, especially at small sample sizes.
         """
-        from scipy.stats.qmc import LatinHypercube
+        from scipy.stats.qmc import Sobol
 
         if n == 0:
             return []
@@ -674,7 +674,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 return []
 
             d = len(continuous_params) + len(categorical_params)
-            sampler = LatinHypercube(d=d, seed=self._random_seed)
+            sampler = Sobol(d=d, scramble=True, seed=self._random_seed)
             samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
 
             specs: List[ExperimentSpec] = []
@@ -693,9 +693,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-                self.logger.debug(f"Baseline LHS proposal: {params}")
+                self.logger.debug(f"Baseline Sobol proposal: {params}")
 
-            self.logger.info(f"Generated {n} baseline experiments using LHS.")
+            self.logger.info(f"Generated {n} baseline experiments using Sobol sequence.")
             return specs
 
         finally:
@@ -981,8 +981,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Return normalized optimization bounds over the full parameter space."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
+        context_codes = set(datamodule.context_feature_codes)
 
         for code in datamodule.input_columns:
+
+            # Context features are fixed at 0 during optimization (uncontrollable).
+            if code in context_codes:
+                bounds_list.append(self._normalize_bounds(code, 0.0, 0.0, datamodule))
+                continue
 
             # Fast One-Hot Check
             if code in col_map:
