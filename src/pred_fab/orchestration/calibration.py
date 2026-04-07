@@ -1,10 +1,11 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Any, Set, Tuple, Callable
-import numpy as np
-from scipy.optimize import minimize
-
 import warnings
 import functools
+
+import numpy as np
+from scipy.optimize import minimize, differential_evolution
 
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
@@ -17,6 +18,16 @@ class Optimizer(Enum):
     """Optimization backend for the calibration acquisition function."""
     LBFGSB = "lbfgsb"  # gradient-based multi-start (fast, local)
     DE     = "de"       # differential evolution (global, slower)
+
+
+@dataclass
+class _OptResult:
+    """Raw output from an optimizer backend."""
+    best_x: Optional[np.ndarray]
+    nfev: int
+    n_starts: int
+    score: float  # negated objective (higher = better)
+
 
 # Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -843,48 +854,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
-    def _run_optimization_de(
-        self,
-        datamodule: DataModule,
-        x0_params: Optional[Dict[str, Any]],
-        bounds: np.ndarray,
-        objective_func: Callable,
-        fixed_param_values: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Run differential evolution (global, population-based) and return best parameters."""
-        from scipy.optimize import differential_evolution
-        seed = int(self.rng.randint(0, 2**31 - 1))
-        result = differential_evolution(
-            func=objective_func,
-            bounds=bounds.tolist(),
-            maxiter=50,
-            popsize=5,
-            seed=seed,
-            mutation=(0.5, 1.0),
-            recombination=0.7,
-            tol=1e-4,
-            polish=True,
-            init='latinhypercube',
-        )
-        self.last_opt_nfev = result.nfev
-        self.last_opt_n_starts = 1
-        self.last_opt_score = float(-result.fun)
-        self.logger.info(
-            f"DE optimization: nfev={result.nfev}, score={self.last_opt_score:.6f}, "
-            f"converged={result.success}"
-        )
-
-        proposed_params = datamodule.array_to_params(result.x)
-        if fixed_param_values:
-            proposed_params.update(fixed_param_values)
-        if x0_params:
-            for k, v in x0_params.items():
-                if k not in proposed_params:
-                    proposed_params[k] = v
-        return datamodule.dataset.schema.parameters.sanitize_values(
-            proposed_params, ignore_unknown=True
-        )
-
     def _run_optimization(
         self,
         datamodule: DataModule,
@@ -892,87 +861,111 @@ class CalibrationSystem(BaseOrchestrationSystem):
         bounds: np.ndarray,
         objective_func: Callable,
         n_rounds: int,
-        fixed_param_values: Dict[str, Any]
+        fixed_param_values: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Run the acquisition function optimization."""
+        """Run the acquisition function optimization and return proposed parameters."""
         if self.optimizer == Optimizer.DE:
-            return self._run_optimization_de(
-                datamodule, x0_params, bounds, objective_func, fixed_param_values
+            opt = self._optimize_de(bounds, objective_func)
+        else:
+            opt = self._optimize_lbfgsb(
+                datamodule, x0_params, bounds, objective_func, n_rounds,
             )
 
-        # Start from current params if available
+        # Publish result bookkeeping
+        self.last_opt_nfev = opt.nfev
+        self.last_opt_n_starts = opt.n_starts
+        self.last_opt_score = opt.score
+        self.logger.info(
+            f"{self.optimizer.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
+        )
+
+        # Handle failure
+        if opt.best_x is None:
+            self.logger.warning("Optimization failed, returning fallback parameters.")
+            if x0_params:
+                return x0_params
+            raise RuntimeError("No valid parameters could be proposed.")
+
+        # Decode, merge fixed/carry-over params, and sanitize
+        proposed_params = datamodule.array_to_params(opt.best_x)
+        if fixed_param_values:
+            proposed_params.update(fixed_param_values)
+        # Carry over params from x0 that aren't in the optimization space
+        # (e.g. runtime params not used by any prediction model).
+        if x0_params:
+            for k, v in x0_params.items():
+                if k not in proposed_params:
+                    proposed_params[k] = v
+        return datamodule.dataset.schema.parameters.sanitize_values(
+            proposed_params, ignore_unknown=True,
+        )
+
+    def _optimize_lbfgsb(
+        self,
+        datamodule: DataModule,
+        x0_params: Optional[Dict[str, Any]],
+        bounds: np.ndarray,
+        objective_func: Callable,
+        n_rounds: int,
+    ) -> _OptResult:
+        """Multi-start L-BFGS-B (gradient-based, local)."""
         x0_list = []
         if x0_params:
             x0_list.append(datamodule.params_to_array(x0_params))
-
-        # Random restarts
         for _ in range(n_rounds):
             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
-
         if not x0_list:
-             # Fallback if no x0_params and n_rounds=0 (unlikely)
-             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
+            x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
 
-        n_starts = len(x0_list)
-        self.logger.info(f"Optimizing with {n_starts} starting point(s) (1 from x0, {n_starts - 1} random restarts)")
-
-        # Run optimization from each starting point.
-        # Cap function evaluations per start: ~10 gradient steps for a d-dim problem
-        # (each step needs d+1 finite-diff evals), which is enough for a smooth landscape.
-        # Without a cap, L-BFGS-B defaults to 15000*d evaluations — prohibitive when the
-        # objective is expensive (e.g. ML model inference over all dimensional positions).
-        n_dims = len(x0_list[0]) if x0_list else 1
-        max_fun = max(100, 10 * (n_dims + 1))  # at least 100, or 10 gradient steps
+        # Cap evals per start: ~10 gradient steps (each needs d+1 finite-diff evals).
+        # Without a cap, L-BFGS-B defaults to 15000*d — prohibitive for expensive objectives.
+        n_dims = len(x0_list[0])
+        max_fun = max(100, 10 * (n_dims + 1))
 
         best_x, best_val = None, np.inf
         total_nfev = 0
         for i, x0 in enumerate(x0_list):
             try:
                 res = minimize(
-                    fun=objective_func,
-                    x0=x0,
-                    bounds=bounds,
-                    method='L-BFGS-B',
-                    options={
-                        'eps': 1e-3,     # float32 in prepare_input loses sub-1e-7 changes
-                        'maxfun': max_fun,
-                    },
+                    fun=objective_func, x0=x0, bounds=bounds, method='L-BFGS-B',
+                    options={'eps': 1e-3, 'maxfun': max_fun},
                 )
                 total_nfev += res.nfev
                 if res.fun < best_val:
                     best_val = res.fun
                     best_x = res.x
-                self.logger.debug(f"  start {i + 1}/{n_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}")
+                self.logger.debug(
+                    f"  start {i + 1}/{len(x0_list)}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
+                )
             except Exception as e:
-                self.logger.warning(f"Optimization round failed with error: {e}")
-                continue
-        self.logger.info(f"Optimization total: {n_starts} starts, {total_nfev} function evaluations")
-        self.last_opt_nfev = total_nfev
-        self.last_opt_n_starts = n_starts
-        self.last_opt_score = float(-best_val) if best_val != np.inf else 0.0
+                self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
 
-        # Handle failure
-        if best_x is None:
-            self.logger.warning("Optimization failed, returning fallback parameters.")
-            if x0_params:
-                return x0_params
-            else:
-                raise RuntimeError("No valid parameters could be proposed.")
+        return _OptResult(
+            best_x=best_x,
+            nfev=total_nfev,
+            n_starts=len(x0_list),
+            score=float(-best_val) if best_val != np.inf else 0.0,
+        )
 
-        # Convert result back
-        proposed_params = datamodule.array_to_params(best_x)
-        self.logger.info(f"Optimization best_val={best_val:.6f}, proposed={proposed_params}")
-        if fixed_param_values:
-            proposed_params.update(fixed_param_values)
-        # Carry over any params from the starting point that aren't in the
-        # optimization space (e.g. runtime params not used by any prediction model).
-        if x0_params:
-            for k, v in x0_params.items():
-                if k not in proposed_params:
-                    proposed_params[k] = v
-        return datamodule.dataset.schema.parameters.sanitize_values(
-            proposed_params,
-            ignore_unknown=True
+    def _optimize_de(
+        self,
+        bounds: np.ndarray,
+        objective_func: Callable,
+    ) -> _OptResult:
+        """Differential evolution (global, population-based)."""
+        seed = int(self.rng.randint(0, 2**31 - 1))
+        result = differential_evolution(
+            func=objective_func,
+            bounds=bounds.tolist(),
+            maxiter=50, popsize=5, seed=seed,
+            mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
+            polish=True, init='latinhypercube',
+        )
+        return _OptResult(
+            best_x=result.x,
+            nfev=result.nfev,
+            n_starts=1,
+            score=float(-result.fun),
         )
 
     # === BOUNDS FOR OPTIMIZATION ===
