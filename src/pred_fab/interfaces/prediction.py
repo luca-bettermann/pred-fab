@@ -1,7 +1,7 @@
 """Abstract interface for prediction models that learn parameter→feature mappings."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Type, Optional, Any, final, Tuple
+from typing import Any, final
 import copy
 import numpy as np
 
@@ -34,7 +34,7 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
-    def validate_dimensional_coherence(self, schema: Any) -> Optional[str]:
+    def validate_dimensional_coherence(self, schema: Any) -> str | None:
         """Enforce structural rules on the model's domain declarations and derive the domain code.
 
         1. Output features may not mix depths (error).
@@ -107,7 +107,7 @@ class IPredictionModel(BaseInterface):
         pass
 
     @abstractmethod
-    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+    def train(self, train_batches: list[tuple[np.ndarray, np.ndarray]], val_batches: list[tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
         """Train the model on (X, y) batch tuples."""
         pass
 
@@ -119,7 +119,7 @@ class IPredictionModel(BaseInterface):
 
     # === ONLINE LEARNING ===
 
-    def tuning(self, tune_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+    def tuning(self, tune_batches: list[tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
         """Fine-tune with new measurements during fabrication; override to enable online learning."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support tuning. "
@@ -128,14 +128,14 @@ class IPredictionModel(BaseInterface):
     
     # === EXPORT/IMPORT SUPPORT ===
     
-    def _get_model_artifacts(self) -> Dict[str, Any]:
+    def _get_model_artifacts(self) -> dict[str, Any]:
         """Serialize trained model state for InferenceBundle export; override to enable. All values must be picklable."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support export. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable export."
         )
     
-    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+    def _set_model_artifacts(self, artifacts: dict[str, Any]) -> None:
         """Restore trained model state from artifacts dict; must exactly reverse _get_model_artifacts()."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support import. "
@@ -157,9 +157,9 @@ class IDeterministicModel(IPredictionModel):
     """
 
     def __init__(self, logger: PfabLogger) -> None:
-        self._norm_parameter_stats: Dict[str, Dict[str, Any]] = {}
-        self._norm_feature_stats: Dict[str, Dict[str, Any]] = {}
-        self._norm_categorical_mappings: Dict[str, List[str]] = {}
+        self._norm_parameter_stats: dict[str, dict[str, Any]] = {}
+        self._norm_feature_stats: dict[str, dict[str, Any]] = {}
+        self._norm_categorical_mappings: dict[str, list[str]] = {}
         self._norm_context_set = False
         super().__init__(logger)
 
@@ -168,9 +168,9 @@ class IDeterministicModel(IPredictionModel):
     @final
     def set_normalization_context(
         self,
-        parameter_stats: Dict[str, Dict[str, Any]],
-        feature_stats: Dict[str, Dict[str, Any]],
-        categorical_mappings: Dict[str, List[str]],
+        parameter_stats: dict[str, dict[str, Any]],
+        feature_stats: dict[str, dict[str, Any]],
+        categorical_mappings: dict[str, list[str]],
     ) -> None:
         """Store normalization statistics so forward_pass can denormalize inputs and renormalize outputs.
 
@@ -182,7 +182,7 @@ class IDeterministicModel(IPredictionModel):
         self._norm_context_set = True
 
     @property
-    def categorical_mappings(self) -> Dict[str, List[str]]:
+    def categorical_mappings(self) -> dict[str, list[str]]:
         """Mapping of categorical parameter names to their sorted category lists."""
         return self._norm_categorical_mappings
 
@@ -219,8 +219,8 @@ class IDeterministicModel(IPredictionModel):
     @final
     def train(
         self,
-        train_batches: List[Tuple[np.ndarray, np.ndarray]],
-        val_batches: List[Tuple[np.ndarray, np.ndarray]],
+        train_batches: list[tuple[np.ndarray, np.ndarray]],
+        val_batches: list[tuple[np.ndarray, np.ndarray]],
         **kwargs: Any,
     ) -> None:
         """No-op — deterministic models have no learned parameters."""
@@ -239,7 +239,7 @@ class IDeterministicModel(IPredictionModel):
         with categoricals collapsed from N one-hot columns to a single integer index.
         """
         batch_size = X_norm.shape[0]
-        raw_cols: List[np.ndarray] = []
+        raw_cols: list[np.ndarray] = []
         col_idx = 0
 
         for param in self.input_parameters:
@@ -269,7 +269,7 @@ class IDeterministicModel(IPredictionModel):
         return y_norm
 
     @staticmethod
-    def _reverse_normalization(data: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _reverse_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Reverse normalization for a data array using pre-computed stats."""
         method = stats['method']
         if method == NormMethod.NONE:
@@ -288,7 +288,7 @@ class IDeterministicModel(IPredictionModel):
             raise ValueError(f"Unknown normalization method: {method}")
 
     @staticmethod
-    def _apply_normalization(data: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _apply_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Apply normalization to a data array using pre-computed stats."""
         method = stats['method']
         if method == NormMethod.NONE:

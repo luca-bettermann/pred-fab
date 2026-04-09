@@ -6,7 +6,7 @@ or training dependencies. Load from exported bundle, predict features, and
 optionally evaluate performance.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Any
 import pandas as pd
 import numpy as np
 import pickle
@@ -28,9 +28,9 @@ class InferenceBundle:
     
     def __init__(
         self,
-        prediction_models: List[IPredictionModel],
-        normalization_state: Dict[str, Any],
-        schema_dict: Dict[str, Any]
+        prediction_models: list[IPredictionModel],
+        normalization_state: dict[str, Any],
+        schema_dict: dict[str, Any]
     ):
         """
         Initialize bundle with models and metadata.
@@ -45,7 +45,7 @@ class InferenceBundle:
         self.schema = schema_dict
         
         # Build feature-to-model mapping
-        self.feature_to_model: Dict[str, IPredictionModel] = {}
+        self.feature_to_model: dict[str, IPredictionModel] = {}
         for model in prediction_models:
             for feat in model.outputs:
                 self.feature_to_model[feat] = model
@@ -70,7 +70,7 @@ class InferenceBundle:
         )
     
     @staticmethod
-    def _reconstruct_model(spec: Dict[str, Any]) -> IPredictionModel:
+    def _reconstruct_model(spec: dict[str, Any]) -> IPredictionModel:
         """Reconstruct model from class path and artifacts."""
         # Import model class
         class_path = spec['class_path']
@@ -95,7 +95,7 @@ class InferenceBundle:
         X_norm = self._prepare_input(X)
         
         # Collect predictions from all models
-        predictions: Dict[str, Any] = {}
+        predictions: dict[str, Any] = {}
         for model in self.prediction_models:
             # Predict (normalized)
             y_pred_norm = model.forward_pass(X_norm)
@@ -142,7 +142,7 @@ class InferenceBundle:
                 
         return X_arr
 
-    def _denormalize_values(self, values: np.ndarray, feature_names: List[str]) -> np.ndarray:
+    def _denormalize_values(self, values: np.ndarray, feature_names: list[str]) -> np.ndarray:
         """Reverse normalization for specific features."""
         feature_stats = self.normalization_state.get('feature_stats', {})
         
@@ -157,7 +157,7 @@ class InferenceBundle:
                     y[:, i] = self._reverse_normalization(y[:, i], feature_stats[name])
         return y
 
-    def _apply_normalization(self, data: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Apply normalization to data array using pre-computed stats."""
         method = stats['method']
         
@@ -176,7 +176,7 @@ class InferenceBundle:
         else:
             return data
 
-    def _reverse_normalization(self, data_norm: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Reverse normalization for data array."""
         method = stats['method']
         
@@ -215,7 +215,7 @@ class InferenceBundle:
             # TODO: Add range validation using schema constraints
     
     @property
-    def feature_names(self) -> List[str]:
+    def feature_names(self) -> list[str]:
         """List of all predictable features."""
         return list(self.feature_to_model.keys())
     

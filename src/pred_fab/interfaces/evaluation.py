@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Tuple, Optional, List, final, Dict
+from typing import final
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
@@ -33,11 +33,11 @@ class IEvaluationModel(BaseInterface):
         ...
 
     @abstractmethod
-    def _compute_target_value(self, params: Dict, **dimensions) -> float:
+    def _compute_target_value(self, params: dict, **dimensions) -> float:
         """Compute the target (ideal) value for scoring at the given parameter context."""
         ...
     
-    def _compute_scaling_factor(self, params: Dict, **dimensions) -> Optional[float]:
+    def _compute_scaling_factor(self, params: dict, **dimensions) -> float | None:
         """Optionally return a scaling factor for performance normalization; None uses target_value as denominator."""
         return None
     
@@ -48,8 +48,8 @@ class IEvaluationModel(BaseInterface):
         self,
         feature_array: NDArray,
         parameters: Parameters,
-        feature_std: Optional[NDArray] = None,
-    ) -> Tuple[Optional[float], List[Optional[float]], Optional[List[Optional[float]]]]:
+        feature_std: NDArray | None = None,
+    ) -> tuple[float | None, list[float | None], list[float | None] | None]:
         """Score each row of feature_array against its target; returns (avg, per-row list, per-row std or None)."""
         # Unpack DataBlocks
         params = parameters.get_values_dict()
@@ -61,8 +61,8 @@ class IEvaluationModel(BaseInterface):
         else:
             dim_iterator_codes = []
 
-        performance_list: List[Optional[float]] = []
-        std_list: List[Optional[float]] = []
+        performance_list: list[float | None] = []
+        std_list: list[float | None] = []
 
         for i, row in enumerate(feature_array):
             # Extract current dimension values
@@ -115,8 +115,8 @@ class IEvaluationModel(BaseInterface):
 
     @final
     def _compute_performance_value(
-        self, feature_value: float, target_value: float, scaling_factor: Optional[float]
-    ) -> Optional[float]:
+        self, feature_value: float, target_value: float, scaling_factor: float | None
+    ) -> float | None:
         """Return 1 − |feature − target| / denominator, clamped to [0, 1].
 
         denominator is scaling_factor when provided, else target_value.
@@ -152,7 +152,7 @@ class IEvaluationModel(BaseInterface):
 
     @final
     @property
-    def input_features(self) -> List[str]:
+    def input_features(self) -> list[str]:
         """Wrap input_feature scalar as a single-element list."""
         input_feat = self.input_feature
         if not isinstance(input_feat, str):
@@ -161,7 +161,7 @@ class IEvaluationModel(BaseInterface):
 
     @final
     @property
-    def outputs(self) -> List[str]:
+    def outputs(self) -> list[str]:
         """Wrap output_performance scalar as a single-element list."""
         perf_code = self.output_performance
         if not isinstance(perf_code, str):

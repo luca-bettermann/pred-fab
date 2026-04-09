@@ -1,7 +1,7 @@
 """Shared base class for orchestration systems."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
 
 from pred_fab.core.data_objects import DataObject
 
@@ -15,13 +15,13 @@ class BaseOrchestrationSystem(ABC):
 
     def __init__(self, logger: PfabLogger):
         self.logger: PfabLogger = logger
-        self.models: List[Any] = []
+        self.models: list[Any] = []
     
-    def get_models(self) -> List[Any]:
+    def get_models(self) -> list[Any]:
         """Return registered models."""
         return self.models
     
-    def get_model_specs(self) -> Dict[str, List[str]]:
+    def get_model_specs(self) -> dict[str, list[str]]:
         """Aggregate input/output specs across all registered models."""
         specs = {
             "input_parameters": [],

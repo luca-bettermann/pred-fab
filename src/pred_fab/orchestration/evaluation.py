@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Type, Optional, List
+from typing import Any
 import numpy as np
 
 from ..utils import PfabLogger
@@ -12,7 +12,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
-        self.models: List[IEvaluationModel] = []
+        self.models: list[IEvaluationModel] = []
 
     # === EVALUATION ===
 
@@ -20,7 +20,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         self,
         exp_data: ExperimentData,
         recompute: bool = False
-    ) -> Dict[str, Optional[float]]:
+    ) -> dict[str, float | None]:
         """Score all features for a completed experiment and store results in exp_data.
 
         This is post-experiment documentation only — the resulting performance values are
@@ -29,7 +29,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         """
         # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
         # so that evaluation models can iterate rows uniformly regardless of feature depth.
-        features_dict: Dict[str, np.ndarray] = {}
+        features_dict: dict[str, np.ndarray] = {}
         for code, tensor in exp_data.features.get_values_dict().items():
             features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
@@ -53,15 +53,15 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     def _evaluate_feature_dict(
         self,
-        features_dict: Dict[str, np.ndarray],
+        features_dict: dict[str, np.ndarray],
         parameters: Parameters,
-        incomplete_features: Dict[str, bool] = {},
-        skip_for_code: Dict[str, bool] = {}
-    ) -> Dict[str, Optional[float]]:
+        incomplete_features: dict[str, bool] = {},
+        skip_for_code: dict[str, bool] = {}
+    ) -> dict[str, float | None]:
         """Run all evaluation models and return {perf_code: value} dict."""
         
         # Prepare result dictionaries
-        performance_dict: Dict[str, Optional[float]] = {}
+        performance_dict: dict[str, float | None] = {}
 
         # Run evaluation for each performance code
         for eval_model in self.models:
@@ -86,6 +86,6 @@ class EvaluationSystem(BaseOrchestrationSystem):
         
         return performance_dict
     
-    def get_models(self) -> List[IEvaluationModel]:
+    def get_models(self) -> list[IEvaluationModel]:
         """Return registered evaluation models."""
         return self.models

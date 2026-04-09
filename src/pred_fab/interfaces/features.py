@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional, final
+from typing import Any, Callable, final
 from numpy.typing import NDArray
 from dataclasses import dataclass
 
@@ -31,7 +31,7 @@ class IFeatureModel(BaseInterface):
     # - outputs
 
     @abstractmethod
-    def _load_data(self, params: Dict, **dimensions) -> Any:
+    def _load_data(self, params: dict, **dimensions) -> Any:
         """Load domain-specific raw data for the given parameter context (files, DB, etc.)."""
         ...
 
@@ -39,16 +39,16 @@ class IFeatureModel(BaseInterface):
     def _compute_feature_logic(
         self,
         data: Any,
-        params: Dict,
+        params: dict,
         visualize: bool = False,
         **dimensions
-        ) -> Dict[str, float]:
+        ) -> dict[str, float]:
         """Extract feature values from loaded data; returns dict mapping feature codes to numeric values."""
         ...
 
     # Pre-define input features as empty. Features can not have other features as inputs.
     @property
-    def input_features(self) -> List[str]:
+    def input_features(self) -> list[str]:
         return []
 
     # === PUBLIC API ===
@@ -57,12 +57,12 @@ class IFeatureModel(BaseInterface):
     def compute_features(
         self,
         parameters: Parameters,
-        domain: Optional['Domain'],
+        domain: Domain | None,
         evaluate_from: int,
-        evaluate_to: Optional[int] = None,
+        evaluate_to: int | None = None,
         visualize: bool = False,
-        depth: Optional[int] = None,
-        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None,
+        depth: int | None = None,
+        get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
         ) -> NDArray:
         """Iterate over every domain axis combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
 
@@ -138,7 +138,7 @@ class IFeatureModel(BaseInterface):
         params,
         dimensions,
         visualize: bool = False,
-        ) -> List[float]:
+        ) -> list[float]:
         """Extract feature with memoization via Dataset."""
 
         # Load and compute

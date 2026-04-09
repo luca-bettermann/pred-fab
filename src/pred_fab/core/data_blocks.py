@@ -2,7 +2,7 @@
 
 from abc import abstractmethod, ABC
 import itertools
-from typing import Dict, Any, List, Optional, Tuple, Type
+from typing import Any
 import numpy as np
 import pandas as pd
 from .data_objects import DataObject, DataDomainAxis, DataArray, Domain
@@ -14,10 +14,10 @@ from ..utils.logger import PfabLogger
 class DataBlock(ABC):
     """Abstract container for typed DataObjects with value storage, validation, and access methods."""
 
-    def __init__(self, items: Optional[List[Any]] = None):
-        self.data_objects: Dict[str, DataObject] = {}  # Schema structure
-        self.values: Dict[str, Any] = {}  # Actual values
-        self.populated_status: Dict[str, bool] = {} # Track if value is populated or just initialized
+    def __init__(self, items: list[Any] | None = None):
+        self.data_objects: dict[str, DataObject] = {}  # Schema structure
+        self.values: dict[str, Any] = {}  # Actual values
+        self.populated_status: dict[str, bool] = {} # Track if value is populated or just initialized
         if items:
             for item in items:
                 self.add(item)
@@ -51,7 +51,7 @@ class DataBlock(ABC):
             raise KeyError(f"Parameter '{name}' not defined in {self.__class__.__name__}")
         return self.data_objects[name].validate(value)
     
-    def validate_all(self, values: Dict[str, Any]) -> bool:
+    def validate_all(self, values: dict[str, Any]) -> bool:
         """Validate multiple values at once."""
         for name, value in values.items():
             self.validate_value(name, value)
@@ -69,7 +69,7 @@ class DataBlock(ABC):
         self.values[name] = value
         self.populated_status[name] = as_populated
 
-    def set_values_from_dict(self, values: Dict[str, Any], logger: PfabLogger, as_populated: bool = True) -> None:
+    def set_values_from_dict(self, values: dict[str, Any], logger: PfabLogger, as_populated: bool = True) -> None:
         """Set multiple values at once, ignoring unknown parameters."""
         for name, value in values.items():
             if self.has(name):
@@ -111,7 +111,7 @@ class DataBlock(ABC):
         """Return iterator over (name, DataObject) pairs."""
         return self.data_objects.items()
     
-    def get_values_dict(self) -> Dict[str, Any]:
+    def get_values_dict(self) -> dict[str, Any]:
         """Extract all set values as a simple dictionary."""
         return dict(self.values)
     
@@ -123,7 +123,7 @@ class DataBlock(ABC):
             return False
         return True
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for schema storage."""
         return {
             "type": self.__class__.__name__,
@@ -135,7 +135,7 @@ class DataBlock(ABC):
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Any:
+    def from_dict(cls, data: dict[str, Any]) -> Any:
         """Reconstruct from dictionary."""
         # Create instance (subclass sets its own types)
         block = cls()
@@ -152,7 +152,7 @@ class DataBlock(ABC):
         return block
     
     @classmethod
-    def from_list(cls, data_objs: List[Any]) -> Any:
+    def from_list(cls, data_objs: list[Any]) -> Any:
         """Reconstruct from list."""
         # Create instance (subclass sets its own types)
         block = cls()
@@ -166,50 +166,50 @@ class DataBlock(ABC):
 class Parameters(DataBlock):
     """Unified parameter block holding static, dynamic, and dimensional parameters."""
 
-    def __init__(self, items: Optional[List[Any]] = None):
+    def __init__(self, items: list[Any] | None = None):
         super().__init__(items)
     
     @property
     def role(self) -> Roles:
         return Roles.PARAMETER
 
-    def _get_domain_axis_objects(self, codes: Optional[List[str]] = None) -> List[DataDomainAxis]:
+    def _get_domain_axis_objects(self, codes: list[str] | None = None) -> list[DataDomainAxis]:
         """Get domain axis DataObjects from parameters in insertion order."""
         return [
             obj for name, obj in self.data_objects.items()
             if isinstance(obj, DataDomainAxis) and (codes is None or name in codes)
         ]
 
-    def _get_domain_axis_names(self) -> List[str]:
+    def _get_domain_axis_names(self) -> list[str]:
         """Get domain axis parameter codes in insertion order."""
         return [name for name, obj in self.data_objects.items() if isinstance(obj, DataDomainAxis)]
 
-    def _get_domain_axis_iterator_codes(self, codes: Optional[List[str]] = None) -> List[str]:
+    def _get_domain_axis_iterator_codes(self, codes: list[str] | None = None) -> list[str]:
         """Get iterator codes for domain axes in insertion order."""
         return [obj.iterator_code for obj in self._get_domain_axis_objects(codes)]
 
-    def _get_domain_axis_values(self, codes: Optional[List[str]] = None) -> List[int]:
+    def _get_domain_axis_values(self, codes: list[str] | None = None) -> list[int]:
         """Get current values of domain axis parameters."""
         return [self.get_value(dim.code) for dim in self._get_domain_axis_objects(codes)]
 
-    def _get_sorted_domain_axes(self) -> List[DataDomainAxis]:
+    def _get_sorted_domain_axes(self) -> list[DataDomainAxis]:
         """Return DataDomainAxis objects in dict insertion order (domain registration order)."""
         return self._get_domain_axis_objects()
 
     # Keep legacy aliases for compatibility with dataset.py export_to_dataframe
-    def get_dim_names(self) -> List[str]:
+    def get_dim_names(self) -> list[str]:
         """Get domain axis parameter codes (alias for _get_domain_axis_names)."""
         return self._get_domain_axis_names()
 
-    def get_dim_iterator_codes(self, codes: Optional[List[str]] = None) -> List[str]:
+    def get_dim_iterator_codes(self, codes: list[str] | None = None) -> list[str]:
         """Get domain axis iterator codes (alias for _get_domain_axis_iterator_codes)."""
         return self._get_domain_axis_iterator_codes(codes)
 
-    def get_dim_values(self, codes: Optional[List[str]] = None) -> List[int]:
+    def get_dim_values(self, codes: list[str] | None = None) -> list[int]:
         """Get domain axis values (alias for _get_domain_axis_values)."""
         return self._get_domain_axis_values(codes)
 
-    def _get_dimension_strides(self) -> Dict[str, int]:
+    def _get_dimension_strides(self) -> dict[str, int]:
         """Compute stride per domain axis; stride[axis] = product of sizes of all inner axes."""
         sorted_dims = self._get_sorted_domain_axes()
         strides = {}
@@ -222,7 +222,7 @@ class Parameters(DataBlock):
             current_stride *= size
         return strides
     
-    def get_start_and_end_indices(self, dimension: str, step_index: int) -> Tuple[int, int]:
+    def get_start_and_end_indices(self, dimension: str, step_index: int) -> tuple[int, int]:
         # Calculate range based on explicit step_index
         strides = self._get_dimension_strides()
         if dimension not in strides:
@@ -233,7 +233,7 @@ class Parameters(DataBlock):
         end = (step_index + 1) * stride
         return start, end
 
-    def get_dim_combinations(self, dim_codes: List[str], evaluate_from: int = 0, evaluate_to: Optional[int] = None) -> List[Tuple[int, ...]]:
+    def get_dim_combinations(self, dim_codes: list[str], evaluate_from: int = 0, evaluate_to: int | None = None) -> list[tuple[int, ...]]:
         """Get all combinations of dimension indices for specified dimensions and the respective iterator names."""
         # Extract dimension values
         dim_values = self._get_domain_axis_values(dim_codes)
@@ -254,11 +254,11 @@ class Parameters(DataBlock):
 
     def sanitize_values(
         self,
-        values: Dict[str, Any],
+        values: dict[str, Any],
         ignore_unknown: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Coerce and validate a parameter dictionary according to schema data objects."""
-        sanitized: Dict[str, Any] = {}
+        sanitized: dict[str, Any] = {}
         for code, value in values.items():
             if not self.has(code):
                 if ignore_unknown:
@@ -274,14 +274,14 @@ class Parameters(DataBlock):
 class Features(DataBlock):
     """DataBlock for multi-dimensional feature arrays backed by DataArray objects."""
 
-    def __init__(self, items: Optional[List[Any]] = None):
+    def __init__(self, items: list[Any] | None = None):
         super().__init__(items)
     
     @property
     def role(self) -> Roles:
         return Roles.FEATURE
     
-    def _initialize_array(self, metric_code: str, shape: Tuple[int, ...], recompute_flag: bool) -> None:
+    def _initialize_array(self, metric_code: str, shape: tuple[int, ...], recompute_flag: bool) -> None:
         """Initialize numpy array for a given metric code."""
         if metric_code not in self.data_objects:
             raise KeyError(f"Metric array code '{metric_code}' not defined")
@@ -309,7 +309,7 @@ class Features(DataBlock):
                         
             iterator_cols = data_array.columns[:-1]
             if not iterator_cols:
-                shape: Tuple[int, ...] = ()
+                shape: tuple[int, ...] = ()
             else:
                 # Translate iterator columns to canonical tensor shape.
                 dim_sizes = self._get_dim_sizes_from_iterators(parameters, iterator_cols)
@@ -323,10 +323,10 @@ class Features(DataBlock):
         df: pd.DataFrame,
         logger: PfabLogger,
         as_populated: bool = True,
-        parameters: Optional[Parameters] = None
+        parameters: Parameters | None = None
     ) -> None:
         """Set feature values from tabular format by transforming to canonical tensor format."""
-        columns: List[str] = list(df.columns)  # type: ignore
+        columns: list[str] = list(df.columns)  # type: ignore
         metric_code = columns[-1]
         if not self.has(metric_code):
             logger.warning(f"Object '{metric_code}' not found in {self.__class__}. Skip assigning array.")
@@ -407,7 +407,7 @@ class Features(DataBlock):
 
         return table
 
-    def value_at(self, feature_code: str, parameters: Parameters, iterator_values: Dict[str, Any]) -> Optional[float]:
+    def value_at(self, feature_code: str, parameters: Parameters, iterator_values: dict[str, Any]) -> float | None:
         """Read one feature value from canonical tensor for given iterator coordinates."""
         # Fast-path for missing feature values.
         if not self.has_value(feature_code):
@@ -431,7 +431,7 @@ class Features(DataBlock):
             idx.append(int(iterator_values[col]))
         return float(np.asarray(arr)[tuple(idx)])
 
-    def _get_dim_codes_from_iterators(self, parameters: Parameters, iterator_cols: List[str]) -> List[str]:
+    def _get_dim_codes_from_iterators(self, parameters: Parameters, iterator_cols: list[str]) -> list[str]:
         iterator_to_dim = {dim.iterator_code: dim.code for dim in parameters._get_domain_axis_objects()}
         dim_codes = []
         for iterator in iterator_cols:
@@ -440,7 +440,7 @@ class Features(DataBlock):
             dim_codes.append(iterator_to_dim[iterator])
         return dim_codes
 
-    def _get_dim_sizes_from_iterators(self, parameters: Parameters, iterator_cols: List[str]) -> List[int]:
+    def _get_dim_sizes_from_iterators(self, parameters: Parameters, iterator_cols: list[str]) -> list[int]:
         dim_codes = self._get_dim_codes_from_iterators(parameters, iterator_cols)
         return [int(parameters.get_value(code)) for code in dim_codes]
 
@@ -448,7 +448,7 @@ class Features(DataBlock):
 class PerformanceAttributes(DataBlock):
     """Evaluation output block storing normalized performance scores (0–1)."""
 
-    def __init__(self, items: Optional[List[Any]] = None):
+    def __init__(self, items: list[Any] | None = None):
         super().__init__(items)
 
     @property
@@ -459,8 +459,8 @@ class PerformanceAttributes(DataBlock):
 class Domains:
     """Container for Domain objects indexed by code."""
 
-    def __init__(self, items: Optional[List['Domain']] = None):
-        self._domains: Dict[str, Domain] = {}
+    def __init__(self, items: list['Domain'] | None = None):
+        self._domains: dict[str, Domain] = {}
         if items:
             for item in items:
                 self.add(item)
@@ -488,16 +488,16 @@ class Domains:
     def values(self):
         return self._domains.values()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize all domains to a dictionary."""
         return {code: domain.to_dict() for code, domain in self._domains.items()}
 
-    def to_hash_dict(self) -> Dict[str, Any]:
+    def to_hash_dict(self) -> dict[str, Any]:
         """Serialize structural identity for schema hashing."""
         return {code: domain.to_hash_dict() for code, domain in self._domains.items()}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Domains':
+    def from_dict(cls, data: dict[str, Any]) -> 'Domains':
         """Reconstruct from dictionary."""
         obj = cls()
         for code, domain_data in data.items():

@@ -1,6 +1,6 @@
 # folder_navigator.py
 import os
-from typing import List, Optional, Dict, Any, Tuple, Callable
+from typing import Any, Callable
 import shutil
 import json
 import pandas as pd
@@ -19,8 +19,8 @@ class LocalData:
         self.root_folder: str = root_folder
         self.local_folder: str = os.path.join(root_folder, local_folder_name)
 
-        self.schema_id: Optional[str] = None
-        self.schema_folder: Optional[str] = None
+        self.schema_id: str | None = None
+        self.schema_folder: str | None = None
 
     # === PUBLIC API METHODS ===
 
@@ -64,7 +64,7 @@ class LocalData:
             raise ValueError("Schema ID must be set before getting experiment file path")
         return os.path.join(self.schema_folder, exp_code, filename)
 
-    def list_experiments(self) -> List[str]:
+    def list_experiments(self) -> list[str]:
         """List all experiment folder names within the schema folder."""
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before listing experiments")
@@ -108,14 +108,14 @@ class LocalData:
         if not is_connected:
             raise ConnectionError(f"Folder access {folder_path}: FAILED")
 
-    def check_availability(self, code: str, memory: Dict[str, Any]) -> None:
+    def check_availability(self, code: str, memory: dict[str, Any]) -> None:
         """Check if code exists in memory."""
         if code not in memory:
             raise ValueError(f"Code not available in memory: {code}")
         
     # === DATA LOADING METHODS ===
 
-    def load_parameters(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def load_parameters(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Load experiment parameters from local files."""
         return self._load_files_generic(
             codes=exp_codes,
@@ -124,7 +124,7 @@ class LocalData:
             file_format=FileFormat.JSON
         )
         
-    def load_performance(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def load_performance(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Load performance metrics from local files."""
         return self._load_files_generic(
             codes=exp_codes,
@@ -133,7 +133,7 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
-    def load_parameter_updates(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def load_parameter_updates(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Load parameter update event logs from local files."""
         return self._load_files_generic(
             codes=exp_codes,
@@ -142,7 +142,7 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
-    def load_features(self, exp_codes: List[str], **kwargs) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    def load_features(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Load feature arrays from local files."""
         feature_name = kwargs.get('feature_name')
         if not feature_name:
@@ -156,7 +156,7 @@ class LocalData:
 
     # === DATA SAVING METHODS ===
     
-    def save_schema(self, schema_dict: Dict[str, Any], recompute: bool = False) -> bool:
+    def save_schema(self, schema_dict: dict[str, Any], recompute: bool = False) -> bool:
         """Save schema JSON to local storage."""
         if not self.schema_folder:
             raise ValueError("Schema folder not configured")
@@ -173,7 +173,7 @@ class LocalData:
             return True
         return False
 
-    def save_parameters(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+    def save_parameters(self, exp_codes: list[str], data: dict[str, dict[str, Any]], 
                         recompute: bool, **kwargs) -> bool:
         """Save experiment parameters to local files."""
         return self._save_files_generic(
@@ -185,7 +185,7 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
-    def save_performance(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
+    def save_performance(self, exp_codes: list[str], data: dict[str, dict[str, Any]], 
                          recompute: bool, **kwargs) -> bool:
         """Save performance metrics to local files."""
         return self._save_files_generic(
@@ -197,7 +197,7 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
-    def save_parameter_updates(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]],
+    def save_parameter_updates(self, exp_codes: list[str], data: dict[str, dict[str, Any]],
                                recompute: bool, **kwargs) -> bool:
         """Save parameter update event logs to local files."""
         return self._save_files_generic(
@@ -209,8 +209,8 @@ class LocalData:
             file_format=FileFormat.JSON
         )
     
-    def save_features(self, exp_codes: List[str], data: Dict[str, Dict[str, Any]], 
-                      recompute: bool, feature_name: str, column_names: List[str], **kwargs) -> bool:
+    def save_features(self, exp_codes: list[str], data: dict[str, dict[str, Any]], 
+                      recompute: bool, feature_name: str, column_names: list[str], **kwargs) -> bool:
         """Save feature arrays to local files."""
         if not feature_name:
             raise ValueError("feature_name required in kwargs for save_features")
@@ -233,11 +233,11 @@ class LocalData:
 
     def _load_files_generic(
             self, 
-            codes: List[str], 
-            subdirs: List[str], 
+            codes: list[str], 
+            subdirs: list[str], 
             filename: str, 
             file_format: FileFormat
-    ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+    ) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Generic file loader for JSON/CSV files."""
         if not self.schema_id:
             raise ValueError("Schema ID must be set")
@@ -276,13 +276,13 @@ class LocalData:
 
     def _save_files_generic(
         self, 
-        codes: List[str], 
-        data: Dict[str, Any], 
-        subdirs: List[str], 
+        codes: list[str], 
+        data: dict[str, Any], 
+        subdirs: list[str], 
         filename: str, 
         recompute: bool, 
         file_format: FileFormat,
-        column_names: Optional[List[str]] = None
+        column_names: list[str] | None = None
     ) -> bool:
         """Generic file saver for JSON/CSV files."""
         if not self.schema_id:

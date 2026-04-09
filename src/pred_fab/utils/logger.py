@@ -3,13 +3,10 @@ import os
 import re
 from datetime import datetime
 
-
-from typing import Optional
-
 class PfabLogger:
     """Singleton logger with dual file/console output, ANSI stripping, and structured console methods."""
     
-    _instance: Optional['PfabLogger'] = None
+    _instance: 'PfabLogger | None' = None
     
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -140,8 +137,6 @@ class PfabLogger:
         if self._console_output_enabled and not self._console_new_line:
             print("")
             self._console_new_line = True
-
-
 
     # === PRIVATE METHODS ===
     def _setup_file_handler(self, log_file: str) -> None:

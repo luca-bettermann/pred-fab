@@ -7,7 +7,7 @@ Integrates with DataModule for normalization and batching.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Type, Any, Tuple
+from typing import Any
 import copy
 import pandas as pd
 import numpy as np
@@ -43,28 +43,28 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: Optional[IResidualModel] = None):
+    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: IResidualModel | None = None):
         """Initialize prediction system."""
         super().__init__(logger)
-        self.models: List[IPredictionModel] = []
+        self.models: list[IPredictionModel] = []
         self.residual_model: IResidualModel = MLPResidualModel(logger) if res_model is None else res_model
 
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
-        self.datamodule: Optional[DataModule] = None  # Stored after training
+        self.datamodule: DataModule | None = None  # Stored after training
 
         # Domain map populated during train(): model id → derived domain code
-        self._model_domain_map: Dict[int, Optional[str]] = {}
+        self._model_domain_map: dict[int, str | None] = {}
 
         # Per-model KDE state for NatPN-light uncertainty estimation (populated after training).
         # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
-        self._model_kdes: Dict[int, _ModelKDE] = {}
+        self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
         self._exploration_radius: float = 0.5              # c: bubble radius at N=1
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
-        self._uncertainty_weights: Dict[str, float] = {}
+        self._uncertainty_weights: dict[str, float] = {}
 
     def _assert_trained(self) -> DataModule:
         """Raise if the system has not been trained yet; return the active DataModule."""
@@ -72,19 +72,19 @@ class PredictionSystem(BaseOrchestrationSystem):
             raise RuntimeError("PredictionSystem not trained. Call train() first.")
         return self.datamodule
 
-    def get_system_input_parameters(self) -> List[str]:
+    def get_system_input_parameters(self) -> list[str]:
         """Get the parameter codes of all model inputs."""
         return self._get_unique_values('input_parameters')
 
-    def get_system_input_features(self) -> List[str]:
+    def get_system_input_features(self) -> list[str]:
         """Get the feature codes of all model inputs."""
         return self._get_unique_values('input_features')
     
-    def get_system_outputs(self) -> List[str]:
+    def get_system_outputs(self) -> list[str]:
         """Get the model outputs."""
         return self._get_unique_values('outputs')
     
-    def _get_unique_values(self, attr: str) -> List[str]:
+    def _get_unique_values(self, attr: str) -> list[str]:
         codes = []
         for model in self.models:
             for code in getattr(model, attr):
@@ -93,7 +93,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 codes.append(code)
         return codes
     
-    def _filter_batches_for_model(self, batches: List[Tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> List[Tuple[np.ndarray, np.ndarray]]:
+    def _filter_batches_for_model(self, batches: list[tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> list[tuple[np.ndarray, np.ndarray]]:
         """Filter batch X/y to the columns required by this model, expanding categoricals to one-hot."""
         dm = self._assert_trained()
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
@@ -162,7 +162,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     # === UNCERTAINTY ESTIMATION (NatPN-light, per-model KDE) ===
 
-    def set_uncertainty_weights(self, weights: Dict[str, float]) -> None:
+    def set_uncertainty_weights(self, weights: dict[str, float]) -> None:
         """Set performance-based weights for per-model uncertainty aggregation.
 
         Maps feature names (prediction model outputs) to their importance weight.
@@ -198,7 +198,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return
 
         # Collect per-experiment config data (shared across models).
-        exp_configs: List[Tuple[Dict[str, Any], float]] = []  # (params, weight)
+        exp_configs: list[tuple[dict[str, Any], float]] = []  # (params, weight)
         n_exp = 0
         for code in datamodule.get_split_codes(SplitType.TRAIN):
             exp = datamodule.dataset.get_experiment(code)
@@ -230,8 +230,8 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         # Fit one KDE per non-deterministic model.
         for model in kde_models:
-            latent_points: List[np.ndarray] = []
-            point_weights: List[float] = []
+            latent_points: list[np.ndarray] = []
+            point_weights: list[float] = []
 
             for params, w in exp_configs:
                 z = self._encode_params_for_model(model, params, datamodule)
@@ -311,8 +311,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
 
     def _encode_params_for_model(
-        self, model: IPredictionModel, params: Dict[str, Any], datamodule: DataModule,
-    ) -> Optional[np.ndarray]:
+        self, model: IPredictionModel, params: dict[str, Any], datamodule: DataModule,
+    ) -> np.ndarray | None:
         """Encode a params dict to latent representation via a specific model's encode()."""
         try:
             X_norm = datamodule.params_to_array(params)
@@ -367,7 +367,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Legacy encode helpers (kept for external callers) ---
 
-    def _encode_params(self, params: Dict[str, Any], datamodule: DataModule) -> Optional[np.ndarray]:
+    def _encode_params(self, params: dict[str, Any], datamodule: DataModule) -> np.ndarray | None:
         """Encode a params dict to latent representation via the primary model's encode()."""
         model = self._primary_encode_model()
         if model is None:
@@ -381,9 +381,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             return X_norm
         return self._encode_from_norm_array_for_model(model, X_norm)
 
-    def _primary_encode_model(self) -> Optional[IPredictionModel]:
+    def _primary_encode_model(self) -> IPredictionModel | None:
         """Return the highest-weight non-deterministic model, or first model as fallback."""
-        best: Optional[IPredictionModel] = None
+        best: IPredictionModel | None = None
         best_w = -1.0
         for m in self.models:
             if isinstance(m, IDeterministicModel):
@@ -455,7 +455,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return weighted_sim / total_w if total_w > 0 else 0.0
 
-    def predict_for_calibration(self, params: Dict[str, Any]) -> Tuple[Dict[str, np.ndarray], Any]:
+    def predict_for_calibration(self, params: dict[str, Any]) -> tuple[dict[str, np.ndarray], Any]:
         """Predict feature arrays for all dimensional positions for calibration use.
 
         Runs the full dimensional prediction for the given parameter configuration
@@ -480,7 +480,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         predictions = self._predict_from_params(params=params, batch_size=1000)
 
         # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
-        feature_arrays: Dict[str, np.ndarray] = {}
+        feature_arrays: dict[str, np.ndarray] = {}
         for feat_name, tensor in predictions.items():
             feat_shape = tensor.shape
             flat = tensor.reshape(-1)
@@ -505,8 +505,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             self,
             exp_data: ExperimentData,
             start: int,
-            end: Optional[int] = None,
-            batch_size: Optional[int] = None,
+            end: int | None = None,
+            batch_size: int | None = None,
             **kwargs
             ) -> DataModule:
         """
@@ -599,7 +599,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return temp_datamodule
     
-    def validate(self, use_test: bool = False) -> Dict[str, Dict[str, float]]:
+    def validate(self, use_test: bool = False) -> dict[str, dict[str, float]]:
         """Validate prediction models on validation or test set."""
         dm = self._assert_trained()
 
@@ -676,10 +676,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         exp_data: ExperimentData,
         predict_from: int = 0,
-        predict_to: Optional[int] = None,
+        predict_to: int | None = None,
         batch_size: int = 1000,
         overlap: int = 0
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """
         Predict dimensional features and populate exp_data.predicted_metric_arrays.
         
@@ -708,7 +708,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # self._store_predictions_in_exp_data(exp_data, predictions)
         return predictions
     
-    def _get_feature_shape(self, feat_code: str, params: Dict[str, Any]) -> Tuple[int, ...]:
+    def _get_feature_shape(self, feat_code: str, params: dict[str, Any]) -> tuple[int, ...]:
         """Get the output tensor shape for a feature given current dimensional parameters."""
         feat_obj = self.schema.features.data_objects.get(feat_code)
         # data_objects stores DataArray instances; Pyright sees DataObject which lacks .columns.
@@ -732,7 +732,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             shape.append(int(params[size_code]))
         return tuple(shape)
 
-    def _get_model_dim_info(self, model: IPredictionModel, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_model_dim_info(self, model: IPredictionModel, params: dict[str, Any]) -> dict[str, Any]:
         """Build dimensional iteration structure for a specific model based on its domain and depth."""
         depth = model.depth
         if id(model) not in self._model_domain_map:
@@ -742,9 +742,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
         domain_code = self._model_domain_map[id(model)]
 
-        dim_sizes: List[int] = []
-        dim_iterators: List[str] = []
-        dim_codes_ordered: List[str] = []
+        dim_sizes: list[int] = []
+        dim_iterators: list[str] = []
+        dim_codes_ordered: list[str] = []
         dim_codes: set = set()
 
         if domain_code is not None and depth > 0:
@@ -781,16 +781,16 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     def _predict_from_params(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         predict_from: int = 0,
-        predict_to: Optional[int] = None,
+        predict_to: int | None = None,
         batch_size: int = 1000,
         overlap: int = 0
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Core prediction logic: per-model iteration with per-feature tensor shapes."""
         self._assert_trained()
 
-        predictions: Dict[str, np.ndarray] = {}
+        predictions: dict[str, np.ndarray] = {}
 
         for model in self.models:
             model_dim_info = self._get_model_dim_info(model, params)
@@ -823,7 +823,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     # def _store_predictions_in_exp_data(
     #     self, 
     #     exp_data: ExperimentData, 
-    #     predictions: Dict[str, np.ndarray]
+    #     predictions: dict[str, np.ndarray]
     # ) -> None:
     #     """Store prediction arrays in exp_data.predicted_metric_arrays."""
     #     for feature_name, pred_array in predictions.items():
@@ -834,13 +834,13 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _execute_batched_predictions_to_dict(
         self,
-        predictions: Dict[str, np.ndarray],
-        dim_info: Dict[str, Any],
+        predictions: dict[str, np.ndarray],
+        dim_info: dict[str, Any],
         predict_from: int,
         predict_to: int,
         batch_size: int,
         overlap: int = 0,
-        model: Optional[IPredictionModel] = None,
+        model: IPredictionModel | None = None,
     ) -> None:
         """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap."""
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")
@@ -879,8 +879,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         batch_start: int,
         batch_end: int,
-        dim_info: Dict[str, Any]
-    ) -> Tuple[pd.DataFrame, List[Tuple[int, ...]]]:
+        dim_info: dict[str, Any]
+    ) -> tuple[pd.DataFrame, list[tuple[int, ...]]]:
         """Build feature matrix X with params + dimensional indices for batch positions.
 
         Uses dimension size-parameter codes (e.g. "dim_1") as column keys to match
@@ -912,10 +912,10 @@ class PredictionSystem(BaseOrchestrationSystem):
     
     def _predict_and_store_batch_to_dict(
         self,
-        predictions: Dict[str, np.ndarray],
+        predictions: dict[str, np.ndarray],
         X_batch: pd.DataFrame,
-        batch_indices: List[Tuple[int, ...]],
-        model: Optional[IPredictionModel] = None,
+        batch_indices: list[tuple[int, ...]],
+        model: IPredictionModel | None = None,
     ) -> None:
         """Run model prediction on X_batch and store results with per-feature index truncation."""
         dm = self._assert_trained()
@@ -1019,11 +1019,11 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"Export validation failed for {model.__class__.__name__}: {e}"
             ) from e
     
-    def _create_bundle_dict(self, include_evaluation: bool) -> Dict[str, Any]:
+    def _create_bundle_dict(self, include_evaluation: bool) -> dict[str, Any]:
         """Assemble bundle with models, artifacts, normalization, and schema."""
         dm = self._assert_trained()
 
-        bundle: Dict[str, Any] = {
+        bundle: dict[str, Any] = {
             'prediction_models': [
                 {
                     'class_path': f"{model.__class__.__module__}.{model.__class__.__name__}",

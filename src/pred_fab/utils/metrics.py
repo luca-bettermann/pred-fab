@@ -1,15 +1,13 @@
 """Metrics utility for calculating performance metrics."""
 
 import numpy as np
-from typing import Dict, Optional
-
 
 class Metrics:
     """Static class for calculating regression metrics."""
 
     @staticmethod
     def _r2(y_true: np.ndarray, y_pred: np.ndarray,
-            weights: Optional[np.ndarray] = None) -> float:
+            weights: np.ndarray | None = None) -> float:
         """Weighted R² score.  When *weights* is None, computes standard R²."""
         if weights is None:
             ss_res = float(np.sum((y_true - y_pred) ** 2))
@@ -28,7 +26,7 @@ class Metrics:
     def calculate_regression_metrics(
         y_true: np.ndarray,
         y_pred: np.ndarray,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Compute MAE, RMSE, and R²; returns dict with 'mae', 'rmse', 'r2', 'n_samples'."""
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
@@ -52,7 +50,7 @@ class Metrics:
         importance: np.ndarray,
         alpha: float = 0.0,
         symmetric: bool = True,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """Performance-adjusted R² that up-weights high-importance samples.
 
         Returns dict with 'r2', 'r2_adj', and 'n_samples'.
