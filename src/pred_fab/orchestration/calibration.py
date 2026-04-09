@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Any, Set, Tuple, Callable
+from typing import Any, Callable
 import warnings
 import functools
 
@@ -23,7 +23,7 @@ class Optimizer(Enum):
 @dataclass
 class _OptResult:
     """Raw output from an optimizer backend."""
-    best_x: Optional[np.ndarray]
+    best_x: np.ndarray | None
     nfev: int
     n_starts: int
     score: float  # negated objective (higher = better)
@@ -39,10 +39,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         schema: DatasetSchema,
         logger: PfabLogger,
-        perf_fn: Callable[[Dict[str, Any]], Dict[str, Optional[float]]],
+        perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
-        similarity_fn: Optional[Callable[[np.ndarray, np.ndarray], float]] = None,
-        random_seed: Optional[int] = None,
+        similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
+        random_seed: int | None = None,
     ):
         super().__init__(logger)
         self.perf_fn = perf_fn
@@ -55,7 +55,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Active datamodule — set before each optimization run so that
         # _inference_func / _acquisition_func can call array_to_params.
-        self._active_datamodule: Optional[DataModule] = None
+        self._active_datamodule: DataModule | None = None
 
         # Set after each _run_optimization call for external inspection.
         self.last_opt_nfev: int = 0
@@ -65,24 +65,29 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Set ordered weights
         self.schema = schema
         self.perf_names_order = list(schema.performance_attrs.keys())
-        self.performance_weights: Dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
+        self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
         # Configure data_objects, bounds and fixed params
-        self.data_objects: Dict[str, DataObject] = {}
-        self.schema_bounds: Dict[str, Tuple[float, float]] = {}
-        self.param_bounds: Dict[str, Tuple[float, float]] = {}
-        self.fixed_params: Dict[str, Any] = {}
-        self.trust_regions: Dict[str, float] = {}
-        self.trajectory_configs: Dict[str, str] = {}   # param_code → dimension_code
+        self.data_objects: dict[str, DataObject] = {}
+        self.schema_bounds: dict[str, tuple[float, float]] = {}
+        self.param_bounds: dict[str, tuple[float, float]] = {}
+        self.fixed_params: dict[str, Any] = {}
+        self.trust_regions: dict[str, float] = {}
+        self.trajectory_configs: dict[str, str] = {}   # param_code → dimension_code
 
         # OFAT (One-Factor-At-a-Time) state for online calibration.
         # Empty list = all_at_once (default); populated via configure_ofat_strategy().
-        self._ofat_codes: List[str] = []
+        self._ofat_codes: list[str] = []
         self._ofat_index: int = 0
 
         self.optimizer: Optimizer = Optimizer.LBFGSB
 
+        # Boundary buffer: penalise acquisition scores near parameter bounds to
+        # counteract KDE edge effects (no evidence outside the search space).
+        self.boundary_buffer_extent: float = 0.0    # fraction of range; 0 = disabled
+        self.boundary_buffer_strength: float = 0.5  # penalty at boundary: score *= (1 - strength)
+        self.boundary_buffer_exponent: float = 2.0   # curve shape: t^exp (1=linear, 2=quadratic)
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -92,11 +97,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # ------------------------------------------------------------------
 
     @property
-    def random_seed(self) -> Optional[int]:
+    def random_seed(self) -> int | None:
         return self._random_seed
 
     @random_seed.setter
-    def random_seed(self, value: Optional[int]) -> None:
+    def random_seed(self, value: int | None) -> None:
         self._random_seed = value
         self.rng = np.random.RandomState(value)
 
@@ -144,7 +149,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === CONFIGURATION METHODS ===
 
-    def set_performance_weights(self, weights: Dict[str, float]) -> None:
+    def set_performance_weights(self, weights: dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
         # set according to order in perf_names_order
         for name, value in weights.items():
@@ -154,7 +159,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
 
-    def configure_param_bounds(self, bounds: Dict[str, Tuple[float, float]], force: bool = False) -> None:
+    def configure_param_bounds(self, bounds: dict[str, tuple[float, float]], force: bool = False) -> None:
         """Configure parameter ranges for offline calibration."""
         for code, (low, high) in bounds.items():
 
@@ -178,7 +183,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.param_bounds[code] = (low, high)
             self.logger.debug(f"Set parameter bounds: {code} -> [{low}, {high}]")
 
-    def configure_fixed_params(self, fixed_params: Dict[str, Any], force: bool = False) -> None:
+    def configure_fixed_params(self, fixed_params: dict[str, Any], force: bool = False) -> None:
         """Configure fixed parameter values."""
         for code, value in (fixed_params or {}).items():
 
@@ -194,7 +199,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.fixed_params[code] = value
             self.logger.debug(f"Set fixed parameter: {code} -> {value}")
 
-    def configure_adaptation_delta(self, deltas: Dict[str, float], force: bool = False) -> None:
+    def configure_adaptation_delta(self, deltas: dict[str, float], force: bool = False) -> None:
         """Configure trust region deltas for online calibration."""
         for code, delta in deltas.items():
 
@@ -270,7 +275,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
         )
 
-    def configure_ofat_strategy(self, codes: List[str]) -> None:
+    def configure_ofat_strategy(self, codes: list[str]) -> None:
         """Configure OFAT cycling: only one parameter in ``codes`` is freed per online step.
 
         Parameters must already have trust regions configured. An empty list resets to
@@ -289,7 +294,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         else:
             self.logger.info("OFAT strategy cleared (all_at_once mode).")
 
-    def _get_active_ofat_code(self) -> Optional[str]:
+    def _get_active_ofat_code(self) -> str | None:
         """Return the currently active OFAT parameter code, or None if OFAT is not active."""
         if not self._ofat_codes:
             return None
@@ -306,8 +311,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _validate_and_clean_config(
         self,
         code: str,
-        allowed_types: Optional[Tuple[type, ...]],
-        conflicting_collections: List[str],
+        allowed_types: tuple[type, ...] | None,
+        conflicting_collections: list[str],
         force: bool
     ) -> bool:
         """Validate parameter against schema and check for conflicting configurations."""
@@ -363,8 +368,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         X: np.ndarray,
         w_explore: float,
-        perf_range: Optional[Tuple[float, float]] = None,
-        unc_range: Optional[Tuple[float, float]] = None,
+        bounds: np.ndarray | None = None,
+        perf_range: tuple[float, float] | None = None,
+        unc_range: tuple[float, float] | None = None,
     ) -> float:
         """EXPLORATION objective: negative UCB score with min-max normalized components."""
         dm = self._active_datamodule
@@ -394,9 +400,41 @@ class CalibrationSystem(BaseOrchestrationSystem):
             u = (u - umin) / span if span > 1e-10 else 0.5
 
         score = (1.0 - w_explore) * sys_perf + w_explore * u
+
+        # Apply boundary buffer to counteract KDE edge effects
+        if self.boundary_buffer_extent > 0 and bounds is not None:
+            score *= self._boundary_factor(X.reshape(-1), bounds)
+
         return -score
 
-    def _compute_system_performance(self, performance: List[float]) -> float:
+    def _boundary_factor(self, X: np.ndarray, bounds: np.ndarray) -> float:
+        """Multiplicative penalty in (0, 1] that decays near parameter boundaries.
+
+        Per-dimension factors are multiplied so corners (near multiple boundaries)
+        receive a stronger penalty. Dimensions with zero-width bounds (fixed params,
+        context features) are skipped.
+        """
+        extent = self.boundary_buffer_extent
+        strength = self.boundary_buffer_strength
+        exponent = self.boundary_buffer_exponent
+        factor = 1.0
+
+        for i in range(len(X)):
+            lo, hi = bounds[i]
+            span = hi - lo
+            if span < 1e-12:
+                continue  # fixed dimension — no penalty
+            d_lo = (X[i] - lo) / span
+            d_hi = (hi - X[i]) / span
+            d = min(d_lo, d_hi)
+            if d >= extent:
+                continue
+            t = max(d / extent, 0.0)  # 0 at boundary, 1 at buffer edge
+            factor *= 1.0 - strength * (1.0 - t ** exponent)
+
+        return factor
+
+    def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance [0, 1]."""
         if not performance:
             return 0.0
@@ -462,7 +500,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _estimate_acquisition_ranges(
         self, bounds: np.ndarray, n_samples: int = 50,
-    ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
         """Sample the search space to estimate performance and uncertainty ranges."""
         dm = self._active_datamodule
         if dm is None:
@@ -494,20 +532,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
         return perf_range, unc_range
 
-    def _build_objective(self, mode: Mode, w_explore: float, bounds: Optional[np.ndarray] = None) -> Callable:
+    def _build_objective(self, mode: Mode, w_explore: float, bounds: np.ndarray | None = None) -> Callable:
         """Return the objective function for the given calibration mode."""
         if mode == Mode.BASELINE:
             raise ValueError(
                 "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
             )
         if mode == Mode.EXPLORATION:
-            perf_range: Optional[Tuple[float, float]] = None
-            unc_range: Optional[Tuple[float, float]] = None
+            perf_range: tuple[float, float] | None = None
+            unc_range: tuple[float, float] | None = None
             if bounds is not None:
                 perf_range, unc_range = self._estimate_acquisition_ranges(bounds)
             return functools.partial(
                 self._acquisition_func,
                 w_explore=w_explore,
+                bounds=bounds,
                 perf_range=perf_range,
                 unc_range=unc_range,
             )
@@ -515,7 +554,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return self._inference_func
         raise ValueError(f"Unknown calibration mode: {mode}")
 
-    def _build_step_grid(self, current_params: Dict[str, Any]) -> List[Dict[str, int]]:
+    def _build_step_grid(self, current_params: dict[str, Any]) -> list[dict[str, int]]:
         """Build flattened Cartesian grid of {dim_code: step_index} dicts, coarsest dimension first.
 
         Returns [{}] when no trajectory configs are configured (experiment-level use case).
@@ -538,8 +577,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _get_eligible_params(
         self,
-        prev_indices: Optional[Dict[str, int]],
-        curr_indices: Dict[str, int],
+        prev_indices: dict[str, int] | None,
+        curr_indices: dict[str, int],
     ) -> set:
         """Return trajectory params whose mapped dimension transitions at this step."""
         transitioning_dims: set = set()
@@ -553,14 +592,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _build_experiment_spec(
         self,
-        proposals: List[Dict[str, Any]],
-        step_grid: List[Dict[str, int]],
+        proposals: list[dict[str, Any]],
+        step_grid: list[dict[str, int]],
         source_step: str,
     ) -> ExperimentSpec:
         """Assemble per-step proposals into an ExperimentSpec with initial_params and dimension schedules."""
         initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
 
-        schedules: Dict[str, ParameterSchedule] = {}
+        schedules: dict[str, ParameterSchedule] = {}
         if len(proposals) > 1 and step_grid and step_grid[0]:
             # Collect unique dims
             dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
@@ -572,8 +611,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 traj_codes = [
                     c for c, dc in self.trajectory_configs.items() if dc == dim_code
                 ]
-                entries: List[Tuple[int, ParameterProposal]] = []
-                prev_idx: Optional[int] = None
+                entries: list[tuple[int, ParameterProposal]] = []
+                prev_idx: int | None = None
                 for flat_i, indices in enumerate(step_grid):
                     cur_idx = indices.get(dim_code, 0)
                     if flat_i == 0:
@@ -602,7 +641,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Uses NormMethod.NONE; excludes params with infinite bounds (logged as warnings).
         Caller must apply any param_bounds overrides to self.param_bounds before calling.
         """
-        active_codes: List[str] = []
+        active_codes: list[str] = []
         for code, data_obj in self.data_objects.items():
             if code in self.fixed_params:
                 continue
@@ -638,8 +677,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def run_baseline(
         self,
         n: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-    ) -> List["ExperimentSpec"]:
+        param_bounds: dict[str, tuple[float, float]] | None = None,
+    ) -> list["ExperimentSpec"]:
         """Generate n baseline proposals using a Sobol quasi-random sequence.
 
         Continuous parameters are stratified across their bounds; categorical parameters
@@ -657,8 +696,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         try:
             # Collect active parameters (skip fixed and infinite-bounds).
-            continuous_params: List[Tuple[str, float, float]] = []  # (code, lo, hi)
-            categorical_params: List[Tuple[str, List[Any]]] = []    # (code, categories)
+            continuous_params: list[tuple[str, float, float]] = []  # (code, lo, hi)
+            categorical_params: list[tuple[str, list[Any]]] = []    # (code, categories)
 
             for code, data_obj in self.data_objects.items():
                 if code in self.fixed_params:
@@ -688,9 +727,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sampler = Sobol(d=d, scramble=True, seed=self._random_seed)
             samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
 
-            specs: List[ExperimentSpec] = []
+            specs: list[ExperimentSpec] = []
             for row in samples:
-                params: Dict[str, Any] = dict(self.fixed_params)
+                params: dict[str, Any] = dict(self.fixed_params)
 
                 for i, (code, lo, hi) in enumerate(continuous_params):
                     params[code] = lo + row[i] * (hi - lo)
@@ -716,12 +755,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         datamodule: DataModule,
         mode: Mode,
-        current_params: Optional[Dict[str, Any]] = None,
-        target_indices: Optional[Dict[str, int]] = None,
+        current_params: dict[str, Any] | None = None,
+        target_indices: dict[str, int] | None = None,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 10,
-        mpc_lookahead: Optional[int] = None,
-        mpc_discount: Optional[float] = None,
+        mpc_lookahead: int | None = None,
+        mpc_discount: float | None = None,
     ) -> ExperimentSpec:
         """Run a single calibration pass and return an ExperimentSpec.
 
@@ -756,7 +795,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None
         if target_indices is not None:
-            step_grid: List[Dict[str, int]] = [target_indices]  # type: ignore[list-item]
+            step_grid: list[dict[str, int]] = [target_indices]  # type: ignore[list-item]
         elif current_params is not None:
             step_grid = self._build_step_grid(current_params)
         else:
@@ -792,11 +831,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Call configure_adaptation_delta() for each before running."
                 )
 
-        working_params: Optional[Dict[str, Any]] = (
+        working_params: dict[str, Any] | None = (
             dict(current_params) if current_params else None
         )
-        prev_indices: Optional[Dict[str, int]] = None
-        proposals: List[Dict[str, Any]] = []
+        prev_indices: dict[str, int] | None = None
+        proposals: list[dict[str, Any]] = []
 
         for step_i, curr_indices in enumerate(step_grid):
             # Build fixed params for this step
@@ -857,12 +896,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _run_optimization(
         self,
         datamodule: DataModule,
-        x0_params: Optional[Dict[str, Any]],
+        x0_params: dict[str, Any] | None,
         bounds: np.ndarray,
         objective_func: Callable,
         n_rounds: int,
-        fixed_param_values: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        fixed_param_values: dict[str, Any],
+    ) -> dict[str, Any]:
         """Run the acquisition function optimization and return proposed parameters."""
         if self.optimizer == Optimizer.DE:
             opt = self._optimize_de(bounds, objective_func)
@@ -903,7 +942,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _optimize_lbfgsb(
         self,
         datamodule: DataModule,
-        x0_params: Optional[Dict[str, Any]],
+        x0_params: dict[str, Any] | None,
         bounds: np.ndarray,
         objective_func: Callable,
         n_rounds: int,
@@ -1002,7 +1041,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(bounds_list)
 
-    def _get_trust_region_bounds(self, datamodule: DataModule, current_params: Dict[str, Any]) -> np.ndarray:
+    def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
         """Return normalized trust-region bounds centred on current_params."""
         bounds_list = []
         col_map = datamodule.get_onehot_column_map()
@@ -1044,7 +1083,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return np.array(bounds_list)
 
-    def _get_hierarchical_bounds_for_code(self, code: str) -> Tuple[float, float]:
+    def _get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
         # 1. Check Fixed Context
         if code in self.fixed_params:
             val = self.fixed_params[code]
@@ -1059,7 +1098,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             raise ValueError(f"No bounds found for '{code}'. Cannot determine optimization bounds.")
         return low, high
 
-    def _normalize_bounds(self, col: str, low: float, high: float, datamodule: DataModule) -> Tuple[float, float]:
+    def _normalize_bounds(self, col: str, low: float, high: float, datamodule: DataModule) -> tuple[float, float]:
         """Normalize bounds to [0, 1] based on schema constraints."""
         n_low, n_high = datamodule.normalize_parameter_bounds(col, low, high)
         if (n_low, n_high) != (low, high):
@@ -1070,9 +1109,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === WRAPPERS ===
 
-    def get_models(self) -> List[Any]:
+    def get_models(self) -> list[Any]:
         """Return empty list (no internal ML models owned by CalibrationSystem)."""
         return []
 
-    def get_model_specs(self) -> Dict[str, List[str]]:
+    def get_model_specs(self) -> dict[str, list[str]]:
         return {}
