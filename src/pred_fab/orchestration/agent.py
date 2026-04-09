@@ -1,13 +1,14 @@
 """PfabAgent — main orchestration class for the PFAB framework."""
 
 import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple
+from typing import Any
 import numpy as np
 
 from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
+from ..core.data_objects import DataArray
 from ..core import ParameterProposal, ExperimentSpec
 from ..orchestration import (
     FeatureSystem,
@@ -51,18 +52,18 @@ class PfabAgent:
         self.calibration_system: CalibrationSystem
         
         # Model registry (store classes and params until dataset is initialized)
-        self._feature_model_specs: List[Tuple[Type[IFeatureModel], dict]] = []  # List of (class, kwargs)
-        self._evaluation_model_specs: List[Tuple[Type[IEvaluationModel], dict]] = []  # List of (class, kwargs)
-        self._prediction_model_specs: List[Tuple[Type[IPredictionModel], dict]] = []  # List of (class, kwargs)
+        self._feature_model_specs: list[tuple[type[IFeatureModel], dict]] = []  # List of (class, kwargs)
+        self._evaluation_model_specs: list[tuple[type[IEvaluationModel], dict]] = []  # List of (class, kwargs)
+        self._prediction_model_specs: list[tuple[type[IPredictionModel], dict]] = []  # List of (class, kwargs)
         
         # Initialization state guard
         self._initialized = False
 
         # Context snapshot: current measured values of context features, injected into perf_fn.
-        self._context_snapshot: Dict[str, float] = {}
+        self._context_snapshot: dict[str, float] = {}
 
         # Progress tracking
-        self.active_exp: Optional[ExperimentData] = None
+        self.active_exp: ExperimentData | None = None
         
     def _assert_initialized(self) -> None:
         """Raise if the agent has not been initialized yet."""
@@ -73,8 +74,8 @@ class PfabAgent:
 
     def _register_model(
             self, 
-            model_class: Type[Any], 
-            model_specs: List[Tuple[Type[Any], dict]], 
+            model_class: type[Any], 
+            model_specs: list[tuple[type[Any], dict]], 
             kwargs: dict
         ) -> None:
         """General registration logic."""
@@ -91,15 +92,15 @@ class PfabAgent:
         model_specs.append((model_class, kwargs))
         self.logger.info(f"Registered model: {model_class.__name__}")
 
-    def register_feature_model(self, feature_class: Type[Any], **kwargs) -> None:
+    def register_feature_model(self, feature_class: type[Any], **kwargs) -> None:
         """Register a feature model."""
         self._register_model(feature_class, self._feature_model_specs, kwargs)
 
-    def register_evaluation_model(self, evaluation_class: Type[IEvaluationModel], **kwargs) -> None:
+    def register_evaluation_model(self, evaluation_class: type[IEvaluationModel], **kwargs) -> None:
         """Register an evaluation model."""
         self._register_model(evaluation_class, self._evaluation_model_specs, kwargs)
     
-    def register_prediction_model(self, prediction_class: Type[IPredictionModel], **kwargs) -> None:
+    def register_prediction_model(self, prediction_class: type[IPredictionModel], **kwargs) -> None:
         """Register a prediction model."""
         self._register_model(prediction_class, self._prediction_model_specs, kwargs)
     
@@ -216,8 +217,16 @@ class PfabAgent:
         self._check_sets_against_keys(set(output_features), schema.features.keys())
         self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
+        # Recursive features are derived by the FeatureSystem (tensor shifting),
+        # not by any registered feature model — treat them as computed.
+        recursive_codes = {
+            code for code, obj in schema.features.items()
+            if isinstance(obj, DataArray) and obj.is_recursive
+        }
+        output_features_set = set(output_features) | recursive_codes
+
         # Validate that all input features are represented as outputs features
-        uncomputed_inputs = set(input_features) - set(output_features)
+        uncomputed_inputs = set(input_features) - output_features_set
         if uncomputed_inputs:
             raise ValueError(
                 f"The following input features are not computed by any model: "
@@ -247,7 +256,7 @@ class PfabAgent:
 
         summary = ["\n===== Agent State Report ====="]
         
-        def _add_section(name: str, models: List[Any], width=25) -> None:
+        def _add_section(name: str, models: list[Any], width=25) -> None:
             if not models:
                 return
             
@@ -302,7 +311,7 @@ class PfabAgent:
         datamodule: DataModule,
         w_explore: float = 0.5,
         n_optimization_rounds: int = 5,
-        current_params: Optional[Dict[str, Any]] = None,
+        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """UCB-based exploration proposal. Iterates over trajectory dimensions when configured."""
         self._check_systems(StepType.FULL)
@@ -326,7 +335,7 @@ class PfabAgent:
         n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
-        current_params: Optional[Dict[str, Any]] = None,
+        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """Extract features, evaluate, then return an inference-guided proposal."""
         self._check_systems(StepType.FULL)
@@ -351,9 +360,9 @@ class PfabAgent:
 
     def adaptation_step(
         self,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
-        exp_data: Optional[ExperimentData] = None,
+        dimension: str | None = None,
+        step_index: int | None = None,
+        exp_data: ExperimentData | None = None,
         mode: Mode = Mode.INFERENCE,
         w_explore: float = 0.0,
         record: bool = False,
@@ -427,7 +436,7 @@ class PfabAgent:
         validate: bool = True,
         test: bool = False,
         **kwargs
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Train prediction models and optionally validate/test."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
@@ -441,11 +450,11 @@ class PfabAgent:
         
     def predict(
         self,
-        exp_data: Optional[ExperimentData] = None,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
+        exp_data: ExperimentData | None = None,
+        dimension: str | None = None,
+        step_index: int | None = None,
         batch_size: int = 1000
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Predict features for an experiment slice and mutate feature tensors."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
@@ -467,16 +476,17 @@ class PfabAgent:
     def configure(
         self,
         *,
-        bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        performance_weights: Optional[Dict[str, float]] = None,
-        fixed_params: Optional[Dict[str, Any]] = None,
-        adaptation_delta: Optional[Dict[str, float]] = None,
-        step_parameters: Optional[Dict[str, str]] = None,
-        ofat_strategy: Optional[List[str]] = None,
-        exploration_radius: Optional[float] = None,
-        optimizer: Optional[Optimizer] = None,
-        mpc_lookahead: Optional[int] = None,
-        mpc_discount: Optional[float] = None,
+        bounds: dict[str, tuple[float, float]] | None = None,
+        performance_weights: dict[str, float] | None = None,
+        fixed_params: dict[str, Any] | None = None,
+        adaptation_delta: dict[str, float] | None = None,
+        step_parameters: dict[str, str] | None = None,
+        ofat_strategy: list[str] | None = None,
+        exploration_radius: float | None = None,
+        optimizer: Optimizer | None = None,
+        mpc_lookahead: int | None = None,
+        mpc_discount: float | None = None,
+        boundary_buffer: tuple[float, float, float] | None = None,
         force: bool = False,
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
@@ -498,6 +508,11 @@ class PfabAgent:
         optimizer           — Optimizer.LBFGSB (default) or Optimizer.DE.
         mpc_lookahead       — N-step lookahead for MPC (default 0 = greedy single-step).
         mpc_discount        — discount factor γ for MPC: step j counts as γʲ (default 0.9).
+        boundary_buffer     — (extent, strength, exponent) for boundary penalty.
+                              extent: fraction of range from each boundary (e.g. 0.1 = 10%).
+                              strength: penalty at boundary — score *= (1 - strength).
+                              exponent: curve shape (1=linear, 2=quadratic, >2=steeper).
+                              Pass (0, 0, 0) or None to disable.
         force               — overwrite already-configured settings without warning.
         """
         self._assert_initialized()
@@ -507,7 +522,7 @@ class PfabAgent:
         if performance_weights is not None:
             self.calibration_system.set_performance_weights(performance_weights)
             # Map performance weights to feature names for per-model KDE aggregation.
-            feature_weights: Dict[str, float] = {}
+            feature_weights: dict[str, float] = {}
             for eval_model in self.eval_system.models:
                 perf_name = eval_model.output_performance
                 feat_name = eval_model.input_feature
@@ -532,6 +547,11 @@ class PfabAgent:
             self.calibration_system.default_mpc_lookahead = mpc_lookahead
         if mpc_discount is not None:
             self.calibration_system.default_mpc_discount = mpc_discount
+        if boundary_buffer is not None:
+            extent, strength, exponent = boundary_buffer
+            self.calibration_system.boundary_buffer_extent = extent
+            self.calibration_system.boundary_buffer_strength = strength
+            self.calibration_system.boundary_buffer_exponent = exponent
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 
@@ -552,7 +572,7 @@ class PfabAgent:
 
     # ── Acquisition introspection ───────────────────────────────────────────────
 
-    def predict_performance(self, params: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    def predict_performance(self, params: dict[str, Any]) -> dict[str, float | None]:
         """Run the prediction + evaluation pipeline at params and return performance scores.
 
         Uses the same perf_fn the optimizer uses internally — useful for logging what the
@@ -562,7 +582,7 @@ class PfabAgent:
         self._assert_initialized()
         return self.calibration_system.perf_fn(params)
 
-    def predict_uncertainty(self, params: Dict[str, Any], datamodule: DataModule) -> float:
+    def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
         """Return the predicted uncertainty (0–1) at params.
 
         Uses the same evidence model the acquisition function queries.
@@ -572,7 +592,7 @@ class PfabAgent:
         self._assert_initialized()
         return float(self.pred_system.uncertainty(datamodule.params_to_array(params)))
 
-    def update_context_snapshot(self, values: Dict[str, float]) -> None:
+    def update_context_snapshot(self, values: dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.
 
         Call this with the latest measured context values (e.g. temperature, humidity)
@@ -585,8 +605,8 @@ class PfabAgent:
     def baseline_step(
         self,
         n: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-    ) -> List[ExperimentSpec]:
+        param_bounds: dict[str, tuple[float, float]] | None = None,
+    ) -> list[ExperimentSpec]:
         """Generate n space-filling baseline proposals using LHS. No trained model required."""
         self._assert_initialized()
         result = self.calibration_system.run_baseline(
@@ -600,8 +620,8 @@ class PfabAgent:
 
     def _instantiate_model_group(
             self,
-            model_specs: List[Tuple[Type[Any], dict]],
-            system_model_list: List[Any],
+            model_specs: list[tuple[type[Any], dict]],
+            system_model_list: list[Any],
             model_type: str
         ) -> None:
         """Instantiate a group of models and add to system."""
@@ -613,7 +633,7 @@ class PfabAgent:
                 raise ValueError(f"{model_type} model {_class.__name__} registered multiple times.")
             system_model_list.append(model)
 
-    def _check_sets_against_keys(self, model_codes: Set[str], schema_keys: List[str]) -> None:
+    def _check_sets_against_keys(self, model_codes: set[str], schema_keys: list[str]) -> None:
         not_represented = model_codes - set(schema_keys)
         if not_represented:
             raise ValueError(
@@ -667,10 +687,10 @@ class PfabAgent:
         
     def _step_config(
             self, 
-            exp_data: Optional[ExperimentData], 
-            dimension: Optional[str] = None, 
-            step_index: Optional[int] = None
-            ) -> Tuple[ExperimentData, int, Optional[int]]:
+            exp_data: ExperimentData | None, 
+            dimension: str | None = None, 
+            step_index: int | None = None
+            ) -> tuple[ExperimentData, int, int | None]:
         """Helper to configure step parameters and retrieve exp_data."""
         # Retrieve experiment data
         if exp_data is None:
@@ -693,7 +713,7 @@ class PfabAgent:
             self,
             exp_code: str,
             start: int,
-            end: Optional[int],
+            end: int | None,
             action: str
         ) -> None:
         """Helper to log step completion messages."""

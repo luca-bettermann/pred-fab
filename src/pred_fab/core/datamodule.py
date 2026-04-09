@@ -1,6 +1,6 @@
 """DataModule — ML preprocessing (normalization, splitting, batching) for Dataset instances."""
 
-from typing import Optional, Dict, List, Tuple, Any, cast
+from typing import Any, cast
 import pandas as pd
 import numpy as np
 import copy
@@ -17,9 +17,9 @@ class DataModule:
     def __init__(
         self,
         dataset: Dataset,
-        batch_size: Optional[int] = None,
+        batch_size: int | None = None,
         normalize: NormMethod = NormMethod.STANDARD,
-        random_seed: Optional[int] = 42
+        random_seed: int | None = 42
     ):
         self.dataset = dataset
         self.batch_size = batch_size
@@ -28,50 +28,50 @@ class DataModule:
         self._initialized = False
         
         # Per-feature/parameter normalization overrides
-        self._feature_overrides: Dict[str, NormMethod] = {}
-        self._parameter_overrides: Dict[str, NormMethod] = {}
+        self._feature_overrides: dict[str, NormMethod] = {}
+        self._parameter_overrides: dict[str, NormMethod] = {}
         
         # Fitted normalization parameters
-        self._feature_stats: Dict[str, Dict[str, Any]] = {}
-        self._parameter_stats: Dict[str, Dict[str, Any]] = {}
+        self._feature_stats: dict[str, dict[str, Any]] = {}
+        self._parameter_stats: dict[str, dict[str, Any]] = {}
         self._is_fitted = False
         
         # Feature system metadata (no data storage)
-        self.input_columns: List[str] = []  # Processed columns (after one-hot)
-        self.output_columns: List[str] = []
-        self.categorical_mappings: Dict[str, List[str]] = {}
+        self.input_columns: list[str] = []  # Processed columns (after one-hot)
+        self.output_columns: list[str] = []
+        self.categorical_mappings: dict[str, list[str]] = {}
         # Context features: observed but uncontrollable — input only, never in output_columns.
-        self._context_feature_codes: List[str] = []
+        self._context_feature_codes: list[str] = []
         # Precomputed extraction plan for fast numpy-based one-hot encoding.
         # Each entry: (src_col, cat_val) — cat_val=None means plain numeric column.
-        self._col_extraction: List[Tuple[str, Optional[Any]]] = []
+        self._col_extraction: list[tuple[str, Any | None]] = []
         
         # Column normalization methods map (for X)
-        self._col_norm_methods: Dict[str, NormMethod] = {}
+        self._col_norm_methods: dict[str, NormMethod] = {}
         
         # Create splits (stores experiment codes)
-        self._split_codes: Dict[str, List[str]] = {
+        self._split_codes: dict[str, list[str]] = {
             SplitType.TRAIN: [],
             SplitType.VAL: [],
             SplitType.TEST: [],
         }
 
     @property
-    def context_feature_codes(self) -> List[str]:
+    def context_feature_codes(self) -> list[str]:
         """Schema codes of context features (observable but uncontrollable)."""
         return list(self._context_feature_codes)
 
     def initialize(
             self,
-            input_parameters: List[str],
-            input_features: List[str],
-            output_columns: List[str]
+            input_parameters: list[str],
+            input_features: list[str],
+            output_columns: list[str]
             ) -> None:
         self._set_input_columns(input_parameters, input_features)
         self.output_columns = output_columns
         self._initialized = True
         
-    def _set_input_columns(self, input_parameters: List[str], input_features: List[str]):
+    def _set_input_columns(self, input_parameters: list[str], input_features: list[str]):
         # Store parameter methods
         for col in input_parameters:
             method = self._get_parameter_normalize_method(col)
@@ -274,7 +274,7 @@ class DataModule:
         self._feature_stats = {}
         self._is_fitted = True
     
-    def get_batches(self, split: SplitType = SplitType.TRAIN) -> List[Tuple[np.ndarray, np.ndarray]]:
+    def get_batches(self, split: SplitType = SplitType.TRAIN) -> list[tuple[np.ndarray, np.ndarray]]:
         """Return list of normalized (X, y) batch tuples for the given split."""
         codes = self._split_codes.get(split, [])
         if not codes:
@@ -320,7 +320,7 @@ class DataModule:
         """Reverse normalization for target features (y)."""
         return self.denormalize_values(y_norm, self.output_columns)
 
-    def denormalize_values(self, values: np.ndarray, feature_names: List[str]) -> np.ndarray:
+    def denormalize_values(self, values: np.ndarray, feature_names: list[str]) -> np.ndarray:
         """Reverse normalization for specific features."""
         if not self._is_fitted:
             return values.copy()
@@ -365,7 +365,7 @@ class DataModule:
         else:
             return data_obj.normalize_strategy
     
-    def get_normalization_state(self) -> Dict[str, Any]:
+    def get_normalization_state(self) -> dict[str, Any]:
         """Export normalization state for inference bundle."""
         if not self._is_fitted:
             raise RuntimeError("DataModule has not been fitted yet.")
@@ -379,7 +379,7 @@ class DataModule:
             'output_columns': copy.deepcopy(self.output_columns)
         }
     
-    def set_normalization_state(self, state: Dict[str, Any]) -> None:
+    def set_normalization_state(self, state: dict[str, Any]) -> None:
         """Restore normalization state from exported bundle."""
         self._default_normalize = state['method']
         self._is_fitted = state['is_fitted']
@@ -389,7 +389,7 @@ class DataModule:
         self.input_columns = copy.deepcopy(state.get('input_columns', []))
         self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
-    def get_onehot_column_map(self) -> Dict[str, Tuple[str, Any]]:
+    def get_onehot_column_map(self) -> dict[str, tuple[str, Any]]:
         """Return mapping of one-hot column name → (parent_parameter_code, category_value)."""
         col_map = {}
         for parent, categories in self.categorical_mappings.items():
@@ -398,7 +398,7 @@ class DataModule:
                 col_map[col_name] = (parent, cat)
         return col_map
 
-    def get_input_indices(self, codes: List[str], skip_missing: bool = False) -> List[int]:
+    def get_input_indices(self, codes: list[str], skip_missing: bool = False) -> list[int]:
         """Return input_columns indices for the given schema codes, expanding categoricals to one-hot.
 
         Categorical codes (e.g. "design") are expanded to all their one-hot column indices
@@ -406,7 +406,7 @@ class DataModule:
         When skip_missing=True, codes that cannot be resolved are silently ignored;
         otherwise a ValueError is raised.
         """
-        indices: List[int] = []
+        indices: list[int] = []
         for code in codes:
             if code in self.categorical_mappings:
                 for cat in sorted(self.categorical_mappings[code]):
@@ -426,7 +426,7 @@ class DataModule:
 
     # === SHARED NORMALIZATION HELPERS ===
     
-    def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> Dict[str, Any]:
+    def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> dict[str, Any]:
         """Compute normalization statistics for a data array."""
         if method == NormMethod.NONE:
             return {'method': NormMethod.NONE}
@@ -452,7 +452,7 @@ class DataModule:
         else:
             raise ValueError(f"Unknown normalization method: {method}")
     
-    def _apply_normalization(self, data: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Apply normalization to data array using pre-computed stats."""
         method = stats['method']
         
@@ -472,7 +472,7 @@ class DataModule:
         else:
             raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
 
-    def normalize_parameter_bounds(self, col: str, low: float, high: float) -> Tuple[float, float]:
+    def normalize_parameter_bounds(self, col: str, low: float, high: float) -> tuple[float, float]:
         """Normalize raw parameter bounds if normalization stats exist for the column."""
         if col not in self._parameter_stats:
             return (low, high)
@@ -481,7 +481,7 @@ class DataModule:
         n_high = self._apply_normalization(np.array([high]), stats)[0]
         return (min(n_low, n_high), max(n_low, n_high))
     
-    def _reverse_normalization(self, data_norm: np.ndarray, stats: Dict[str, Any]) -> np.ndarray:
+    def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Reverse normalization for data array."""
         method = stats['method']
         
@@ -501,7 +501,7 @@ class DataModule:
         else:
             raise ValueError(f"Unknown normalization method: {method}")
 
-    def _normalize_batch(self, data: np.ndarray, columns: List[str], stats: Dict[str, Dict[str, Any]]) -> None:
+    def _normalize_batch(self, data: np.ndarray, columns: list[str], stats: dict[str, dict[str, Any]]) -> None:
         """Apply normalization to a batch of data in-place."""
         if not self._is_fitted:
             return
@@ -522,9 +522,11 @@ class DataModule:
                 result[:, j] = vals.astype(np.float32)
             else:
                 result[:, j] = (vals == cat_val).astype(np.float32)
+        # Replace NaN with 0 — recursive features use NaN for boundary padding.
+        np.nan_to_num(result, copy=False, nan=0.0)
         return result
 
-    def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> Dict[str, Any]:
+    def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> dict[str, Any]:
         """Decode one-hot encoded categories from array."""
         params = {}
         for original_col, categories in self.categorical_mappings.items():
@@ -557,7 +559,7 @@ class DataModule:
 
     # === CALIBRATION HELPERS ===
 
-    def params_to_array(self, params: Dict[str, Any]) -> np.ndarray:
+    def params_to_array(self, params: dict[str, Any]) -> np.ndarray:
         """Convert a parameter dict to a normalized 1D input array."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -566,7 +568,7 @@ class DataModule:
         arr = self.prepare_input(df)
         return arr[0]
 
-    def array_to_params(self, array: np.ndarray) -> Dict[str, Any]:
+    def array_to_params(self, array: np.ndarray) -> dict[str, Any]:
         """Reverse-normalize and decode a 1D input array back to a parameter dict."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -599,10 +601,10 @@ class DataModule:
 
     def build_calibration_training_arrays(
         self,
-        performance_order: List[str],
+        performance_order: list[str],
         split: SplitType = SplitType.TRAIN,
         strict: bool = True
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Build (X, y) arrays for calibration training; strict=True raises on missing performance values."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -611,8 +613,8 @@ class DataModule:
         if not performance_order:
             raise ValueError("performance_order must contain at least one performance code.")
 
-        X_rows: List[np.ndarray] = []
-        y_rows: List[List[float]] = []
+        X_rows: list[np.ndarray] = []
+        y_rows: list[list[float]] = []
 
         for code in self._split_codes[split]:
             exp = self.dataset.get_experiment(code)
@@ -648,10 +650,10 @@ class DataModule:
         """Create a deep copy of this DataModule."""
         return copy.deepcopy(self)
     
-    def get_split_codes(self, split: SplitType = SplitType.TRAIN) -> List[str]:
+    def get_split_codes(self, split: SplitType = SplitType.TRAIN) -> list[str]:
         return self._split_codes[split]
     
-    def get_split_sizes(self) -> Dict[str, int]:
+    def get_split_sizes(self) -> dict[str, int]:
         """Get the sizes of each split as dict with train/val/test keys."""
         return {
             SplitType.TRAIN: len(self._split_codes[SplitType.TRAIN]),
@@ -661,9 +663,9 @@ class DataModule:
 
     def set_split_codes(
         self,
-        train_codes: List[str],
-        val_codes: Optional[List[str]] = None,
-        test_codes: Optional[List[str]] = None,
+        train_codes: list[str],
+        val_codes: list[str] | None = None,
+        test_codes: list[str] | None = None,
     ) -> None:
         """Explicitly set split membership without triggering split recomputation or refit."""
         self._split_codes = {

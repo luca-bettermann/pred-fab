@@ -1,7 +1,8 @@
 """DataObject type system for schema definitions — validation, typing, and value storage."""
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional, Dict, Tuple, Type, Union
+from collections.abc import Sequence
+from typing import Any
 import numpy as np
 
 from ..utils.enum import NormMethod, Roles
@@ -9,14 +10,14 @@ from ..utils.enum import NormMethod, Roles
 class DataObject(ABC):
     """Base class for schema type definitions — encapsulates dtype, constraints, and role."""
 
-    _registry: Dict[str, Type['DataObject']] = {}
+    _registry: dict[str, type['DataObject']] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls._registry[cls.__name__] = cls
 
-    def __init__(self, code: str, dtype: type, role: Roles, constraints: Optional[Dict[str, Any]] = None,
-                 round_digits: Optional[int] = None):
+    def __init__(self, code: str, dtype: type, role: Roles, constraints: dict[str, Any] | None = None,
+                 round_digits: int | None = None):
         self.code = code
         self.dtype = dtype
         self.constraints = constraints or {}
@@ -39,7 +40,7 @@ class DataObject(ABC):
         """Coerce raw input to this object's canonical runtime dtype."""
         ...
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for schema storage."""
         data = {
             "code": self.code,
@@ -54,7 +55,7 @@ class DataObject(ABC):
             data["runtime_adjustable"] = True
         return data
 
-    def to_hash_dict(self) -> Dict[str, Any]:
+    def to_hash_dict(self) -> dict[str, Any]:
         """Serialize structural identity for schema hashing; excludes operational metadata (e.g. runtime_adjustable)."""
         data = {
             "code": self.code,
@@ -68,7 +69,7 @@ class DataObject(ABC):
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'DataObject':
+    def from_dict(cls, data: dict[str, Any]) -> 'DataObject':
         """Reconstruct from dictionary."""
         obj_type = data["type"]
         code = data["code"]
@@ -77,7 +78,7 @@ class DataObject(ABC):
         role_raw = data.get("role")
 
         # Deserialize role from stored enum value string.
-        role: Optional[Roles]
+        role: Roles | None
         if role_raw is None:
             role = None
         elif isinstance(role_raw, Roles):
@@ -105,7 +106,7 @@ class DataObject(ABC):
 
     @classmethod
     @abstractmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataObject':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataObject':
         """Implementation-specific reconstruction. Override in subclasses."""
         ...
 
@@ -113,8 +114,8 @@ class DataObject(ABC):
 class DataReal(DataObject):
     """Floating-point numeric parameter."""
 
-    def __init__(self, code: str, role: Roles, min_val: Optional[float] = None, max_val: Optional[float] = None,
-                 round_digits: Optional[int] = None):
+    def __init__(self, code: str, role: Roles, min_val: float | None = None, max_val: float | None = None,
+                 round_digits: int | None = None):
         constraints = {}
         if min_val is not None:
             constraints["min"] = min_val
@@ -149,14 +150,14 @@ class DataReal(DataObject):
         return coerced
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataReal':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataReal':
         return cls(code, role, constraints.get("min"), constraints.get("max"), round_digits)
 
 
 class DataInt(DataObject):
     """Integer numeric parameter."""
 
-    def __init__(self, code: str, role: Roles, min_val: Optional[int] = None, max_val: Optional[int] = None, round_digits: Optional[int] = None):
+    def __init__(self, code: str, role: Roles, min_val: int | None = None, max_val: int | None = None, round_digits: int | None = None):
         constraints = {}
         if min_val is not None:
             constraints["min"] = int(min_val)
@@ -186,7 +187,7 @@ class DataInt(DataObject):
         return int(round(float(value)))
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataInt':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataInt':
         return cls(code, role, constraints.get("min"), constraints.get("max"))
 
 
@@ -215,13 +216,13 @@ class DataBool(DataObject):
         raise TypeError(f"{self.code} must be bool-like, got {type(value).__name__}")
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataBool':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataBool':
         return cls(code, role)
 
 class DataCategorical(DataObject):
     """Categorical parameter with a fixed set of allowed string values."""
 
-    def __init__(self, code: str, categories: List[str], role: Roles):
+    def __init__(self, code: str, categories: list[str], role: Roles):
         if not categories:
             raise ValueError("Categories list cannot be empty")
         super().__init__(code, str, role, {"categories": categories})
@@ -247,14 +248,14 @@ class DataCategorical(DataObject):
         return str(value)
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataCategorical':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataCategorical':
         return cls(code, constraints["categories"], role)
 
 
 class Dimension:
     """User-facing declaration of a single domain axis: a named integer iteration parameter."""
 
-    def __init__(self, code: str, iterator_code: str, min_val: int = 1, max_val: Optional[int] = None):
+    def __init__(self, code: str, iterator_code: str, min_val: int = 1, max_val: int | None = None):
         self.code = code
         self.iterator_code = iterator_code
         self.min_val = int(min_val)
@@ -264,7 +265,7 @@ class Dimension:
 class DataDomainAxis(DataInt):
     """Integer parameter auto-created for a domain axis; carries iterator_code. Never instantiated by users."""
 
-    def __init__(self, code: str, iterator_code: str, role: Roles, min_val: int = 1, max_val: Optional[int] = None):
+    def __init__(self, code: str, iterator_code: str, role: Roles, min_val: int = 1, max_val: int | None = None):
         super().__init__(code, role, min_val, max_val)
         self.iterator_code = iterator_code
         self.constraints["domain_iterator_code"] = iterator_code
@@ -274,26 +275,26 @@ class DataDomainAxis(DataInt):
         return NormMethod.MIN_MAX
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any], round_digits: Optional[int]) -> 'DataDomainAxis':
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataDomainAxis':
         return cls(code, constraints["domain_iterator_code"], role, constraints.get("min", 1), constraints.get("max"))
 
 
 class Domain:
     """Named ordered sequence of axes defining an iteration space for feature extraction."""
 
-    def __init__(self, code: str, axes: List[Dimension]):
+    def __init__(self, code: str, axes: list[Dimension]):
         self.code = code
-        self._axes: List[Dimension] = list(axes)
+        self._axes: list[Dimension] = list(axes)
 
     @property
-    def axes(self) -> List[Dimension]:
+    def axes(self) -> list[Dimension]:
         return self._axes
 
-    def get_param_codes(self) -> List[str]:
+    def get_param_codes(self) -> list[str]:
         """Return list of param codes for each axis."""
         return [a.code for a in self._axes]
 
-    def get_iterator_codes(self) -> List[str]:
+    def get_iterator_codes(self) -> list[str]:
         """Return list of iterator_code strings for each axis."""
         return [a.iterator_code for a in self._axes]
 
@@ -302,11 +303,11 @@ class Domain:
         """Number of axes in this domain."""
         return len(self._axes)
 
-    def create_axis_params(self, role: Roles) -> List['DataDomainAxis']:
+    def create_axis_params(self, role: Roles) -> list['DataDomainAxis']:
         """Instantiate DataDomainAxis objects for each axis in this domain."""
         return [DataDomainAxis(a.code, a.iterator_code, role, a.min_val, a.max_val) for a in self._axes]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for schema storage."""
         return {
             "code": self.code,
@@ -314,12 +315,12 @@ class Domain:
                        "min_val": a.min_val, "max_val": a.max_val} for a in self._axes]
         }
 
-    def to_hash_dict(self) -> Dict[str, Any]:
+    def to_hash_dict(self) -> dict[str, Any]:
         """Serialize structural identity for schema hashing."""
         return self.to_dict()
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Domain':
+    def from_dict(cls, data: dict[str, Any]) -> 'Domain':
         """Reconstruct from dictionary."""
         axes = [Dimension(a["code"], a["iterator_code"], a["min_val"], a.get("max_val")) for a in data["axes"]]
         return cls(data["code"], axes)
@@ -328,17 +329,23 @@ class Domain:
 class DataArray(DataObject):
     """Numpy array DataObject with dtype validation, used for feature tensor storage."""
 
-    def __init__(self, code: str, role: Roles, dtype: Union[str, type, np.dtype] = np.float64,
-                 domain_code: Optional[str] = None, feature_depth: Optional[int] = None,
-                 context: bool = False):
+    def __init__(self, code: str, role: Roles, dtype: str | type | np.dtype = np.float64,
+                 domain_code: str | None = None, feature_depth: int | None = None,
+                 context: bool = False,
+                 recursive_source: str | None = None,
+                 recursive_dimensions: tuple[str, ...] | None = None,
+                 recursive_depth: int | None = None):
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
-        self.columns: List[str] = []
-        self.domain_code: Optional[str] = domain_code
-        self.feature_depth: Optional[int] = feature_depth
+        self.columns: list[str] = []
+        self.domain_code: str | None = domain_code
+        self.feature_depth: int | None = feature_depth
         self.context: bool = context  # Observable but uncontrollable covariate; input-only, never optimized.
+        self.recursive_source: str | None = recursive_source
+        self.recursive_dimensions: tuple[str, ...] | None = recursive_dimensions
+        self.recursive_depth: int | None = recursive_depth
 
-        constraints: Dict[str, Any] = {
+        constraints: dict[str, Any] = {
             "dtype": resolved_dtype.name,
             "columns": self.columns
         }
@@ -348,14 +355,25 @@ class DataArray(DataObject):
             constraints["feature_depth"] = feature_depth
         if context:
             constraints["context"] = True
+        if recursive_source is not None:
+            constraints["recursive_source"] = recursive_source
+        if recursive_dimensions is not None:
+            constraints["recursive_dimensions"] = list(recursive_dimensions)
+        if recursive_depth is not None:
+            constraints["recursive_depth"] = recursive_depth
 
         super().__init__(code, np.ndarray, role, constraints)
+
+    @property
+    def is_recursive(self) -> bool:
+        """Whether this feature is derived by shifting a source feature tensor."""
+        return self.recursive_source is not None
 
     @property
     def normalize_strategy(self) -> NormMethod:
         return NormMethod.DEFAULT
 
-    def set_columns(self, columns: List[str]) -> None:
+    def set_columns(self, columns: list[str]) -> None:
         """Set associated iterator column names for this DataArray."""
         self.columns = columns
         self.constraints["columns"] = columns
@@ -379,15 +397,19 @@ class DataArray(DataObject):
         return np.asarray(value, dtype=target_dtype)
 
     @classmethod
-    def _from_json_impl(cls, code: str, role: Roles, constraints: Dict[str, Any],
-                       round_digits: Optional[int] = None) -> 'DataArray':
-        # Pass dtype string/type directly to init, which handles conversion
+    def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any],
+                       round_digits: int | None = None) -> 'DataArray':
+        """Reconstruct DataArray from serialized constraints."""
+        rec_dims = constraints.get("recursive_dimensions")
         obj = cls(
             code, role,
             dtype=constraints.get("dtype", np.float64),
             domain_code=constraints.get("domain_code"),
             feature_depth=constraints.get("feature_depth"),
             context=constraints.get("context", False),
+            recursive_source=constraints.get("recursive_source"),
+            recursive_dimensions=tuple(rec_dims) if rec_dims is not None else None,
+            recursive_depth=constraints.get("recursive_depth"),
         )
         obj.round_digits = round_digits
         if "columns" in constraints:
@@ -414,7 +436,7 @@ class Parameter:
         return obj
 
     @staticmethod
-    def categorical(code: str, categories: List[str]) -> DataCategorical:
+    def categorical(code: str, categories: list[str]) -> DataCategorical:
         """Create a categorical parameter."""
         return DataCategorical(code=code, categories=categories, role=Roles.PARAMETER)
 
@@ -429,15 +451,15 @@ class Feature:
     """Factory for creating feature Feature objects."""
 
     @staticmethod
-    def array(code: str, dtype: Union[str, type, np.dtype] = np.float64,
-              domain: Optional['Domain'] = None, depth: Optional[int] = None) -> DataArray:
+    def array(code: str, dtype: str | type | np.dtype = np.float64,
+              domain: Domain | None = None, depth: int | None = None) -> DataArray:
         """Create a feature DataArray tied to a domain. depth=None means full domain depth."""
         return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
                          domain_code=domain.code if domain is not None else None, feature_depth=depth)
 
     @staticmethod
-    def context(code: str, dtype: Union[str, type, np.dtype] = np.float64,
-                domain: Optional['Domain'] = None, depth: Optional[int] = None) -> DataArray:
+    def context(code: str, dtype: str | type | np.dtype = np.float64,
+                domain: Domain | None = None, depth: int | None = None) -> DataArray:
         """Create a context feature DataArray — observable but uncontrollable covariate.
 
         Context features are extracted like regular features but passed as fixed inputs
@@ -446,6 +468,43 @@ class Feature:
         return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
                          domain_code=domain.code if domain is not None else None,
                          feature_depth=depth, context=True)
+
+    @staticmethod
+    def recursive(
+        code: str,
+        source: 'DataArray',
+        dimensions: Sequence['Dimension'],
+        depth: int = 1,
+        max_depth: int | None = None,
+    ) -> DataArray | list[DataArray]:
+        """Derive recursive feature(s) from a source feature by shifting along domain dimensions.
+
+        With ``depth`` only (default 1), returns a single DataArray referencing the source
+        tensor shifted by ``depth`` steps along each listed dimension.  Boundary positions
+        are filled with NaN (converted to 0 at DataModule batch time).
+
+        With ``max_depth``, returns a list of DataArrays for steps 1..max_depth, suitable
+        for ``*``-unpacking into a Features block.
+        """
+        rec_dims = tuple(d.iterator_code for d in dimensions)
+        domain_code = source.domain_code
+
+        def _make(suffix_depth: int) -> DataArray:
+            arr_code = f"{code}_{suffix_depth}" if max_depth is not None else code
+            return DataArray(
+                code=arr_code,
+                role=Roles.FEATURE,
+                domain_code=domain_code,
+                feature_depth=source.feature_depth,
+                context=True,  # recursive features are not optimised
+                recursive_source=source.code,
+                recursive_dimensions=rec_dims,
+                recursive_depth=suffix_depth,
+            )
+
+        if max_depth is not None:
+            return [_make(d) for d in range(1, max_depth + 1)]
+        return _make(depth)
 
 
 class PerformanceAttribute:
