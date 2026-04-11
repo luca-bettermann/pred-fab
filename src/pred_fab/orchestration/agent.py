@@ -63,7 +63,7 @@ class PfabAgent:
         self._context_snapshot: dict[str, float] = {}
 
         # Console reporter (created in initialize_systems)
-        self.console: ConsoleReporter | None = None
+        self._console: ConsoleReporter | None = None
 
         # Progress tracking
         self.active_exp: ExperimentData | None = None
@@ -72,6 +72,13 @@ class PfabAgent:
         """Raise if the agent has not been initialized yet."""
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize_systems() first.")
+
+    @property
+    def console(self) -> ConsoleReporter:
+        """Schema-aware console reporter; available after initialize_systems()."""
+        if self._console is None:
+            raise RuntimeError("Console not available. Call initialize_systems() first.")
+        return self._console
 
     # === MODEL REGISTRATION ===
 
@@ -183,7 +190,7 @@ class PfabAgent:
             for code, obj in schema.parameters.items()
             if isinstance(obj, DataCategorical)
         }
-        self.console = ConsoleReporter(
+        self._console = ConsoleReporter(
             logger=self.logger,
             param_codes=param_codes,
             perf_codes=perf_codes,
@@ -546,8 +553,8 @@ class PfabAgent:
             self.calibration_system.configure_param_bounds(bounds, force=force)
         if performance_weights is not None:
             self.calibration_system.set_performance_weights(performance_weights)
-            if self.console is not None:
-                self.console._perf_weights = performance_weights
+            if self._console is not None:
+                self._console._perf_weights = performance_weights
             # Map performance weights to feature names for per-model KDE aggregation.
             feature_weights: dict[str, float] = {}
             for eval_model in self.eval_system.models:

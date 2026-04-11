@@ -1,6 +1,7 @@
 """Schema-aware ANSI console reporter for agent step output."""
 
 import math
+from collections.abc import Mapping
 from typing import Any
 
 from .logger import PfabLogger
@@ -86,7 +87,7 @@ class ConsoleReporter:
                 parts.append(f"{code[:3]}={val}")
         return "  ".join(parts)
 
-    def _format_perf(self, perf: dict[str, float | None]) -> str:
+    def _format_perf(self, perf: Mapping[str, float | None]) -> str:
         """Format performance metrics with ANSI coloring."""
         parts: list[str] = []
         for code in self._perf_codes:
@@ -130,7 +131,7 @@ class ConsoleReporter:
         self,
         exp_code: str,
         params: dict[str, Any],
-        perf: dict[str, float | None],
+        perf: Mapping[str, float | None],
     ) -> None:
         """Print one experiment result row: params + performance scores."""
         if not self.enabled:
@@ -143,7 +144,7 @@ class ConsoleReporter:
         self,
         exp_code: str,
         params: dict[str, Any],
-        perf: dict[str, float | None],
+        perf: Mapping[str, float | None],
         uncertainty: float,
         score: float,
     ) -> None:
@@ -163,7 +164,7 @@ class ConsoleReporter:
         self,
         exp_code: str,
         params: dict[str, Any],
-        perf: dict[str, float | None],
+        perf: Mapping[str, float | None],
         score: float,
     ) -> None:
         """Inference experiment result: params + perf + objective score."""
