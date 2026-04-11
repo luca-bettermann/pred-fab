@@ -466,7 +466,12 @@ class PfabAgent:
 
         # Run validation on trained models if requested
         if validate or test:
-            return self.pred_system.validate(use_test=test)
+            perf_weights = None
+            if self.calibration_system is not None:
+                perf_weights = self.calibration_system.performance_weights
+            return self.pred_system.validate(
+                use_test=test, performance_weights=perf_weights,
+            )
         
     def predict(
         self,

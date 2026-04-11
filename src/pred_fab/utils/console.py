@@ -185,15 +185,21 @@ class ConsoleReporter:
 
     # ── Training ────────────────────────────────────────────────────────
 
-    def print_training_summary(self, r2_scores: dict[str, float]) -> None:
-        """Print R² scores for each prediction model output."""
+    def print_training_summary(self, feature_metrics: dict[str, dict[str, float]]) -> None:
+        """Print R² and R²_adj scores for each prediction model output."""
         if not self.enabled:
             return
-        parts = "  ".join(
-            f"{name}: R²={_score_color(max(0.0, r2))}{r2:.3f}{_R}"
-            for name, r2 in r2_scores.items()
-        )
-        self._print(f"\n  {_B}Model quality{_R}  {parts}")
+        parts: list[str] = []
+        for name, metrics in feature_metrics.items():
+            r2 = metrics.get('r2', 0.0)
+            r2_adj = metrics.get('r2_adj')
+            r2_str = f"R²={_score_color(max(0.0, r2))}{r2:.3f}{_R}"
+            if r2_adj is not None:
+                adj_str = f"R²_adj={_score_color(max(0.0, r2_adj))}{r2_adj:.3f}{_R}"
+                parts.append(f"{name}: {r2_str}  {adj_str}")
+            else:
+                parts.append(f"{name}: {r2_str}")
+        self._print(f"\n  {_B}Model quality{_R}  {'  '.join(parts)}")
 
     # ── Adaptation ──────────────────────────────────────────────────────
 

@@ -599,11 +599,20 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return temp_datamodule
     
-    def validate(self, use_test: bool = False) -> dict[str, dict[str, float]]:
-        """Validate prediction models on validation or test set."""
+    def validate(
+        self,
+        use_test: bool = False,
+        performance_weights: dict[str, float] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """Validate prediction models on validation or test set.
+
+        Returns per-feature metrics: {feature_name: {'r2': float, 'r2_adj': float, ...}}.
+        When performance_weights are provided, R²_adj is computed using combined
+        performance as the importance signal.
+        """
         dm = self._assert_trained()
 
-        split =  SplitType.TEST if use_test else SplitType.VAL
+        split = SplitType.TEST if use_test else SplitType.VAL
 
         # Check if split is empty before trying to extract
         split_sizes = dm.get_split_sizes()
@@ -628,8 +637,31 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
 
-        # Compute metrics for each model
-        results = {}
+        # Build per-row importance from experiment performance (for R²_adj)
+        importance_arr: np.ndarray | None = None
+        if performance_weights:
+            total_w = sum(performance_weights.values())
+            if total_w > 0:
+                codes = dm.get_split_codes(split)
+                importance_rows: list[float] = []
+                for code in codes:
+                    exp = dm.dataset.get_experiment(code)
+                    perf = exp.performance.get_values_dict()
+                    combined = sum(
+                        performance_weights.get(k, 0.0) * float(v)
+                        for k, v in perf.items() if v is not None
+                    ) / total_w
+                    # Count rows this experiment contributes
+                    dim_names = exp.parameters.get_dim_names()
+                    if not dim_names:
+                        n_rows = 1
+                    else:
+                        n_rows = len(exp.parameters.get_dim_combinations(dim_names))
+                    importance_rows.extend([combined] * n_rows)
+                importance_arr = np.array(importance_rows, dtype=np.float64)
+
+        # Compute per-feature metrics
+        results: dict[str, dict[str, float]] = {}
         for model in self.models:
             # Get indices for this model
             input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
@@ -642,34 +674,40 @@ class PredictionSystem(BaseOrchestrationSystem):
             # Predict from the model-specific input slice.
             y_pred_norm = model.forward_pass(X_split[:, input_indices])
             y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
-            
-            # Calculate metrics and store
-            model_metrics = Metrics.calculate_regression_metrics(y_true, y_pred)
-            results.update(model_metrics)
-            
-            self.logger.console_info(f"  Model ({', '.join(model.outputs)}):")
-            self.logger.console_info(f"    {'Feature':<20} | {'MAE':<10} | {'RMSE':<10} | {'R²':<10}")
-            self.logger.console_info(f"    {'-' * 60}")
 
-            # Calculate and log metrics per feature
+            self.logger.console_info(f"  Model ({', '.join(model.outputs)}):")
+            self.logger.console_info(f"    {'Feature':<20} | {'MAE':<10} | {'RMSE':<10} | {'R²':<10} | {'R²_adj':<10}")
+            self.logger.console_info(f"    {'-' * 70}")
+
+            # Per-feature metrics
             for i, feature_name in enumerate(model.outputs):
-                # Extract single feature vectors
                 y_true_feat = y_true[:, i]
                 y_pred_feat = y_pred[:, i]
-                
+
                 feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
-                
+
+                # Add R²_adj when importance is available
+                if importance_arr is not None and len(importance_arr) == len(y_true_feat):
+                    adj = Metrics.calculate_adjusted_r2(
+                        y_true_feat, y_pred_feat, importance_arr
+                    )
+                    feat_metrics['r2_adj'] = adj['r2_adj']
+
+                results[feature_name] = feat_metrics
+
+                r2_adj_str = f"{feat_metrics['r2_adj']:<10.4f}" if 'r2_adj' in feat_metrics else f"{'n/a':<10}"
                 self.logger.console_info(
                     f"    {feature_name:<20} | "
                     f"{feat_metrics['mae']:<10.4f} | "
                     f"{feat_metrics['rmse']:<10.4f} | "
-                    f"{feat_metrics['r2']:<10.4f}"
+                    f"{feat_metrics['r2']:<10.4f} | "
+                    f"{r2_adj_str}"
                 )
-        
+
         self.logger.console_success(
-            f"Validation complete on {split} set ({len(X_split)} experiments)"
+            f"Validation complete on {split} set ({len(X_split)} samples)"
         )
-        
+
         return results
 
     def predict_experiment(
