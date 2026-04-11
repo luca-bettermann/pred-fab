@@ -19,7 +19,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
+from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
 
 
 class PfabAgent:
@@ -61,6 +61,9 @@ class PfabAgent:
 
         # Context snapshot: current measured values of context features, injected into perf_fn.
         self._context_snapshot: dict[str, float] = {}
+
+        # Console reporter (created in initialize_systems)
+        self.console: ConsoleReporter | None = None
 
         # Progress tracking
         self.active_exp: ExperimentData | None = None
@@ -170,6 +173,23 @@ class PfabAgent:
 
         # validate against schema
         self._validate_systems_against_schema(schema)
+
+        # Build console reporter from schema metadata
+        from ..core.data_objects import DataCategorical
+        param_codes = list(schema.parameters.keys())
+        perf_codes = list(schema.performance_attrs.keys())
+        param_categories = {
+            code: obj.constraints.get("categories", [])
+            for code, obj in schema.parameters.items()
+            if isinstance(obj, DataCategorical)
+        }
+        self.console = ConsoleReporter(
+            logger=self.logger,
+            param_codes=param_codes,
+            perf_codes=perf_codes,
+            param_categories=param_categories,
+        )
+
         self._initialized = True
 
         self.logger.console_success(f"Successfully initialized agentic systems.")
@@ -521,6 +541,8 @@ class PfabAgent:
             self.calibration_system.configure_param_bounds(bounds, force=force)
         if performance_weights is not None:
             self.calibration_system.set_performance_weights(performance_weights)
+            if self.console is not None:
+                self.console._perf_weights = performance_weights
             # Map performance weights to feature names for per-model KDE aggregation.
             feature_weights: dict[str, float] = {}
             for eval_model in self.eval_system.models:

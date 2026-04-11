@@ -1,6 +1,7 @@
 from .local_data import LocalData
 from .logger import PfabLogger
 from .metrics import Metrics
+from .console import ConsoleReporter
 from .enum import (
     SystemName,
     Roles,
@@ -33,5 +34,6 @@ __all__ = [
     "FileFormat",
     "SamplingStrategy",
     "SourceStep",
+    "ConsoleReporter",
 ]
     
