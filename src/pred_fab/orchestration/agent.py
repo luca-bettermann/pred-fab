@@ -717,8 +717,9 @@ class PfabAgent:
             datamodule = self.calibration_system._build_schema_datamodule()
             datamodule.fit_without_data()
 
-        # Initialize empty KDE so uncertainty function works
-        self.pred_system.fit_empty_kde(datamodule)
+        # Initialize empty KDE sized for the target arrangement.
+        # Bandwidth is set for n points so all proposals use consistent bubble sizes.
+        self.pred_system.fit_empty_kde(datamodule, target_n=n)
         self.calibration_system._active_datamodule = datamodule
 
         specs: list[ExperimentSpec] = []

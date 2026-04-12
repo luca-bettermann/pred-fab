@@ -290,7 +290,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"(c={self._exploration_radius}, total_weight={total_w:.2f})."
             )
 
-    def fit_empty_kde(self, datamodule: DataModule) -> None:
+    def fit_empty_kde(self, datamodule: DataModule, target_n: int = 1) -> None:
         """Initialize empty KDE structures for all non-deterministic models.
 
         Creates per-model KDEs with zero latent points. Uncertainty returns 1.0
@@ -298,6 +298,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         are injected iteratively via add_virtual_point(), causing subsequent
         proposals to avoid already-proposed regions — producing maximin coverage
         through the same acquisition function used for exploration and inference.
+
+        target_n sets the expected final number of points. The KDE bandwidth is
+        computed for this target size from the start, so all proposals use
+        consistently-sized uncertainty bubbles — producing even spacing
+        regardless of proposal order.
         """
         self._model_kdes = {}
         self.datamodule = datamodule
@@ -306,7 +311,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info("All models are deterministic — empty KDE not needed.")
             return
 
-        self._n_exp = 0  # no real experiments yet
+        # Use target_n for bandwidth so bubbles are sized for the final arrangement,
+        # not the current (growing) point count. This produces even spacing.
+        self._n_exp = target_n
 
         for model in kde_models:
             # Determine latent dimensionality by encoding a dummy point
@@ -387,13 +394,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
         z = z[kde.active_mask]
 
-        # Use the actual number of points in the KDE (real + virtual)
-        # so bandwidth adapts correctly during baseline spacing.
-        n_points = max(len(kde.latent_points), 1)
+        # Bandwidth uses the larger of _n_exp (real experiments) or actual
+        # point count (real + virtual). For baseline, _n_exp is pre-set to
+        # target_n so bubbles are consistently sized from the start.
+        n_for_bandwidth = max(self._n_exp, 1)
 
         d     = float(kde.n_active_dims)
-        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_points))
-        gamma = max(1.0, self._exploration_radius * np.sqrt(float(n_points)))
+        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_for_bandwidth))
+        gamma = max(1.0, self._exploration_radius * np.sqrt(float(n_for_bandwidth)))
 
         if len(kde.latent_points) == 0:
             return 1.0  # no evidence → maximum uncertainty
@@ -404,9 +412,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         if kde.q_max <= 0:
             return 1.0
         ratio  = float(np.clip(q / kde.q_max, 0.0, 1.0))
-        n_post = float(n_points) * (ratio ** gamma)
+        n_post = float(n_for_bandwidth) * (ratio ** gamma)
         u      = 1.0 / (1.0 + n_post)
-        u_min  = 1.0 / (1.0 + float(n_points))
+        u_min  = 1.0 / (1.0 + float(n_for_bandwidth))
         return float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
 
     def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
@@ -464,11 +472,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             kde.latent_points = np.vstack([kde.latent_points, z_proj.reshape(1, -1)])
             kde.weights = raw_weights / raw_weights.sum()
 
-            # Recompute q_max with the expanded point set (use actual point count,
-            # not _n_exp, since virtual points may exist without real experiments)
-            n_pts = max(len(kde.latent_points), 1)
+            # Recompute q_max using consistent bandwidth
+            n_for_h = max(self._n_exp, 1)
             d = float(kde.n_active_dims)
-            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_pts))
+            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_for_h))
             kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
 
         self.logger.debug(f"Virtual KDE point added: {list(params.keys())}")
