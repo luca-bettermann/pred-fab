@@ -153,7 +153,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info(f"Trained model for '{primary_feature}'")
 
             if self.logger._console_output_enabled:
-                bar_len = 8
+                bar_len = 12
                 filled = int(bar_len * trained_count / total)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
                 if trained_count == total:

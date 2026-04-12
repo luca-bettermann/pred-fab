@@ -1068,7 +1068,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Final checkmark line (unified for both optimizers)
         if console:
-            bar = "\u2588" * 8
+            bar = "\u2588" * 12
             print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{opt.nfev} evals\033[0m", flush=True)
 
         # Publish result bookkeeping
@@ -1156,7 +1156,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         total_nfev = 0
         for i, x0 in enumerate(x0_list):
             if show_progress:
-                bar_len = 8
+                bar_len = 12
                 filled = int(bar_len * (i + 1) / total_starts)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
                 print(f"  {'Optimizing':<10s} [{bar}] \033[2m{i+1}/{total_starts}\033[0m", end="\r", flush=True)
@@ -1197,7 +1197,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         def _progress(xk, convergence):
             _iter[0] += 1
             if show_progress:
-                bar_len = 8
+                bar_len = 12
                 filled = int(bar_len * _iter[0] / maxiter)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
                 print(f"  {'Optimizing':<10s} [{bar}] \033[2m{_iter[0]}/{maxiter}\033[0m", end="\r", flush=True)
