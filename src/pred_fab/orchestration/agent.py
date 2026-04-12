@@ -176,6 +176,7 @@ class PfabAgent:
             perf_fn=_perf_fn,
             uncertainty_fn=_pred.uncertainty,
             similarity_fn=_pred.kernel_similarity,
+            n_exp_fn=lambda: _pred._n_exp,
         )
 
         # Wire up virtual KDE point callbacks for within-trajectory spacing.

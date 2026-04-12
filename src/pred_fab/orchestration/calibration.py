@@ -42,12 +42,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
         similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
+        n_exp_fn: Callable[[], int] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger)
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
         self.similarity_fn = similarity_fn
+        self._n_exp_fn = n_exp_fn
 
         # Virtual KDE point callbacks for within-trajectory spacing.
         # Set by PfabAgent to inject proposed points into the KDE between
@@ -110,12 +112,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Boundary buffer: penalise acquisition scores near parameter bounds to
         # counteract KDE edge effects (no evidence outside the search space).
-        self.boundary_buffer_extent: float = 0.0    # fraction of range; 0 = disabled
+        # The extent adapts dynamically: effective_extent = base_extent / √N,
+        # tracking the KDE bandwidth decay so the buffer shrinks with the bubbles.
+        self.boundary_buffer_extent: float = 0.0    # base extent (fraction of range at N=1); 0 = disabled
         self.boundary_buffer_strength: float = 0.5  # penalty at boundary: score *= (1 - strength)
         self.boundary_buffer_exponent: float = 2.0   # curve shape: t^exp (1=linear, 2=quadratic)
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
+
+    def _get_n_exp(self) -> int:
+        """Current experiment count from the prediction system (for dynamic buffer scaling)."""
+        if self._n_exp_fn is not None:
+            return self._n_exp_fn()
+        return 1
 
     # ------------------------------------------------------------------
     # random_seed property
@@ -441,15 +451,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _boundary_factor(self, X: np.ndarray, bounds: np.ndarray) -> float:
         """Multiplicative penalty in (0, 1] that decays near parameter boundaries.
 
+        The extent adapts dynamically with the number of experiments:
+        effective_extent = base_extent / √N. This tracks the KDE bandwidth
+        decay (h ∝ 1/√N), so the buffer shrinks as evidence accumulates
+        and edge effects diminish.
+
         Per-dimension factors are multiplied so corners (near multiple boundaries)
         receive a stronger penalty. Dimensions with zero-width bounds (fixed params,
         context features) are skipped.
         """
-        extent = self.boundary_buffer_extent
+        base_extent = self.boundary_buffer_extent
         strength = self.boundary_buffer_strength
         exponent = self.boundary_buffer_exponent
-        factor = 1.0
 
+        # Scale extent with 1/√N, matching KDE bandwidth decay
+        n_exp = self._get_n_exp()
+        extent = base_extent / np.sqrt(max(n_exp, 1))
+
+        factor = 1.0
         for i in range(len(X)):
             lo, hi = bounds[i]
             span = hi - lo
