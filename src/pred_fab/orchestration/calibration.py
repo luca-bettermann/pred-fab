@@ -761,7 +761,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 return []
 
             d = len(continuous_params) + len(categorical_params)
-            sampler = LatinHypercube(d=d, seed=self._random_seed)
+            sampler = LatinHypercube(d=d, optimization="random-cd")
             samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
 
             specs: list[ExperimentSpec] = []
@@ -1090,7 +1090,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         result = differential_evolution(
             func=objective_func,
             bounds=bounds.tolist(),
-            maxiter=maxiter, popsize=popsize, seed=seed,
+            maxiter=maxiter, popsize=popsize,
             mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
             polish=True, init='latinhypercube',
             callback=_progress_callback,
