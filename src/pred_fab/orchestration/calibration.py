@@ -1056,18 +1056,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Run the acquisition function optimization and return proposed parameters."""
         active_optimizer = optimizer_override or self.optimizer
 
-        if self.logger._console_output_enabled:
-            print(f"  {'Optimizing':<10s} ...", end="\r", flush=True)
+        console = self.logger._console_output_enabled
 
         if active_optimizer == Optimizer.DE:
-            opt = self._optimize_de(bounds, objective_func)
+            opt = self._optimize_de(bounds, objective_func, show_progress=console)
         else:
             opt = self._optimize_lbfgsb(
                 datamodule, x0_params, bounds, objective_func, n_rounds,
+                show_progress=console,
             )
 
-        if self.logger._console_output_enabled:
-            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{opt.nfev} evals]" + " " * 20, flush=True)
+        # Final checkmark line (unified for both optimizers)
+        if console:
+            bar = "\u2588" * 12
+            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] {opt.nfev} evals", flush=True)
 
         # Publish result bookkeeping
         self.last_opt_nfev = opt.nfev
@@ -1132,6 +1134,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         bounds: np.ndarray,
         objective_func: Callable,
         n_rounds: int,
+        show_progress: bool = False,
     ) -> _OptResult:
         """Multi-start L-BFGS-B (gradient-based, local)."""
         x0_list = []
@@ -1147,10 +1150,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_dims = len(x0_list[0])
         max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
         eps = self.lbfgsb_eps
+        total_starts = len(x0_list)
 
         best_x, best_val = None, np.inf
         total_nfev = 0
         for i, x0 in enumerate(x0_list):
+            if show_progress:
+                bar_len = 12
+                filled = int(bar_len * (i + 1) / total_starts)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                print(f"  {'Optimizing':<10s} [{bar}] {i+1}/{total_starts}", end="\r", flush=True)
             try:
                 res = minimize(
                     fun=objective_func, x0=x0, bounds=bounds, method='L-BFGS-B',
@@ -1161,7 +1170,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     best_val = res.fun
                     best_x = res.x
                 self.logger.debug(
-                    f"  start {i + 1}/{len(x0_list)}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
+                    f"  start {i + 1}/{total_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
                 )
             except Exception as e:
                 self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
@@ -1177,11 +1186,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         bounds: np.ndarray,
         objective_func: Callable,
+        show_progress: bool = False,
     ) -> _OptResult:
         """Differential evolution (global, population-based, with L-BFGS-B polish)."""
         seed = int(self.rng.randint(0, 2**31 - 1))
         maxiter = self.de_maxiter
         popsize = self.de_popsize
+
+        _iter = [0]
+        def _progress(xk, convergence):
+            _iter[0] += 1
+            if show_progress:
+                bar_len = 12
+                filled = int(bar_len * _iter[0] / maxiter)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                print(f"  {'Optimizing':<10s} [{bar}] {_iter[0]}/{maxiter}", end="\r", flush=True)
 
         result = differential_evolution(
             func=objective_func,
@@ -1189,6 +1208,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             maxiter=maxiter, popsize=popsize,
             mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
             polish=True, init='latinhypercube',
+            callback=_progress,
         )
 
         return _OptResult(
