@@ -290,6 +290,48 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"(c={self._exploration_radius}, total_weight={total_w:.2f})."
             )
 
+    def fit_empty_kde(self, datamodule: DataModule) -> None:
+        """Initialize empty KDE structures for all non-deterministic models.
+
+        Creates per-model KDEs with zero latent points. Uncertainty returns 1.0
+        everywhere (maximum). Used to bootstrap baseline spacing: virtual points
+        are injected iteratively via add_virtual_point(), causing subsequent
+        proposals to avoid already-proposed regions — producing maximin coverage
+        through the same acquisition function used for exploration and inference.
+        """
+        self._model_kdes = {}
+        self.datamodule = datamodule
+        kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
+        if not kde_models:
+            self.logger.info("All models are deterministic — empty KDE not needed.")
+            return
+
+        self._n_exp = 0  # no real experiments yet
+
+        for model in kde_models:
+            # Determine latent dimensionality by encoding a dummy point
+            input_cols = model.input_parameters + model.input_features
+            input_indices = datamodule.get_input_indices(input_cols, skip_missing=True)
+            n_input = len(input_indices) if input_indices else len(datamodule.input_columns)
+            dummy_X = np.zeros((1, n_input))
+            z = model.encode(dummy_X)[0]
+            n_dims = len(z)
+
+            self._model_kdes[id(model)] = _ModelKDE(
+                model=model,
+                latent_points=np.empty((0, n_dims)),  # zero points
+                weights=np.empty(0),
+                q_max=0.0,
+                active_mask=np.ones(n_dims, dtype=bool),
+                n_active_dims=n_dims,
+                weight=self._get_model_weight(model),
+            )
+
+        self.logger.info(
+            f"Empty KDE initialized for {len(self._model_kdes)} models "
+            f"(c={self._exploration_radius}). Ready for virtual point injection."
+        )
+
     @staticmethod
     def _compute_q_max(points: np.ndarray, weights: np.ndarray, h: float) -> float:
         """Max weighted KDE density over all training latent points."""
@@ -345,9 +387,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
         z = z[kde.active_mask]
 
+        # Use the actual number of points in the KDE (real + virtual)
+        # so bandwidth adapts correctly during baseline spacing.
+        n_points = max(len(kde.latent_points), 1)
+
         d     = float(kde.n_active_dims)
-        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
-        gamma = max(1.0, self._exploration_radius * np.sqrt(float(self._n_exp)))
+        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_points))
+        gamma = max(1.0, self._exploration_radius * np.sqrt(float(n_points)))
+
+        if len(kde.latent_points) == 0:
+            return 1.0  # no evidence → maximum uncertainty
 
         dists_sq = np.sum((kde.latent_points - z) ** 2, axis=1)
         q = float(np.dot(kde.weights, np.exp(-dists_sq / (2.0 * h ** 2))))
@@ -355,9 +404,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         if kde.q_max <= 0:
             return 1.0
         ratio  = float(np.clip(q / kde.q_max, 0.0, 1.0))
-        n_post = float(self._n_exp) * (ratio ** gamma)
+        n_post = float(n_points) * (ratio ** gamma)
         u      = 1.0 / (1.0 + n_post)
-        u_min  = 1.0 / (1.0 + float(self._n_exp))
+        u_min  = 1.0 / (1.0 + float(n_points))
         return float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
 
     def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
@@ -409,15 +458,17 @@ class PredictionSystem(BaseOrchestrationSystem):
                 kde._original_q_max = kde.q_max                        # type: ignore[attr-defined]
 
             # Append with weight 1.0 (single observation), then renormalize
-            new_weight = 1.0
-            raw_weights = kde.weights * kde.weights.sum()  # undo normalization
-            raw_weights = np.append(raw_weights, new_weight)
+            w_sum = kde.weights.sum()
+            raw_weights = kde.weights * w_sum if w_sum > 0 else kde.weights.copy()
+            raw_weights = np.append(raw_weights, 1.0)
             kde.latent_points = np.vstack([kde.latent_points, z_proj.reshape(1, -1)])
             kde.weights = raw_weights / raw_weights.sum()
 
-            # Recompute q_max with the expanded point set
+            # Recompute q_max with the expanded point set (use actual point count,
+            # not _n_exp, since virtual points may exist without real experiments)
+            n_pts = max(len(kde.latent_points), 1)
             d = float(kde.n_active_dims)
-            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_pts))
             kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
 
         self.logger.debug(f"Virtual KDE point added: {list(params.keys())}")

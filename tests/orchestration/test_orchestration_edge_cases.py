@@ -74,7 +74,7 @@ def test_calibration_acquisition_uses_perf_fn_and_uncertainty_fn(tmp_path):
     # Build a dummy normalized X array
     X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
     w = 0.5
-    result = calibration._acquisition_func(X, w_explore=w)
+    result = calibration._acquisition_func(X, kappa=w)
 
     # Both callables should have been invoked
     assert len(perf_calls) == 1

@@ -366,7 +366,7 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
     valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)
     w = 0.4
-    result = calibration._acquisition_func(X, w_explore=w)
+    result = calibration._acquisition_func(X, kappa=w)
 
     assert len(perf_calls) == 1
     assert len(unc_calls) == 1
@@ -411,7 +411,7 @@ def test_acquisition_func_with_no_active_datamodule_returns_zero(tmp_path):
     calibration = build_calibration_system(tmp_path, dataset)
 
     X = np.zeros(3)
-    result = calibration._acquisition_func(X, w_explore=0.5)
+    result = calibration._acquisition_func(X, kappa=0.5)
     assert result == pytest.approx(0.0)
 
 
@@ -524,7 +524,7 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
         datamodule=datamodule,
         mode=Mode.EXPLORATION,
         current_params=current_params,
-        w_explore=0.5,
+        kappa=0.5,
     )
 
     assert isinstance(result, ExperimentSpec)

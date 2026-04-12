@@ -346,7 +346,7 @@ class PfabAgent:
     def exploration_step(
         self,
         datamodule: DataModule,
-        w_explore: float = 0.5,
+        kappa: float = 0.5,
         n_optimization_rounds: int = 5,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
@@ -357,7 +357,7 @@ class PfabAgent:
             datamodule=datamodule,
             mode=Mode.EXPLORATION,
             current_params=current_params,
-            w_explore=w_explore,
+            kappa=kappa,
             n_optimization_rounds=n_optimization_rounds,
         )
 
@@ -368,27 +368,22 @@ class PfabAgent:
         self,
         exp_data: ExperimentData,
         datamodule: DataModule,
-        w_explore: float = 0.5,
         n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """Extract features, evaluate, then return an inference-guided proposal."""
+        """Extract features, evaluate, then return a performance-maximizing proposal (kappa=0)."""
         self._check_systems(StepType.FULL)
 
-        # 1. Extract Features
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
-
-        # 2. Evaluate Performance
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
-        # 3. Calibrate
         result = self.calibration_system.run_calibration(
             datamodule=datamodule,
             mode=Mode.INFERENCE,
             current_params=current_params,
-            w_explore=w_explore,
+            kappa=0.0,
             n_optimization_rounds=n_optimization_rounds,
         )
 
@@ -401,7 +396,7 @@ class PfabAgent:
         step_index: int | None = None,
         exp_data: ExperimentData | None = None,
         mode: Mode = Mode.INFERENCE,
-        w_explore: float = 0.0,
+        kappa: float = 0.0,
         record: bool = False,
         **kwargs
     ) -> ExperimentSpec:
@@ -435,7 +430,7 @@ class PfabAgent:
             mode=mode,
             current_params=current_params,
             target_indices=target_indices,
-            w_explore=w_explore,
+            kappa=kappa,
         )
         # Tag as adaptation (run_calibration uses mode-derived source_step).
         proposal = ParameterProposal.from_dict(
@@ -703,16 +698,49 @@ class PfabAgent:
     def baseline_step(
         self,
         n: int,
-        param_bounds: dict[str, tuple[float, float]] | None = None,
+        datamodule: DataModule | None = None,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals using LHS. No trained model required."""
+        """Generate n space-filling baseline proposals using kappa=1 (pure evidence).
+
+        Uses the same acquisition function as exploration and inference, but with
+        kappa=1.0 (maximize uncertainty only). Virtual KDE points are injected
+        after each proposal so subsequent proposals avoid already-proposed regions,
+        producing maximally-spaced coverage without a separate sampling algorithm.
+
+        No trained prediction model is required — the KDE operates in raw
+        parameter space (encode() returns identity when untrained).
+        """
         self._assert_initialized()
-        result = self.calibration_system.run_baseline(
-            n=n,
-            param_bounds=param_bounds,
-        )
+
+        # Build a schema-only DataModule if none provided
+        if datamodule is None:
+            datamodule = self.calibration_system._build_schema_datamodule()
+            datamodule.fit_without_data()
+
+        # Initialize empty KDE so uncertainty function works
+        self.pred_system.fit_empty_kde(datamodule)
+        self.calibration_system._active_datamodule = datamodule
+
+        specs: list[ExperimentSpec] = []
+        for i in range(n):
+            result = self.calibration_system.run_calibration(
+                datamodule=datamodule,
+                mode=Mode.EXPLORATION,
+                kappa=1.0,
+                n_optimization_rounds=0,
+                source_step_override=SourceStep.BASELINE,
+            )
+            specs.append(result)
+
+            # Inject virtual point so the next proposal avoids this one
+            params = dict(result.initial_params.to_dict())
+            self.pred_system.add_virtual_point(params, datamodule)
+
+        # Clear virtual points — they're not real experiments
+        self.pred_system.clear_virtual_points()
+
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
-        return result
+        return specs
 
     # === Helper Functions ===
 

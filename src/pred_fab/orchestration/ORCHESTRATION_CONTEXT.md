@@ -38,14 +38,21 @@ agent.configure(
 )
 ```
 
-## Acquisition Function
-The exploration objective combines predicted performance and KDE uncertainty:
+## Unified Acquisition Function
+One optimizer, one equation, three modes controlled by a single parameter κ (kappa):
 ```
-score = (1 - w_explore) * normalized_perf + w_explore * uncertainty
+score = (1 - κ) · performance + κ · evidence
 ```
-- **Performance** is normalized to its running observed range from training data (updated after each `train()` call). This ensures `w_explore` balances meaningfully even when raw scores occupy a narrow band.
-- **Uncertainty** (KDE output) is inherently [0, 1] and not renormalized.
-- **Note**: The combined score can slightly exceed [0, 1] when the prediction model extrapolates beyond training data. This is expected behaviour, not an error — it indicates the model is operating in an unfamiliar region.
+| κ | Mode | Purpose |
+|---|------|---------|
+| 1.0 | Baseline | Pure evidence — maximally-spaced coverage via virtual KDE points |
+| 0 < κ < 1 | Exploration | Balance coverage + performance (default κ=0.5) |
+| 0.0 | Inference | Pure performance — first-time-right manufacturing |
+
+- **Performance** is normalized to its running observed range from training data.
+- **Evidence** (KDE uncertainty) is inherently [0, 1] and not renormalized.
+- **Baseline** uses `fit_empty_kde()` + iterative virtual point injection — no separate sampling algorithm (LHS/Sobol) needed.
+
 Users interact only with `PfabAgent` — no direct access to subsystems needed.
 
 ## Telemetry Properties on PfabAgent
@@ -83,7 +90,7 @@ covariates are correctly injected at calibration time without being part of the 
 
 | Method | Mode | Notes |
 |--------|------|-------|
-| `baseline_step(n)` | BASELINE | Latin Hypercube Sampling, no trained model needed |
+| `baseline_step(n)` | BASELINE | κ=1 pure evidence, no trained model needed |
 | `exploration_step(…)` | EXPLORATION | UCB acquisition |
 | `inference_step(…)` | INFERENCE | Feature extraction + perf-max |
 | `adaptation_step(…)` | INFERENCE | Online tuning + trust-region calibration; batch_size via `**kwargs` |

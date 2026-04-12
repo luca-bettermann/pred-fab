@@ -70,7 +70,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, w_explore=0.5,
+        result = cal._acquisition_func(X, kappa=0.5,
                                         perf_range=(0.2, 0.8),
                                         unc_range=(0.0, 1.0))
         assert np.isfinite(result)
@@ -82,7 +82,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, w_explore=0.5,
+        result = cal._acquisition_func(X, kappa=0.5,
                                         perf_range=None,
                                         unc_range=None)
         assert np.isfinite(result)
@@ -94,7 +94,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, w_explore=0.5,
+        result = cal._acquisition_func(X, kappa=0.5,
                                         perf_range=(0.2, 0.8),
                                         unc_range=(0.0, 1.0))
         assert result <= 0.0
@@ -112,14 +112,14 @@ class TestBuildObjective:
         cal = agent.calibration_system
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
-        obj = cal._build_objective(Mode.EXPLORATION, w_explore=0.7, bounds=bounds)
+        obj = cal._build_objective(Mode.EXPLORATION, kappa=0.7, bounds=bounds)
         assert callable(obj)
 
     def test_inference_objective_callable(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
         cal._active_datamodule = datamodule
-        obj = cal._build_objective(Mode.INFERENCE, w_explore=0.0)
+        obj = cal._build_objective(Mode.INFERENCE, kappa=0.0)
         assert callable(obj)
 
 

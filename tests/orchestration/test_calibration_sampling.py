@@ -528,7 +528,7 @@ def _make_calibration_with_single_param(tmp_path, perf_fn, uncertainty_fn):
 
 
 def test_exploration_high_w_targets_uncertainty_region(tmp_path):
-    """With w_explore=1 and uncertainty concentrated above param_1=8, the proposal lands there.
+    """With kappa=1 and uncertainty concentrated above param_1=8, the proposal lands there.
 
     The performance signal is flat so only uncertainty drives the proposal.
     """
@@ -541,20 +541,20 @@ def test_exploration_high_w_targets_uncertainty_region(tmp_path):
     result = calibration.run_calibration(
         datamodule=datamodule,
         mode=Mode.EXPLORATION,
-        w_explore=1.0,
+        kappa=1.0,
         n_optimization_rounds=20,
     )
 
     assert result["param_1"] > 7.0, (
-        f"With w_explore=1 and uncertainty above 8, expected param_1 > 7, "
+        f"With kappa=1 and uncertainty above 8, expected param_1 > 7, "
         f"got {result['param_1']:.2f}"
     )
 
 
 def test_exploration_zero_w_targets_performance_region(tmp_path):
-    """With w_explore=0 and performance concentrated above param_1=8, the proposal lands there.
+    """With kappa=0 and performance concentrated above param_1=8, the proposal lands there.
 
-    w_explore=0 collapses EXPLORATION to pure INFERENCE — uncertainty is ignored entirely.
+    kappa=0 collapses EXPLORATION to pure INFERENCE — uncertainty is ignored entirely.
     """
     calibration, datamodule = _make_calibration_with_single_param(
         tmp_path,
@@ -566,12 +566,12 @@ def test_exploration_zero_w_targets_performance_region(tmp_path):
     result = calibration.run_calibration(
         datamodule=datamodule,
         mode=Mode.EXPLORATION,
-        w_explore=0.0,
+        kappa=0.0,
         n_optimization_rounds=20,
     )
 
     assert result["param_1"] > 7.0, (
-        f"With w_explore=0 and performance above 8, expected param_1 > 7, "
+        f"With kappa=0 and performance above 8, expected param_1 > 7, "
         f"got {result['param_1']:.2f}"
     )
 
@@ -607,7 +607,7 @@ def test_inference_ignores_uncertainty_signal(tmp_path):
     """INFERENCE must not be pulled toward high-uncertainty regions.
 
     Performance peaks above param_1=8; uncertainty peaks below param_1=2.
-    INFERENCE (w_explore=0 implicitly) should stay in the high-performance region
+    INFERENCE (kappa=0 implicitly) should stay in the high-performance region
     even though uncertainty is high elsewhere.
     """
     calibration, datamodule = _make_calibration_with_single_param(
@@ -630,11 +630,11 @@ def test_inference_ignores_uncertainty_signal(tmp_path):
 
 
 def test_exploration_and_inference_diverge_when_signals_conflict(tmp_path):
-    """EXPLORATION (high w_explore) and INFERENCE must target different regions.
+    """EXPLORATION (high kappa) and INFERENCE must target different regions.
 
     Performance is high above param_1=8 (right side).
     Uncertainty is high below param_1=2 (left side).
-    INFERENCE should land right; EXPLORATION with w_explore=0.9 should land left.
+    INFERENCE should land right; EXPLORATION with kappa=0.9 should land left.
     """
     perf_fn = lambda p: {"performance_1": 1.0 if p.get("param_1", 0) > 8.0 else 0.0,
                          "performance_2": 0.5}
@@ -658,7 +658,7 @@ def test_exploration_and_inference_diverge_when_signals_conflict(tmp_path):
     )
 
     r_inf = cal_inference.run_calibration(dm_inference, Mode.INFERENCE, n_optimization_rounds=20)
-    r_exp = cal_explore.run_calibration(dm_explore, Mode.EXPLORATION, w_explore=0.9,
+    r_exp = cal_explore.run_calibration(dm_explore, Mode.EXPLORATION, kappa=0.9,
                                         n_optimization_rounds=20)
 
     assert r_inf["param_1"] > 7.0, f"INFERENCE should target high-perf region, got {r_inf['param_1']:.2f}"

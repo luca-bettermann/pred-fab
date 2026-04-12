@@ -396,7 +396,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _acquisition_func(
         self,
         X: np.ndarray,
-        w_explore: float,
+        kappa: float,
         bounds: np.ndarray | None = None,
         perf_range: tuple[float, float] | None = None,
         unc_range: tuple[float, float] | None = None,
@@ -421,7 +421,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
         u = float(self.uncertainty_fn(X.reshape(-1)))
 
-        # Normalize performance to its observed training range so w_explore
+        # Normalize performance to its observed training range so kappa
         # balances meaningfully even when raw scores occupy a narrow band.
         # Uncertainty (KDE) is inherently [0, 1] and not renormalized.
         # Note: values can slightly exceed [0, 1] when the model extrapolates
@@ -431,7 +431,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             span = pmax - pmin
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
 
-        score = (1.0 - w_explore) * sys_perf + w_explore * u
+        score = (1.0 - kappa) * sys_perf + kappa * u
 
         # Apply boundary buffer to counteract KDE edge effects
         if self.boundary_buffer_extent > 0 and bounds is not None:
@@ -574,7 +574,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Uncertainty (KDE output) is inherently [0, 1] — no normalization needed.
         return perf_range, None
 
-    def _build_objective(self, mode: Mode, w_explore: float, bounds: np.ndarray | None = None) -> Callable:
+    def _build_objective(self, mode: Mode, kappa: float, bounds: np.ndarray | None = None) -> Callable:
         """Return the objective function for the given calibration mode."""
         if mode == Mode.BASELINE:
             raise ValueError(
@@ -584,7 +584,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             perf_range, unc_range = self._get_acquisition_ranges()
             return functools.partial(
                 self._acquisition_func,
-                w_explore=w_explore,
+                kappa=kappa,
                 bounds=bounds,
                 perf_range=perf_range,
                 unc_range=unc_range,
@@ -794,10 +794,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         mode: Mode,
         current_params: dict[str, Any] | None = None,
         target_indices: dict[str, int] | None = None,
-        w_explore: float = 0.5,
+        kappa: float = 0.5,
         n_optimization_rounds: int = 10,
         mpc_lookahead: int | None = None,
         mpc_discount: float | None = None,
+        source_step_override: SourceStep | None = None,
     ) -> ExperimentSpec:
         """Run a single calibration pass and return an ExperimentSpec.
 
@@ -814,7 +815,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # For exploration, compute global bounds first so we can estimate ranges
         global_bounds = self._get_global_bounds(datamodule) if mode == Mode.EXPLORATION else None
-        objective = self._build_objective(mode, w_explore, bounds=global_bounds)
+        objective = self._build_objective(mode, kappa, bounds=global_bounds)
 
         if lookahead > 0:
             objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
@@ -822,7 +823,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"MPC lookahead enabled: depth={lookahead}, discount={discount:.3f}"
             )
 
-        if mode == Mode.EXPLORATION:
+        if source_step_override is not None:
+            source_step = source_step_override
+        elif mode == Mode.EXPLORATION:
             source_step: SourceStep = SourceStep.EXPLORATION
         elif mode == Mode.INFERENCE:
             source_step = SourceStep.INFERENCE
@@ -840,7 +843,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"run_calibration: mode={mode.name}, {'online (trust-region)' if is_online else 'offline (global)'}, "
-            f"w_explore={w_explore:.2f}, mpc_lookahead={lookahead}, step_grid={len(step_grid)} step(s)"
+            f"kappa={kappa:.2f}, mpc_lookahead={lookahead}, step_grid={len(step_grid)} step(s)"
         )
 
         # Validate trust regions for online/trust-region optimization
