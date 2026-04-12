@@ -235,6 +235,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
 
+        if n_exp < 5:
+            self.logger.console_warning(
+                f"KDE uncertainty fitted with only {n_exp} experiments — "
+                f"estimates may be unreliable until more data is collected."
+            )
+
         # Fit one KDE per non-deterministic model.
         for model in kde_models:
             latent_points: list[np.ndarray] = []
