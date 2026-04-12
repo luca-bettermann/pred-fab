@@ -2,6 +2,7 @@ LICENSE
 README.md
 pyproject.toml
 src/pred_fab/__init__.py
+src/pred_fab/py.typed
 src/pred_fab.egg-info/PKG-INFO
 src/pred_fab.egg-info/SOURCES.txt
 src/pred_fab.egg-info/dependency_links.txt
@@ -29,6 +30,7 @@ src/pred_fab/orchestration/features.py
 src/pred_fab/orchestration/inference_bundle.py
 src/pred_fab/orchestration/prediction.py
 src/pred_fab/utils/__init__.py
+src/pred_fab/utils/console.py
 src/pred_fab/utils/enum.py
 src/pred_fab/utils/local_data.py
 src/pred_fab/utils/logger.py
