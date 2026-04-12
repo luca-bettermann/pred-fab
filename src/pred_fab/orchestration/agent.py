@@ -178,6 +178,16 @@ class PfabAgent:
             similarity_fn=_pred.kernel_similarity,
         )
 
+        # Wire up virtual KDE point callbacks for within-trajectory spacing.
+        # The DataModule reference is captured at call time via the closure.
+        def _add_vp(params: dict[str, Any]) -> None:
+            dm = self.calibration_system._active_datamodule
+            if dm is not None:
+                _pred.add_virtual_point(params, dm)
+
+        self.calibration_system._add_virtual_point_fn = _add_vp
+        self.calibration_system._clear_virtual_points_fn = _pred.clear_virtual_points
+
         # validate against schema
         self._validate_systems_against_schema(schema)
 
@@ -351,7 +361,7 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        self.logger.console_success("Successfully completed exploration step.")
+        self.logger.info("Successfully completed exploration step.")
         return result
 
     def inference_step(
@@ -382,7 +392,7 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        self.logger.console_success("Successfully completed inference step.")
+        self.logger.info("Successfully completed inference step.")
         return result
 
     def adaptation_step(
@@ -438,7 +448,7 @@ class PfabAgent:
             exp_data.record_parameter_update(proposal, dimension=dimension, step_index=step_index)
             self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
 
-        self.logger.console_success("Successfully completed adaptation step.")
+        self.logger.info("Successfully completed adaptation step.")
         return result
 
     # === ADDITIONAL API CALLS ===
@@ -455,7 +465,7 @@ class PfabAgent:
         # Extract Features and Evaluate Performance
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute_flag, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
-        self.logger.console_success(f"Successfully evaluated experiment '{exp_data.code}'.")
+        self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
     def train(
         self,
@@ -470,6 +480,10 @@ class PfabAgent:
         
         # Train prediction models using provided DataModule
         self.pred_system.train(datamodule, **kwargs)
+
+        # Update running performance range for acquisition normalization
+        if self.calibration_system is not None:
+            self.calibration_system.update_perf_range(datamodule)
 
         # Run validation on trained models if requested
         if validate or test:
@@ -516,9 +530,15 @@ class PfabAgent:
         ofat_strategy: list[str] | None = None,
         exploration_radius: float | None = None,
         optimizer: Optimizer | None = None,
+        online_optimizer: Optimizer | None = None,
         mpc_lookahead: int | None = None,
         mpc_discount: float | None = None,
         boundary_buffer: tuple[float, float, float] | None = None,
+        de_maxiter: int | None = None,
+        de_popsize: int | None = None,
+        lbfgsb_maxfun: int | None = None,
+        lbfgsb_eps: float | None = None,
+        trajectory_smoothing: float | None = None,
         force: bool = False,
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
@@ -537,7 +557,8 @@ class PfabAgent:
         exploration_radius  — NatPN evidence model bubble size c:
                               h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
                               Larger c → slower transition from exploration to exploitation.
-        optimizer           — Optimizer.LBFGSB (default) or Optimizer.DE.
+        optimizer           — offline optimizer: Optimizer.DE (default) or Optimizer.LBFGSB.
+        online_optimizer    — online/adaptation optimizer: Optimizer.LBFGSB (default) or Optimizer.DE.
         mpc_lookahead       — N-step lookahead for MPC (default 0 = greedy single-step).
         mpc_discount        — discount factor γ for MPC: step j counts as γʲ (default 0.9).
         boundary_buffer     — (extent, strength, exponent) for boundary penalty.
@@ -545,6 +566,14 @@ class PfabAgent:
                               strength: penalty at boundary — score *= (1 - strength).
                               exponent: curve shape (1=linear, 2=quadratic, >2=steeper).
                               Pass (0, 0, 0) or None to disable.
+        de_maxiter          — DE: maximum generations (default 100).
+        de_popsize          — DE: population size per dimension (default 10).
+        lbfgsb_maxfun       — L-BFGS-B: max function evaluations per start (default: auto).
+        lbfgsb_eps          — L-BFGS-B: finite-difference step size (default 1e-3).
+        trajectory_smoothing — penalize speed changes between adjacent trajectory layers.
+                              0 = disabled, 0.1 = mild, 0.3 = strong. Encourages monotonic
+                              trajectories by reducing the acquisition score proportional to
+                              |speed_change| / trust_region_width.
         force               — overwrite already-configured settings without warning.
         """
         self._assert_initialized()
@@ -581,11 +610,23 @@ class PfabAgent:
             self.calibration_system.default_mpc_lookahead = mpc_lookahead
         if mpc_discount is not None:
             self.calibration_system.default_mpc_discount = mpc_discount
+        if online_optimizer is not None:
+            self.calibration_system.online_optimizer = online_optimizer
         if boundary_buffer is not None:
             extent, strength, exponent = boundary_buffer
             self.calibration_system.boundary_buffer_extent = extent
             self.calibration_system.boundary_buffer_strength = strength
             self.calibration_system.boundary_buffer_exponent = exponent
+        if de_maxiter is not None:
+            self.calibration_system.de_maxiter = de_maxiter
+        if de_popsize is not None:
+            self.calibration_system.de_popsize = de_popsize
+        if lbfgsb_maxfun is not None:
+            self.calibration_system.lbfgsb_maxfun = lbfgsb_maxfun
+        if lbfgsb_eps is not None:
+            self.calibration_system.lbfgsb_eps = lbfgsb_eps
+        if trajectory_smoothing is not None:
+            self.calibration_system.trajectory_smoothing = trajectory_smoothing
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 
@@ -754,4 +795,4 @@ class PfabAgent:
         log_text = f"Experiment '{exp_code}' {action} successfully"
         if start and end:
             log_text += f" for dimension range [{start}:{end}]"
-        self.logger.console_info(log_text)
+        self.logger.info(log_text)

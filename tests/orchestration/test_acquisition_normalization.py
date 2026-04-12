@@ -33,34 +33,28 @@ def _setup_trained_agent(tmp_path):
 # ===========================================================================
 
 class TestAcquisitionRangeEstimation:
-    """_estimate_acquisition_ranges samples the search space for min/max."""
+    """_get_acquisition_ranges returns perf range from training data; uncertainty is not normalized."""
 
-    def test_returns_two_tuples(self, tmp_path):
+    def test_returns_perf_range_and_none_unc(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
-        cal._active_datamodule = datamodule
-        bounds = cal._get_global_bounds(datamodule)
-        perf_range, unc_range = cal._estimate_acquisition_ranges(bounds, n_samples=10)
-        assert len(perf_range) == 2
-        assert len(unc_range) == 2
+        perf_range, unc_range = cal._get_acquisition_ranges()
+        assert perf_range is not None
+        assert unc_range is None  # uncertainty is inherently [0,1], not renormalized
 
     def test_perf_range_min_leq_max(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
-        cal._active_datamodule = datamodule
-        bounds = cal._get_global_bounds(datamodule)
-        perf_range, unc_range = cal._estimate_acquisition_ranges(bounds, n_samples=20)
+        perf_range, _ = cal._get_acquisition_ranges()
+        assert perf_range is not None
         assert perf_range[0] <= perf_range[1]
-        assert unc_range[0] <= unc_range[1]
 
-    def test_ranges_are_finite(self, tmp_path):
+    def test_perf_range_is_finite(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
-        cal._active_datamodule = datamodule
-        bounds = cal._get_global_bounds(datamodule)
-        perf_range, unc_range = cal._estimate_acquisition_ranges(bounds, n_samples=10)
+        perf_range, _ = cal._get_acquisition_ranges()
+        assert perf_range is not None
         assert np.isfinite(perf_range[0]) and np.isfinite(perf_range[1])
-        assert np.isfinite(unc_range[0]) and np.isfinite(unc_range[1])
 
 
 # ===========================================================================
@@ -158,4 +152,4 @@ class TestConfigureMPC:
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         agent.configure(mpc_lookahead=5, mpc_discount=0.7)
         # Other settings should remain default
-        assert agent.calibration_system.optimizer == Optimizer.LBFGSB
+        assert agent.calibration_system.optimizer == Optimizer.DE

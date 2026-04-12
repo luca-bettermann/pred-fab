@@ -748,8 +748,7 @@ class Dataset:
         #         feature_name=PRED_SUFFIX + name # pass to kwargs
         #     )
 
-        self.logger.console_success(f"Successfully saved experiments {codes_to_save}.")
-        self.logger.console_new_line()
+        self.logger.info(f"Successfully saved experiments {codes_to_save}.")
         
     def save_schema(self, recompute: bool = False, verbose: bool = True) -> None:
         """Save schema hierarchically."""        

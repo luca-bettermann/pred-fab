@@ -118,7 +118,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             domain_code = model.validate_dimensional_coherence(self.schema)
             self._model_domain_map[id(model)] = domain_code
 
-        self.logger.console_info("Starting prediction model training...")
+        self.logger.info("Starting prediction model training...")
 
         # Fit normalization
         self.logger.info("Fitting normalization on training data...")
@@ -138,23 +138,30 @@ class PredictionSystem(BaseOrchestrationSystem):
         train_batches = self.datamodule.get_batches(SplitType.TRAIN)
         val_batches = self.datamodule.get_batches(SplitType.VAL)
 
-        # Train each registered model
+        # Train each registered model with inline progress
+        total = len(self.models)
         trained_count = 0
         for model in self.models:
-            # Filter batches for this model
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
-            
-            # Train model with user-provided kwargs
+
             self.logger.info(f"Training model for features {model.outputs}...")
             model.train(model_train_batches, model_val_batches, **kwargs)
             trained_count += 1
-            
+
             primary_feature = model.outputs[0] if model.outputs else "unknown"
-            self.logger.console_info(f"✓ Trained model for '{primary_feature}'")
-        
+            self.logger.info(f"Trained model for '{primary_feature}'")
+
+            # Inline progress: [====    ] 2/3
+            if self.logger._console_output_enabled:
+                bar_len = 12
+                filled = int(bar_len * trained_count / total)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                end = "\n" if trained_count == total else "\r"
+                print(f"  Training [{bar}] {trained_count}/{total}", end=end, flush=True)
+
         self.logger.console_success(
-            f"Training complete: {trained_count}/{len(self.models)} models trained"
+            f"Training complete: {trained_count}/{total} models trained"
         )
 
         # Fit KDE on latent representations of training configs (NatPN-light)
@@ -364,6 +371,72 @@ class PredictionSystem(BaseOrchestrationSystem):
         if h < 1e-10:
             return 0.0
         return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+
+    # --- Virtual KDE points for within-trajectory spacing ---
+    #
+    # During trajectory optimization, the optimizer proposes one speed per layer
+    # in sequence. Without virtual points, the KDE is frozen for the entire
+    # trajectory — all layers see the same uncertainty landscape, so they
+    # converge to similar speeds. Virtual points inject proposed-but-not-yet-
+    # executed parameter configurations into the KDE after each layer, causing
+    # subsequent layers to see lower uncertainty at that speed and naturally
+    # spacing out across the parameter range.
+    #
+    # Virtual points are temporary: they are cleared after the trajectory call
+    # completes. They do not affect the training data or the prediction model.
+
+    def add_virtual_point(self, params: dict[str, Any], datamodule: DataModule) -> None:
+        """Inject a virtual point into all per-model KDEs.
+
+        The point is encoded into each model's latent space, appended to the
+        KDE with a small weight (equivalent to a single-row observation),
+        and q_max is recomputed. Call clear_virtual_points() to restore the
+        original KDE state.
+        """
+        if not self._model_kdes:
+            return
+
+        for kde in self._model_kdes.values():
+            z = self._encode_params_for_model(kde.model, params, datamodule)
+            if z is None:
+                continue
+            z_proj = z[kde.active_mask]
+
+            # Save original state on first virtual point addition
+            if not hasattr(kde, '_original_latent_points'):
+                kde._original_latent_points = kde.latent_points.copy()  # type: ignore[attr-defined]
+                kde._original_weights = kde.weights.copy()              # type: ignore[attr-defined]
+                kde._original_q_max = kde.q_max                        # type: ignore[attr-defined]
+
+            # Append with weight 1.0 (single observation), then renormalize
+            new_weight = 1.0
+            raw_weights = kde.weights * kde.weights.sum()  # undo normalization
+            raw_weights = np.append(raw_weights, new_weight)
+            kde.latent_points = np.vstack([kde.latent_points, z_proj.reshape(1, -1)])
+            kde.weights = raw_weights / raw_weights.sum()
+
+            # Recompute q_max with the expanded point set
+            d = float(kde.n_active_dims)
+            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+            kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
+
+        self.logger.debug(f"Virtual KDE point added: {list(params.keys())}")
+
+    def clear_virtual_points(self) -> None:
+        """Restore all per-model KDEs to their pre-virtual-point state."""
+        if not self._model_kdes:
+            return
+
+        for kde in self._model_kdes.values():
+            if hasattr(kde, '_original_latent_points'):
+                kde.latent_points = kde._original_latent_points  # type: ignore[attr-defined]
+                kde.weights = kde._original_weights              # type: ignore[attr-defined]
+                kde.q_max = kde._original_q_max                  # type: ignore[attr-defined]
+                del kde._original_latent_points                  # type: ignore[attr-defined]
+                del kde._original_weights                        # type: ignore[attr-defined]
+                del kde._original_q_max                          # type: ignore[attr-defined]
+
+        self.logger.debug("Virtual KDE points cleared.")
 
     # --- Legacy encode helpers (kept for external callers) ---
 
@@ -595,7 +668,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Train residual model
         self.logger.info(f"Training residual model on {len(X_tune)} samples...")
         self.residual_model.fit(X_residual_input, residuals)
-        self.logger.console_success("✓ Residual model updated")
+        self.logger.info("Residual model updated")
 
         return temp_datamodule
     

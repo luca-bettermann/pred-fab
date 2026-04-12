@@ -10,7 +10,7 @@ from scipy.optimize import minimize, differential_evolution
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, NormMethod, SourceStep
+from ..utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType
 from .base_system import BaseOrchestrationSystem
 
 
@@ -48,6 +48,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
         self.similarity_fn = similarity_fn
+
+        # Virtual KDE point callbacks for within-trajectory spacing.
+        # Set by PfabAgent to inject proposed points into the KDE between
+        # trajectory steps, causing subsequent layers to see lower uncertainty
+        # at already-proposed speeds and naturally spacing out.
+        self._add_virtual_point_fn: Callable[[dict[str, Any]], None] | None = None
+        self._clear_virtual_points_fn: Callable[[], None] | None = None
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
         self.default_mpc_lookahead: int = 0
@@ -81,7 +88,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._ofat_codes: list[str] = []
         self._ofat_index: int = 0
 
-        self.optimizer: Optimizer = Optimizer.LBFGSB
+        self.optimizer: Optimizer = Optimizer.DE           # offline (exploration + inference)
+        self.online_optimizer: Optimizer = Optimizer.LBFGSB  # online (adaptation / trust-region)
+
+        # DE optimizer parameters (global, population-based + L-BFGS-B polish)
+        self.de_maxiter: int = 100     # maximum generations
+        self.de_popsize: int = 10      # population size per dimension
+
+        # L-BFGS-B optimizer parameters (gradient-based, multi-start)
+        self.lbfgsb_maxfun: int | None = None  # max evals per start (None = auto)
+        self.lbfgsb_eps: float = 1e-3           # finite-difference step size
+
+        # Running min/max of predicted system performance across training data.
+        # Updated after each train() call, used to normalize acquisition scores.
+        self._perf_range_min: float | None = None  # lowest predicted performance seen so far
+        self._perf_range_max: float | None = None  # highest predicted performance seen so far
+
+        # Trajectory smoothing: penalizes speed changes between adjacent layers
+        # to encourage monotonic trajectories. penalty = 1 - lambda * |delta| / trust_width.
+        self.trajectory_smoothing: float = 0.0  # 0 = disabled, 0.1 = mild, 0.3 = strong
 
         # Boundary buffer: penalise acquisition scores near parameter bounds to
         # counteract KDE edge effects (no evidence outside the search space).
@@ -351,7 +376,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         dm = self._active_datamodule
         if dm is None:
             return 0.0
-        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            params_dict = dm.array_to_params(X.reshape(-1))
+        except (ValueError, KeyError):
+            return 0.0  # out-of-bounds point from optimizer overshoot
         try:
             perf_dict = self.perf_fn(params_dict)
         except Exception:
@@ -376,7 +404,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         dm = self._active_datamodule
         if dm is None:
             return 0.0
-        params_dict = dm.array_to_params(X.reshape(-1))
+        try:
+            params_dict = dm.array_to_params(X.reshape(-1))
+        except (ValueError, KeyError):
+            return 0.0  # out-of-bounds point from optimizer overshoot
         try:
             perf_dict = self.perf_fn(params_dict)
         except Exception:
@@ -389,15 +420,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
         u = float(self.uncertainty_fn(X.reshape(-1)))
 
-        # Min-max normalize both components so w_explore has calibrated influence
+        # Normalize performance to its observed training range so w_explore
+        # balances meaningfully even when raw scores occupy a narrow band.
+        # Uncertainty (KDE) is inherently [0, 1] and not renormalized.
+        # Note: values can slightly exceed [0, 1] when the model extrapolates
+        # beyond training data — this is expected, not an error.
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
-        if unc_range is not None:
-            umin, umax = unc_range
-            span = umax - umin
-            u = (u - umin) / span if span > 1e-10 else 0.5
 
         score = (1.0 - w_explore) * sys_perf + w_explore * u
 
@@ -498,39 +529,52 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return mpc_obj
 
-    def _estimate_acquisition_ranges(
-        self, bounds: np.ndarray, n_samples: int = 50,
-    ) -> tuple[tuple[float, float], tuple[float, float]]:
-        """Sample the search space to estimate performance and uncertainty ranges."""
-        dm = self._active_datamodule
-        if dm is None:
-            return (0.0, 1.0), (0.0, 1.0)
+    def update_perf_range(self, datamodule: DataModule) -> None:
+        """Update running min/max of predicted performance from training data.
 
-        samples = self.rng.uniform(bounds[:, 0], bounds[:, 1], size=(n_samples, bounds.shape[0]))
-        perfs, uncs = [], []
-        for X in samples:
-            params_dict = dm.array_to_params(X)
+        Called after each train() to keep the normalization range current.
+        Uses perf_fn on each training experiment's parameters — the same
+        function the optimizer queries, so the range is representative.
+        """
+        self._active_datamodule = datamodule
+        train_codes = datamodule.get_split_codes(SplitType.TRAIN)
+        if not train_codes:
+            return
+
+        for code in train_codes:
+            exp = datamodule.dataset.get_experiment(code)
+            params_dict = exp.parameters.get_values_dict()
             try:
                 perf_dict = self.perf_fn(params_dict)
                 pv = [
                     float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
                     for name in self.perf_names_order if name in perf_dict
                 ]
-                perfs.append(self._compute_system_performance(pv) if pv else 0.0)
+                sys_perf = self._compute_system_performance(pv) if pv else 0.0
             except Exception:
-                perfs.append(0.0)
-            try:
-                uncs.append(float(self.uncertainty_fn(X)))
-            except Exception:
-                uncs.append(1.0)
+                continue
 
-        perf_range = (min(perfs), max(perfs))
-        unc_range = (min(uncs), max(uncs))
+            if self._perf_range_min is None or sys_perf < self._perf_range_min:
+                self._perf_range_min = sys_perf
+            if self._perf_range_max is None or sys_perf > self._perf_range_max:
+                self._perf_range_max = sys_perf
+
         self.logger.debug(
-            f"Acquisition ranges — perf: [{perf_range[0]:.3f}, {perf_range[1]:.3f}], "
-            f"unc: [{unc_range[0]:.3f}, {unc_range[1]:.3f}]"
+            f"Performance range updated: [{self._perf_range_min:.3f}, {self._perf_range_max:.3f}]"
         )
-        return perf_range, unc_range
+
+    def _get_acquisition_ranges(self) -> tuple[tuple[float, float] | None, None]:
+        """Return (perf_range, unc_range) for acquisition normalization.
+
+        Performance is normalized to its running observed range from training data.
+        Uncertainty is not normalized — KDE already outputs meaningful [0, 1] values.
+        """
+        if self._perf_range_min is not None and self._perf_range_max is not None:
+            perf_range = (self._perf_range_min, self._perf_range_max)
+        else:
+            perf_range = None
+        # Uncertainty (KDE output) is inherently [0, 1] — no normalization needed.
+        return perf_range, None
 
     def _build_objective(self, mode: Mode, w_explore: float, bounds: np.ndarray | None = None) -> Callable:
         """Return the objective function for the given calibration mode."""
@@ -539,10 +583,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
             )
         if mode == Mode.EXPLORATION:
-            perf_range: tuple[float, float] | None = None
-            unc_range: tuple[float, float] | None = None
-            if bounds is not None:
-                perf_range, unc_range = self._estimate_acquisition_ranges(bounds)
+            perf_range, unc_range = self._get_acquisition_ranges()
             return functools.partial(
                 self._acquisition_func,
                 w_explore=w_explore,
@@ -837,6 +878,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: dict[str, int] | None = None
         proposals: list[dict[str, Any]] = []
 
+        # Track previous step's params for trajectory smoothing penalty.
+        _prev_step_params: dict[str, Any] | None = None
+
         for step_i, curr_indices in enumerate(step_grid):
             # Build fixed params for this step
             fixed_for_step = dict(self.fixed_params)
@@ -872,17 +916,54 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"fixed={sorted(fixed_for_step.keys())}"
             )
 
+            # Wrap objective with trajectory smoothing penalty for non-first steps.
+            # Penalizes large parameter changes between adjacent layers to encourage
+            # monotonic trajectories: penalty = 1 - lambda * |delta| / trust_width.
+            step_objective = objective
+            if (self.trajectory_smoothing > 0 and _prev_step_params is not None
+                    and len(step_grid) > 1):
+                _lam = self.trajectory_smoothing
+                _prev = _prev_step_params
+                _tr = self.trust_regions
+                _dm = datamodule
+
+                def _smoothed_objective(X, _base=step_objective, _l=_lam, _p=_prev, _t=_tr, _d=_dm):
+                    base_score = _base(X)
+                    params_dict = _d.array_to_params(X.reshape(-1))
+                    penalty = 1.0
+                    for code, delta in _t.items():
+                        if code in _p and code in params_dict and delta > 0:
+                            change = abs(float(params_dict[code]) - float(_p[code]))
+                            penalty *= 1.0 - _l * min(change / delta, 1.0)
+                    return base_score / max(penalty, 1e-6)  # base is negative, dividing by <1 makes it more negative
+
+                step_objective = _smoothed_objective
+
+            # Online (trust-region) uses the online_optimizer; offline uses the main optimizer.
+            opt_for_step = self.online_optimizer if is_online else None
+
             result = self._run_optimization(
                 datamodule,
                 x0_params=working_params,
                 bounds=bounds,
-                objective_func=objective,
+                objective_func=step_objective,
                 n_rounds=n_rounds,
                 fixed_param_values=fixed_for_step,
+                optimizer_override=opt_for_step,
             )
             proposals.append(result)
+            _prev_step_params = dict(result)
             working_params = result
             prev_indices = curr_indices
+
+            # Inject virtual KDE point so subsequent trajectory steps see lower
+            # uncertainty at this speed, naturally spacing out layer proposals.
+            if len(step_grid) > 1 and self._add_virtual_point_fn is not None:
+                self._add_virtual_point_fn(result)
+
+        # Clear virtual KDE points after trajectory completes.
+        if len(step_grid) > 1 and self._clear_virtual_points_fn is not None:
+            self._clear_virtual_points_fn()
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")
@@ -901,9 +982,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         objective_func: Callable,
         n_rounds: int,
         fixed_param_values: dict[str, Any],
+        optimizer_override: Optimizer | None = None,
     ) -> dict[str, Any]:
         """Run the acquisition function optimization and return proposed parameters."""
-        if self.optimizer == Optimizer.DE:
+        active_optimizer = optimizer_override or self.optimizer
+        if active_optimizer == Optimizer.DE:
             opt = self._optimize_de(bounds, objective_func)
         else:
             opt = self._optimize_lbfgsb(
@@ -915,7 +998,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_n_starts = opt.n_starts
         self.last_opt_score = opt.score
         self.logger.info(
-            f"{self.optimizer.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
+            f"{active_optimizer.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
         )
 
         # Handle failure
@@ -956,10 +1039,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if not x0_list:
             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
 
-        # Cap evals per start: ~10 gradient steps (each needs d+1 finite-diff evals).
+        # Cap evals per start. Default: ~10 gradient steps (each needs d+1 finite-diff evals).
         # Without a cap, L-BFGS-B defaults to 15000*d — prohibitive for expensive objectives.
         n_dims = len(x0_list[0])
-        max_fun = max(100, 10 * (n_dims + 1))
+        max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
+        eps = self.lbfgsb_eps
 
         best_x, best_val = None, np.inf
         total_nfev = 0
@@ -967,7 +1051,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             try:
                 res = minimize(
                     fun=objective_func, x0=x0, bounds=bounds, method='L-BFGS-B',
-                    options={'eps': 1e-3, 'maxfun': max_fun},
+                    options={'eps': eps, 'maxfun': max_fun},
                 )
                 total_nfev += res.nfev
                 if res.fun < best_val:
@@ -991,15 +1075,35 @@ class CalibrationSystem(BaseOrchestrationSystem):
         bounds: np.ndarray,
         objective_func: Callable,
     ) -> _OptResult:
-        """Differential evolution (global, population-based)."""
+        """Differential evolution (global, population-based, with L-BFGS-B polish)."""
         seed = int(self.rng.randint(0, 2**31 - 1))
+        maxiter = self.de_maxiter
+        popsize = self.de_popsize
+
+        # Progress callback for console output
+        _iter_count = [0]
+        def _progress_callback(xk, convergence):
+            _iter_count[0] += 1
+            if self.logger._console_output_enabled:
+                bar_len = 12
+                filled = int(bar_len * _iter_count[0] / maxiter)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                end = "\r"
+                print(f"  Optimizing [{bar}] {_iter_count[0]}/{maxiter}", end=end, flush=True)
+
         result = differential_evolution(
             func=objective_func,
             bounds=bounds.tolist(),
-            maxiter=50, popsize=5, seed=seed,
+            maxiter=maxiter, popsize=popsize, seed=seed,
             mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
             polish=True, init='latinhypercube',
+            callback=_progress_callback,
         )
+
+        # Clear the progress line
+        if self.logger._console_output_enabled:
+            print(f"  Optimizing [{'done':^12s}] {result.nfev} evals", flush=True)
+
         return _OptResult(
             best_x=result.x,
             nfev=result.nfev,

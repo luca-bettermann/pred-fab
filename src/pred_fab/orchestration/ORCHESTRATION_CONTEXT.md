@@ -12,7 +12,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models; per-model KDE uncertainty + similarity |
 | `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC |
-| `Optimizer` | `calibration.py` | Enum: `LBFGSB` (gradient multi-start, fast) / `DE` (differential evolution, global) |
+| `Optimizer` | `calibration.py` | Enum: `DE` (differential evolution + L-BFGS-B polish, default offline) / `LBFGSB` (gradient multi-start, default online) |
 
 ## Configuration — `agent.configure()`
 All calibration and strategy configuration goes through a single call on `PfabAgent`:
@@ -25,12 +25,27 @@ agent.configure(
     step_parameters={"speed": "n_layers"},  # param → dimension for trajectory stepping
     ofat_strategy=["speed"],             # OFAT cycling order (requires trust regions)
     exploration_radius=0.15,             # KDE bubble size c: h=c·√d/√N, γ=max(1,c·√N)
-    optimizer=Optimizer.DE,              # optimization backend
+    optimizer=Optimizer.DE,              # offline optimizer (exploration + inference)
+    online_optimizer=Optimizer.LBFGSB,   # online optimizer (adaptation / trust-region)
+    de_maxiter=100,                      # DE: maximum generations
+    de_popsize=10,                       # DE: population size per dimension
+    lbfgsb_maxfun=None,                  # L-BFGS-B: max evals per start (None = auto)
+    lbfgsb_eps=1e-3,                     # L-BFGS-B: finite-difference step size
     mpc_lookahead=0,                     # N-step MPC lookahead (0 = greedy)
     mpc_discount=0.9,                    # MPC discount factor γ
+    boundary_buffer=(0.1, 0.8, 2.0),     # (extent, strength, exponent) for edge penalty
     force=False,                         # re-configure after training if True
 )
 ```
+
+## Acquisition Function
+The exploration objective combines predicted performance and KDE uncertainty:
+```
+score = (1 - w_explore) * normalized_perf + w_explore * uncertainty
+```
+- **Performance** is normalized to its running observed range from training data (updated after each `train()` call). This ensures `w_explore` balances meaningfully even when raw scores occupy a narrow band.
+- **Uncertainty** (KDE output) is inherently [0, 1] and not renormalized.
+- **Note**: The combined score can slightly exceed [0, 1] when the prediction model extrapolates beyond training data. This is expected behaviour, not an error — it indicates the model is operating in an unfamiliar region.
 Users interact only with `PfabAgent` — no direct access to subsystems needed.
 
 ## Telemetry Properties on PfabAgent
