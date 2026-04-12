@@ -6,6 +6,7 @@ import functools
 
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
+from scipy.stats.qmc import LatinHypercube
 
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
@@ -720,14 +721,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n: int,
         param_bounds: dict[str, tuple[float, float]] | None = None,
     ) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals using a Sobol quasi-random sequence.
+        """Generate n baseline proposals using Latin Hypercube Sampling.
 
         Continuous parameters are stratified across their bounds; categorical parameters
-        are stratified across their categories. Sobol sequences provide better
-        low-discrepancy coverage than LHS, especially at small sample sizes.
+        are stratified across their categories. LHS guarantees exactly one sample
+        per stratum in each dimension, producing evenly-spaced coverage.
         """
-        from scipy.stats.qmc import Sobol
-
         if n == 0:
             return []
 
@@ -765,7 +764,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 return []
 
             d = len(continuous_params) + len(categorical_params)
-            sampler = Sobol(d=d, scramble=True, seed=self._random_seed)
+            sampler = LatinHypercube(d=d, seed=self._random_seed)
             samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
 
             specs: list[ExperimentSpec] = []
@@ -784,9 +783,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-                self.logger.debug(f"Baseline Sobol proposal: {params}")
+                self.logger.debug(f"Baseline LHS proposal: {params}")
 
-            self.logger.info(f"Generated {n} baseline experiments using Sobol sequence.")
+            self.logger.info(f"Generated {n} baseline experiments using LHS.")
             return specs
 
         finally:
