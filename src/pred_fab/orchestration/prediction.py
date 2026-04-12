@@ -235,10 +235,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
 
-        if n_exp < 5:
+        n_params = len(datamodule.dataset.schema.parameters.data_objects)
+        if n_params > n_exp:
             self.logger.console_warning(
-                f"KDE uncertainty fitted with only {n_exp} experiments — "
-                f"estimates may be unreliable until more data is collected."
+                f"KDE fitted with {n_exp} experiments but {n_params} parameters — "
+                f"uncertainty estimates may be unreliable."
             )
 
         # Fit one KDE per non-deterministic model.
