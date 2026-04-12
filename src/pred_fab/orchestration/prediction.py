@@ -855,11 +855,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
                 results[feature_name] = feat_metrics
 
-        # Print compact validation table
+        # Print compact validation table with line breaks for readability
         has_adj = any('r2_adj' in m for m in results.values())
         header = f"  {'Feature':<25s}  {'R²':>8s}"
         if has_adj:
             header += f"  {'R²_adj':>8s}"
+        self.logger.console_new_line()
         self.logger.console_info(header)
         self.logger.console_info(f"  {'─' * (36 if not has_adj else 46)}")
         for feat, m in results.items():
@@ -867,6 +868,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             if has_adj and 'r2_adj' in m:
                 line += f"  {m['r2_adj']:8.4f}"
             self.logger.console_info(line)
+        self.logger.console_new_line()
         self.logger.console_success(
             f"Validation: {split} set, {len(X_split)} samples"
         )
