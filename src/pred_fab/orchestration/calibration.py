@@ -1056,9 +1056,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Run the acquisition function optimization and return proposed parameters."""
         active_optimizer = optimizer_override or self.optimizer
 
-        # Unified progress: show "Optimizing" during, "✓ Optimized" after
         if self.logger._console_output_enabled:
-            print(f"  Optimizing ...", end="\r", flush=True)
+            print(f"  {'Optimizing':<10s} ...", end="\r", flush=True)
 
         if active_optimizer == Optimizer.DE:
             opt = self._optimize_de(bounds, objective_func)
@@ -1068,7 +1067,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
 
         if self.logger._console_output_enabled:
-            print(f"\033[32m\u2713\033[0m Optimized  [{opt.nfev} evals]" + " " * 20, flush=True)
+            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{opt.nfev} evals]" + " " * 20, flush=True)
 
         # Publish result bookkeeping
         self.last_opt_nfev = opt.nfev

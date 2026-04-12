@@ -152,15 +152,14 @@ class PredictionSystem(BaseOrchestrationSystem):
             primary_feature = model.outputs[0] if model.outputs else "unknown"
             self.logger.info(f"Trained model for '{primary_feature}'")
 
-            # Inline progress: [████░░░░] 2/3  →  ✓ Trained [████████████] 3/3
             if self.logger._console_output_enabled:
                 bar_len = 12
                 filled = int(bar_len * trained_count / total)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
                 if trained_count == total:
-                    print(f"\033[32m\u2713\033[0m Trained [{bar}] {trained_count}/{total}", flush=True)
+                    print(f"\033[32m\u2713\033[0m {'Trained':<10s} [{bar}] {trained_count}/{total}", flush=True)
                 else:
-                    print(f"  Training [{bar}] {trained_count}/{total}", end="\r", flush=True)
+                    print(f"  {'Training':<10s} [{bar}] {trained_count}/{total}", end="\r", flush=True)
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
 
