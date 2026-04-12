@@ -1068,8 +1068,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Final checkmark line (unified for both optimizers)
         if console:
-            bar = "\u2588" * 12
-            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] {opt.nfev} evals", flush=True)
+            bar = "\u2588" * 8
+            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{opt.nfev} evals\033[0m", flush=True)
 
         # Publish result bookkeeping
         self.last_opt_nfev = opt.nfev
@@ -1156,10 +1156,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         total_nfev = 0
         for i, x0 in enumerate(x0_list):
             if show_progress:
-                bar_len = 12
+                bar_len = 8
                 filled = int(bar_len * (i + 1) / total_starts)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                print(f"  {'Optimizing':<10s} [{bar}] {i+1}/{total_starts}", end="\r", flush=True)
+                print(f"  {'Optimizing':<10s} [{bar}] \033[2m{i+1}/{total_starts}\033[0m", end="\r", flush=True)
             try:
                 res = minimize(
                     fun=objective_func, x0=x0, bounds=bounds, method='L-BFGS-B',
@@ -1197,10 +1197,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         def _progress(xk, convergence):
             _iter[0] += 1
             if show_progress:
-                bar_len = 12
+                bar_len = 8
                 filled = int(bar_len * _iter[0] / maxiter)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                print(f"  {'Optimizing':<10s} [{bar}] {_iter[0]}/{maxiter}", end="\r", flush=True)
+                print(f"  {'Optimizing':<10s} [{bar}] \033[2m{_iter[0]}/{maxiter}\033[0m", end="\r", flush=True)
 
         result = differential_evolution(
             func=objective_func,

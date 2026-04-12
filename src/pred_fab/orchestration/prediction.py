@@ -153,13 +153,13 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info(f"Trained model for '{primary_feature}'")
 
             if self.logger._console_output_enabled:
-                bar_len = 12
+                bar_len = 8
                 filled = int(bar_len * trained_count / total)
                 bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
                 if trained_count == total:
-                    print(f"\033[32m\u2713\033[0m {'Trained':<10s} [{bar}] {trained_count}/{total}", flush=True)
+                    print(f"\033[32m\u2713\033[0m {'Trained':<10s} [{bar}] \033[2m{trained_count}/{total}\033[0m", flush=True)
                 else:
-                    print(f"  {'Training':<10s} [{bar}] {trained_count}/{total}", end="\r", flush=True)
+                    print(f"  {'Training':<10s} [{bar}] \033[2m{trained_count}/{total}\033[0m", end="\r", flush=True)
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
 

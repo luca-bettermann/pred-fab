@@ -204,6 +204,9 @@ class ConsoleReporter:
                     param_parts.append(f"{code}={val}")
             if param_parts:
                 self._print(f"    {_D}\u2192 {', '.join(param_parts)}{_R}")
+        # Blank line after proposal block for visual separation
+        if self._logger._console_output_enabled:
+            print("", flush=True)
 
     def print_optimizer_stats(self, n_starts: int, n_evals: int) -> None:
         """Dim optimizer summary line."""
