@@ -695,7 +695,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"Configure DataModule with {'test_size' if use_test else 'val_size'} > 0.0"
             )
 
-        self.logger.console_info(f"Validating models on {split} set...")
+        self.logger.info(f"Validating models on {split} set...")
 
         # Extract validation/test data
         batches = dm.get_batches(split)
