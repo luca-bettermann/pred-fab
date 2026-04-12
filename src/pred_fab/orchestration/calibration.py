@@ -6,6 +6,7 @@ import functools
 
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
+from scipy.spatial import Voronoi
 from scipy.stats.qmc import LatinHypercube
 
 from ..core import DataModule, Dataset, DatasetSchema
@@ -716,77 +717,147 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def run_baseline(
         self,
         n: int,
-        param_bounds: dict[str, tuple[float, float]] | None = None,
+        iterations: int = 200,
     ) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals using Latin Hypercube Sampling.
+        """Generate n baseline proposals with optimal spacing via Lloyd's relaxation.
 
-        Continuous parameters are stratified across their bounds; categorical parameters
-        are stratified across their categories. LHS guarantees exactly one sample
-        per stratum in each dimension, producing evenly-spaced coverage.
+        Places N points to maximize coverage using Voronoi relaxation (Lloyd's
+        algorithm). Each iteration moves every point to the centroid of its
+        Voronoi cell, converging to a near-optimal packing arrangement.
+
+        Mirror reflections at boundaries ensure points are not pushed to edges.
+        Categorical parameters are stratified: N is distributed evenly across
+        all categorical combinations, and continuous spacing is optimized
+        within each stratum.
+
+        Fast (~0.5s for N=20, d=2) and deterministic given the random seed.
         """
         if n == 0:
             return []
 
-        _saved_param_bounds = dict(self.param_bounds)
-        if param_bounds:
-            self.param_bounds.update(param_bounds)
+        # Collect active parameters (skip fixed and infinite-bounds).
+        continuous_params: list[tuple[str, float, float]] = []  # (code, lo, hi)
+        categorical_params: list[tuple[str, list[Any]]] = []    # (code, categories)
 
-        try:
-            # Collect active parameters (skip fixed and infinite-bounds).
-            continuous_params: list[tuple[str, float, float]] = []  # (code, lo, hi)
-            categorical_params: list[tuple[str, list[Any]]] = []    # (code, categories)
-
-            for code, data_obj in self.data_objects.items():
-                if code in self.fixed_params:
+        for code, data_obj in self.data_objects.items():
+            if code in self.fixed_params:
+                continue
+            if isinstance(data_obj, DataCategorical):
+                categorical_params.append((code, list(data_obj.constraints["categories"])))
+            elif isinstance(data_obj, DataBool):
+                categorical_params.append((code, [False, True]))
+            else:
+                try:
+                    lo, hi = self._get_hierarchical_bounds_for_code(code)
+                except ValueError:
                     continue
-                if isinstance(data_obj, DataCategorical):
-                    categorical_params.append((code, list(data_obj.constraints["categories"])))
-                elif isinstance(data_obj, DataBool):
-                    categorical_params.append((code, [False, True]))
-                else:
-                    try:
-                        lo, hi = self._get_hierarchical_bounds_for_code(code)
-                    except ValueError:
-                        continue
-                    if lo == -np.inf or hi == np.inf:
-                        self.logger.warning(
-                            f"Parameter '{code}' has infinite bounds; "
-                            "skipping in baseline generation."
-                        )
-                        continue
-                    continuous_params.append((code, lo, hi))
+                if lo == -np.inf or hi == np.inf:
+                    self.logger.warning(
+                        f"Parameter '{code}' has infinite bounds; skipping in baseline."
+                    )
+                    continue
+                continuous_params.append((code, lo, hi))
 
-            if not continuous_params and not categorical_params:
-                self.logger.warning("No valid parameters for baseline generation.")
-                return []
+        if not continuous_params and not categorical_params:
+            self.logger.warning("No valid parameters for baseline generation.")
+            return []
 
-            d = len(continuous_params) + len(categorical_params)
-            sampler = LatinHypercube(d=d, optimization="random-cd")
-            samples = sampler.random(n=n)  # shape (n, d), values in [0, 1)
+        d_cont = len(continuous_params)
 
-            specs: list[ExperimentSpec] = []
-            for row in samples:
+        # Build categorical combinations for stratification
+        if categorical_params:
+            import itertools as _it
+            cat_combos = list(_it.product(*(cats for _, cats in categorical_params)))
+            cat_codes = [code for code, _ in categorical_params]
+        else:
+            cat_combos = [()]
+            cat_codes = []
+
+        # Distribute n across categorical strata
+        n_per_stratum = [n // len(cat_combos)] * len(cat_combos)
+        for i in range(n % len(cat_combos)):
+            n_per_stratum[i] += 1
+
+        # Run Lloyd's relaxation per stratum
+        specs: list[ExperimentSpec] = []
+        for combo, n_i in zip(cat_combos, n_per_stratum):
+            if n_i == 0:
+                continue
+            points = self._lloyds_relaxation(n_i, d_cont, iterations)
+
+            # Decode normalized [0,1] points to parameter values
+            for point in points:
                 params: dict[str, Any] = dict(self.fixed_params)
-
-                for i, (code, lo, hi) in enumerate(continuous_params):
-                    params[code] = lo + row[i] * (hi - lo)
-
-                offset = len(continuous_params)
-                for j, (code, categories) in enumerate(categorical_params):
-                    k = len(categories)
-                    idx = min(int(np.floor(row[offset + j] * k)), k - 1)
-                    params[code] = categories[idx]
-
+                for k, (code, lo, hi) in enumerate(continuous_params):
+                    params[code] = lo + float(point[k]) * (hi - lo)
+                for k, code in enumerate(cat_codes):
+                    params[code] = combo[k]
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-                self.logger.debug(f"Baseline LHS proposal: {params}")
 
-            self.logger.info(f"Generated {n} baseline experiments using LHS.")
-            return specs
+        self.logger.info(
+            f"Baseline: {n} experiments via Lloyd's relaxation "
+            f"({d_cont} continuous, {len(categorical_params)} categorical, "
+            f"{len(cat_combos)} strata)."
+        )
+        return specs
 
-        finally:
-            self.param_bounds = _saved_param_bounds
+    def _lloyds_relaxation(
+        self, n: int, d: int, iterations: int = 200,
+    ) -> np.ndarray:
+        """Place n points in [0,1]^d using Voronoi relaxation (Lloyd's algorithm).
+
+        Returns (n, d) array of points in [0,1]^d with near-optimal spacing.
+        Mirror reflections at boundaries ensure points are pushed inward
+        proportionally to their spacing, not clustered at edges.
+        """
+        if n == 1:
+            return np.full((1, d), 0.5)
+
+        # Initialize with LHS for good starting positions
+        sampler = LatinHypercube(d=d, seed=self._random_seed)
+        points = sampler.random(n)
+
+        for it in range(iterations):
+            # Mirror points across all boundaries. Use the full 3^d tiling
+            # (all combinations of -1, 0, +1 shifts) so edge cells get
+            # proper neighbors and centroids aren't biased inward.
+            shifts = np.array(np.meshgrid(*([[-1, 0, 1]] * d))).T.reshape(-1, d)
+            tiles = []
+            for shift in shifts:
+                tile = points.copy()
+                for dim in range(d):
+                    if shift[dim] == -1:
+                        tile[:, dim] = -tile[:, dim]
+                    elif shift[dim] == 1:
+                        tile[:, dim] = 2.0 - tile[:, dim]
+                tiles.append(tile)
+            all_pts = np.vstack(tiles)
+
+            try:
+                vor = Voronoi(all_pts)
+            except Exception:
+                break
+
+            # Move each original point to its Voronoi cell centroid
+            new_points = np.empty_like(points)
+            for i in range(n):
+                region_idx = vor.point_region[i]
+                region = vor.regions[region_idx]
+                if -1 in region or not region:
+                    new_points[i] = points[i]
+                    continue
+                vertices = vor.vertices[region]
+                new_points[i] = np.clip(vertices.mean(axis=0), 0.0, 1.0)
+
+            shift = float(np.max(np.abs(new_points - points)))
+            points = new_points
+            if shift < 1e-8:
+                self.logger.debug(f"Lloyd's converged at iteration {it + 1}.")
+                break
+
+        return np.clip(points, 0.0, 1.0)
 
     def run_calibration(
         self,

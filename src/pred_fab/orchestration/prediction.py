@@ -294,15 +294,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Initialize empty KDE structures for all non-deterministic models.
 
         Creates per-model KDEs with zero latent points. Uncertainty returns 1.0
-        everywhere (maximum). Used to bootstrap baseline spacing: virtual points
-        are injected iteratively via add_virtual_point(), causing subsequent
-        proposals to avoid already-proposed regions — producing maximin coverage
-        through the same acquisition function used for exploration and inference.
+        everywhere (maximum). Useful for testing or manual virtual point injection.
 
-        target_n sets the expected final number of points. The KDE bandwidth is
-        computed for this target size from the start, so all proposals use
-        consistently-sized uncertainty bubbles — producing even spacing
-        regardless of proposal order.
+        target_n pre-sets the bandwidth scaling so uncertainty bubbles are sized
+        for the expected total number of points.
         """
         self._model_kdes = {}
         self.datamodule = datamodule

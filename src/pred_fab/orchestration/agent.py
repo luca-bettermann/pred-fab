@@ -698,50 +698,19 @@ class PfabAgent:
     def baseline_step(
         self,
         n: int,
-        datamodule: DataModule | None = None,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals using kappa=1 (pure evidence).
+        """Generate n space-filling baseline proposals via maximin spacing.
 
-        Uses the same acquisition function as exploration and inference, but with
-        kappa=1.0 (maximize uncertainty only). Virtual KDE points are injected
-        after each proposal so subsequent proposals avoid already-proposed regions,
-        producing maximally-spaced coverage without a separate sampling algorithm.
+        Optimizes all N point positions jointly to maximize the minimum pairwise
+        distance. Uses the same DE optimizer as exploration and inference, but
+        with a spacing objective instead of the acquisition function.
 
-        No trained prediction model is required — the KDE operates in raw
-        parameter space (encode() returns identity when untrained).
+        Handles continuous and categorical parameters. No trained model required.
         """
         self._assert_initialized()
-
-        # Build a schema-only DataModule if none provided
-        if datamodule is None:
-            datamodule = self.calibration_system._build_schema_datamodule()
-            datamodule.fit_without_data()
-
-        # Initialize empty KDE sized for the target arrangement.
-        # Bandwidth is set for n points so all proposals use consistent bubble sizes.
-        self.pred_system.fit_empty_kde(datamodule, target_n=n)
-        self.calibration_system._active_datamodule = datamodule
-
-        specs: list[ExperimentSpec] = []
-        for i in range(n):
-            result = self.calibration_system.run_calibration(
-                datamodule=datamodule,
-                mode=Mode.EXPLORATION,
-                kappa=1.0,
-                n_optimization_rounds=0,
-                source_step_override=SourceStep.BASELINE,
-            )
-            specs.append(result)
-
-            # Inject virtual point so the next proposal avoids this one
-            params = dict(result.initial_params.to_dict())
-            self.pred_system.add_virtual_point(params, datamodule)
-
-        # Clear virtual points — they're not real experiments
-        self.pred_system.clear_virtual_points()
-
+        result = self.calibration_system.run_baseline(n=n)
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
-        return specs
+        return result
 
     # === Helper Functions ===
 
