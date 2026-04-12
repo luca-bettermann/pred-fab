@@ -17,7 +17,6 @@ from ..orchestration import (
     CalibrationSystem,
     Optimizer,
 )
-from .config import OptimizerConfig, ExplorationConfig, TrajectoryConfig
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
@@ -519,134 +518,148 @@ class PfabAgent:
     def configure(
         self,
         *,
-        # Config objects (grouped)
-        optimizer_config: OptimizerConfig | None = None,
-        exploration_config: ExplorationConfig | None = None,
-        trajectory_config: TrajectoryConfig | None = None,
-        # Flat kwargs (backward compatible, applied after config objects)
-        bounds: dict[str, tuple[float, float]] | None = None,
         performance_weights: dict[str, float] | None = None,
+        bounds: dict[str, tuple[float, float]] | None = None,
         fixed_params: dict[str, Any] | None = None,
-        adaptation_delta: dict[str, float] | None = None,
-        step_parameters: dict[str, str] | None = None,
-        ofat_strategy: list[str] | None = None,
         exploration_radius: float | None = None,
+        boundary_buffer: tuple[float, float, float] | None = None,
         optimizer: Optimizer | None = None,
         online_optimizer: Optimizer | None = None,
-        mpc_lookahead: int | None = None,
-        mpc_discount: float | None = None,
-        boundary_buffer: tuple[float, float, float] | None = None,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
         lbfgsb_maxfun: int | None = None,
         lbfgsb_eps: float | None = None,
+        adaptation_delta: dict[str, float] | None = None,
+        step_parameters: dict[str, str] | None = None,
+        ofat_strategy: list[str] | None = None,
+        mpc_lookahead: int | None = None,
+        mpc_discount: float | None = None,
         trajectory_smoothing: float | None = None,
         force: bool = False,
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
 
-        Accepts either config objects (grouped) or flat kwargs (backward
-        compatible). Config objects are applied first; flat kwargs override.
+        Convenience method that delegates to the specific configure_* methods.
+        For explicit, grouped configuration prefer calling those directly:
 
-        Config objects (preferred):
-            optimizer_config    — OptimizerConfig(backend, online_backend, de_*, lbfgsb_*)
-            exploration_config  — ExplorationConfig(radius, boundary_buffer)
-            trajectory_config   — TrajectoryConfig(step_parameters, adaptation_delta,
-                                  ofat_strategy, mpc_lookahead, mpc_discount, smoothing)
-
-        Flat kwargs (backward compatible):
-            bounds, performance_weights, fixed_params, optimizer, online_optimizer,
-            exploration_radius, boundary_buffer, de_maxiter, de_popsize,
-            lbfgsb_maxfun, lbfgsb_eps, adaptation_delta, step_parameters,
-            ofat_strategy, mpc_lookahead, mpc_discount, trajectory_smoothing
-
-        force — overwrite already-configured settings without warning.
+            agent.configure_performance(weights={...})
+            agent.configure_exploration(radius=0.3, boundary_buffer=(0.45, 0.8, 2.0))
+            agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=100)
+            agent.configure_trajectory(step_parameters={...}, smoothing=0.1)
         """
         self._assert_initialized()
 
-        # Unpack config objects into flat kwargs (config objects applied first,
-        # explicit kwargs override).
-        if optimizer_config is not None:
-            if optimizer is None and optimizer_config.backend is not None:
-                optimizer = optimizer_config.backend
-            if online_optimizer is None and optimizer_config.online_backend is not None:
-                online_optimizer = optimizer_config.online_backend
-            if de_maxiter is None and optimizer_config.de_maxiter is not None:
-                de_maxiter = optimizer_config.de_maxiter
-            if de_popsize is None and optimizer_config.de_popsize is not None:
-                de_popsize = optimizer_config.de_popsize
-            if lbfgsb_maxfun is None and optimizer_config.lbfgsb_maxfun is not None:
-                lbfgsb_maxfun = optimizer_config.lbfgsb_maxfun
-            if lbfgsb_eps is None and optimizer_config.lbfgsb_eps is not None:
-                lbfgsb_eps = optimizer_config.lbfgsb_eps
-        if exploration_config is not None:
-            if exploration_radius is None and exploration_config.radius is not None:
-                exploration_radius = exploration_config.radius
-            if boundary_buffer is None and exploration_config.boundary_buffer is not None:
-                boundary_buffer = exploration_config.boundary_buffer
-        if trajectory_config is not None:
-            if step_parameters is None and trajectory_config.step_parameters is not None:
-                step_parameters = trajectory_config.step_parameters
-            if adaptation_delta is None and trajectory_config.adaptation_delta is not None:
-                adaptation_delta = trajectory_config.adaptation_delta
-            if ofat_strategy is None and trajectory_config.ofat_strategy is not None:
-                ofat_strategy = trajectory_config.ofat_strategy
-            if mpc_lookahead is None and trajectory_config.mpc_lookahead is not None:
-                mpc_lookahead = trajectory_config.mpc_lookahead
-            if mpc_discount is None and trajectory_config.mpc_discount is not None:
-                mpc_discount = trajectory_config.mpc_discount
-            if trajectory_smoothing is None and trajectory_config.smoothing is not None:
-                trajectory_smoothing = trajectory_config.smoothing
-
+        if performance_weights is not None:
+            self.configure_performance(weights=performance_weights)
         if bounds is not None:
             self.calibration_system.configure_param_bounds(bounds, force=force)
-        if performance_weights is not None:
-            self.calibration_system.set_performance_weights(performance_weights)
-            if self._console is not None:
-                self._console._perf_weights = performance_weights
-            # Map performance weights to feature names for per-model KDE aggregation.
-            feature_weights: dict[str, float] = {}
-            for eval_model in self.eval_system.models:
-                perf_name = eval_model.output_performance
-                feat_name = eval_model.input_feature
-                if perf_name in performance_weights:
-                    feature_weights[feat_name] = performance_weights[perf_name]
-            if feature_weights:
-                self.pred_system.set_uncertainty_weights(feature_weights)
         if fixed_params is not None:
             self.calibration_system.configure_fixed_params(fixed_params, force=force)
-        if adaptation_delta is not None:
-            self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
-        if step_parameters is not None:
-            for param_code, dim_code in step_parameters.items():
-                self.calibration_system.configure_step_parameter(param_code, dim_code, force=force)
-        if ofat_strategy is not None:
-            self.calibration_system.configure_ofat_strategy(ofat_strategy)
-        if exploration_radius is not None:
-            self.pred_system.configure_exploration(exploration_radius)
-        if optimizer is not None:
-            self.calibration_system.optimizer = optimizer
-        if mpc_lookahead is not None:
-            self.calibration_system.default_mpc_lookahead = mpc_lookahead
-        if mpc_discount is not None:
-            self.calibration_system.default_mpc_discount = mpc_discount
-        if online_optimizer is not None:
-            self.calibration_system.online_optimizer = online_optimizer
+        if exploration_radius is not None or boundary_buffer is not None:
+            self.configure_exploration(radius=exploration_radius, boundary_buffer=boundary_buffer)
+        if any(v is not None for v in [optimizer, online_optimizer, de_maxiter, de_popsize, lbfgsb_maxfun, lbfgsb_eps]):
+            self.configure_optimizer(
+                backend=optimizer, online_backend=online_optimizer,
+                de_maxiter=de_maxiter, de_popsize=de_popsize,
+                lbfgsb_maxfun=lbfgsb_maxfun, lbfgsb_eps=lbfgsb_eps,
+            )
+        if any(v is not None for v in [step_parameters, adaptation_delta, ofat_strategy, mpc_lookahead, mpc_discount, trajectory_smoothing]):
+            self.configure_trajectory(
+                step_parameters=step_parameters, adaptation_delta=adaptation_delta,
+                ofat_strategy=ofat_strategy, mpc_lookahead=mpc_lookahead,
+                mpc_discount=mpc_discount, smoothing=trajectory_smoothing,
+                force=force,
+            )
+
+    def configure_performance(
+        self,
+        *,
+        weights: dict[str, float],
+    ) -> None:
+        """Set performance weights for calibration and uncertainty aggregation."""
+        self._assert_initialized()
+        self.calibration_system.set_performance_weights(weights)
+        if self._console is not None:
+            self._console._perf_weights = weights
+        # Map performance weights to feature names for per-model KDE aggregation.
+        feature_weights: dict[str, float] = {}
+        for eval_model in self.eval_system.models:
+            perf_name = eval_model.output_performance
+            feat_name = eval_model.input_feature
+            if perf_name in weights:
+                feature_weights[feat_name] = weights[perf_name]
+        if feature_weights:
+            self.pred_system.set_uncertainty_weights(feature_weights)
+
+    def configure_exploration(
+        self,
+        *,
+        radius: float | None = None,
+        boundary_buffer: tuple[float, float, float] | None = None,
+    ) -> None:
+        """Set exploration radius (KDE bandwidth) and boundary buffer."""
+        self._assert_initialized()
+        if radius is not None:
+            self.pred_system.configure_exploration(radius)
         if boundary_buffer is not None:
             extent, strength, exponent = boundary_buffer
             self.calibration_system.boundary_buffer_extent = extent
             self.calibration_system.boundary_buffer_strength = strength
             self.calibration_system.boundary_buffer_exponent = exponent
+
+    def configure_optimizer(
+        self,
+        *,
+        backend: Optimizer | None = None,
+        online_backend: Optimizer | None = None,
+        de_maxiter: int | None = None,
+        de_popsize: int | None = None,
+        lbfgsb_maxfun: int | None = None,
+        lbfgsb_eps: float | None = None,
+    ) -> None:
+        """Set optimizer backend and tuning parameters."""
+        self._assert_initialized()
+        cal = self.calibration_system
+        if backend is not None:
+            cal.optimizer = backend
+        if online_backend is not None:
+            cal.online_optimizer = online_backend
         if de_maxiter is not None:
-            self.calibration_system.de_maxiter = de_maxiter
+            cal.de_maxiter = de_maxiter
         if de_popsize is not None:
-            self.calibration_system.de_popsize = de_popsize
+            cal.de_popsize = de_popsize
         if lbfgsb_maxfun is not None:
-            self.calibration_system.lbfgsb_maxfun = lbfgsb_maxfun
+            cal.lbfgsb_maxfun = lbfgsb_maxfun
         if lbfgsb_eps is not None:
-            self.calibration_system.lbfgsb_eps = lbfgsb_eps
-        if trajectory_smoothing is not None:
-            self.calibration_system.trajectory_smoothing = trajectory_smoothing
+            cal.lbfgsb_eps = lbfgsb_eps
+
+    def configure_trajectory(
+        self,
+        *,
+        step_parameters: dict[str, str] | None = None,
+        adaptation_delta: dict[str, float] | None = None,
+        ofat_strategy: list[str] | None = None,
+        mpc_lookahead: int | None = None,
+        mpc_discount: float | None = None,
+        smoothing: float | None = None,
+        force: bool = False,
+    ) -> None:
+        """Set trajectory, adaptation, and MPC parameters."""
+        self._assert_initialized()
+        cal = self.calibration_system
+        if step_parameters is not None:
+            for param_code, dim_code in step_parameters.items():
+                cal.configure_step_parameter(param_code, dim_code, force=force)
+        if adaptation_delta is not None:
+            cal.configure_adaptation_delta(adaptation_delta, force=force)
+        if ofat_strategy is not None:
+            cal.configure_ofat_strategy(ofat_strategy)
+        if mpc_lookahead is not None:
+            cal.default_mpc_lookahead = mpc_lookahead
+        if mpc_discount is not None:
+            cal.default_mpc_discount = mpc_discount
+        if smoothing is not None:
+            cal.trajectory_smoothing = smoothing
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 
