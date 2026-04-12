@@ -25,13 +25,7 @@ def _score_color(v: float) -> str:
     return _RD
 
 
-def _combined_score(perf: dict[str, float], weights: dict[str, float]) -> float:
-    """Weighted combined performance score, normalized to [0, 1]."""
-    total_w = sum(weights.values())
-    if total_w == 0:
-        return 0.0
-    score = sum(weights.get(k, 0.0) * float(v) for k, v in perf.items() if v is not None)
-    return score / total_w
+from .metrics import combined_score as _combined_score
 
 
 class ConsoleReporter:

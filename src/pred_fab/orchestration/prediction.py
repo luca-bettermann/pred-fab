@@ -17,7 +17,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, IDeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, Metrics, LocalData, SplitType
+from ..utils import PfabLogger, Metrics, LocalData, SplitType, combined_score
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
@@ -671,7 +671,35 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info("Residual model updated")
 
         return temp_datamodule
-    
+
+    @staticmethod
+    def _build_importance_weights(
+        dm: DataModule,
+        split: SplitType,
+        performance_weights: dict[str, float] | None,
+    ) -> np.ndarray | None:
+        """Build per-row importance weights from experiment performance scores.
+
+        Each experiment's combined performance score (weighted sum of its
+        performance attributes) is replicated for every dimensional row it
+        contributes. Higher-performing experiments get higher weight in
+        R²_adj, measuring prediction accuracy where it matters most.
+
+        Returns None if no performance_weights are provided.
+        """
+        if not performance_weights:
+            return None
+        codes = dm.get_split_codes(split)
+        importance_rows: list[float] = []
+        for code in codes:
+            exp = dm.dataset.get_experiment(code)
+            perf = exp.performance.get_values_dict()
+            score = combined_score(perf, performance_weights)
+            dim_names = exp.parameters.get_dim_names()
+            n_rows = len(exp.parameters.get_dim_combinations(dim_names)) if dim_names else 1
+            importance_rows.extend([score] * n_rows)
+        return np.array(importance_rows, dtype=np.float64)
+
     def validate(
         self,
         use_test: bool = False,
@@ -710,28 +738,10 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
 
-        # Build per-row importance from experiment performance (for R²_adj)
-        importance_arr: np.ndarray | None = None
-        if performance_weights:
-            total_w = sum(performance_weights.values())
-            if total_w > 0:
-                codes = dm.get_split_codes(split)
-                importance_rows: list[float] = []
-                for code in codes:
-                    exp = dm.dataset.get_experiment(code)
-                    perf = exp.performance.get_values_dict()
-                    combined = sum(
-                        performance_weights.get(k, 0.0) * float(v)
-                        for k, v in perf.items() if v is not None
-                    ) / total_w
-                    # Count rows this experiment contributes
-                    dim_names = exp.parameters.get_dim_names()
-                    if not dim_names:
-                        n_rows = 1
-                    else:
-                        n_rows = len(exp.parameters.get_dim_combinations(dim_names))
-                    importance_rows.extend([combined] * n_rows)
-                importance_arr = np.array(importance_rows, dtype=np.float64)
+        # Build per-row importance for R²_adj: experiments near the performance
+        # optimum are weighted higher, so R²_adj measures prediction accuracy
+        # where it matters most for calibration.
+        importance_arr = self._build_importance_weights(dm, split, performance_weights)
 
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}

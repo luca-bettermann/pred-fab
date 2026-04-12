@@ -1,6 +1,28 @@
 """Metrics utility for calculating performance metrics."""
 
+from typing import Any
+
 import numpy as np
+
+
+def combined_score(
+    performance: dict[str, Any],
+    weights: dict[str, float],
+) -> float:
+    """Weighted combined performance score.
+
+    Computes sum(w_i * perf_i) / sum(w_i) over all keys in performance
+    that have a non-None value and a corresponding weight.
+    """
+    total_w = sum(weights.values())
+    if total_w == 0:
+        return 0.0
+    score = sum(
+        weights.get(k, 0.0) * float(v)
+        for k, v in performance.items() if v is not None
+    )
+    return score / total_w
+
 
 class Metrics:
     """Static class for calculating regression metrics."""

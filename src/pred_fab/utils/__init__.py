@@ -1,6 +1,6 @@
 from .local_data import LocalData
 from .logger import PfabLogger
-from .metrics import Metrics
+from .metrics import Metrics, combined_score
 from .console import ConsoleReporter
 from .enum import (
     SystemName,
@@ -21,6 +21,7 @@ __all__ = [
     "LocalData",
     "PfabLogger",
     "Metrics",
+    "combined_score",
 
     "SystemName",
     "Roles",

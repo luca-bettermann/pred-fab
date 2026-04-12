@@ -11,7 +11,7 @@ from scipy.stats.qmc import LatinHypercube
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType
+from ..utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score
 from .base_system import BaseOrchestrationSystem
 
 
@@ -467,22 +467,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return factor
 
     def _compute_system_performance(self, performance: list[float]) -> float:
-        """Compute weighted system performance [0, 1]."""
+        """Compute weighted system performance from an ordered list of scores.
+
+        Delegates to the shared combined_score utility, converting the
+        ordered list to a dict keyed by perf_names_order.
+        """
         if not performance:
             return 0.0
-
-        total_score = 0.0
-        total_weight = 0.0
-
-        # make sure to order performance weights by the performance names in dataset
-        ordered_weights = [self.performance_weights.get(name, 0.0) for name in self.perf_names_order]
-
-        for i, weight in enumerate(ordered_weights):
-            # Assume performance metrics are [0, 1]
-            total_score += performance[i] * weight
-            total_weight += weight
-
-        return total_score / total_weight if total_weight > 0 else 0.0
+        perf_dict = {
+            name: performance[i]
+            for i, name in enumerate(self.perf_names_order)
+            if i < len(performance)
+        }
+        return combined_score(perf_dict, self.performance_weights)
 
 
     # === PRIVATE HELPERS ===

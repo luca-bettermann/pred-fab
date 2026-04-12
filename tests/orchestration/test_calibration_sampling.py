@@ -110,19 +110,18 @@ def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
 
 # ===== _compute_system_performance() mismatched lengths =====
 
-def test_compute_system_performance_fewer_values_than_perf_attrs_raises_index_error(tmp_path):
+def test_compute_system_performance_fewer_values_than_perf_attrs_uses_available(tmp_path):
     """
-    Passing fewer performance values than perf_names_order entries should expose the
-    IndexError in the inner loop. Documents the known behavior — callers must match lengths.
+    Passing fewer performance values than perf_names_order entries computes
+    with the available values only (partial coverage is valid).
     """
     agent, dataset, codes = build_workflow_stack(tmp_path)
-    # workflow schema has 2 perf attrs: performance_1 and performance_2
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.set_performance_weights({"performance_1": 1.0, "performance_2": 1.0})
 
-    with pytest.raises(IndexError):
-        # Only 1 value but 2 perf attrs — should raise IndexError
-        calibration._compute_system_performance([0.5])
+    # Only 1 value but 2 perf attrs — computes with partial data
+    score = calibration._compute_system_performance([0.5])
+    assert 0.0 < score < 1.0
 
 
 # ===== run_calibration(domain=ONLINE) behavior =====
