@@ -17,6 +17,7 @@ from ..orchestration import (
     CalibrationSystem,
     Optimizer,
 )
+from .config import OptimizerConfig, ExplorationConfig, TrajectoryConfig
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
@@ -519,9 +520,9 @@ class PfabAgent:
         self,
         *,
         # Config objects (grouped)
-        optimizer_config: "OptimizerConfig | None" = None,
-        exploration_config: "ExplorationConfig | None" = None,
-        trajectory_config: "TrajectoryConfig | None" = None,
+        optimizer_config: OptimizerConfig | None = None,
+        exploration_config: ExplorationConfig | None = None,
+        trajectory_config: TrajectoryConfig | None = None,
         # Flat kwargs (backward compatible, applied after config objects)
         bounds: dict[str, tuple[float, float]] | None = None,
         performance_weights: dict[str, float] | None = None,
