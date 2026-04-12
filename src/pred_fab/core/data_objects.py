@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, overload
 import numpy as np
 
 from ..utils.enum import NormMethod, Roles
@@ -470,13 +470,28 @@ class Feature:
                          feature_depth=depth, context=True)
 
     @staticmethod
+    @overload
+    @staticmethod
+    def recursive(
+        code: str, source: 'DataArray', dimensions: Sequence['Dimension'],
+        depth: int = 1, *, max_depth: int,
+    ) -> list['DataArray']: ...
+
+    @overload
+    @staticmethod
+    def recursive(
+        code: str, source: 'DataArray', dimensions: Sequence['Dimension'],
+        depth: int = 1, max_depth: None = None,
+    ) -> 'DataArray': ...
+
+    @staticmethod  # type: ignore[misc]
     def recursive(
         code: str,
         source: 'DataArray',
         dimensions: Sequence['Dimension'],
         depth: int = 1,
         max_depth: int | None = None,
-    ) -> DataArray | list[DataArray]:
+    ) -> 'DataArray | list[DataArray]':
         """Derive recursive feature(s) from a source feature by shifting along domain dimensions.
 
         With ``depth`` only (default 1), returns a single DataArray referencing the source
