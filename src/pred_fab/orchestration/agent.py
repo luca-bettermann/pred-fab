@@ -362,6 +362,17 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
+        # Console: show acquisition components + proposed parameters
+        cal = self.calibration_system
+        perf = cal.last_opt_perf
+        unc = cal.last_opt_unc
+        obj = cal.last_opt_score
+        if self._console is not None and self._console.enabled:
+            params = dict(result.initial_params) if result.initial_params else {}
+            self._console.print_proposal_row(
+                [params], perf, unc, obj, cal.last_opt_nfev,
+            )
+
         self.logger.info("Successfully completed exploration step.")
         return result
 
@@ -629,14 +640,19 @@ class PfabAgent:
         return self.calibration_system.perf_fn(params)
 
     def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
-        """Return the predicted uncertainty (0–1) at params.
+        """Return the predicted uncertainty (0–1) at params, with boundary buffer applied.
 
         Uses the same evidence model the acquisition function queries.
+        The boundary buffer suppresses edge effects near parameter bounds.
         Pass the current datamodule so params are normalized consistently.
         Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
         """
         self._assert_initialized()
-        return float(self.pred_system.uncertainty(datamodule.params_to_array(params)))
+        X = datamodule.params_to_array(params)
+        u = float(self.pred_system.uncertainty(X))
+        bounds = self.calibration_system._get_global_bounds(datamodule)
+        u *= self.calibration_system._boundary_factor(X, bounds)
+        return u
 
     def update_context_snapshot(self, values: dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.

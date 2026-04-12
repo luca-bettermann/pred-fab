@@ -70,6 +70,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_nfev: int = 0
         self.last_opt_n_starts: int = 0
         self.last_opt_score: float = 0.0
+        self.last_opt_perf: float = 0.0      # normalized performance component
+        self.last_opt_unc: float = 0.0       # uncertainty component (with buffer)
 
         # Set ordered weights
         self.schema = schema
@@ -1064,6 +1066,33 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_nfev = opt.nfev
         self.last_opt_n_starts = opt.n_starts
         self.last_opt_score = opt.score
+
+        # Compute individual components at the optimal point for reporting
+        if opt.best_x is not None:
+            try:
+                _params = datamodule.array_to_params(opt.best_x)
+                _perf_dict = self.perf_fn(_params)
+                _perf_values = [
+                    float(_perf_dict[n]) if _perf_dict.get(n) is not None else 0.0
+                    for n in self.perf_names_order if n in _perf_dict
+                ]
+                raw_perf = self._compute_system_performance(_perf_values) if _perf_values else 0.0
+                # Normalize performance same as acquisition function
+                if self._perf_range_min is not None and self._perf_range_max is not None:
+                    span = self._perf_range_max - self._perf_range_min
+                    self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
+                else:
+                    self.last_opt_perf = raw_perf
+                raw_unc = float(self.uncertainty_fn(opt.best_x))
+                _bounds = self._get_global_bounds(datamodule)
+                self.last_opt_unc = raw_unc * self._boundary_factor(opt.best_x, _bounds)
+            except Exception:
+                self.last_opt_perf = 0.0
+                self.last_opt_unc = 0.0
+        else:
+            self.last_opt_perf = 0.0
+            self.last_opt_unc = 0.0
+
         self.logger.info(
             f"{active_optimizer.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
         )
