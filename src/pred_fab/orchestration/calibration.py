@@ -6,8 +6,6 @@ import functools
 
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
-from scipy.spatial import Voronoi
-from scipy.stats.qmc import LatinHypercube
 
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
@@ -717,20 +715,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def run_baseline(
         self,
         n: int,
-        iterations: int = 200,
     ) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals with optimal spacing via Lloyd's relaxation.
+        """Generate n baseline proposals with structured spacing via recursive bisection.
 
-        Places N points to maximize coverage using Voronoi relaxation (Lloyd's
-        algorithm). Each iteration moves every point to the centroid of its
-        Voronoi cell, converging to a near-optimal packing arrangement.
+        Recursively splits the parameter space into equal-volume cells and places
+        one point at each cell centre. Splits along the dimension with the largest
+        relative range, producing a clean grid-like arrangement for any N and d.
 
-        Mirror reflections at boundaries ensure points are not pushed to edges.
         Categorical parameters are stratified: N is distributed evenly across
-        all categorical combinations, and continuous spacing is optimized
-        within each stratum.
+        all categorical combinations, with continuous spacing optimized per stratum.
 
-        Fast (~0.5s for N=20, d=2) and deterministic given the random seed.
+        Deterministic, instant (O(N log N)), works for any N, d, and variable types.
         """
         if n == 0:
             return []
@@ -762,8 +757,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.logger.warning("No valid parameters for baseline generation.")
             return []
 
-        d_cont = len(continuous_params)
-
         # Build categorical combinations for stratification
         if categorical_params:
             import itertools as _it
@@ -778,18 +771,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
         for i in range(n % len(cat_combos)):
             n_per_stratum[i] += 1
 
-        # Run Lloyd's relaxation per stratum
+        # Generate points per stratum via recursive bisection
         specs: list[ExperimentSpec] = []
         for combo, n_i in zip(cat_combos, n_per_stratum):
             if n_i == 0:
                 continue
-            points = self._lloyds_relaxation(n_i, d_cont, iterations)
+            bounds = [(lo, hi) for _, lo, hi in continuous_params]
+            original_ranges = [hi - lo for lo, hi in bounds]
+            points = self._recursive_split(n_i, bounds, original_ranges)
 
-            # Decode normalized [0,1] points to parameter values
             for point in points:
                 params: dict[str, Any] = dict(self.fixed_params)
-                for k, (code, lo, hi) in enumerate(continuous_params):
-                    params[code] = lo + float(point[k]) * (hi - lo)
+                for k, (code, _, _) in enumerate(continuous_params):
+                    params[code] = float(point[k])
                 for k, code in enumerate(cat_codes):
                     params[code] = combo[k]
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
@@ -797,67 +791,49 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
 
         self.logger.info(
-            f"Baseline: {n} experiments via Lloyd's relaxation "
-            f"({d_cont} continuous, {len(categorical_params)} categorical, "
+            f"Baseline: {n} experiments via recursive bisection "
+            f"({len(continuous_params)} continuous, {len(categorical_params)} categorical, "
             f"{len(cat_combos)} strata)."
         )
         return specs
 
-    def _lloyds_relaxation(
-        self, n: int, d: int, iterations: int = 200,
-    ) -> np.ndarray:
-        """Place n points in [0,1]^d using Voronoi relaxation (Lloyd's algorithm).
+    @staticmethod
+    def _recursive_split(
+        n: int,
+        bounds: list[tuple[float, float]],
+        original_ranges: list[float],
+    ) -> list[list[float]]:
+        """Recursively bisect the parameter space into n cells, return cell centres.
 
-        Returns (n, d) array of points in [0,1]^d with near-optimal spacing.
-        Mirror reflections at boundaries ensure points are pushed inward
-        proportionally to their spacing, not clustered at edges.
+        Splits along the dimension with the largest relative range
+        (current range / original range) so narrow dimensions still get split
+        proportionally. Produces a deterministic grid-like arrangement.
         """
         if n == 1:
-            return np.full((1, d), 0.5)
+            return [[(lo + hi) / 2.0 for lo, hi in bounds]]
 
-        # Initialize with LHS for good starting positions
-        sampler = LatinHypercube(d=d, seed=self._random_seed)
-        points = sampler.random(n)
+        d = len(bounds)
+        # Split along dimension with largest relative range
+        dim = max(
+            range(d),
+            key=lambda i: (bounds[i][1] - bounds[i][0]) / original_ranges[i]
+            if original_ranges[i] > 0 else 0,
+        )
 
-        for it in range(iterations):
-            # Mirror points across all boundaries. Use the full 3^d tiling
-            # (all combinations of -1, 0, +1 shifts) so edge cells get
-            # proper neighbors and centroids aren't biased inward.
-            shifts = np.array(np.meshgrid(*([[-1, 0, 1]] * d))).T.reshape(-1, d)
-            tiles = []
-            for shift in shifts:
-                tile = points.copy()
-                for dim in range(d):
-                    if shift[dim] == -1:
-                        tile[:, dim] = -tile[:, dim]
-                    elif shift[dim] == 1:
-                        tile[:, dim] = 2.0 - tile[:, dim]
-                tiles.append(tile)
-            all_pts = np.vstack(tiles)
+        n_left = n // 2
+        n_right = n - n_left
+        lo, hi = bounds[dim]
+        split = lo + (hi - lo) * n_left / n  # proportional split
 
-            try:
-                vor = Voronoi(all_pts)
-            except Exception:
-                break
+        bounds_left = list(bounds)
+        bounds_left[dim] = (lo, split)
+        bounds_right = list(bounds)
+        bounds_right[dim] = (split, hi)
 
-            # Move each original point to its Voronoi cell centroid
-            new_points = np.empty_like(points)
-            for i in range(n):
-                region_idx = vor.point_region[i]
-                region = vor.regions[region_idx]
-                if -1 in region or not region:
-                    new_points[i] = points[i]
-                    continue
-                vertices = vor.vertices[region]
-                new_points[i] = np.clip(vertices.mean(axis=0), 0.0, 1.0)
-
-            shift = float(np.max(np.abs(new_points - points)))
-            points = new_points
-            if shift < 1e-8:
-                self.logger.debug(f"Lloyd's converged at iteration {it + 1}.")
-                break
-
-        return np.clip(points, 0.0, 1.0)
+        return (
+            CalibrationSystem._recursive_split(n_left, bounds_left, original_ranges)
+            + CalibrationSystem._recursive_split(n_right, bounds_right, original_ranges)
+        )
 
     def run_calibration(
         self,
