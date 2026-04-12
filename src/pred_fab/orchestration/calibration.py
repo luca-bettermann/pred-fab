@@ -1055,12 +1055,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> dict[str, Any]:
         """Run the acquisition function optimization and return proposed parameters."""
         active_optimizer = optimizer_override or self.optimizer
+
+        # Unified progress: show "Optimizing" during, "✓ Optimized" after
+        if self.logger._console_output_enabled:
+            print(f"  Optimizing ...", end="\r", flush=True)
+
         if active_optimizer == Optimizer.DE:
             opt = self._optimize_de(bounds, objective_func)
         else:
             opt = self._optimize_lbfgsb(
                 datamodule, x0_params, bounds, objective_func, n_rounds,
             )
+
+        if self.logger._console_output_enabled:
+            print(f"\033[32m\u2713\033[0m Optimized  [{opt.nfev} evals]" + " " * 20, flush=True)
 
         # Publish result bookkeeping
         self.last_opt_nfev = opt.nfev
@@ -1176,29 +1184,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         maxiter = self.de_maxiter
         popsize = self.de_popsize
 
-        # Progress callback for console output
-        _iter_count = [0]
-        def _progress_callback(xk, convergence):
-            _iter_count[0] += 1
-            if self.logger._console_output_enabled:
-                bar_len = 12
-                filled = int(bar_len * _iter_count[0] / maxiter)
-                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                end = "\r"
-                print(f"  Optimizing [{bar}] {_iter_count[0]}/{maxiter}", end=end, flush=True)
-
         result = differential_evolution(
             func=objective_func,
             bounds=bounds.tolist(),
             maxiter=maxiter, popsize=popsize,
             mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
             polish=True, init='latinhypercube',
-            callback=_progress_callback,
         )
-
-        # Clear the progress line
-        if self.logger._console_output_enabled:
-            print(f"  Optimizing [{'done':^12s}] {result.nfev} evals", flush=True)
 
         return _OptResult(
             best_x=result.x,

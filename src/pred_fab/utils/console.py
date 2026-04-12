@@ -180,26 +180,30 @@ class ConsoleReporter:
         obj: float,
         nfev: int,
     ) -> None:
-        """Print exploration proposal: objective components + proposed parameters."""
+        """Print exploration proposal: objective components + proposed parameters on own line."""
         if not self.enabled:
             return
         perf_s = f"perf={_score_color(perf)}{perf:.3f}{_R}"
         unc_s = f"unc={_score_color(unc)}{unc:.3f}{_R}"
         obj_s = f"obj={_score_color(obj)}{obj:.3f}{_R}"
-        # Compact parameter summary from first proposal
-        param_parts: list[str] = []
+        self._print(f"  {_C}>{_R} {perf_s}  {unc_s}  {obj_s}")
+        # Proposed parameters on a second line (grey, only tunable params)
         if proposals:
             p = proposals[0]
+            param_parts: list[str] = []
             for code in self._param_codes:
                 val = p.get(code)
                 if val is None:
                     continue
                 if isinstance(val, float):
-                    param_parts.append(f"{val:.2f}" if abs(val) < 1 else f"{val:.1f}")
+                    fmt = f"{val:.2f}" if abs(val) < 1 else f"{val:.1f}"
+                    param_parts.append(f"{code}={fmt}")
+                elif isinstance(val, int):
+                    param_parts.append(f"{code}={val}")
                 else:
-                    param_parts.append(str(val))
-        params_s = f"{_D}({', '.join(param_parts)}){_R}" if param_parts else ""
-        self._print(f"  {_C}>{_R} {perf_s}  {unc_s}  {obj_s}  {_D}{nfev} evals{_R}  {params_s}")
+                    param_parts.append(f"{code}={val}")
+            if param_parts:
+                self._print(f"    {_D}\u2192 {', '.join(param_parts)}{_R}")
 
     def print_optimizer_stats(self, n_starts: int, n_evals: int) -> None:
         """Dim optimizer summary line."""
