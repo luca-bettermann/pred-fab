@@ -1,6 +1,28 @@
 """Metrics utility for calculating performance metrics."""
 
+from typing import Any
+
 import numpy as np
+
+
+def combined_score(
+    performance: dict[str, Any],
+    weights: dict[str, float],
+) -> float:
+    """Weighted combined performance score.
+
+    Computes sum(w_i * perf_i) / sum(w_i) over all keys in performance
+    that have a non-None value and a corresponding weight.
+    """
+    total_w = sum(weights.values())
+    if total_w == 0:
+        return 0.0
+    score = sum(
+        weights.get(k, 0.0) * float(v)
+        for k, v in performance.items() if v is not None
+    )
+    return score / total_w
+
 
 class Metrics:
     """Static class for calculating regression metrics."""
@@ -48,30 +70,19 @@ class Metrics:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         importance: np.ndarray,
-        alpha: float = 0.0,
-        symmetric: bool = True,
     ) -> dict[str, float]:
-        """Performance-adjusted R² that up-weights high-importance samples.
+        """Performance-weighted R² that emphasizes high-importance samples.
 
         Returns dict with 'r2', 'r2_adj', and 'n_samples'.
 
-        The *importance* array (one value per sample, in [0, 1]) expresses how
-        relevant each sample is for the downstream optimization objective.
-        When *symmetric* is True (default), the caller should compute
-        ``importance_i = max(perf_true_i, perf_pred_i)`` so that both
-        actually-good and predicted-good samples count.  When False, only
-        ground-truth performance is used — better for cross-method comparison
-        since weights become model-independent.
+        The *importance* array contains pre-computed per-sample weights
+        (typically in [floor, 1.0], see _build_importance_weights).
+        Samples with higher weight contribute more to R²_adj.
 
-        *alpha* ∈ [0, 1] sets the minimum weight floor:
-          ``weight_i = alpha + (1 − alpha) · importance_i``
-        At alpha=0 (default): weights = importance (pure importance weighting).
-        At alpha=1: weights = 1 for all samples (r2_adj = r2).
-
-        Interpretation of the gap (r2_adj − r2):
-          gap > 0  →  high-importance samples predicted better (exploration working)
-          gap < 0  →  high-importance samples predicted worse
-          gap ≈ 0  →  prediction quality is uniform across the space
+        Interpretation of the gap (r2_adj - r2):
+          gap > 0 -> high-importance samples predicted better
+          gap < 0 -> high-importance samples predicted worse
+          gap ~ 0 -> prediction quality is uniform across the space
         """
         y_true = np.asarray(y_true, dtype=float)
         y_pred = np.asarray(y_pred, dtype=float)
@@ -87,12 +98,7 @@ class Metrics:
         if n == 0:
             return {'r2': 0.0, 'r2_adj': 0.0, 'n_samples': 0}
 
-        alpha = float(np.clip(alpha, 0.0, 1.0))
-
-        # Up-weight important samples: floor at alpha, scale to 1 at importance=1
-        weights = alpha + (1.0 - alpha) * importance
-
         r2 = Metrics._r2(y_true, y_pred)
-        r2_adj = Metrics._r2(y_true, y_pred, weights=weights)
+        r2_adj = Metrics._r2(y_true, y_pred, weights=importance)
 
         return {'r2': r2, 'r2_adj': r2_adj, 'n_samples': n}

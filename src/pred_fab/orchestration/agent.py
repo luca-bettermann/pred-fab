@@ -522,6 +522,11 @@ class PfabAgent:
     def configure(
         self,
         *,
+        # Config objects (grouped)
+        optimizer_config: "OptimizerConfig | None" = None,
+        exploration_config: "ExplorationConfig | None" = None,
+        trajectory_config: "TrajectoryConfig | None" = None,
+        # Flat kwargs (backward compatible, applied after config objects)
         bounds: dict[str, tuple[float, float]] | None = None,
         performance_weights: dict[str, float] | None = None,
         fixed_params: dict[str, Any] | None = None,
@@ -543,40 +548,58 @@ class PfabAgent:
     ) -> None:
         """Configure the agent.  All parameters are keyword-only and optional.
 
-        Call configure() one or more times at any phase — only the supplied
-        arguments are applied; the rest remain unchanged.
+        Accepts either config objects (grouped) or flat kwargs (backward
+        compatible). Config objects are applied first; flat kwargs override.
 
-        bounds              — search space for offline calibration, keyed by parameter code.
-        performance_weights — relative importance of each performance attribute (default 1.0).
-        fixed_params        — parameters held constant during calibration (e.g. design intent).
-        adaptation_delta    — trust-region half-widths for online/layer-by-layer adaptation.
-        step_parameters     — {param_code: dimension_code} pairs declaring which runtime
-                              parameters are re-optimised at each step of the given dimension.
-        ofat_strategy       — cycle through these parameter codes one-at-a-time per adaptation
-                              step (OFAT).  Requires adaptation_delta to be set first.
-        exploration_radius  — NatPN evidence model bubble size c:
-                              h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
-                              Larger c → slower transition from exploration to exploitation.
-        optimizer           — offline optimizer: Optimizer.DE (default) or Optimizer.LBFGSB.
-        online_optimizer    — online/adaptation optimizer: Optimizer.LBFGSB (default) or Optimizer.DE.
-        mpc_lookahead       — N-step lookahead for MPC (default 0 = greedy single-step).
-        mpc_discount        — discount factor γ for MPC: step j counts as γʲ (default 0.9).
-        boundary_buffer     — (extent, strength, exponent) for boundary penalty.
-                              extent: fraction of range from each boundary (e.g. 0.1 = 10%).
-                              strength: penalty at boundary — score *= (1 - strength).
-                              exponent: curve shape (1=linear, 2=quadratic, >2=steeper).
-                              Pass (0, 0, 0) or None to disable.
-        de_maxiter          — DE: maximum generations (default 100).
-        de_popsize          — DE: population size per dimension (default 10).
-        lbfgsb_maxfun       — L-BFGS-B: max function evaluations per start (default: auto).
-        lbfgsb_eps          — L-BFGS-B: finite-difference step size (default 1e-3).
-        trajectory_smoothing — penalize speed changes between adjacent trajectory layers.
-                              0 = disabled, 0.1 = mild, 0.3 = strong. Encourages monotonic
-                              trajectories by reducing the acquisition score proportional to
-                              |speed_change| / trust_region_width.
-        force               — overwrite already-configured settings without warning.
+        Config objects (preferred):
+            optimizer_config    — OptimizerConfig(backend, online_backend, de_*, lbfgsb_*)
+            exploration_config  — ExplorationConfig(radius, boundary_buffer)
+            trajectory_config   — TrajectoryConfig(step_parameters, adaptation_delta,
+                                  ofat_strategy, mpc_lookahead, mpc_discount, smoothing)
+
+        Flat kwargs (backward compatible):
+            bounds, performance_weights, fixed_params, optimizer, online_optimizer,
+            exploration_radius, boundary_buffer, de_maxiter, de_popsize,
+            lbfgsb_maxfun, lbfgsb_eps, adaptation_delta, step_parameters,
+            ofat_strategy, mpc_lookahead, mpc_discount, trajectory_smoothing
+
+        force — overwrite already-configured settings without warning.
         """
         self._assert_initialized()
+
+        # Unpack config objects into flat kwargs (config objects applied first,
+        # explicit kwargs override).
+        if optimizer_config is not None:
+            if optimizer is None and optimizer_config.backend is not None:
+                optimizer = optimizer_config.backend
+            if online_optimizer is None and optimizer_config.online_backend is not None:
+                online_optimizer = optimizer_config.online_backend
+            if de_maxiter is None and optimizer_config.de_maxiter is not None:
+                de_maxiter = optimizer_config.de_maxiter
+            if de_popsize is None and optimizer_config.de_popsize is not None:
+                de_popsize = optimizer_config.de_popsize
+            if lbfgsb_maxfun is None and optimizer_config.lbfgsb_maxfun is not None:
+                lbfgsb_maxfun = optimizer_config.lbfgsb_maxfun
+            if lbfgsb_eps is None and optimizer_config.lbfgsb_eps is not None:
+                lbfgsb_eps = optimizer_config.lbfgsb_eps
+        if exploration_config is not None:
+            if exploration_radius is None and exploration_config.radius is not None:
+                exploration_radius = exploration_config.radius
+            if boundary_buffer is None and exploration_config.boundary_buffer is not None:
+                boundary_buffer = exploration_config.boundary_buffer
+        if trajectory_config is not None:
+            if step_parameters is None and trajectory_config.step_parameters is not None:
+                step_parameters = trajectory_config.step_parameters
+            if adaptation_delta is None and trajectory_config.adaptation_delta is not None:
+                adaptation_delta = trajectory_config.adaptation_delta
+            if ofat_strategy is None and trajectory_config.ofat_strategy is not None:
+                ofat_strategy = trajectory_config.ofat_strategy
+            if mpc_lookahead is None and trajectory_config.mpc_lookahead is not None:
+                mpc_lookahead = trajectory_config.mpc_lookahead
+            if mpc_discount is None and trajectory_config.mpc_discount is not None:
+                mpc_discount = trajectory_config.mpc_discount
+            if trajectory_smoothing is None and trajectory_config.smoothing is not None:
+                trajectory_smoothing = trajectory_config.smoothing
 
         if bounds is not None:
             self.calibration_system.configure_param_bounds(bounds, force=force)

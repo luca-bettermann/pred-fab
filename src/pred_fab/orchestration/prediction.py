@@ -17,7 +17,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, IDeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, Metrics, LocalData, SplitType
+from ..utils import PfabLogger, Metrics, LocalData, SplitType, combined_score
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
@@ -671,7 +671,55 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.info("Residual model updated")
 
         return temp_datamodule
-    
+
+    @staticmethod
+    def _build_importance_weights(
+        dm: DataModule,
+        split: SplitType,
+        performance_weights: dict[str, float] | None,
+        floor: float = 0.1,
+    ) -> np.ndarray | None:
+        """Build per-row importance weights from experiment performance scores.
+
+        Linearly maps each experiment's combined performance to [floor, 1.0]:
+          importance_i = floor + (1 - floor) * (perf_i - perf_min) / (perf_max - perf_min)
+
+        High-performing experiments get weight ~1.0, low-performing get ~floor.
+        This makes R²_adj emphasize prediction accuracy near the operating
+        optimum — where it matters for inference and first-time-right manufacturing.
+
+        Returns None if no performance_weights are provided.
+        """
+        if not performance_weights:
+            return None
+
+        # Collect per-experiment combined scores
+        codes = dm.get_split_codes(split)
+        exp_scores: list[tuple[float, int]] = []  # (score, n_rows)
+        for code in codes:
+            exp = dm.dataset.get_experiment(code)
+            perf = exp.performance.get_values_dict()
+            score = combined_score(perf, performance_weights)
+            dim_names = exp.parameters.get_dim_names()
+            n_rows = len(exp.parameters.get_dim_combinations(dim_names)) if dim_names else 1
+            exp_scores.append((score, n_rows))
+
+        if not exp_scores:
+            return None
+
+        # Normalize to [floor, 1.0]
+        all_scores = [s for s, _ in exp_scores]
+        s_min, s_max = min(all_scores), max(all_scores)
+        span = s_max - s_min
+
+        importance_rows: list[float] = []
+        for score, n_rows in exp_scores:
+            t = (score - s_min) / span if span > 1e-10 else 0.5
+            weight = floor + (1.0 - floor) * t
+            importance_rows.extend([weight] * n_rows)
+
+        return np.array(importance_rows, dtype=np.float64)
+
     def validate(
         self,
         use_test: bool = False,
@@ -710,28 +758,10 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
 
-        # Build per-row importance from experiment performance (for R²_adj)
-        importance_arr: np.ndarray | None = None
-        if performance_weights:
-            total_w = sum(performance_weights.values())
-            if total_w > 0:
-                codes = dm.get_split_codes(split)
-                importance_rows: list[float] = []
-                for code in codes:
-                    exp = dm.dataset.get_experiment(code)
-                    perf = exp.performance.get_values_dict()
-                    combined = sum(
-                        performance_weights.get(k, 0.0) * float(v)
-                        for k, v in perf.items() if v is not None
-                    ) / total_w
-                    # Count rows this experiment contributes
-                    dim_names = exp.parameters.get_dim_names()
-                    if not dim_names:
-                        n_rows = 1
-                    else:
-                        n_rows = len(exp.parameters.get_dim_combinations(dim_names))
-                    importance_rows.extend([combined] * n_rows)
-                importance_arr = np.array(importance_rows, dtype=np.float64)
+        # Build per-row importance for R²_adj: experiments near the performance
+        # optimum are weighted higher, so R²_adj measures prediction accuracy
+        # where it matters most for calibration.
+        importance_arr = self._build_importance_weights(dm, split, performance_weights)
 
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
@@ -748,18 +778,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             y_pred_norm = model.forward_pass(X_split[:, input_indices])
             y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
 
-            self.logger.console_info(f"  Model ({', '.join(model.outputs)}):")
-            self.logger.console_info(f"    {'Feature':<20} | {'MAE':<10} | {'RMSE':<10} | {'R²':<10} | {'R²_adj':<10}")
-            self.logger.console_info(f"    {'-' * 70}")
-
-            # Per-feature metrics
             for i, feature_name in enumerate(model.outputs):
                 y_true_feat = y_true[:, i]
                 y_pred_feat = y_pred[:, i]
 
                 feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
 
-                # Add R²_adj when importance is available
                 if importance_arr is not None and len(importance_arr) == len(y_true_feat):
                     adj = Metrics.calculate_adjusted_r2(
                         y_true_feat, y_pred_feat, importance_arr
@@ -768,17 +792,20 @@ class PredictionSystem(BaseOrchestrationSystem):
 
                 results[feature_name] = feat_metrics
 
-                r2_adj_str = f"{feat_metrics['r2_adj']:<10.4f}" if 'r2_adj' in feat_metrics else f"{'n/a':<10}"
-                self.logger.console_info(
-                    f"    {feature_name:<20} | "
-                    f"{feat_metrics['mae']:<10.4f} | "
-                    f"{feat_metrics['rmse']:<10.4f} | "
-                    f"{feat_metrics['r2']:<10.4f} | "
-                    f"{r2_adj_str}"
-                )
-
+        # Print compact validation table
+        has_adj = any('r2_adj' in m for m in results.values())
+        header = f"  {'Feature':<25s}  {'R²':>8s}"
+        if has_adj:
+            header += f"  {'R²_adj':>8s}"
+        self.logger.console_info(header)
+        self.logger.console_info(f"  {'─' * (36 if not has_adj else 46)}")
+        for feat, m in results.items():
+            line = f"  {feat:<25s}  {m['r2']:8.4f}"
+            if has_adj and 'r2_adj' in m:
+                line += f"  {m['r2_adj']:8.4f}"
+            self.logger.console_info(line)
         self.logger.console_success(
-            f"Validation complete on {split} set ({len(X_split)} samples)"
+            f"Validation: {split} set, {len(X_split)} samples"
         )
 
         return results
