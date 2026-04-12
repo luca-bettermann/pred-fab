@@ -1200,6 +1200,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === BOUNDS FOR OPTIMIZATION ===
 
+    def get_tunable_params(self, datamodule: DataModule) -> list[str]:
+        """Return codes of parameters the optimizer can actually vary.
+
+        Excludes: context features, fixed params, features (lag values),
+        and one-hot columns. Only returns the original parameter codes
+        that have non-zero-width bounds.
+        """
+        context_codes = set(datamodule.context_feature_codes)
+        col_map = datamodule.get_onehot_column_map()
+        schema_params = set(datamodule.dataset.schema.parameters.data_objects.keys())
+        tunable = []
+        for code in datamodule.input_columns:
+            if code in context_codes:
+                continue
+            if code in col_map:
+                continue  # one-hot column, not a raw param
+            if code not in schema_params:
+                continue  # feature (lag value), not a parameter
+            if code in self.fixed_params:
+                continue
+            lo, hi = self._get_hierarchical_bounds_for_code(code)
+            if hi - lo < 1e-12:
+                continue  # zero-width bounds = constant
+            tunable.append(code)
+        return tunable
+
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
         """Return normalized optimization bounds over the full parameter space."""
         bounds_list = []
