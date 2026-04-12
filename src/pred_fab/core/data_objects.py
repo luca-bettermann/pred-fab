@@ -469,7 +469,6 @@ class Feature:
                          domain_code=domain.code if domain is not None else None,
                          feature_depth=depth, context=True)
 
-    @staticmethod
     @overload
     @staticmethod
     def recursive(
