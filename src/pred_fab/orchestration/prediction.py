@@ -731,15 +731,22 @@ class PredictionSystem(BaseOrchestrationSystem):
         split: SplitType,
         performance_weights: dict[str, float] | None,
         floor: float = 0.1,
+        steepness: float = 0.8,
     ) -> np.ndarray | None:
-        """Build per-row importance weights from experiment performance scores.
+        """Build per-row importance weights via sigmoid centered at mean performance.
 
-        Linearly maps each experiment's combined performance to [floor, 1.0]:
-          importance_i = floor + (1 - floor) * (perf_i - perf_min) / (perf_max - perf_min)
+        weight_i = floor + (1 - floor) * sigmoid(k * (perf_i - perf_mean))
 
-        High-performing experiments get weight ~1.0, low-performing get ~floor.
-        This makes R²_adj emphasize prediction accuracy near the operating
-        optimum — where it matters for inference and first-time-right manufacturing.
+        where k = steepness / perf_std adapts to the data spread. This gives:
+          - At mean performance: weight = midpoint = (1 + floor) / 2
+          - Above mean: weight climbs toward 1.0 (high-performing = important)
+          - Below mean: weight drops toward floor (low-performing = less important)
+
+        The sigmoid ensures smooth transitions with no hard cutoffs. The gap
+        (R²_adj - R²) is interpretable relative to the mean:
+          gap > 0 → model predicts above-average experiments better
+          gap < 0 → model predicts above-average experiments worse
+          gap ≈ 0 → uniform prediction quality across performance range
 
         Returns None if no performance_weights are provided.
         """
@@ -760,15 +767,18 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not exp_scores:
             return None
 
-        # Normalize to [floor, 1.0]
-        all_scores = [s for s, _ in exp_scores]
-        s_min, s_max = min(all_scores), max(all_scores)
-        span = s_max - s_min
+        # Compute mean and std of performance scores
+        all_scores = np.array([s for s, _ in exp_scores])
+        s_mean = float(all_scores.mean())
+        s_std = float(all_scores.std())
+
+        # Sigmoid weighting centered at mean, steepness adapts to spread
+        k = steepness / s_std if s_std > 1e-10 else 0.0
 
         importance_rows: list[float] = []
         for score, n_rows in exp_scores:
-            t = (score - s_min) / span if span > 1e-10 else 0.5
-            weight = floor + (1.0 - floor) * t
+            sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
+            weight = floor + (1.0 - floor) * sigmoid
             importance_rows.extend([weight] * n_rows)
 
         return np.array(importance_rows, dtype=np.float64)
