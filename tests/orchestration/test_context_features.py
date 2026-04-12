@@ -165,7 +165,7 @@ def test_ofat_configure_requires_trust_regions(tmp_path):
     agent = build_workflow_agent(tmp_path, dataset.schema)
     configure_default_workflow_calibration(agent)
     with pytest.raises(ValueError, match="trust region"):
-        agent.configure(ofat_strategy=["param_1"])  # param_1 has bounds, not a trust region
+        agent.configure_trajectory(ofat_strategy=["param_1"])  # param_1 has bounds, not a trust region
 
 
 def test_ofat_configure_succeeds_for_trust_region_param(tmp_path):
@@ -173,7 +173,7 @@ def test_ofat_configure_succeeds_for_trust_region_param(tmp_path):
     dataset = build_workflow_dataset(tmp_path)
     agent = build_workflow_agent(tmp_path, dataset.schema)
     configure_default_workflow_calibration(agent)
-    agent.configure(ofat_strategy=["speed"])  # speed has trust region (adaptation_delta)
+    agent.configure_trajectory(ofat_strategy=["speed"])  # speed has trust region (adaptation_delta)
     assert agent.calibration_system._ofat_codes == ["speed"]
     assert agent.calibration_system._ofat_index == 0
 

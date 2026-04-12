@@ -128,7 +128,7 @@ class TestBuildObjective:
 # ===========================================================================
 
 class TestConfigureMPC:
-    """agent.configure() can set mpc_lookahead and mpc_discount."""
+    """agent.configure_trajectory() can set mpc_lookahead and mpc_discount."""
 
     def test_mpc_lookahead_default_is_zero(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
@@ -140,16 +140,16 @@ class TestConfigureMPC:
 
     def test_configure_sets_mpc_lookahead(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure(mpc_lookahead=3)
+        agent.configure_trajectory(mpc_lookahead=3)
         assert agent.calibration_system.default_mpc_lookahead == 3
 
     def test_configure_sets_mpc_discount(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure(mpc_discount=0.8)
+        agent.configure_trajectory(mpc_discount=0.8)
         assert agent.calibration_system.default_mpc_discount == 0.8
 
     def test_configure_mpc_does_not_affect_other_settings(self, tmp_path):
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure(mpc_lookahead=5, mpc_discount=0.7)
+        agent.configure_trajectory(mpc_lookahead=5, mpc_discount=0.7)
         # Other settings should remain default
         assert agent.calibration_system.optimizer == Optimizer.DE

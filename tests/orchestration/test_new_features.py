@@ -20,7 +20,7 @@ def _setup_trained_agent(tmp_path):
 # ===========================================================================
 
 class TestOptimizerConfig:
-    """agent.configure() sets optimizer parameters."""
+    """agent.configure_optimizer() sets optimizer parameters."""
 
     def test_default_optimizer_is_de(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
@@ -32,32 +32,32 @@ class TestOptimizerConfig:
 
     def test_configure_de_maxiter(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(de_maxiter=200)
+        agent.configure_optimizer(de_maxiter=200)
         assert agent.calibration_system.de_maxiter == 200
 
     def test_configure_de_popsize(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(de_popsize=20)
+        agent.configure_optimizer(de_popsize=20)
         assert agent.calibration_system.de_popsize == 20
 
     def test_configure_lbfgsb_maxfun(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(lbfgsb_maxfun=500)
+        agent.configure_optimizer(lbfgsb_maxfun=500)
         assert agent.calibration_system.lbfgsb_maxfun == 500
 
     def test_configure_lbfgsb_eps(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(lbfgsb_eps=0.01)
+        agent.configure_optimizer(lbfgsb_eps=0.01)
         assert agent.calibration_system.lbfgsb_eps == 0.01
 
     def test_configure_online_optimizer(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(online_optimizer=Optimizer.DE)
+        agent.configure_optimizer(online_backend=Optimizer.DE)
         assert agent.calibration_system.online_optimizer == Optimizer.DE
 
     def test_configure_trajectory_smoothing(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(trajectory_smoothing=0.2)
+        agent.configure_trajectory(smoothing=0.2)
         assert agent.calibration_system.trajectory_smoothing == 0.2
 
 
@@ -146,7 +146,7 @@ class TestTrajectorySmoothing:
 
     def test_smoothing_configurable(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure(trajectory_smoothing=0.15)
+        agent.configure_trajectory(smoothing=0.15)
         assert agent.calibration_system.trajectory_smoothing == 0.15
 
 

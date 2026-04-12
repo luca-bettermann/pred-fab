@@ -515,62 +515,6 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="predicted")
         return predictions
     
-    def configure(
-        self,
-        *,
-        performance_weights: dict[str, float] | None = None,
-        bounds: dict[str, tuple[float, float]] | None = None,
-        fixed_params: dict[str, Any] | None = None,
-        exploration_radius: float | None = None,
-        boundary_buffer: tuple[float, float, float] | None = None,
-        optimizer: Optimizer | None = None,
-        online_optimizer: Optimizer | None = None,
-        de_maxiter: int | None = None,
-        de_popsize: int | None = None,
-        lbfgsb_maxfun: int | None = None,
-        lbfgsb_eps: float | None = None,
-        adaptation_delta: dict[str, float] | None = None,
-        step_parameters: dict[str, str] | None = None,
-        ofat_strategy: list[str] | None = None,
-        mpc_lookahead: int | None = None,
-        mpc_discount: float | None = None,
-        trajectory_smoothing: float | None = None,
-        force: bool = False,
-    ) -> None:
-        """Configure the agent.  All parameters are keyword-only and optional.
-
-        Convenience method that delegates to the specific configure_* methods.
-        For explicit, grouped configuration prefer calling those directly:
-
-            agent.configure_performance(weights={...})
-            agent.configure_exploration(radius=0.3, boundary_buffer=(0.45, 0.8, 2.0))
-            agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=100)
-            agent.configure_trajectory(step_parameters={...}, smoothing=0.1)
-        """
-        self._assert_initialized()
-
-        if performance_weights is not None:
-            self.configure_performance(weights=performance_weights)
-        if bounds is not None:
-            self.calibration_system.configure_param_bounds(bounds, force=force)
-        if fixed_params is not None:
-            self.calibration_system.configure_fixed_params(fixed_params, force=force)
-        if exploration_radius is not None or boundary_buffer is not None:
-            self.configure_exploration(radius=exploration_radius, boundary_buffer=boundary_buffer)
-        if any(v is not None for v in [optimizer, online_optimizer, de_maxiter, de_popsize, lbfgsb_maxfun, lbfgsb_eps]):
-            self.configure_optimizer(
-                backend=optimizer, online_backend=online_optimizer,
-                de_maxiter=de_maxiter, de_popsize=de_popsize,
-                lbfgsb_maxfun=lbfgsb_maxfun, lbfgsb_eps=lbfgsb_eps,
-            )
-        if any(v is not None for v in [step_parameters, adaptation_delta, ofat_strategy, mpc_lookahead, mpc_discount, trajectory_smoothing]):
-            self.configure_trajectory(
-                step_parameters=step_parameters, adaptation_delta=adaptation_delta,
-                ofat_strategy=ofat_strategy, mpc_lookahead=mpc_lookahead,
-                mpc_discount=mpc_discount, smoothing=trajectory_smoothing,
-                force=force,
-            )
-
     def configure_performance(
         self,
         *,
@@ -594,18 +538,12 @@ class PfabAgent:
     def configure_exploration(
         self,
         *,
-        radius: float | None = None,
-        boundary_buffer: tuple[float, float, float] | None = None,
+        radius: float,
     ) -> None:
-        """Set exploration radius (KDE bandwidth) and boundary buffer."""
+        """Set exploration radius (KDE bandwidth). Boundary buffer derives from this automatically."""
         self._assert_initialized()
-        if radius is not None:
-            self.pred_system.configure_exploration(radius)
-        if boundary_buffer is not None:
-            extent, strength, exponent = boundary_buffer
-            self.calibration_system.boundary_buffer_extent = extent
-            self.calibration_system.boundary_buffer_strength = strength
-            self.calibration_system.boundary_buffer_exponent = exponent
+        self.pred_system.configure_exploration(radius)
+        self.calibration_system._exploration_radius = radius
 
     def configure_optimizer(
         self,

@@ -112,11 +112,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Boundary buffer: penalise acquisition scores near parameter bounds to
         # counteract KDE edge effects (no evidence outside the search space).
-        # The extent adapts dynamically: effective_extent = base_extent / √N,
-        # tracking the KDE bandwidth decay so the buffer shrinks with the bubbles.
-        self.boundary_buffer_extent: float = 0.0    # base extent (fraction of range at N=1); 0 = disabled
-        self.boundary_buffer_strength: float = 0.5  # penalty at boundary: score *= (1 - strength)
-        self.boundary_buffer_exponent: float = 2.0   # curve shape: t^exp (1=linear, 2=quadratic)
+        # Derived from exploration_radius: extent = radius / √N (tracks KDE bandwidth).
+        # Enabled automatically when exploration_radius > 0.
+        self._exploration_radius: float = 0.0  # mirrored from PredictionSystem for buffer calc
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -443,43 +441,47 @@ class CalibrationSystem(BaseOrchestrationSystem):
         score = (1.0 - kappa) * sys_perf + kappa * u
 
         # Apply boundary buffer to counteract KDE edge effects
-        if self.boundary_buffer_extent > 0 and bounds is not None:
+        if bounds is not None:
             score *= self._boundary_factor(X.reshape(-1), bounds)
 
         return -score
 
-    def _boundary_factor(self, X: np.ndarray, bounds: np.ndarray) -> float:
+    def _boundary_factor(
+        self,
+        X: np.ndarray,
+        bounds: np.ndarray,
+        strength: float = 0.5,
+        exponent: float = 2.0,
+    ) -> float:
         """Multiplicative penalty in (0, 1] that decays near parameter boundaries.
 
-        The extent adapts dynamically with the number of experiments:
-        effective_extent = base_extent / √N. This tracks the KDE bandwidth
-        decay (h ∝ 1/√N), so the buffer shrinks as evidence accumulates
-        and edge effects diminish.
+        Derived from the exploration radius — no separate configuration needed.
+        extent   = exploration_radius / √N  (tracks KDE bandwidth decay)
+        strength = penalty at boundary: score *= (1 - strength)
+        exponent = curve shape (2.0 = quadratic, matching KDE kernel)
 
         Per-dimension factors are multiplied so corners (near multiple boundaries)
-        receive a stronger penalty. Dimensions with zero-width bounds (fixed params,
-        context features) are skipped.
+        receive a stronger penalty.
         """
-        base_extent = self.boundary_buffer_extent
-        strength = self.boundary_buffer_strength
-        exponent = self.boundary_buffer_exponent
+        radius = self._exploration_radius
+        if radius <= 0:
+            return 1.0
 
-        # Scale extent with 1/√N, matching KDE bandwidth decay
         n_exp = self._get_n_exp()
-        extent = base_extent / np.sqrt(max(n_exp, 1))
+        extent = radius / np.sqrt(max(n_exp, 1))
 
         factor = 1.0
         for i in range(len(X)):
             lo, hi = bounds[i]
             span = hi - lo
             if span < 1e-12:
-                continue  # fixed dimension — no penalty
+                continue
             d_lo = (X[i] - lo) / span
             d_hi = (hi - X[i]) / span
             d = min(d_lo, d_hi)
             if d >= extent:
                 continue
-            t = max(d / extent, 0.0)  # 0 at boundary, 1 at buffer edge
+            t = max(d / extent, 0.0)
             factor *= 1.0 - strength * (1.0 - t ** exponent)
 
         return factor
