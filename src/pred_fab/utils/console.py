@@ -178,7 +178,6 @@ class ConsoleReporter:
         perf: float,
         unc: float,
         obj: float,
-        nfev: int,
     ) -> None:
         """Print exploration proposal: objective components + proposed parameters on own line."""
         if not self.enabled:

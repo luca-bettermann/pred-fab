@@ -362,19 +362,15 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        # Console: show acquisition components + proposed parameters (schema params only)
+        # Console: merge optimizer result + proposal components on one line
         cal = self.calibration_system
-        perf = cal.last_opt_perf
-        unc = cal.last_opt_unc
-        obj = cal.last_opt_score
         if self._console is not None and self._console.enabled:
             params = dict(result.initial_params) if result.initial_params else {}
             tunable_codes = set(cal.get_tunable_params(datamodule))
             tunable = {k: v for k, v in params.items() if k in tunable_codes}
             self._console.print_proposal_row(
-                [tunable], perf, unc, obj, cal.last_opt_nfev,
+                [tunable], cal.last_opt_perf, cal.last_opt_unc, cal.last_opt_score,
             )
-            self.logger.console_new_line()
 
         self.logger.info("Successfully completed exploration step.")
         return result

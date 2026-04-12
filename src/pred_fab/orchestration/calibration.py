@@ -121,6 +121,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
 
+    def _print_optimized_line(self, nfev: int, suffix: str = "") -> None:
+        """Print the ✓ Optimized [...] line. Suffix allows merging with proposal components."""
+        bar = "\u2588" * 12
+        print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{nfev} evals\033[0m{suffix}", flush=True)
+
     def _get_n_exp(self) -> int:
         """Current experiment count from the prediction system (for dynamic buffer scaling)."""
         if self._n_exp_fn is not None:
@@ -1066,10 +1071,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 show_progress=console,
             )
 
-        # Final checkmark line (unified for both optimizers)
         if console:
-            bar = "\u2588" * 12
-            print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{opt.nfev} evals\033[0m", flush=True)
+            self._print_optimized_line(opt.nfev)
 
         # Publish result bookkeeping
         self.last_opt_nfev = opt.nfev
