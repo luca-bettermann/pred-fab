@@ -925,8 +925,11 @@ class Dataset:
                 for i, dim_name in enumerate(dim_names):
                     # Keep model-facing columns on schema parameter codes.
                     row_dict[dim_name] = idx_tuple[i]
+                    # Also include the iterator code (e.g. layer_idx, segment_idx)
+                    # so prediction models can use positional information.
                     iterator_ctx[dim_iterators[i]] = idx_tuple[i]
-                
+                    row_dict[dim_iterators[i]] = idx_tuple[i]
+
                 X_rows.append(row_dict)
                 
                 # Build y row (Features at index)

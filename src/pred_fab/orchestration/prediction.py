@@ -60,7 +60,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._exploration_radius: float = 0.5              # c: bubble radius at N=1
+        self._exploration_radius: float = 0.15             # c: bubble radius at N=1
+        self._bandwidth_decay: float = 1/2                 # exponent for N-decay: h ∝ 1/N^decay
+        self._base_buffer: float = 0.5                     # shared buffer for perf/unc floor scaling
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
@@ -166,6 +168,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit KDE on latent representations of training configs (NatPN-light)
         self._fit_kde(datamodule)
     
+    def _n_decay(self, n: int) -> float:
+        """Compute the N-dependent decay factor for KDE bandwidth: 1/N^decay."""
+        return 1.0 / max(n, 1) ** self._bandwidth_decay
+
     # === UNCERTAINTY ESTIMATION (NatPN-light, per-model KDE) ===
 
     def set_uncertainty_weights(self, weights: dict[str, float]) -> None:
@@ -270,7 +276,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             projected = latent_array[:, active_mask]
             n_active_dims = projected.shape[1]
-            h = self._exploration_radius * np.sqrt(float(n_active_dims)) / np.sqrt(float(n_exp))
+            h = self._exploration_radius * np.sqrt(float(n_active_dims)) * self._n_decay(n_exp)
             q_max = self._compute_q_max(projected, weights_array, h)
 
             self._model_kdes[id(model)] = _ModelKDE(
@@ -360,7 +366,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         if self._model_kdes and self._n_exp > 0:
             for kde in self._model_kdes.values():
                 d = float(kde.n_active_dims)
-                h = exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+                h = exploration_radius * np.sqrt(d) * self._n_decay(self._n_exp)
                 kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
             self.logger.info(
                 f"Evidence model updated: exploration_radius={exploration_radius}, "
@@ -401,8 +407,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         n_for_bandwidth = max(self._n_exp, 1)
 
         d     = float(kde.n_active_dims)
-        h     = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_for_bandwidth))
-        gamma = max(1.0, self._exploration_radius * np.sqrt(float(n_for_bandwidth)))
+        h     = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_bandwidth)
+        gamma = max(1.0, self._exploration_radius / self._n_decay(n_for_bandwidth))
 
         if len(kde.latent_points) == 0:
             return 1.0  # no evidence → maximum uncertainty
@@ -414,9 +420,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return 1.0
         ratio  = float(np.clip(q / kde.q_max, 0.0, 1.0))
         n_post = float(n_for_bandwidth) * (ratio ** gamma)
-        u      = 1.0 / (1.0 + n_post)
-        u_min  = 1.0 / (1.0 + float(n_for_bandwidth))
-        return float(np.clip((u - u_min) / (1.0 - u_min + 1e-12), 0.0, 1.0))
+        return 1.0 / (1.0 + n_post)
 
     def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
         """Compute kernel similarity for a single model's latent space."""
@@ -425,7 +429,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         z1 = z1[kde.active_mask]
         z2 = z2[kde.active_mask]
         d = float(kde.n_active_dims)
-        h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(self._n_exp))
+        h = self._exploration_radius * np.sqrt(d) * self._n_decay(self._n_exp)
         if h < 1e-10:
             return 0.0
         return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
@@ -476,7 +480,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             # Recompute q_max using consistent bandwidth
             n_for_h = max(self._n_exp, 1)
             d = float(kde.n_active_dims)
-            h = self._exploration_radius * np.sqrt(d) / np.sqrt(float(n_for_h))
+            h = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_h)
             kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
 
         self.logger.debug(f"Virtual KDE point added: {list(params.keys())}")
@@ -563,9 +567,15 @@ class PredictionSystem(BaseOrchestrationSystem):
             weighted_u += kde.weight * u_i
             total_w += kde.weight
 
-        u_agg = weighted_u / total_w if total_w > 0 else 1.0
-        self.logger.debug(f"uncertainty (aggregated): u={u_agg:.4f}")
-        return u_agg
+        u_raw = weighted_u / total_w if total_w > 0 else 1.0
+
+        # Apply uncertainty floor: u = buffer + (1 - buffer) * u_raw
+        # Same buffer as performance normalization, symmetric scaling.
+        buffer = self._base_buffer * self._n_decay(max(self._n_exp, 1))
+        u = buffer + (1.0 - buffer) * u_raw
+
+        self.logger.debug(f"uncertainty (aggregated): u_raw={u_raw:.4f}, buffer={buffer:.4f}, u={u:.4f}")
+        return u
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
         """Performance-weighted kernel similarity between two parameter vectors.

@@ -177,6 +177,8 @@ class PfabAgent:
             uncertainty_fn=_pred.uncertainty,
             similarity_fn=_pred.kernel_similarity,
             n_exp_fn=lambda: _pred._n_exp,
+            n_decay_fn=_pred._n_decay,
+            base_buffer_fn=lambda: _pred._base_buffer,
         )
 
         # Wire up virtual KDE point callbacks for within-trajectory spacing.
@@ -362,15 +364,24 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        # Console: merge optimizer result + proposal components on one line
+        # Console: show proposal (single or trajectory)
         cal = self.calibration_system
         if self._console is not None and self._console.enabled:
-            params = dict(result.initial_params) if result.initial_params else {}
-            tunable_codes = set(cal.get_tunable_params(datamodule))
-            tunable = {k: v for k, v in params.items() if k in tunable_codes}
             self._console.print_proposal_row(
-                [tunable], cal.last_opt_perf, cal.last_opt_unc, cal.last_opt_score,
+                [], cal.last_opt_perf, cal.last_opt_unc, cal.last_opt_score,
             )
+            tunable_codes = set(cal.get_tunable_params(datamodule))
+            params = dict(result.initial_params) if result.initial_params else {}
+            tunable = {k: v for k, v in params.items() if k in tunable_codes}
+
+            if cal.last_trajectory and len(cal.last_trajectory) > 1:
+                # Trajectory: print per-layer schedule table
+                self._console.print_trajectory_table(
+                    cal.last_trajectory, tunable_codes, cal.trajectory_configs,
+                )
+            else:
+                # Single proposal: show params on grey line
+                self._console.print_params_line(tunable)
 
         self.logger.info("Successfully completed exploration step.")
         return result

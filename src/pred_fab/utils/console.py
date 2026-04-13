@@ -179,31 +179,72 @@ class ConsoleReporter:
         unc: float,
         obj: float,
     ) -> None:
-        """Print exploration proposal: objective components + proposed parameters on own line."""
+        """Print exploration proposal: objective components."""
         if not self.enabled:
             return
         perf_s = f"perf={_score_color(perf)}{perf:.3f}{_R}"
         unc_s = f"unc={_score_color(unc)}{unc:.3f}{_R}"
         obj_s = f"obj={_score_color(obj)}{obj:.3f}{_R}"
         self._print(f"  {_C}>{_R} {perf_s}  {unc_s}  {obj_s}")
-        # Proposed parameters on a second line (grey, only tunable params)
-        if proposals:
-            p = proposals[0]
-            param_parts: list[str] = []
-            for code in self._param_codes:
-                val = p.get(code)
-                if val is None:
-                    continue
-                if isinstance(val, float):
-                    fmt = f"{val:.2f}" if abs(val) < 1 else f"{val:.1f}"
-                    param_parts.append(f"{code}={fmt}")
-                elif isinstance(val, int):
-                    param_parts.append(f"{code}={val}")
-                else:
-                    param_parts.append(f"{code}={val}")
-            if param_parts:
-                self._print(f"    {_D}\u2192 {', '.join(param_parts)}{_R}")
-        # Blank line after proposal block for visual separation
+
+    def print_params_line(self, params: dict[str, Any]) -> None:
+        """Print proposed parameters in grey on own line, with trailing blank line."""
+        if not self.enabled:
+            return
+        parts: list[str] = []
+        for code, val in params.items():
+            if isinstance(val, float):
+                fmt = f"{val:.2f}" if abs(val) < 1 else f"{val:.1f}"
+                parts.append(f"{code}={fmt}")
+            elif isinstance(val, int):
+                parts.append(f"{code}={val}")
+            else:
+                parts.append(f"{code}={val}")
+        if parts:
+            self._print(f"    {_D}\u2192 {', '.join(parts)}{_R}")
+        if self._logger._console_output_enabled:
+            print("", flush=True)
+
+    def print_trajectory_table(
+        self,
+        proposals: list[dict[str, Any]],
+        tunable_codes: set[str],
+        trajectory_configs: dict[str, str],
+    ) -> None:
+        """Print per-layer trajectory schedule as a vertical table."""
+        if not self.enabled or not proposals:
+            return
+        # Identify which params vary per layer vs fixed across layers
+        traj_params = set(trajectory_configs.keys())
+        fixed_params: dict[str, str] = {}
+        for code in tunable_codes:
+            if code not in traj_params:
+                val = proposals[0].get(code)
+                if val is not None:
+                    fmt = f"{val:.2f}" if isinstance(val, float) and abs(val) < 1 else f"{val:.1f}" if isinstance(val, float) else str(val)
+                    fixed_params[code] = fmt
+
+        # Fixed params line
+        if fixed_params:
+            fixed_s = ", ".join(f"{k}={v}" for k, v in fixed_params.items())
+            self._print(f"    {_D}\u2192 {fixed_s}{_R}")
+
+        # Per-layer table for trajectory params
+        traj_codes = sorted(traj_params & tunable_codes)
+        if traj_codes:
+            header = f"    {_D}{'layer':<7s}"
+            for code in traj_codes:
+                header += f"  {code:>8s}"
+            header += _R
+            self._print(header)
+            for i, p in enumerate(proposals):
+                row = f"    {_D}{i+1:<7d}"
+                for code in traj_codes:
+                    val = p.get(code, 0)
+                    row += f"  {float(val):8.1f}" if isinstance(val, (int, float)) else f"  {str(val):>8s}"
+                row += _R
+                self._print(row)
+
         if self._logger._console_output_enabled:
             print("", flush=True)
 

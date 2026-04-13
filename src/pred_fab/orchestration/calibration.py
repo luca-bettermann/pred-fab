@@ -43,6 +43,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         uncertainty_fn: Callable[[np.ndarray], float],
         similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
+        n_decay_fn: Callable[[int], float] | None = None,
+        base_buffer_fn: Callable[[], float] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger)
@@ -50,6 +52,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.uncertainty_fn = uncertainty_fn
         self.similarity_fn = similarity_fn
         self._n_exp_fn = n_exp_fn
+        self._n_decay_fn = n_decay_fn
+        self._base_buffer_fn = base_buffer_fn
 
         # Virtual KDE point callbacks for within-trajectory spacing.
         # Set by PfabAgent to inject proposed points into the KDE between
@@ -72,6 +76,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_score: float = 0.0
         self.last_opt_perf: float = 0.0      # normalized performance component
         self.last_opt_unc: float = 0.0       # uncertainty component (with buffer)
+        self.last_trajectory: list[dict[str, Any]] | None = None  # per-layer params for trajectory
 
         # Set ordered weights
         self.schema = schema
@@ -117,6 +122,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Derived from exploration_radius: extent = radius / √N (tracks KDE bandwidth).
         # Enabled automatically when exploration_radius > 0.
         self._exploration_radius: float = 0.0  # mirrored from PredictionSystem for buffer calc
+        self._suppress_opt_print: bool = False  # suppress per-step print during trajectory
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -127,10 +133,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{nfev} evals\033[0m{suffix}", flush=True)
 
     def _get_n_exp(self) -> int:
-        """Current experiment count from the prediction system (for dynamic buffer scaling)."""
+        """Current experiment count from the prediction system."""
         if self._n_exp_fn is not None:
             return self._n_exp_fn()
         return 1
+
+    def _n_decay(self, n: int) -> float:
+        """N-dependent decay factor, delegated to prediction system for single source of truth."""
+        if self._n_decay_fn is not None:
+            return self._n_decay_fn(n)
+        return 1.0 / max(n, 1) ** (1/3)
 
     # ------------------------------------------------------------------
     # random_seed property
@@ -437,9 +449,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Normalize performance to its observed training range so kappa
         # balances meaningfully even when raw scores occupy a narrow band.
-        # Uncertainty (KDE) is inherently [0, 1] and not renormalized.
-        # Note: values can slightly exceed [0, 1] when the model extrapolates
-        # beyond training data — this is expected, not an error.
+        # Values can exceed [0, 1] when the model extrapolates beyond training data.
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
@@ -463,7 +473,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Multiplicative penalty in (0, 1] that decays near parameter boundaries.
 
         Derived from the exploration radius — no separate configuration needed.
-        extent   = exploration_radius / √N  (tracks KDE bandwidth decay)
+        extent   = exploration_radius / N^decay  (tracks KDE bandwidth decay)
         strength = penalty at boundary: score *= (1 - strength)
         exponent = curve shape (2.0 = quadratic, matching KDE kernel)
 
@@ -475,7 +485,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return 1.0
 
         n_exp = self._get_n_exp()
-        extent = radius / np.sqrt(max(n_exp, 1))
+        extent = radius * self._n_decay(n_exp)
 
         factor = 1.0
         for i in range(len(X)):
@@ -525,10 +535,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if depth <= 0:
             return base_objective
 
+        _mpc_evals = [0]  # mutable counter for total inner evals
+        # Normalization: sum of discount weights so MPC score stays in same range as single score
+        _weight_sum = 1.0 + sum(discount ** (j + 1) for j in range(depth))
+
         def mpc_obj(X: np.ndarray) -> float:
             base_score = base_objective(X)
+            _mpc_evals[0] += 1
             total = base_score
-            self.logger.debug(f"mpc: base_score={base_score:.4f}")
             X_cur = X.copy()
             for j in range(depth):
                 try:
@@ -539,32 +553,44 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         x0=X_cur,
                         bounds=bounds_ahead,
                         method='L-BFGS-B',
+                        options={'maxfun': 20},  # cheap inner solve
                     )
+                    _mpc_evals[0] += res.nfev
                     X_cur = res.x
                     step_score = base_objective(X_cur)
+                    _mpc_evals[0] += 1
                     discount_factor = discount ** (j + 1)
                     total += discount_factor * step_score
-                    self.logger.debug(
-                        f"  mpc step {j + 1}/{depth}: score={step_score:.4f}, "
-                        f"discount={discount_factor:.4f}, cumulative={total:.4f}"
-                    )
                 except Exception:
                     break
-            return total
+            return total / _weight_sum
+
+        mpc_obj._eval_counter = _mpc_evals  # expose counter
 
         return mpc_obj
 
     def update_perf_range(self, datamodule: DataModule) -> None:
-        """Update running min/max of predicted performance from training data.
+        """Update performance normalization range from training data.
 
-        Called after each train() to keep the normalization range current.
-        Uses perf_fn on each training experiment's parameters — the same
-        function the optimizer queries, so the range is representative.
+        Called after each train(). Computes predicted performance at each
+        training experiment, then applies an absolute buffer that decays
+        with the number of experiments:
+
+            half_buffer = (base_buffer / N^decay) / 2
+            perf_min = raw_min - half_buffer
+            perf_max = raw_max + half_buffer
+
+        Early on (few experiments), the buffer is large and performance is
+        compressed — uncertainty naturally dominates. As data grows, the
+        buffer shrinks and performance fills [0, 1].
         """
         self._active_datamodule = datamodule
         train_codes = datamodule.get_split_codes(SplitType.TRAIN)
         if not train_codes:
             return
+
+        raw_min: float | None = None
+        raw_max: float | None = None
 
         for code in train_codes:
             exp = datamodule.dataset.get_experiment(code)
@@ -579,26 +605,29 @@ class CalibrationSystem(BaseOrchestrationSystem):
             except Exception:
                 continue
 
-            if self._perf_range_min is None or sys_perf < self._perf_range_min:
-                self._perf_range_min = sys_perf
-            if self._perf_range_max is None or sys_perf > self._perf_range_max:
-                self._perf_range_max = sys_perf
+            if raw_min is None or sys_perf < raw_min:
+                raw_min = sys_perf
+            if raw_max is None or sys_perf > raw_max:
+                raw_max = sys_perf
 
-        self.logger.debug(
-            f"Performance range updated: [{self._perf_range_min:.3f}, {self._perf_range_max:.3f}]"
-        )
+        if raw_min is not None and raw_max is not None:
+            n = len(train_codes)
+            base_buffer = self._base_buffer_fn() if self._base_buffer_fn else 0.2
+            half_buffer = (base_buffer * self._n_decay(n)) / 2
+            self._perf_range_min = raw_min - half_buffer
+            self._perf_range_max = raw_max + half_buffer
+            self.logger.debug(
+                f"Performance range: [{raw_min:.3f}, {raw_max:.3f}] "
+                f"+ half_buffer {half_buffer:.3f} (N={n}) "
+                f"→ [{self._perf_range_min:.3f}, {self._perf_range_max:.3f}]"
+            )
 
     def _get_acquisition_ranges(self) -> tuple[tuple[float, float] | None, None]:
-        """Return (perf_range, unc_range) for acquisition normalization.
-
-        Performance is normalized to its running observed range from training data.
-        Uncertainty is not normalized — KDE already outputs meaningful [0, 1] values.
-        """
+        """Return (perf_range, unc_range) for acquisition normalization."""
         if self._perf_range_min is not None and self._perf_range_max is not None:
             perf_range = (self._perf_range_min, self._perf_range_max)
         else:
             perf_range = None
-        # Uncertainty (KDE output) is inherently [0, 1] — no normalization needed.
         return perf_range, None
 
     def _build_objective(self, mode: Mode, kappa: float, bounds: np.ndarray | None = None) -> Callable:
@@ -955,6 +984,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Track previous step's params for trajectory smoothing penalty.
         _prev_step_params: dict[str, Any] | None = None
 
+        is_trajectory = len(step_grid) > 1
+        console = self.logger._console_output_enabled
+        if is_trajectory and console:
+            self._suppress_opt_print = True
+        total_traj_nfev = 0
+
         for step_i, curr_indices in enumerate(step_grid):
             # Build fixed params for this step
             fixed_for_step = dict(self.fixed_params)
@@ -991,8 +1026,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
 
             # Wrap objective with trajectory smoothing penalty for non-first steps.
-            # Penalizes large parameter changes between adjacent layers to encourage
-            # monotonic trajectories: penalty = 1 - lambda * |delta| / trust_width.
+            # Multiplicative penalty on the acquisition score (before negation):
+            #   score *= (1 - lambda * |delta| / trust_width)
+            # This directly reduces the score for large jumps, keeping it in [0, 1].
             step_objective = objective
             if (self.trajectory_smoothing > 0 and _prev_step_params is not None
                     and len(step_grid) > 1):
@@ -1002,14 +1038,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 _dm = datamodule
 
                 def _smoothed_objective(X, _base=step_objective, _l=_lam, _p=_prev, _t=_tr, _d=_dm):
-                    base_score = _base(X)
-                    params_dict = _d.array_to_params(X.reshape(-1))
-                    penalty = 1.0
+                    base_score = _base(X)  # negative (minimization)
+                    try:
+                        params_dict = _d.array_to_params(X.reshape(-1))
+                    except (ValueError, KeyError):
+                        return base_score
+                    # Penalty: reduce score proportionally to jump size
                     for code, delta in _t.items():
                         if code in _p and code in params_dict and delta > 0:
                             change = abs(float(params_dict[code]) - float(_p[code]))
-                            penalty *= 1.0 - _l * min(change / delta, 1.0)
-                    return base_score / max(penalty, 1e-6)  # base is negative, dividing by <1 makes it more negative
+                            frac = min(change / delta, 1.0)
+                            # base_score is negative; multiply penalty makes it less negative (worse)
+                            base_score *= (1.0 - _l * frac)
+                    return base_score
 
                 step_objective = _smoothed_objective
 
@@ -1029,15 +1070,36 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _prev_step_params = dict(result)
             working_params = result
             prev_indices = curr_indices
+            total_traj_nfev += self.last_opt_nfev
+
+            # Trajectory: layer progress bar
+            if is_trajectory and console:
+                n_steps = len(step_grid)
+                bar_len = 12
+                filled = int(bar_len * (step_i + 1) / n_steps)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                if step_i + 1 == n_steps:
+                    print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] "
+                          f"\033[2m{total_traj_nfev} evals ({n_steps} layers)\033[0m", flush=True)
+                else:
+                    print(f"  {'Optimizing':<10s} [{bar}] "
+                          f"\033[2m{step_i+1}/{n_steps} layers, {total_traj_nfev} evals\033[0m",
+                          end="\r", flush=True)
 
             # Inject virtual KDE point so subsequent trajectory steps see lower
             # uncertainty at this speed, naturally spacing out layer proposals.
-            if len(step_grid) > 1 and self._add_virtual_point_fn is not None:
+            if is_trajectory and self._add_virtual_point_fn is not None:
                 self._add_virtual_point_fn(result)
 
         # Clear virtual KDE points after trajectory completes.
-        if len(step_grid) > 1 and self._clear_virtual_points_fn is not None:
+        if is_trajectory and self._clear_virtual_points_fn is not None:
             self._clear_virtual_points_fn()
+
+        if is_trajectory:
+            self._suppress_opt_print = False
+            self.last_trajectory = list(proposals)
+        else:
+            self.last_trajectory = None
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")
@@ -1061,7 +1123,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Run the acquisition function optimization and return proposed parameters."""
         active_optimizer = optimizer_override or self.optimizer
 
-        console = self.logger._console_output_enabled
+        console = self.logger._console_output_enabled and not self._suppress_opt_print
 
         if active_optimizer == Optimizer.DE:
             opt = self._optimize_de(bounds, objective_func, show_progress=console)
@@ -1071,11 +1133,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 show_progress=console,
             )
 
-        if console:
-            self._print_optimized_line(opt.nfev)
+        # Publish result bookkeeping — include MPC inner evals if applicable
+        total_nfev = opt.nfev
+        if hasattr(objective_func, '_eval_counter'):
+            total_nfev = objective_func._eval_counter[0]
+        self.last_opt_nfev = total_nfev
 
-        # Publish result bookkeeping
-        self.last_opt_nfev = opt.nfev
+        if console:
+            self._print_optimized_line(total_nfev)
         self.last_opt_n_starts = opt.n_starts
         self.last_opt_score = opt.score
 
