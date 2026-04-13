@@ -1,6 +1,5 @@
 """PfabAgent — main orchestration class for the PFAB framework."""
 
-import textwrap
 from typing import Any
 import numpy as np
 
@@ -118,7 +117,8 @@ class PfabAgent:
 
     def initialize_systems(self, schema: DatasetSchema, verbose_flag: bool = False) -> None:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
-                
+        self.schema = schema
+
         # Step 1: Initialize systems (dataset will be set later)
         self.logger.info("Instantiating models from registered classes...")
         if not self._feature_model_specs:
@@ -289,56 +289,52 @@ class PfabAgent:
         self.logger.info(f"Active experiment set to: {exp_data.code}")
 
     def state_report(self) -> None:
-        """Log an overview of the registered models and their I/O to the console."""
+        """Log an overview of all agent systems to the console."""
+        _B = "\033[1m"
+        _D = "\033[2m"
+        _R = "\033[0m"
+
         if not self._initialized:
             self.logger.console_warning("Agent not initialized. No models to report.")
             return
 
-        summary = ["\n===== Agent State Report ====="]
-        
-        def _add_section(name: str, models: list[Any], width=25) -> None:
+        lines = [f"\n  {_B}Agent{_R}"]
+
+        def _add_model_section(name: str, models: list[Any]) -> None:
             if not models:
                 return
-            
-            # Header with newline before it
-            header = f"\n{name:<{width}} | {'Inputs':<{width}} | {'Outputs':<{width}}"
-            summary.append(header)
-            divider = "-" * (3 * width + 6)
-            summary.append(divider)
-            
+            lines.append(f"\n  {_D}{name}{_R}")
             for model in models:
                 inp_str = ", ".join(model.input_parameters + model.input_features)
                 out_str = ", ".join(model.outputs)
-                
-                # Wrap text to multiple lines if needed
-                inp_lines = textwrap.wrap(inp_str, width=width) if inp_str else [""]
-                out_lines = textwrap.wrap(out_str, width=width) if out_str else [""]
-                
-                # If wrap returns empty list for empty string (python behavior varies), ensure list has one element
-                if not inp_lines: inp_lines = [""]
-                if not out_lines: out_lines = [""]
+                lines.append(f"    {model.__class__.__name__:<20s} {inp_str:<30s} → {out_str}")
 
-                max_lines = max(len(inp_lines), len(out_lines))
-                model_name = model.__class__.__name__
-
-                for i in range(max_lines):
-                    col1 = model_name if i == 0 else ""
-                    col2 = inp_lines[i] if i < len(inp_lines) else ""
-                    col3 = out_lines[i] if i < len(out_lines) else ""
-                    summary.append(f"{col1:<{width}} | {col2:<{width}} | {col3:<{width}}")
-
-        # Report on systems
         if self.feature_system:
-            _add_section("Feature System", self.feature_system.models)
-            
+            _add_model_section("Feature System", self.feature_system.models)
         if self.eval_system:
-            _add_section("Evaluation System", self.eval_system.models)
-            
+            _add_model_section("Evaluation System", self.eval_system.models)
         if self.pred_system:
-            _add_section("Prediction System", self.pred_system.models)
-            
-        self.logger.console_new_line()
-        self.logger.console_info("\n".join(summary))
+            _add_model_section("Prediction System", self.pred_system.models)
+
+        # # Calibration System (config — not a trained system)
+        # cal = self.calibration_system
+        # lines.append(f"\n  {_D}Calibration System{_R}")
+        #
+        # pw_parts = [f"{k}={v:g}" for k, v in cal.performance_weights.items()]
+        # lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
+        #
+        # explore_parts = [f"radius={cal._exploration_radius:g}",
+        #                  f"buffer={cal._buffer:g}",
+        #                  f"decay_exp={cal._decay_exp:g}"]
+        # lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
+        #
+        # for code in cal.data_objects.keys():
+        #     low, high = cal._get_hierarchical_bounds_for_code(code)
+        #     bounds_str = f"[{low}, {high}]"
+        #     delta = cal.trust_regions.get(code, "─")
+        #     lines.append(f"    {code:<20s} {bounds_str:<15s} {_D}{delta}{_R}")
+
+        self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
     def calibration_state_report(self) -> None:
@@ -559,12 +555,21 @@ class PfabAgent:
     def configure_exploration(
         self,
         *,
-        radius: float,
+        radius: float | None = None,
+        buffer: float | None = None,
+        decay_exp: float | None = None,
     ) -> None:
-        """Set exploration radius (KDE bandwidth). Boundary buffer derives from this automatically."""
+        """Set exploration parameters (KDE bandwidth, normalization buffer, decay exponent)."""
         self._assert_initialized()
-        self.pred_system.configure_exploration(radius)
-        self.calibration_system._exploration_radius = radius
+        if radius is not None:
+            self.pred_system.configure_exploration(radius)
+            self.calibration_system._exploration_radius = radius
+        if buffer is not None:
+            self.pred_system._base_buffer = buffer
+            self.calibration_system._buffer = buffer
+        if decay_exp is not None:
+            self.pred_system._bandwidth_decay = decay_exp
+            self.calibration_system._decay_exp = decay_exp
 
     def configure_optimizer(
         self,

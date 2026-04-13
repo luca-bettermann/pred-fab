@@ -121,7 +121,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # counteract KDE edge effects (no evidence outside the search space).
         # Derived from exploration_radius: extent = radius / √N (tracks KDE bandwidth).
         # Enabled automatically when exploration_radius > 0.
-        self._exploration_radius: float = 0.0  # mirrored from PredictionSystem for buffer calc
+        self._exploration_radius: float = 0.20  # mirrored from PredictionSystem for buffer calc
+        self._buffer: float = 0.5              # mirrored from PredictionSystem
+        self._decay_exp: float = 0.5           # mirrored from PredictionSystem
         self._suppress_opt_print: bool = False  # suppress per-step print during trajectory
 
         # Extract parameter constraints from schema
@@ -176,27 +178,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
-        summary = ["===== Calibration System State =====\n"]
-        width = 20
-        # Columns: Input, Bounds, Delta
-        header = f"{'Input':<{width}} | {'Bounds':<{width}} | {'Delta':<{8}}"
-        summary.append(header)
-        summary.append("-" * len(header))
+        _B = "\033[1m"
+        _D = "\033[2m"
+        _R = "\033[0m"
 
+        lines = [f"\n  {_B}Calibration{_R}"]
+
+        # Performance weights
+        pw_parts = [f"{k}={v:g}" for k, v in self.performance_weights.items()]
+        lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
+
+        # Exploration settings
+        explore_parts = [f"radius={self._exploration_radius:g}",
+                         f"buffer={self._buffer:g}",
+                         f"decay_exp={self._decay_exp:g}"]
+        lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
+
+        # Parameter bounds and deltas
+        lines.append(f"\n    {_D}{'Parameter':<20s} {'Bounds':<20s} {'Delta':<8s}{_R}")
         for code in self.data_objects.keys():
-
-            # Determine Bounds
-            # Priority: Fixed -> Configured Bounds -> Schema Constraints
             low, high = self._get_hierarchical_bounds_for_code(code)
             bounds_str = f"[{low}, {high}]"
+            delta = self.trust_regions.get(code, "─")
+            lines.append(f"    {code:<20s} {bounds_str:<20s} {delta:<8}")
 
-            # Determine Delta
-            delta = self.trust_regions.get(code, "-")
-
-            summary.append(f"{code:<{width}} | {bounds_str:<{width}} | {delta:<{8}}")
-
-        self.logger.console_new_line()
-        self.logger.console_info("\n".join(summary))
+        self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
     # === CONFIGURATION METHODS ===

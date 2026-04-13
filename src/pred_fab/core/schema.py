@@ -16,7 +16,7 @@ from .data_blocks import (
     Features,
     Domains,
 )
-from .data_objects import DataArray, Domain
+from .data_objects import DataArray, DataDomainAxis, Domain
 from ..utils.enum import Roles
 
 class DatasetSchema:
@@ -78,6 +78,58 @@ class DatasetSchema:
         self.registry.register_schema(self.name, schema_hash, schema_struct)
         self.local_data.set_schema(self.name)
         self.logger.console_success(f"Successfully initialized schema with ID: {self.name}.")
+
+    def state_report(self) -> None:
+        """Print schema overview to console."""
+        _B = "\033[1m"
+        _D = "\033[2m"
+        _R = "\033[0m"
+
+        lines = [f"\n  {_B}Schema: {self.name}{_R}"]
+
+        # Parameters (exclude domain axis params)
+        lines.append(f"\n  {_D}Parameters{_R}")
+        for code, obj in self.parameters.items():
+            if isinstance(obj, DataDomainAxis):
+                continue
+            c = obj.constraints
+            lo, hi = c.get("min", ""), c.get("max", "")
+            bounds = f"[{lo}, {hi}]" if lo != "" else ""
+            if obj.runtime_adjustable:
+                ptype = "runtime"
+            else:
+                ptype = ""
+            lines.append(f"    {code:<20s} {bounds:<15s} {_D}{ptype}{_R}")
+
+        # Domains
+        if self.domains and len(list(self.domains.keys())) > 0:
+            lines.append(f"\n  {_D}Domains{_R}")
+            for domain_code, domain in self.domains.items():
+                lines.append(f"    {domain_code}")
+                for axis in domain.axes:
+                    lo, hi = axis.min_val, axis.max_val
+                    bounds = f"[{lo}, {hi}]"
+                    fixed = "fixed" if (hi is not None and lo == hi) else ""
+                    lines.append(f"      {axis.code:<18s} {bounds:<15s} {_D}{fixed}{_R}")
+
+        # Features
+        lines.append(f"\n  {_D}Features{_R}")
+        for code, obj in self.features.items():
+            if hasattr(obj, 'is_recursive') and obj.is_recursive:
+                ftype = "recursive"
+            elif hasattr(obj, 'context') and obj.context:
+                ftype = "context"
+            else:
+                ftype = ""
+            lines.append(f"    {code:<20s} {_D}{ftype}{_R}")
+
+        # Performance attributes
+        lines.append(f"\n  {_D}Performance{_R}")
+        for code in self.performance_attrs.keys():
+            lines.append(f"    {code}")
+
+        self.logger.console_summary("\n".join(lines))
+        self.logger.console_new_line()
 
     def _initialize_feature_columns(self) -> None:
         """Set iterator column names on each feature DataArray from domain definitions."""

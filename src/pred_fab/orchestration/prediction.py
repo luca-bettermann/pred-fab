@@ -60,7 +60,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._exploration_radius: float = 0.15             # c: bubble radius at N=1
+        self._exploration_radius: float = 0.20             # c: bubble radius at N=1
         self._bandwidth_decay: float = 1/2                 # exponent for N-decay: h ∝ 1/N^decay
         self._base_buffer: float = 0.5                     # shared buffer for perf/unc floor scaling
 
