@@ -9,7 +9,7 @@ Schema-agnostic plotting for every PFAB phase. Users pass `AxisSpec` objects tha
 | Module | Functions | Description |
 |--------|-----------|-------------|
 | `_style.py` | `AxisSpec`, `save_fig`, helpers | Shared dataclass, palette constants, axis/subtitle utilities |
-| `baseline.py` | `plot_parameter_space` | 1×3: scatter + ground truth + initial model |
+| `baseline.py` | `plot_parameter_space`, `plot_parameter_space_3d` | 1×3: scatter + truth + model; 3D scatter with Zinc z-color |
 | `prediction.py` | `plot_prediction_scatter`, `plot_topology_comparison`, `plot_importance_weights` | Pred vs actual, side-by-side topologies, R²_adj sigmoid |
 | `exploration.py` | `plot_uncertainty_map`, `plot_acquisition`, `plot_optimizer_comparison` | Uncertainty 3-panel, acquisition 3-panel, per-optimizer scatter |
 | `inference.py` | `plot_inference_result`, `plot_inference_convergence` | Single-shot result, trajectory + score convergence |
