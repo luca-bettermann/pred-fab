@@ -11,12 +11,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Visual Identity — core palette
+STEEL_100 = "#D6E4F0"
+STEEL_300 = "#8BB0CC"
 STEEL_500 = "#4A7FA5"
+STEEL_700 = "#2D5F85"
+STEEL_900 = "#1A3A5C"
 EMERALD_500 = "#10B981"
+ZINC_50 = "#FAFAFA"
+ZINC_100 = "#F4F4F5"
+ZINC_200 = "#E4E4E7"
+ZINC_300 = "#D4D4D8"
 ZINC_400 = "#A1A1AA"
 ZINC_500 = "#71717A"
 ZINC_600 = "#52525B"
 ZINC_700 = "#3F3F46"
+ZINC_800 = "#27272A"
+ZINC_900 = "#18181B"
 ACCENT_YELLOW = "#EAB308"
 ACCENT_RED = "#DC2626"
 
