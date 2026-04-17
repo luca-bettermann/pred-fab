@@ -126,13 +126,15 @@ class ConsoleReporter:
         exp_code: str,
         params: dict[str, Any],
         perf: Mapping[str, float | None],
+        suffix: str = "",
     ) -> None:
         """Print one experiment result row: params + performance scores."""
         if not self.enabled:
             return
         meta = self._format_params(params)
         perf_s = self._format_perf(perf)
-        self._print(f"  {_B}{exp_code:<14}{_R}{_D}{meta}{_R}  {perf_s}")
+        tail = f"  {_D}{suffix}{_R}" if suffix else ""
+        self._print(f"  {_B}{exp_code:<14}{_R}{_D}{meta}{_R}  {perf_s}{tail}")
 
     def print_exploration_row(
         self,

@@ -645,6 +645,11 @@ class PfabAgent:
         """Number of optimizer restarts used in the most recent calibration step."""
         return self.calibration_system.last_opt_n_starts
 
+    @property
+    def last_baseline_nfev(self) -> int:
+        """Number of DE evaluations in the most recent baseline step."""
+        return getattr(self.calibration_system, 'last_baseline_nfev', 0)
+
     # ── Acquisition introspection ───────────────────────────────────────────────
 
     def predict_performance(self, params: dict[str, Any]) -> dict[str, float | None]:

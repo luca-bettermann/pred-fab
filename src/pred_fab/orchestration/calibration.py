@@ -885,21 +885,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 jitter = self.rng.normal(0, 0.02, size=init_norm.shape)
                 init_norm = np.clip(init_norm + jitter, 0.01, 0.99)
 
-            # Integer dim indices (within the numeric_params array) and their
-            # normalized step sizes for the rounding penalty.
+            # Integer dim indices and their ranges for native DE integrality.
             int_indices: list[int] = []
-            int_steps: list[float] = []
+            int_ranges: list[int] = []
             for d_int, (_, lo, hi) in enumerate(integer_params):
                 col = len(continuous_params) + d_int
                 int_indices.append(col)
-                span = hi - lo
-                int_steps.append(1.0 / span if span > 0 else 1.0)
+                int_ranges.append(int(hi - lo))
 
             # Joint optimization via particle repulsion (DE)
             optimized = self._repulsion_optimize(
                 init_norm,
                 integer_dim_indices=int_indices or None,
-                integer_steps=int_steps or None,
+                integer_ranges=int_ranges or None,
             )
 
             # Denormalize to original parameter space
@@ -994,7 +992,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         init_positions: np.ndarray,
         integer_dim_indices: list[int] | None = None,
-        integer_steps: list[float] | None = None,
+        integer_ranges: list[int] | None = None,
     ) -> np.ndarray:
         """Jointly optimize N point positions via Riesz energy minimization.
 
@@ -1002,9 +1000,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         terms, spreading points maximally in normalized [0,1]^d space.  The
         recursive bisection layout is injected into the initial DE population.
 
-        Integer dimensions get a rounding penalty — ``(x - nearest_int)^2`` in
-        normalized space — that steers the optimizer toward positions that map
-        cleanly to integer values after denormalization.
+        Integer dimensions use scipy DE's native ``integrality`` constraint.
+        They are represented in the DE variable space as integers in [0, range]
+        (where range = hi - lo) and normalized to [0,1] inside the energy
+        function for consistent distance computation.
         """
         n, n_dims = init_positions.shape
         if n <= 1 or n_dims == 0:
@@ -1013,53 +1012,71 @@ class CalibrationSystem(BaseOrchestrationSystem):
         p = self.baseline_riesz_p
         iu = np.triu_indices(n, k=1)  # pre-compute once
 
-        # Pre-compute integer rounding penalty parameters.
-        # step = 1/(hi-lo) in normalized space — distance between adjacent ints.
-        int_dims = np.array(integer_dim_indices or [], dtype=int)
-        int_steps = np.array(integer_steps or [], dtype=float)
-        has_integers = len(int_dims) > 0
+        # Integer dims: DE operates in [0, range] integer space; energy
+        # function normalizes back to [0, 1] for distance computation.
+        int_set = set(integer_dim_indices or [])
+        int_ranges = {d: r for d, r in zip(integer_dim_indices or [], integer_ranges or [])}
 
         def energy(x_flat: np.ndarray) -> float:
-            X = x_flat.reshape(n, n_dims)
+            X = x_flat.reshape(n, n_dims).copy()
+            # Normalize integer dims from [0, range] back to [0, 1]
+            for d in int_set:
+                X[:, d] = X[:, d] / int_ranges[d] if int_ranges[d] > 0 else 0.5
+            X_norm = X
 
             # Pairwise repulsion: Σ_{i<j} 1/dist(xi, xj)^p
-            diff = X[:, np.newaxis, :] - X[np.newaxis, :, :]
+            diff = X_norm[:, np.newaxis, :] - X_norm[np.newaxis, :, :]
             dist_sq = np.sum(diff ** 2, axis=2)
             dsq = np.maximum(dist_sq[iu], 1e-20)
             pairwise = np.sum(dsq ** (-p / 2))
 
             # Boundary repulsion at half-distance.
             # Factor of 2 → equilibrium at half the inter-point spacing from edge.
-            X_clip = np.clip(X, 1e-10, 1.0 - 1e-10)
+            X_clip = np.clip(X_norm, 1e-10, 1.0 - 1e-10)
             boundary = np.sum((2.0 * X_clip) ** (-p))
             boundary += np.sum((2.0 * (1.0 - X_clip)) ** (-p))
 
-            # Integer rounding penalty: steer toward grid positions that
-            # map to exact integers after denormalization.
-            int_penalty = 0.0
-            if has_integers:
-                for idx, step in zip(int_dims, int_steps):
-                    col = X[:, idx]
-                    nearest = np.round(col / step) * step
-                    int_penalty += np.sum(((col - nearest) / step) ** 2)
-                int_penalty *= n  # scale comparable to repulsion
+            return float(pairwise + boundary)
 
-            return float(pairwise + boundary + int_penalty)
-
+        # Build per-variable DE bounds and integrality mask.
+        # Continuous dims: [0.01, 0.99] in normalized space.
+        # Integer dims: [0, range] in integer space (integrality=True).
         n_vars = n * n_dims
-        de_bounds = [(0.01, 0.99)] * n_vars
+        de_bounds: list[tuple[float, float]] = []
+        integrality_mask: list[bool] = []
+        for _pt in range(n):
+            for d in range(n_dims):
+                if d in int_set:
+                    de_bounds.append((0.0, float(int_ranges[d])))
+                    integrality_mask.append(True)
+                else:
+                    de_bounds.append((0.01, 0.99))
+                    integrality_mask.append(False)
+
+        # Convert init positions: integer dims from [0,1] to [0, range].
+        init_de = init_positions.copy()
+        for d in int_set:
+            init_de[:, d] = np.round(init_de[:, d] * int_ranges[d])
 
         # Inject recursive bisection layout into DE initial population.
-        # DE popsize is per-variable; total population = popsize * n_vars.
         popsize = max(self.de_popsize, 2)
         pop_total = popsize * n_vars
-        init_pop = self.rng.uniform(0.01, 0.99, size=(pop_total, n_vars))
-        init_pop[0] = init_positions.flatten()
+        init_flat = init_de.flatten()
+        init_pop = np.empty((pop_total, n_vars))
+        for i in range(pop_total):
+            for v in range(n_vars):
+                lo, hi = de_bounds[v]
+                init_pop[i, v] = self.rng.uniform(lo + 0.001, hi - 0.001)
+        init_pop[0] = init_flat
         # Add jittered variants of the warm start
         n_jittered = min(pop_total - 1, 5)
         for j in range(1, 1 + n_jittered):
             jitter = self.rng.normal(0, 0.05, size=n_vars)
-            init_pop[j] = np.clip(init_positions.flatten() + jitter, 0.01, 0.99)
+            candidate = init_flat + jitter
+            for v in range(n_vars):
+                lo, hi = de_bounds[v]
+                candidate[v] = np.clip(candidate[v], lo + 0.001, hi - 0.001)
+            init_pop[j] = candidate
 
         result = differential_evolution(
             energy,
@@ -1068,13 +1085,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
             maxiter=self.de_maxiter,
             seed=self._random_seed,  # type: ignore[call-arg]
             tol=1e-10,
-            polish=True,
+            polish=not any(integrality_mask),  # polish uses L-BFGS-B, incompatible with integrality
+            integrality=integrality_mask,  # type: ignore[call-arg]
         )
 
+        self.last_baseline_nfev: int = int(result.nfev)
         self.logger.debug(
             f"Repulsion DE: {result.nfev} evals, energy = {result.fun:.2f}."
         )
-        return result.x.reshape(n, n_dims)
+
+        # Convert integer dims from [0, range] back to [0, 1] normalized space.
+        out = result.x.reshape(n, n_dims).copy()
+        for d in int_set:
+            out[:, d] = out[:, d] / int_ranges[d] if int_ranges[d] > 0 else 0.5
+        return out
 
     @staticmethod
     def _min_pairwise_distance(
