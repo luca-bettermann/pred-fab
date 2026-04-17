@@ -108,6 +108,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.lbfgsb_maxfun: int | None = None  # max evals per start (None = auto)
         self.lbfgsb_eps: float = 1e-3           # finite-difference step size
 
+        # Baseline particle repulsion: Riesz energy exponent.
+        # p=2 (Coulomb), higher p → stronger focus on worst-case closest pair.
+        self.baseline_riesz_p: float = 2.0
+
         # Running min/max of predicted system performance across training data.
         # Updated after each train() call, used to normalize acquisition scores.
         self._perf_range_min: float | None = None  # lowest predicted performance seen so far
@@ -779,22 +783,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         n: int,
     ) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals with structured spacing via recursive bisection.
+        """Generate n baseline proposals via joint particle repulsion.
 
-        Recursively splits the parameter space into equal-volume cells and places
-        one point at each cell centre. Splits along the dimension with the largest
-        relative range, producing a clean grid-like arrangement for any N and d.
+        Places all N points simultaneously in the normalized parameter space and
+        minimizes Riesz energy (pairwise + boundary repulsion) to maximize spread.
 
-        Categorical parameters are stratified: N is distributed evenly across
-        all categorical combinations, with continuous spacing optimized per stratum.
+        Integers (DataInt) participate natively in the distance metric — optimized
+        as continuous, then snapped to the nearest integer.  Categoricals define
+        independent strata (no fake ordinal distance); cross-stratum repulsion
+        operates on continuous+integer dims only, so strata get offset grids.
 
-        Deterministic, instant (O(N log N)), works for any N, d, and variable types.
+        Initialized from recursive bisection, then jointly refined via DE.
         """
         if n == 0:
             return []
 
         # Collect active parameters (skip fixed and infinite-bounds).
         continuous_params: list[tuple[str, float, float]] = []  # (code, lo, hi)
+        integer_params: list[tuple[str, int, int]] = []         # (code, lo, hi)
         categorical_params: list[tuple[str, list[Any]]] = []    # (code, categories)
 
         for code, data_obj in self.data_objects.items():
@@ -804,6 +810,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 categorical_params.append((code, list(data_obj.constraints["categories"])))
             elif isinstance(data_obj, DataBool):
                 categorical_params.append((code, [False, True]))
+            elif isinstance(data_obj, DataInt):
+                try:
+                    lo, hi = self._get_hierarchical_bounds_for_code(code)
+                except ValueError:
+                    continue
+                if lo == -np.inf or hi == np.inf:
+                    self.logger.warning(
+                        f"Parameter '{code}' has infinite bounds; skipping in baseline."
+                    )
+                    continue
+                integer_params.append((code, int(lo), int(hi)))
             else:
                 try:
                     lo, hi = self._get_hierarchical_bounds_for_code(code)
@@ -816,48 +833,123 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     continue
                 continuous_params.append((code, lo, hi))
 
-        if not continuous_params and not categorical_params:
+        # Numeric params = continuous + integer (both participate in distance)
+        numeric_params: list[tuple[str, float, float]] = [
+            *continuous_params,
+            *[(c, float(lo), float(hi)) for c, lo, hi in integer_params],
+        ]
+        n_numeric = len(numeric_params)
+        n_integer = len(integer_params)
+
+        if not numeric_params and not categorical_params:
             self.logger.warning("No valid parameters for baseline generation.")
             return []
 
-        # Build categorical combinations for stratification
+        # --- Assign categorical values (stratified buckets, no ordinal distance) ---
         if categorical_params:
             import itertools as _it
             cat_combos = list(_it.product(*(cats for _, cats in categorical_params)))
             cat_codes = [code for code, _ in categorical_params]
+            n_strata = len(cat_combos)
         else:
             cat_combos = [()]
             cat_codes = []
+            n_strata = 1
 
-        # Distribute n across categorical strata
-        n_per_stratum = [n // len(cat_combos)] * len(cat_combos)
-        for i in range(n % len(cat_combos)):
+        n_per_stratum = [n // n_strata] * n_strata
+        for i in range(n % n_strata):
             n_per_stratum[i] += 1
 
-        # Generate points per stratum via recursive bisection
-        specs: list[ExperimentSpec] = []
+        cat_assignments: list[tuple[Any, ...]] = []
         for combo, n_i in zip(cat_combos, n_per_stratum):
-            if n_i == 0:
-                continue
-            bounds = [(lo, hi) for _, lo, hi in continuous_params]
-            original_ranges = [hi - lo for lo, hi in bounds]
-            points = self._recursive_split(n_i, bounds, original_ranges)
+            cat_assignments.extend([combo] * n_i)
 
-            for point in points:
-                params: dict[str, Any] = dict(self.fixed_params)
-                for k, (code, _, _) in enumerate(continuous_params):
-                    params[code] = float(point[k])
-                for k, code in enumerate(cat_codes):
-                    params[code] = combo[k]
-                params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
-                proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
-                specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+        # --- Initialize numeric positions via recursive bisection ---
+        if n_numeric > 0:
+            init_norm = np.zeros((n, n_numeric))
+            idx = 0
+            for _combo, n_i in zip(cat_combos, n_per_stratum):
+                if n_i == 0:
+                    continue
+                bounds = [(lo, hi) for _, lo, hi in numeric_params]
+                original_ranges = [hi - lo for lo, hi in bounds]
+                points = self._recursive_split(n_i, bounds, original_ranges)
+                for point in points:
+                    for d, (_, lo, hi) in enumerate(numeric_params):
+                        span = hi - lo
+                        init_norm[idx, d] = (point[d] - lo) / span if span > 0 else 0.5
+                    idx += 1
 
-        self.logger.info(
-            f"Baseline: {n} experiments via recursive bisection "
-            f"({len(continuous_params)} continuous, {len(categorical_params)} categorical, "
-            f"{len(cat_combos)} strata)."
-        )
+            # Jitter to break symmetry across strata
+            if n_strata > 1:
+                jitter = self.rng.normal(0, 0.02, size=init_norm.shape)
+                init_norm = np.clip(init_norm + jitter, 0.01, 0.99)
+
+            # Integer dim indices (within the numeric_params array) and their
+            # normalized step sizes for the rounding penalty.
+            int_indices: list[int] = []
+            int_steps: list[float] = []
+            for d_int, (_, lo, hi) in enumerate(integer_params):
+                col = len(continuous_params) + d_int
+                int_indices.append(col)
+                span = hi - lo
+                int_steps.append(1.0 / span if span > 0 else 1.0)
+
+            # Joint optimization via particle repulsion (DE)
+            optimized = self._repulsion_optimize(
+                init_norm,
+                integer_dim_indices=int_indices or None,
+                integer_steps=int_steps or None,
+            )
+
+            # Denormalize to original parameter space
+            final_positions = np.zeros_like(optimized)
+            for d, (_, lo, hi) in enumerate(numeric_params):
+                final_positions[:, d] = optimized[:, d] * (hi - lo) + lo
+
+            # Snap integer dims to nearest allowed value
+            for d_int, (_, lo, hi) in enumerate(integer_params):
+                col = len(continuous_params) + d_int
+                final_positions[:, col] = np.clip(
+                    np.round(final_positions[:, col]), lo, hi,
+                )
+        else:
+            optimized = np.zeros((n, 0))
+            final_positions = np.zeros((n, 0))
+
+        # --- Build ExperimentSpecs ---
+        specs: list[ExperimentSpec] = []
+        for i in range(n):
+            params: dict[str, Any] = dict(self.fixed_params)
+            for d, (code, _, _) in enumerate(continuous_params):
+                params[code] = float(final_positions[i, d])
+            for d_int, (code, _, _) in enumerate(integer_params):
+                col = len(continuous_params) + d_int
+                params[code] = int(final_positions[i, col])
+            for d, code in enumerate(cat_codes):
+                params[code] = cat_assignments[i][d]
+            params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
+            proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
+            specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+
+        # Log with min pairwise distance diagnostic
+        if n > 1 and n_numeric > 0:
+            min_dist = self._min_pairwise_distance(optimized, None)
+            self.logger.info(
+                f"Baseline: {n} experiments via particle repulsion "
+                f"({len(continuous_params)} continuous, {n_integer} integer, "
+                f"{len(categorical_params)} categorical"
+                f"{f', {n_strata} strata' if n_strata > 1 else ''}"
+                f", riesz_p={self.baseline_riesz_p:.1f}"
+                f") — min dist = {min_dist:.4f}."
+            )
+        else:
+            self.logger.info(
+                f"Baseline: {n} experiment(s) "
+                f"({len(continuous_params)} continuous, {n_integer} integer, "
+                f"{len(categorical_params)} categorical)."
+            )
+
         return specs
 
     @staticmethod
@@ -897,6 +989,104 @@ class CalibrationSystem(BaseOrchestrationSystem):
             CalibrationSystem._recursive_split(n_left, bounds_left, original_ranges)
             + CalibrationSystem._recursive_split(n_right, bounds_right, original_ranges)
         )
+
+    def _repulsion_optimize(
+        self,
+        init_positions: np.ndarray,
+        integer_dim_indices: list[int] | None = None,
+        integer_steps: list[float] | None = None,
+    ) -> np.ndarray:
+        """Jointly optimize N point positions via Riesz energy minimization.
+
+        Uses DE (differential evolution) to minimize pairwise 1/dist^p + boundary
+        terms, spreading points maximally in normalized [0,1]^d space.  The
+        recursive bisection layout is injected into the initial DE population.
+
+        Integer dimensions get a rounding penalty — ``(x - nearest_int)^2`` in
+        normalized space — that steers the optimizer toward positions that map
+        cleanly to integer values after denormalization.
+        """
+        n, n_dims = init_positions.shape
+        if n <= 1 or n_dims == 0:
+            return init_positions.copy()
+
+        p = self.baseline_riesz_p
+        iu = np.triu_indices(n, k=1)  # pre-compute once
+
+        # Pre-compute integer rounding penalty parameters.
+        # step = 1/(hi-lo) in normalized space — distance between adjacent ints.
+        int_dims = np.array(integer_dim_indices or [], dtype=int)
+        int_steps = np.array(integer_steps or [], dtype=float)
+        has_integers = len(int_dims) > 0
+
+        def energy(x_flat: np.ndarray) -> float:
+            X = x_flat.reshape(n, n_dims)
+
+            # Pairwise repulsion: Σ_{i<j} 1/dist(xi, xj)^p
+            diff = X[:, np.newaxis, :] - X[np.newaxis, :, :]
+            dist_sq = np.sum(diff ** 2, axis=2)
+            dsq = np.maximum(dist_sq[iu], 1e-20)
+            pairwise = np.sum(dsq ** (-p / 2))
+
+            # Boundary repulsion at half-distance.
+            # Factor of 2 → equilibrium at half the inter-point spacing from edge.
+            X_clip = np.clip(X, 1e-10, 1.0 - 1e-10)
+            boundary = np.sum((2.0 * X_clip) ** (-p))
+            boundary += np.sum((2.0 * (1.0 - X_clip)) ** (-p))
+
+            # Integer rounding penalty: steer toward grid positions that
+            # map to exact integers after denormalization.
+            int_penalty = 0.0
+            if has_integers:
+                for idx, step in zip(int_dims, int_steps):
+                    col = X[:, idx]
+                    nearest = np.round(col / step) * step
+                    int_penalty += np.sum(((col - nearest) / step) ** 2)
+                int_penalty *= n  # scale comparable to repulsion
+
+            return float(pairwise + boundary + int_penalty)
+
+        n_vars = n * n_dims
+        de_bounds = [(0.01, 0.99)] * n_vars
+
+        # Inject recursive bisection layout into DE initial population.
+        # DE popsize is per-variable; total population = popsize * n_vars.
+        popsize = max(self.de_popsize, 2)
+        pop_total = popsize * n_vars
+        init_pop = self.rng.uniform(0.01, 0.99, size=(pop_total, n_vars))
+        init_pop[0] = init_positions.flatten()
+        # Add jittered variants of the warm start
+        n_jittered = min(pop_total - 1, 5)
+        for j in range(1, 1 + n_jittered):
+            jitter = self.rng.normal(0, 0.05, size=n_vars)
+            init_pop[j] = np.clip(init_positions.flatten() + jitter, 0.01, 0.99)
+
+        result = differential_evolution(
+            energy,
+            bounds=de_bounds,
+            init=init_pop,
+            maxiter=self.de_maxiter,
+            seed=self._random_seed,  # type: ignore[call-arg]
+            tol=1e-10,
+            polish=True,
+        )
+
+        self.logger.debug(
+            f"Repulsion DE: {result.nfev} evals, energy = {result.fun:.2f}."
+        )
+        return result.x.reshape(n, n_dims)
+
+    @staticmethod
+    def _min_pairwise_distance(
+        positions: np.ndarray,
+        cat_positions: np.ndarray | None,
+    ) -> float:
+        """Compute minimum pairwise Euclidean distance across all points."""
+        X = np.hstack([positions, cat_positions]) if cat_positions is not None else positions
+        diff = X[:, np.newaxis, :] - X[np.newaxis, :, :]
+        dist_sq = np.sum(diff ** 2, axis=2)
+        np.fill_diagonal(dist_sq, np.inf)
+        return float(np.sqrt(np.min(dist_sq)))
 
     def run_calibration(
         self,

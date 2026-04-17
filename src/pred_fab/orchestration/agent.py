@@ -580,6 +580,7 @@ class PfabAgent:
         de_popsize: int | None = None,
         lbfgsb_maxfun: int | None = None,
         lbfgsb_eps: float | None = None,
+        baseline_riesz_p: float | None = None,
     ) -> None:
         """Set optimizer backend and tuning parameters."""
         self._assert_initialized()
@@ -596,6 +597,8 @@ class PfabAgent:
             cal.lbfgsb_maxfun = lbfgsb_maxfun
         if lbfgsb_eps is not None:
             cal.lbfgsb_eps = lbfgsb_eps
+        if baseline_riesz_p is not None:
+            cal.baseline_riesz_p = baseline_riesz_p
 
     def configure_trajectory(
         self,
@@ -683,13 +686,11 @@ class PfabAgent:
         self,
         n: int,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals via maximin spacing.
+        """Generate n space-filling baseline proposals via joint particle repulsion.
 
-        Optimizes all N point positions jointly to maximize the minimum pairwise
-        distance. Uses the same DE optimizer as exploration and inference, but
-        with a spacing objective instead of the acquisition function.
-
-        Handles continuous and categorical parameters. No trained model required.
+        Places all N points simultaneously and minimizes Riesz energy (pairwise
+        + boundary repulsion) to maximize spread. Categorical parameters are
+        included in the distance computation for cross-stratum coordination.
         """
         self._assert_initialized()
         result = self.calibration_system.run_baseline(n=n)
