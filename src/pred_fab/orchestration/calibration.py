@@ -10,7 +10,7 @@ from scipy.optimize import minimize, differential_evolution
 from ..core import DataModule, Dataset, DatasetSchema
 from ..core import DataInt, DataReal, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ..core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ..utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score
+from ..utils import PfabLogger, ProgressBar, Mode, NormMethod, SourceStep, SplitType, combined_score
 from .base_system import BaseOrchestrationSystem
 
 
@@ -545,39 +545,44 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if depth <= 0:
             return base_objective
 
-        _mpc_evals = [0]  # mutable counter for total inner evals
+        calibration_system = self
+
+        class _MpcObjective:
+            """Callable MPC wrapper that tracks total inner evaluations."""
+
+            def __init__(self, weight_sum: float):
+                self._eval_counter = [0]
+                self._weight_sum = weight_sum
+
+            def __call__(self, X: np.ndarray) -> float:
+                base_score = base_objective(X)
+                self._eval_counter[0] += 1
+                total = base_score
+                X_cur = X.copy()
+                for j in range(depth):
+                    try:
+                        params_cur = datamodule.array_to_params(X_cur)
+                        bounds_ahead = calibration_system._get_trust_region_bounds(datamodule, params_cur)
+                        res = minimize(
+                            fun=base_objective,
+                            x0=X_cur,
+                            bounds=bounds_ahead,
+                            method='L-BFGS-B',
+                            options={'maxfun': 20},  # cheap inner solve
+                        )
+                        self._eval_counter[0] += res.nfev
+                        X_cur = res.x
+                        step_score = base_objective(X_cur)
+                        self._eval_counter[0] += 1
+                        discount_factor = discount ** (j + 1)
+                        total += discount_factor * step_score
+                    except Exception:
+                        break
+                return total / self._weight_sum
+
         # Normalization: sum of discount weights so MPC score stays in same range as single score
-        _weight_sum = 1.0 + sum(discount ** (j + 1) for j in range(depth))
-
-        def mpc_obj(X: np.ndarray) -> float:
-            base_score = base_objective(X)
-            _mpc_evals[0] += 1
-            total = base_score
-            X_cur = X.copy()
-            for j in range(depth):
-                try:
-                    params_cur = datamodule.array_to_params(X_cur)
-                    bounds_ahead = self._get_trust_region_bounds(datamodule, params_cur)
-                    res = minimize(
-                        fun=base_objective,
-                        x0=X_cur,
-                        bounds=bounds_ahead,
-                        method='L-BFGS-B',
-                        options={'maxfun': 20},  # cheap inner solve
-                    )
-                    _mpc_evals[0] += res.nfev
-                    X_cur = res.x
-                    step_score = base_objective(X_cur)
-                    _mpc_evals[0] += 1
-                    discount_factor = discount ** (j + 1)
-                    total += discount_factor * step_score
-                except Exception:
-                    break
-            return total / _weight_sum
-
-        mpc_obj._eval_counter = _mpc_evals  # expose counter
-
-        return mpc_obj
+        weight_sum = 1.0 + sum(discount ** (j + 1) for j in range(depth))
+        return _MpcObjective(weight_sum)
 
     def update_perf_range(self, datamodule: DataModule) -> None:
         """Update performance normalization range from training data.
@@ -894,10 +899,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 int_ranges.append(int(hi - lo))
 
             # Joint optimization via particle repulsion (DE)
+            console = self.logger._console_output_enabled
             optimized = self._repulsion_optimize(
                 init_norm,
                 integer_dim_indices=int_indices or None,
                 integer_ranges=int_ranges or None,
+                show_progress=console,
             )
 
             # Denormalize to original parameter space
@@ -993,6 +1000,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         init_positions: np.ndarray,
         integer_dim_indices: list[int] | None = None,
         integer_ranges: list[int] | None = None,
+        show_progress: bool = False,
     ) -> np.ndarray:
         """Jointly optimize N point positions via Riesz energy minimization.
 
@@ -1078,18 +1086,29 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 candidate[v] = np.clip(candidate[v], lo + 0.001, hi - 0.001)
             init_pop[j] = candidate
 
+        maxiter = self.de_maxiter
+        bar = ProgressBar("Baseline", max_iter=maxiter) if show_progress else None
+
+        def _progress(xk, convergence):
+            if bar:
+                bar.step()
+
         result = differential_evolution(
             energy,
             bounds=de_bounds,
             init=init_pop,
-            maxiter=self.de_maxiter,
+            maxiter=maxiter,
             seed=self._random_seed,  # type: ignore[call-arg]
             tol=1e-10,
             polish=not any(integrality_mask),  # polish uses L-BFGS-B, incompatible with integrality
             integrality=integrality_mask,  # type: ignore[call-arg]
+            callback=_progress,
         )
 
         self.last_baseline_nfev: int = int(result.nfev)
+        if bar:
+            bar.finish(nfev=result.nfev)
+
         self.logger.debug(
             f"Repulsion DE: {result.nfev} evals, energy = {result.fun:.2f}."
         )
@@ -1294,17 +1313,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             # Trajectory: layer progress bar
             if is_trajectory and console:
-                n_steps = len(step_grid)
-                bar_len = 12
-                filled = int(bar_len * (step_i + 1) / n_steps)
-                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                if step_i + 1 == n_steps:
-                    print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] "
-                          f"\033[2m{total_traj_nfev} evals ({n_steps} layers)\033[0m", flush=True)
-                else:
-                    print(f"  {'Optimizing':<10s} [{bar}] "
-                          f"\033[2m{step_i+1}/{n_steps} layers, {total_traj_nfev} evals\033[0m",
-                          end="\r", flush=True)
+                if step_i == 0:
+                    _traj_bar = ProgressBar("Trajectory", max_iter=len(step_grid))
+                _traj_bar.step()  # type: ignore[possibly-unbound]
+                if step_i + 1 == len(step_grid):
+                    _traj_bar.finish(nfev=total_traj_nfev)  # type: ignore[possibly-unbound]
 
             # Inject virtual KDE point so subsequent trajectory steps see lower
             # uncertainty at this speed, naturally spacing out layer proposals.
@@ -1354,9 +1367,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
 
         # Publish result bookkeeping — include MPC inner evals if applicable
-        total_nfev = opt.nfev
-        if hasattr(objective_func, '_eval_counter'):
-            total_nfev = objective_func._eval_counter[0]
+        mpc_counter = getattr(objective_func, '_eval_counter', None)
+        total_nfev = mpc_counter[0] if mpc_counter is not None else opt.nfev
         self.last_opt_nfev = total_nfev
 
         if console:
@@ -1370,7 +1382,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 _params = datamodule.array_to_params(opt.best_x)
                 _perf_dict = self.perf_fn(_params)
                 _perf_values = [
-                    float(_perf_dict[n]) if _perf_dict.get(n) is not None else 0.0
+                    float(v) if (v := _perf_dict.get(n)) is not None else 0.0
                     for n in self.perf_names_order if n in _perf_dict
                 ]
                 raw_perf = self._compute_system_performance(_perf_values) if _perf_values else 0.0
@@ -1442,12 +1454,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         best_x, best_val = None, np.inf
         total_nfev = 0
+        bar = ProgressBar("Optimizing", max_iter=total_starts) if show_progress else None
         for i, x0 in enumerate(x0_list):
-            if show_progress:
-                bar_len = 12
-                filled = int(bar_len * (i + 1) / total_starts)
-                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                print(f"  {'Optimizing':<10s} [{bar}] \033[2m{i+1}/{total_starts}\033[0m", end="\r", flush=True)
+            if bar:
+                bar.step()
             try:
                 res = minimize(
                     fun=objective_func, x0=x0, bounds=bounds, method='L-BFGS-B',
@@ -1462,6 +1472,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
             except Exception as e:
                 self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
+
+        if bar:
+            bar.finish(nfev=total_nfev)
 
         return _OptResult(
             best_x=best_x,
@@ -1481,14 +1494,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         maxiter = self.de_maxiter
         popsize = self.de_popsize
 
-        _iter = [0]
+        bar = ProgressBar("Optimizing", max_iter=maxiter) if show_progress else None
+
         def _progress(xk, convergence):
-            _iter[0] += 1
-            if show_progress:
-                bar_len = 12
-                filled = int(bar_len * _iter[0] / maxiter)
-                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
-                print(f"  {'Optimizing':<10s} [{bar}] \033[2m{_iter[0]}/{maxiter}\033[0m", end="\r", flush=True)
+            if bar:
+                bar.step()
 
         result = differential_evolution(
             func=objective_func,
@@ -1498,6 +1508,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             polish=True, init='latinhypercube',
             callback=_progress,
         )
+
+        if bar:
+            bar.finish(nfev=result.nfev)
 
         return _OptResult(
             best_x=result.x,

@@ -28,6 +28,39 @@ def _score_color(v: float) -> str:
 from .metrics import combined_score as _combined_score
 
 
+class ProgressBar:
+    """Inline ANSI progress bar for optimizer iterations.
+
+    Usage::
+
+        bar = ProgressBar("Optimizing", max_iter=100)
+        # as DE callback:
+        def callback(xk, convergence):
+            bar.step()
+        # after optimizer completes:
+        bar.finish(nfev=result.nfev)
+    """
+
+    def __init__(self, label: str = "Optimizing", max_iter: int = 100, bar_len: int = 12):
+        self._label = label
+        self._max = max_iter
+        self._len = bar_len
+        self._i = 0
+
+    def step(self, i: int | None = None) -> None:
+        """Advance by one (or jump to ``i``) and redraw."""
+        self._i = (self._i + 1) if i is None else i
+        filled = int(self._len * min(self._i / self._max, 1.0))
+        bar = "\u2588" * filled + "\u2591" * (self._len - filled)
+        print(f"  {self._label:<10s} [{bar}] {_D}{self._i}/{self._max}{_R}", end="\r", flush=True)
+
+    def finish(self, nfev: int | None = None) -> None:
+        """Fill the bar completely and print final info."""
+        bar = "\u2588" * self._len
+        suffix = f"nfev={nfev}" if nfev is not None else f"{self._i}/{self._max}"
+        print(f"{_G}\u2713{_R} {self._label:<10s} [{bar}] {_D}{suffix}{_R}   ")
+
+
 class ConsoleReporter:
     """Schema-aware formatted console output for agent steps.
 

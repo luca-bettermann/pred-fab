@@ -17,7 +17,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, IDeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, Metrics, LocalData, SplitType, combined_score
+from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
@@ -155,13 +155,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info(f"Trained model for '{primary_feature}'")
 
             if self.logger._console_output_enabled:
-                bar_len = 12
-                filled = int(bar_len * trained_count / total)
-                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                if trained_count == 1:
+                    _train_bar = ProgressBar("Training", max_iter=total)
+                _train_bar.step()  # type: ignore[possibly-unbound]
                 if trained_count == total:
-                    print(f"\033[32m\u2713\033[0m {'Trained':<10s} [{bar}] \033[2m{trained_count}/{total}\033[0m", flush=True)
-                else:
-                    print(f"  {'Training':<10s} [{bar}] \033[2m{trained_count}/{total}\033[0m", end="\r", flush=True)
+                    _train_bar.finish()  # type: ignore[possibly-unbound]
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
 

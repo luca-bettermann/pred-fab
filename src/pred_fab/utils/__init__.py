@@ -1,7 +1,7 @@
 from .local_data import LocalData
 from .logger import PfabLogger
 from .metrics import Metrics, combined_score
-from .console import ConsoleReporter
+from .console import ConsoleReporter, ProgressBar
 from .enum import (
     SystemName,
     Roles,
