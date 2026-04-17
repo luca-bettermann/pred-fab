@@ -19,7 +19,8 @@ experiment parameters that maximise process performance.
 | `src/pred_fab/interfaces/` | Model contracts (feature, evaluation, prediction) |
 | `src/pred_fab/orchestration/` | System coordination (PfabAgent, CalibrationSystem, …) |
 | `src/pred_fab/utils/` | Enums, logging, local persistence, metrics |
-| `tests/` | Pytest suite (485 passing, 2 skipped) |
+| `src/pred_fab/plotting/` | Schema-agnostic visualization for all PFAB phases (see `PLOTTING_CONTEXT.md`) |
+| `tests/` | Pytest suite (582 passing) |
 
 ## Entry Point
 `PfabAgent` in `orchestration/agent.py` is the single integration surface for users.
