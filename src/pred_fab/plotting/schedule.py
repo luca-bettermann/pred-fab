@@ -1,4 +1,4 @@
-"""Trajectory and adaptation phase plots."""
+"""Schedule and adaptation phase plots."""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,27 +6,27 @@ import matplotlib.pyplot as plt
 from ._style import save_fig, STEEL_500
 
 
-def plot_trajectory_comparison(
+def plot_schedule_comparison(
     save_path: str,
     fixed_scores: list[float],
-    traj_scores: list[float],
-    traj_schedules: list[dict[str, list[float]]],
+    sched_scores: list[float],
+    schedules: list[dict[str, list[float]]],
     schedule_key: str,
     schedule_label: str = "",
     *,
     n_steps: int | None = None,
-    title: str = "Fixed vs Trajectory Exploration",
+    title: str = "Fixed vs Schedule Exploration",
 ) -> None:
-    """1x2: fixed vs trajectory scores + per-step parameter schedules."""
+    """1x2: fixed vs schedule scores + per-step parameter schedules."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     fig.suptitle(title, fontsize=13, fontweight="bold")
 
     n_fixed = len(fixed_scores)
-    n_traj = len(traj_scores)
+    n_sched = len(sched_scores)
     ax1.bar(range(1, n_fixed + 1), fixed_scores, color="#DD8452",
             label="Fixed params", alpha=0.8)
-    ax1.bar(range(n_fixed + 1, n_fixed + n_traj + 1), traj_scores,
-            color=STEEL_500, label="Trajectory", alpha=0.8)
+    ax1.bar(range(n_fixed + 1, n_fixed + n_sched + 1), sched_scores,
+            color=STEEL_500, label="Schedule", alpha=0.8)
     ax1.set_xlabel("Exploration Round")
     ax1.set_ylabel("Combined Score")
     ax1.set_title("Performance per Round")
@@ -34,16 +34,16 @@ def plot_trajectory_comparison(
     ax1.grid(True, alpha=0.2, axis="y")
 
     y_label = schedule_label or schedule_key
-    for i, sched in enumerate(traj_schedules):
+    for i, sched in enumerate(schedules):
         if schedule_key in sched:
             vals = sched[schedule_key]
             steps = n_steps or len(vals)
             ax2.plot(range(steps), vals[:steps], "o-",
-                     label=f"traj_{i+1:02d}", lw=1.5, ms=5)
+                     label=f"sched_{i+1:02d}", lw=1.5, ms=5)
     ax2.set_xlabel("Step Index")
     ax2.set_ylabel(y_label)
     ax2.set_title(f"Per-Step {y_label}")
-    if any(schedule_key in s for s in traj_schedules):
+    if any(schedule_key in s for s in schedules):
         ax2.legend(fontsize=7)
     ax2.grid(True, alpha=0.2)
 
@@ -83,5 +83,32 @@ def plot_adaptation(
     ax2.set_title(deviation_label)
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.2)
+
+    save_fig(save_path)
+
+
+def plot_schedule_detail(
+    save_path: str,
+    schedules: list[dict[str, list[float]]],
+    param_key: str,
+    param_label: str = "",
+    *,
+    step_label: str = "Step",
+    title: str = "Schedule Detail",
+) -> None:
+    """Parameter value vs step index, one line per experiment."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.suptitle(title, fontsize=13, fontweight="bold")
+
+    y_label = param_label or param_key
+    for i, sched in enumerate(schedules):
+        if param_key in sched:
+            vals = sched[param_key]
+            ax.plot(range(len(vals)), vals, "o-", label=f"exp_{i+1:02d}", lw=1.5, ms=5)
+
+    ax.set_xlabel(step_label)
+    ax.set_ylabel(y_label)
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.2)
 
     save_fig(save_path)

@@ -181,7 +181,7 @@ class PfabAgent:
             base_buffer_fn=lambda: _pred._base_buffer,
         )
 
-        # Wire up virtual KDE point callbacks for within-trajectory spacing.
+        # Wire up virtual KDE point callbacks for within-schedule spacing.
         # The DataModule reference is captured at call time via the closure.
         def _add_vp(params: dict[str, Any]) -> None:
             dm = self.calibration_system._active_datamodule
@@ -349,7 +349,7 @@ class PfabAgent:
         n_optimization_rounds: int = 5,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """UCB-based exploration proposal. Iterates over trajectory dimensions when configured."""
+        """UCB-based exploration proposal. Iterates over schedule dimensions when configured."""
         self._check_systems(StepType.FULL)
 
         result = self.calibration_system.run_calibration(
@@ -360,7 +360,7 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        # Console: show proposal (single or trajectory)
+        # Console: show proposal (single or schedule)
         cal = self.calibration_system
         if self._console is not None and self._console.enabled:
             self._console.print_proposal_row(
@@ -370,10 +370,10 @@ class PfabAgent:
             params = dict(result.initial_params) if result.initial_params else {}
             tunable = {k: v for k, v in params.items() if k in tunable_codes}
 
-            if cal.last_trajectory and len(cal.last_trajectory) > 1:
-                # Trajectory: print per-layer schedule table
-                self._console.print_trajectory_table(
-                    cal.last_trajectory, tunable_codes, cal.trajectory_configs,
+            if cal.last_schedule and len(cal.last_schedule) > 1:
+                # Schedule: print per-layer schedule table
+                self._console.print_schedule_table(
+                    cal.last_schedule, tunable_codes, cal.schedule_configs,
                 )
             else:
                 # Single proposal: show params on grey line
@@ -600,33 +600,23 @@ class PfabAgent:
         if baseline_riesz_p is not None:
             cal.baseline_riesz_p = baseline_riesz_p
 
-    def configure_trajectory(
+    def configure_schedule(
         self,
+        parameter: str,
+        dimension: str,
         *,
-        step_parameters: dict[str, str] | None = None,
-        adaptation_delta: dict[str, float] | None = None,
-        ofat_strategy: list[str] | None = None,
-        mpc_lookahead: int | None = None,
-        mpc_discount: float | None = None,
+        delta: float | None = None,
         smoothing: float | None = None,
         force: bool = False,
     ) -> None:
-        """Set trajectory, adaptation, and MPC parameters."""
+        """Configure a parameter to vary per step of a dimension."""
         self._assert_initialized()
         cal = self.calibration_system
-        if step_parameters is not None:
-            for param_code, dim_code in step_parameters.items():
-                cal.configure_step_parameter(param_code, dim_code, force=force)
-        if adaptation_delta is not None:
-            cal.configure_adaptation_delta(adaptation_delta, force=force)
-        if ofat_strategy is not None:
-            cal.configure_ofat_strategy(ofat_strategy)
-        if mpc_lookahead is not None:
-            cal.default_mpc_lookahead = mpc_lookahead
-        if mpc_discount is not None:
-            cal.default_mpc_discount = mpc_discount
+        cal.configure_schedule_parameter(parameter, dimension, force=force)
+        if delta is not None:
+            cal.configure_adaptation_delta({parameter: delta}, force=force)
         if smoothing is not None:
-            cal.trajectory_smoothing = smoothing
+            cal.schedule_smoothing = smoothing
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 

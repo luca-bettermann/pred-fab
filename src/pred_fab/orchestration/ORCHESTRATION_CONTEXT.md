@@ -7,35 +7,20 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 
 | Class | File | Role |
 |-------|------|------|
-| `PfabAgent` | `agent.py` | Registration, initialization, step methods, single `configure()` entry point |
+| `PfabAgent` | `agent.py` | Registration, initialization, step methods, explicit `configure_*()` methods |
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models; per-model KDE uncertainty + similarity |
-| `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC |
+| `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC (online only) |
 | `Optimizer` | `calibration.py` | Enum: `DE` (differential evolution + L-BFGS-B polish, default offline) / `LBFGSB` (gradient multi-start, default online) |
 
-## Configuration — `agent.configure()`
-All calibration and strategy configuration goes through a single call on `PfabAgent`:
+## Configuration
+All calibration and strategy configuration goes through explicit methods on `PfabAgent`:
 ```python
-agent.configure(
-    bounds={"param": (lo, hi)},          # parameter search bounds
-    performance_weights={"perf": 2.0},   # calibration objective weights
-    fixed_params={"param_3": "B"},       # locked values (e.g. categorical)
-    adaptation_delta={"speed": 10.0},    # trust-region half-width (runtime params only)
-    step_parameters={"speed": "n_layers"},  # param → dimension for trajectory stepping
-    ofat_strategy=["speed"],             # OFAT cycling order (requires trust regions)
-    exploration_radius=0.20,             # KDE bubble size c: h=c·√d/√N, γ=max(1,c·√N)
-    optimizer=Optimizer.DE,              # offline optimizer (exploration + inference)
-    online_optimizer=Optimizer.LBFGSB,   # online optimizer (adaptation / trust-region)
-    de_maxiter=100,                      # DE: maximum generations
-    de_popsize=10,                       # DE: population size per dimension
-    lbfgsb_maxfun=None,                  # L-BFGS-B: max evals per start (None = auto)
-    lbfgsb_eps=1e-3,                     # L-BFGS-B: finite-difference step size
-    mpc_lookahead=0,                     # N-step MPC lookahead (0 = greedy)
-    mpc_discount=0.9,                    # MPC discount factor γ
-    boundary_buffer=(0.1, 0.8, 2.0),     # (extent, strength, exponent) for edge penalty
-    force=False,                         # re-configure after training if True
-)
+agent.configure_performance(weights={"perf": 2.0})
+agent.configure_exploration(radius=0.20)
+agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=100)
+agent.configure_schedule("speed", "n_layers", delta=5.0, smoothing=0.25)
 ```
 
 ## Unified Acquisition Function
@@ -70,15 +55,13 @@ Convenience prediction methods (no calibration run):
 
 - **Offline** (no `current_params`/`target_indices`): global bounds + random restarts
 - **Online** (`current_params` + `target_indices`): trust-region bounds, single-shot
-- **Step-grid** (`step_parameters` configured): iterates over Cartesian product of dimension steps; only params whose mapped dimension transitions are free at each step
-- **MPC** (`mpc_lookahead > 0`): wraps objective with N-step discounted lookahead via `_wrap_mpc_objective`; default 0 = greedy
+- **Step-grid** (`schedule_configs` configured): iterates over Cartesian product of dimension steps; only params whose mapped dimension transitions are free at each step
+- **MPC** (`mpc_lookahead > 0`, online only): wraps objective with N-step discounted lookahead via `_wrap_mpc_objective`; ignored in offline mode
 
-`run_baseline(n)` is a separate entry point for LHS space-filling proposals (no model required).
+`run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
 
-### OFAT (One-Factor-At-a-Time) Strategy
-Enabled via `agent.configure(ofat_strategy=[...])`. Only the currently active param is freed within
-its trust region; all others are fixed to current. Index auto-advances after each online call.
-Requires trust regions (adaptation_delta) to be set first.
+### Schedule Configuration
+`configure_schedule(parameter, dimension, delta, smoothing)` declares that a runtime-adjustable parameter should vary per step of a dimension. Auto-delta (1/10 of param range) is applied when no explicit delta is provided. Schedule smoothing penalizes large jumps between adjacent steps (default λ=0.25).
 
 ### Context Features
 `PfabAgent._context_snapshot` holds current measured context feature values (e.g. temperature, humidity).
@@ -97,7 +80,7 @@ covariates are correctly injected at calibration time without being part of the 
 
 ## Return Type
 All step methods return `ExperimentSpec(initial_params, schedules)`.
-`schedules` is non-empty only when trajectory dimensions are configured.
+`schedules` is non-empty only when schedule dimensions are configured.
 
 ## perf_fn Closure
 CalibrationSystem never calls PredictionSystem or EvaluationSystem directly.

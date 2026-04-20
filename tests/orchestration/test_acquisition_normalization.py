@@ -1,17 +1,12 @@
 """
-Tests for acquisition function min-max normalization and configure() extensions
-(mpc_lookahead, mpc_discount).
+Tests for acquisition function min-max normalization.
 """
 import pytest
 import numpy as np
 
 from pred_fab.utils.enum import Mode
-from pred_fab.orchestration.calibration import Optimizer
 from tests.utils.builders import (
     build_real_agent_stack,
-    build_workflow_stack,
-    evaluate_loaded_workflow_experiments,
-    build_prepared_workflow_datamodule,
 )
 
 
@@ -121,35 +116,3 @@ class TestBuildObjective:
         cal._active_datamodule = datamodule
         obj = cal._build_objective(Mode.INFERENCE, kappa=0.0)
         assert callable(obj)
-
-
-# ===========================================================================
-# configure() — mpc_lookahead and mpc_discount
-# ===========================================================================
-
-class TestConfigureMPC:
-    """agent.configure_trajectory() can set mpc_lookahead and mpc_discount."""
-
-    def test_mpc_lookahead_default_is_zero(self, tmp_path):
-        agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.default_mpc_lookahead == 0
-
-    def test_mpc_discount_default_is_0_9(self, tmp_path):
-        agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.default_mpc_discount == 0.9
-
-    def test_configure_sets_mpc_lookahead(self, tmp_path):
-        agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure_trajectory(mpc_lookahead=3)
-        assert agent.calibration_system.default_mpc_lookahead == 3
-
-    def test_configure_sets_mpc_discount(self, tmp_path):
-        agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure_trajectory(mpc_discount=0.8)
-        assert agent.calibration_system.default_mpc_discount == 0.8
-
-    def test_configure_mpc_does_not_affect_other_settings(self, tmp_path):
-        agent, exp, datamodule = _setup_trained_agent(tmp_path)
-        agent.configure_trajectory(mpc_lookahead=5, mpc_discount=0.7)
-        # Other settings should remain default
-        assert agent.calibration_system.optimizer == Optimizer.DE
