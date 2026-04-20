@@ -1,19 +1,13 @@
-"""Tests for context feature flag and OFAT trajectory strategy."""
+"""Tests for context feature flag."""
 import pytest
 import numpy as np
-from typing import Any, Dict, List, Optional
 
 from pred_fab.core.data_objects import DataArray, Domain, Dimension, Feature, Parameter, PerformanceAttribute
 from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
 from pred_fab.core import DatasetSchema, DataModule, Dataset
-from pred_fab.utils import PfabLogger
 from tests.utils.builders import (
-    build_test_logger,
-    build_calibration_system,
-    build_workflow_schema,
     build_workflow_dataset,
     build_workflow_agent,
-    configure_default_workflow_calibration,
 )
 
 
@@ -155,154 +149,3 @@ def test_agent_update_context_snapshot_replaces_old(tmp_path):
     assert "temperature" in agent._context_snapshot
     assert agent._context_snapshot["temperature"] == 25.0
     assert agent._context_snapshot.get("humidity") == 0.7
-
-
-# === CalibrationSystem OFAT strategy ===
-
-def test_ofat_configure_requires_trust_regions(tmp_path):
-    """configure_ofat_strategy raises if parameter has no trust region."""
-    dataset = build_workflow_dataset(tmp_path)
-    agent = build_workflow_agent(tmp_path, dataset.schema)
-    configure_default_workflow_calibration(agent)
-    with pytest.raises(ValueError, match="trust region"):
-        agent.configure_trajectory(ofat_strategy=["param_1"])  # param_1 has bounds, not a trust region
-
-
-def test_ofat_configure_succeeds_for_trust_region_param(tmp_path):
-    """configure_ofat_strategy succeeds when parameter has a trust region."""
-    dataset = build_workflow_dataset(tmp_path)
-    agent = build_workflow_agent(tmp_path, dataset.schema)
-    configure_default_workflow_calibration(agent)
-    agent.configure_trajectory(ofat_strategy=["speed"])  # speed has trust region (adaptation_delta)
-    assert agent.calibration_system._ofat_codes == ["speed"]
-    assert agent.calibration_system._ofat_index == 0
-
-
-def test_ofat_active_code_cycles(tmp_path):
-    """_get_active_ofat_code returns codes in order and wraps around."""
-    dataset = build_workflow_dataset(tmp_path)
-    agent = build_workflow_agent(tmp_path, dataset.schema)
-    configure_default_workflow_calibration(agent)
-    cs = agent.calibration_system
-    # Manually inject two OFAT codes (pretend both have trust regions)
-    cs.trust_regions["speed"] = 10.0  # already set
-    cs._ofat_codes = ["speed"]
-    cs._ofat_index = 0
-    assert cs._get_active_ofat_code() == "speed"
-    cs._advance_ofat()
-    assert cs._ofat_index == 0  # wraps with single element
-
-
-def test_ofat_empty_codes_returns_none(tmp_path):
-    """_get_active_ofat_code returns None when OFAT is not configured."""
-    dataset = build_workflow_dataset(tmp_path)
-    cs = build_calibration_system(tmp_path, dataset)
-    assert cs._get_active_ofat_code() is None
-
-
-def test_ofat_trust_region_bounds_fixes_inactive_param(tmp_path):
-    """With OFAT active, inactive trust-region param is fixed (low==high) in bounds."""
-    from pred_fab.core.data_objects import Parameter as P
-    from pred_fab.core.data_blocks import Parameters as Params, Features as Feats, PerformanceAttributes as Perfs
-    from pred_fab.core.data_objects import PerformanceAttribute
-    from pred_fab.core import DatasetSchema, DataModule, Dataset
-    from pred_fab.utils.enum import NormMethod
-
-    # Build schema with two runtime params
-    p1 = P.real("speed_a", min_val=0.0, max_val=100.0, runtime=True)
-    p2 = P.real("speed_b", min_val=0.0, max_val=100.0, runtime=True)
-    perf = PerformanceAttribute.score("perf_1")
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="ofat_test",
-        parameters=Params([p1, p2]),
-        features=Feats([]),
-        performance=Perfs([perf]),
-    )
-    dataset = Dataset(schema=schema, debug_flag=True)
-    logger = build_test_logger(tmp_path)
-
-    from pred_fab.orchestration.calibration import CalibrationSystem
-    cs = CalibrationSystem(
-        schema=schema,
-        logger=logger,
-        perf_fn=lambda p: {"perf_1": 0.5},
-        uncertainty_fn=lambda x: 1.0,
-    )
-    cs.configure_adaptation_delta({"speed_a": 10.0, "speed_b": 10.0})
-    cs.configure_ofat_strategy(["speed_a", "speed_b"])
-
-    # Build a minimal fitted datamodule for bounds computation
-    datamodule = DataModule(dataset, normalize=NormMethod.NONE)
-    datamodule.initialize(
-        input_parameters=["speed_a", "speed_b"],
-        input_features=[],
-        output_columns=["perf_1"],
-    )
-    datamodule.fit_without_data()
-    cs._active_datamodule = datamodule
-
-    current = {"speed_a": 50.0, "speed_b": 50.0}
-    bounds = cs._get_trust_region_bounds(datamodule, current)
-
-    # speed_a is active (index 0) → free; speed_b is inactive → fixed
-    speed_a_idx = datamodule.input_columns.index("speed_a")
-    speed_b_idx = datamodule.input_columns.index("speed_b")
-    assert bounds[speed_a_idx, 0] < bounds[speed_a_idx, 1], "Active param should have non-zero range"
-    assert bounds[speed_b_idx, 0] == bounds[speed_b_idx, 1], "Inactive param should be fixed (low==high)"
-
-
-def test_ofat_advance_on_online_calibration(tmp_path):
-    """OFAT index advances automatically after each online run_calibration call."""
-    from pred_fab.core.data_objects import Parameter as P
-    from pred_fab.core.data_blocks import Parameters as Params, Features as Feats, PerformanceAttributes as Perfs
-    from pred_fab.core.data_objects import PerformanceAttribute
-    from pred_fab.core import DatasetSchema, DataModule, Dataset
-    from pred_fab.utils.enum import NormMethod, Mode
-
-    p1 = P.real("speed_a", min_val=0.0, max_val=100.0, runtime=True)
-    p2 = P.real("speed_b", min_val=0.0, max_val=100.0, runtime=True)
-    perf = PerformanceAttribute.score("perf_1")
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="ofat_advance",
-        parameters=Params([p1, p2]),
-        features=Feats([]),
-        performance=Perfs([perf]),
-    )
-    dataset = Dataset(schema=schema, debug_flag=True)
-    logger = build_test_logger(tmp_path)
-
-    from pred_fab.orchestration.calibration import CalibrationSystem
-    cs = CalibrationSystem(
-        schema=schema,
-        logger=logger,
-        perf_fn=lambda p: {"perf_1": 0.5},
-        uncertainty_fn=lambda x: 1.0,
-    )
-    cs.configure_adaptation_delta({"speed_a": 10.0, "speed_b": 10.0})
-    cs.configure_ofat_strategy(["speed_a", "speed_b"])
-
-    datamodule = DataModule(dataset, normalize=NormMethod.NONE)
-    datamodule.initialize(
-        input_parameters=["speed_a", "speed_b"],
-        input_features=[],
-        output_columns=["perf_1"],
-    )
-    datamodule.fit_without_data()
-
-    assert cs._ofat_index == 0
-    cs.run_calibration(
-        datamodule=datamodule,
-        mode=Mode.INFERENCE,
-        current_params={"speed_a": 50.0, "speed_b": 50.0},
-        target_indices={},
-    )
-    assert cs._ofat_index == 1  # advanced to speed_b
-    cs.run_calibration(
-        datamodule=datamodule,
-        mode=Mode.INFERENCE,
-        current_params={"speed_a": 50.0, "speed_b": 50.0},
-        target_indices={},
-    )
-    assert cs._ofat_index == 0  # wrapped back to speed_a

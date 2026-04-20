@@ -198,8 +198,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         into a single scalar by ``uncertainty()`` using performance-based weights.
 
         One latent point per unique effective parameter configuration per model.
-        Non-trajectory experiments contribute 1 point (weight = sqrt(total_rows)).
-        Trajectory experiments contribute K points (weight_k = sqrt(segment_rows)).
+        Non-schedule experiments contribute 1 point (weight = sqrt(total_rows)).
+        Schedule experiments contribute K points (weight_k = sqrt(segment_rows)).
         """
         self._model_kdes = {}
         kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
@@ -432,17 +432,17 @@ class PredictionSystem(BaseOrchestrationSystem):
             return 0.0
         return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
 
-    # --- Virtual KDE points for within-trajectory spacing ---
+    # --- Virtual KDE points for within-schedule spacing ---
     #
-    # During trajectory optimization, the optimizer proposes one speed per layer
+    # During schedule optimization, the optimizer proposes one speed per step
     # in sequence. Without virtual points, the KDE is frozen for the entire
-    # trajectory — all layers see the same uncertainty landscape, so they
+    # schedule — all steps see the same uncertainty landscape, so they
     # converge to similar speeds. Virtual points inject proposed-but-not-yet-
-    # executed parameter configurations into the KDE after each layer, causing
-    # subsequent layers to see lower uncertainty at that speed and naturally
+    # executed parameter configurations into the KDE after each step, causing
+    # subsequent steps to see lower uncertainty at that speed and naturally
     # spacing out across the parameter range.
     #
-    # Virtual points are temporary: they are cleared after the trajectory call
+    # Virtual points are temporary: they are cleared after the schedule call
     # completes. They do not affect the training data or the prediction model.
 
     def add_virtual_point(self, params: dict[str, Any], datamodule: DataModule) -> None:

@@ -4,8 +4,8 @@ Contract tests for the unified CalibrationSystem.run_calibration() step-loop.
 Covers all four primary use cases:
   1. Offline exploration — experiment level (single step, global bounds + restarts)
   2. Offline inference  — experiment level (single step, global bounds + restarts)
-  3. Offline exploration — dimensional level (multi-step, trajectory params)
-  4. Offline inference  — dimensional level (multi-step, trajectory params)
+  3. Offline exploration — dimensional level (multi-step, schedule params)
+  4. Offline inference  — dimensional level (multi-step, schedule params)
 
 Plus edge cases: empty step grid, multi-dim grids, eligibility logic, spec assembly,
 and interactions between fixed params, trust regions, and the step-loop.
@@ -54,7 +54,7 @@ def _setup_real_agent(tmp_path):
 # ===========================================================================
 
 class TestOfflineExplorationExperimentLevel:
-    """run_calibration(mode=EXPLORATION, domain=OFFLINE) with no trajectory configs."""
+    """run_calibration(mode=EXPLORATION, domain=OFFLINE) with no schedule configs."""
 
     def test_returns_experiment_spec(self, tmp_path):
         agent, exp, datamodule = _setup_real_agent(tmp_path)
@@ -77,7 +77,7 @@ class TestOfflineExplorationExperimentLevel:
         )
         assert result.initial_params.source_step == "exploration_step"
 
-    def test_schedules_empty_without_trajectory_configs(self, tmp_path):
+    def test_schedules_empty_without_schedule_configs(self, tmp_path):
         agent, exp, datamodule = _setup_real_agent(tmp_path)
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
@@ -135,7 +135,7 @@ class TestOfflineExplorationExperimentLevel:
 # ===========================================================================
 
 class TestOfflineInferenceExperimentLevel:
-    """run_calibration(mode=INFERENCE, domain=OFFLINE) with no trajectory configs."""
+    """run_calibration(mode=INFERENCE, domain=OFFLINE) with no schedule configs."""
 
     def test_returns_experiment_spec(self, tmp_path):
         agent, exp, datamodule = _setup_real_agent(tmp_path)
@@ -151,7 +151,7 @@ class TestOfflineInferenceExperimentLevel:
         )
         assert result.initial_params.source_step == "inference_step"
 
-    def test_schedules_empty_without_trajectory_configs(self, tmp_path):
+    def test_schedules_empty_without_schedule_configs(self, tmp_path):
         agent, exp, datamodule = _setup_real_agent(tmp_path)
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
@@ -195,13 +195,13 @@ class TestOfflineInferenceExperimentLevel:
 # ===========================================================================
 
 class TestOfflineExplorationDimensionalLevel:
-    """run_calibration(mode=EXPLORATION) with trajectory configs → multi-step loop."""
+    """run_calibration(mode=EXPLORATION) with schedule configs → multi-step loop."""
 
     def _configured_cs(self, tmp_path):
-        """Return (cs, exp, datamodule) with speed configured for dim_1 trajectory."""
+        """Return (cs, exp, datamodule) with speed configured for dim_1 schedule."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         return cs, exp, datamodule
 
@@ -231,7 +231,7 @@ class TestOfflineExplorationDimensionalLevel:
         for schedule in result.schedules.values():
             assert isinstance(schedule, ParameterSchedule)
 
-    def test_schedule_entries_contain_trajectory_param(self, tmp_path):
+    def test_schedule_entries_contain_schedule_param(self, tmp_path):
         cs, exp, datamodule = self._configured_cs(tmp_path)
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
         result = cs.run_calibration(
@@ -246,7 +246,7 @@ class TestOfflineExplorationDimensionalLevel:
         delta = 30.0
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": delta})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -269,7 +269,7 @@ class TestOfflineExplorationDimensionalLevel:
     def test_initial_params_source_step_is_exploration(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -278,23 +278,20 @@ class TestOfflineExplorationDimensionalLevel:
         )
         assert result.initial_params.source_step == "exploration_step"
 
-    def test_raises_when_trajectory_param_missing_trust_region(self, tmp_path):
+    def test_auto_delta_set_by_configure_schedule_parameter(self, tmp_path):
+        """configure_schedule_parameter() auto-sets trust region to 1/10 of range."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
-        # deliberately omit configure_adaptation_delta
-
-        current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
-        with pytest.raises(RuntimeError, match="trust region"):
-            cs.run_calibration(
-                datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
-            )
+        assert "speed" not in cs.trust_regions
+        cs.configure_schedule_parameter("speed", "dim_1")
+        # speed bounds [0, 200] → auto-delta = 20.0
+        assert cs.trust_regions["speed"] == pytest.approx(20.0)
 
     def test_without_current_params_produces_single_step(self, tmp_path):
         """Without current_params, step grid defaults to single step → empty schedules."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
 
         result = cs.run_calibration(
@@ -307,7 +304,7 @@ class TestOfflineExplorationDimensionalLevel:
         """If current_params['dim_1'] == 1, step grid has 1 step → no schedule transitions."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0, "dim_1": 1}
@@ -326,10 +323,10 @@ class TestOfflineExplorationDimensionalLevel:
         current_params["dim_2"] = 3
 
         # Manually test grid ordering
-        # trajectory_configs must include both dims to be non-trivial
+        # schedule_configs must include both dims to be non-trivial
         # We only configure speed→dim_1 here; just validate the grid structure
         grid = cs._build_step_grid(current_params)
-        # No trajectory configs → single-step grid
+        # No schedule configs → single-step grid
         assert grid == [{}]
 
 
@@ -338,12 +335,12 @@ class TestOfflineExplorationDimensionalLevel:
 # ===========================================================================
 
 class TestOfflineInferenceDimensionalLevel:
-    """run_calibration(mode=INFERENCE) with trajectory configs → multi-step loop."""
+    """run_calibration(mode=INFERENCE) with schedule configs → multi-step loop."""
 
     def test_returns_experiment_spec(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -355,7 +352,7 @@ class TestOfflineInferenceDimensionalLevel:
     def test_source_step_is_inference(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -367,7 +364,7 @@ class TestOfflineInferenceDimensionalLevel:
     def test_schedule_produced_for_configured_dimension(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -376,12 +373,12 @@ class TestOfflineInferenceDimensionalLevel:
         )
         assert "dim_1" in result.schedules
 
-    def test_inference_trajectory_values_within_bounds(self, tmp_path):
-        """Trajectory proposals under inference mode must still stay within trust region."""
+    def test_inference_schedule_values_within_bounds(self, tmp_path):
+        """Schedule proposals under inference mode must still stay within trust region."""
         delta = 25.0
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": delta})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -407,7 +404,7 @@ class TestOfflineInferenceDimensionalLevel:
 class TestStepLoopInternals:
     """Low-level tests for _build_step_grid, _get_eligible_params, _build_experiment_spec."""
 
-    def test_build_step_grid_no_trajectory_returns_single_empty_dict(self, tmp_path):
+    def test_build_step_grid_no_schedule_returns_single_empty_dict(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
         current_params = exp.parameters.get_values_dict()
@@ -418,7 +415,7 @@ class TestStepLoopInternals:
     def test_build_step_grid_with_dim1_size2(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
         current_params["dim_1"] = 2
@@ -429,10 +426,10 @@ class TestStepLoopInternals:
         assert grid[1] == {"dim_1": 1}
 
     def test_get_eligible_params_all_transition_at_first_step(self, tmp_path):
-        """At step 0 (prev_indices=None), ALL trajectory params are eligible."""
+        """At step 0 (prev_indices=None), ALL schedule params are eligible."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
 
         eligible = cs._get_eligible_params(prev_indices=None, curr_indices={"dim_1": 0})
         assert "speed" in eligible
@@ -441,7 +438,7 @@ class TestStepLoopInternals:
         """When a dim doesn't change, its params are NOT eligible."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
 
         eligible = cs._get_eligible_params(
             prev_indices={"dim_1": 1}, curr_indices={"dim_1": 1},
@@ -452,7 +449,7 @@ class TestStepLoopInternals:
         """When a dim changes, its params ARE eligible."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
 
         eligible = cs._get_eligible_params(
             prev_indices={"dim_1": 0}, curr_indices={"dim_1": 1},
@@ -478,7 +475,7 @@ class TestStepLoopInternals:
         """Two proposals with a dim transition → schedule populated."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("speed", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_1")
         from pred_fab.utils.enum import SourceStep
 
         proposals = [
@@ -581,13 +578,13 @@ class TestAgentStepMethodContracts:
         result = agent.inference_step(exp_data=exp, datamodule=datamodule, recompute=True)
         assert isinstance(result, ExperimentSpec)
 
-    def test_exploration_step_with_trajectory_produces_schedule(self, tmp_path):
+    def test_exploration_step_with_schedule_produces_schedule(self, tmp_path):
         agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
         agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
         agent.train(datamodule=datamodule, validate=False, test=False)
 
-        agent.calibration_system.configure_step_parameter("speed", "dim_1")
+        agent.calibration_system.configure_schedule_parameter("speed", "dim_1")
         agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
@@ -596,13 +593,13 @@ class TestAgentStepMethodContracts:
         assert isinstance(result, ExperimentSpec)
         assert "dim_1" in result.schedules
 
-    def test_inference_step_with_trajectory_produces_schedule(self, tmp_path):
+    def test_inference_step_with_schedule_produces_schedule(self, tmp_path):
         agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
         agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
         agent.train(datamodule=datamodule, validate=False, test=False)
 
-        agent.calibration_system.configure_step_parameter("speed", "dim_1")
+        agent.calibration_system.configure_schedule_parameter("speed", "dim_1")
         agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
@@ -774,8 +771,8 @@ class TestMultiDimMixedScenario:
     def _configured_cs(self, tmp_path):
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
         return cs, exp, datamodule, current_params
@@ -784,8 +781,8 @@ class TestMultiDimMixedScenario:
         """dim_1=2 × dim_2=3 → 6 steps, dim_1 (level 1) varies in outer loop."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         current_params = {**exp.parameters.get_values_dict()}
 
         grid = cs._build_step_grid(current_params)
@@ -805,8 +802,8 @@ class TestMultiDimMixedScenario:
         """layer_height is only eligible when dim_1 index changes."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
 
         # Step 0: prev=None → dim_1 transitions → layer_height eligible
         eligible_0 = cs._get_eligible_params(None, {"dim_1": 0, "dim_2": 0})
@@ -824,8 +821,8 @@ class TestMultiDimMixedScenario:
         """speed maps to dim_2 which transitions at every step of the flat grid."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         current_params = {**exp.parameters.get_values_dict()}
         grid = cs._build_step_grid(current_params)
 
@@ -872,8 +869,8 @@ class TestMultiDimMixedScenario:
         delta = 0.1
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": delta, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
 
@@ -897,8 +894,8 @@ class TestMultiDimMixedScenario:
         delta = 50.0
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": delta})
         current_params = {**exp.parameters.get_values_dict()}
 
@@ -923,8 +920,8 @@ class TestMultiDimMixedScenario:
 
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
 
         # Simulate 6 optimization results
         proposals = [
@@ -973,15 +970,15 @@ class TestMultiDimMixedScenario:
 
 class TestTargetIndices:
     """target_indices={"dim_1": k} collapses the Cartesian grid to one step,
-    optimising only the trajectory params mapped to the specified dimensions
+    optimising only the schedule params mapped to the specified dimensions
     and fixing everything else.
     """
 
     def _configured_cs(self, tmp_path):
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
         return cs, exp, datamodule, current_params
@@ -1068,11 +1065,11 @@ class TestTargetIndices:
         )
         assert result.initial_params.source_step == "inference_step"
 
-    def test_target_indices_without_trajectory_config_is_experiment_level(self, tmp_path):
-        """target_indices with no trajectory configs → experiment-level step (all params eligible)."""
+    def test_target_indices_without_schedule_config_is_experiment_level(self, tmp_path):
+        """target_indices with no schedule configs → experiment-level step (all params eligible)."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        # No configure_step_parameter calls
+        # No configure_schedule_parameter calls
 
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
@@ -1106,50 +1103,16 @@ class TestMPCLookahead:
         """Return (cs, exp, datamodule, current_params) with both runtime params configured."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_step_parameter("layer_height", "dim_1")
-        cs.configure_step_parameter("speed", "dim_2")
+        cs.configure_schedule_parameter("layer_height", "dim_1")
+        cs.configure_schedule_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
         return cs, exp, datamodule, current_params
 
-    # --- Smoke tests ---
+    # --- Online smoke tests ---
 
-    def test_mpc_depth_zero_returns_experiment_spec(self, tmp_path):
-        """Explicit mpc_lookahead=0 (default, no lookahead) should behave identically to omitting the arg."""
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=0,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    def test_mpc_depth_one_returns_experiment_spec(self, tmp_path):
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=1,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    def test_mpc_depth_two_returns_experiment_spec(self, tmp_path):
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=2,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    def test_mpc_inference_mode_returns_experiment_spec(self, tmp_path):
-        """MPC works with INFERENCE mode as well."""
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, mpc_lookahead=1,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    def test_mpc_online_domain_returns_experiment_spec(self, tmp_path):
-        """MPC also applies in the ONLINE domain (single-step trust-region run)."""
+    def test_mpc_online_returns_experiment_spec(self, tmp_path):
+        """MPC applies in online mode (target_indices provided)."""
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, target_indices={},
@@ -1157,25 +1120,14 @@ class TestMPCLookahead:
         )
         assert isinstance(result, ExperimentSpec)
 
-    def test_mpc_with_trajectory_returns_both_schedules(self, tmp_path):
-        """MPC does not disrupt schedule assembly — both dim schedules still produced."""
-        cs, exp, datamodule, current_params = self._two_runtime_cs(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=1,
-        )
-        assert isinstance(result, ExperimentSpec)
-        assert "dim_1" in result.schedules
-        assert "dim_2" in result.schedules
-
-    def test_mpc_source_step_preserved(self, tmp_path):
-        """MPC does not affect the source_step tag on initial_params."""
+    def test_mpc_ignored_in_offline_mode(self, tmp_path):
+        """mpc_lookahead is silently ignored when target_indices is None (offline)."""
         cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=1,
+            current_params=current_params, mpc_lookahead=2,
         )
-        assert result.initial_params.source_step == "exploration_step"
+        assert isinstance(result, ExperimentSpec)
 
     # --- _wrap_mpc_objective unit tests ---
 
@@ -1224,7 +1176,7 @@ class TestMPCLookahead:
     # --- Call-count: MPC must evaluate the objective more than greedy ---
 
     def test_mpc_evaluates_objective_more_than_greedy(self, tmp_path):
-        """Each MPC objective evaluation runs an inner minimize → more base calls."""
+        """Each MPC objective evaluation runs an inner minimize → more base calls (online only)."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
         cs.configure_adaptation_delta({"speed": 50.0})
@@ -1239,19 +1191,19 @@ class TestMPCLookahead:
         cs.perf_fn = counting_perf_fn
         current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
 
-        # Greedy baseline (mpc_lookahead=0 → no lookahead)
+        # Greedy baseline (online, mpc_lookahead=0 → no lookahead)
         call_count["n"] = 0
         cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=0,
+            current_params=current_params, target_indices={}, mpc_lookahead=0,
         )
         calls_greedy = call_count["n"]
 
-        # MPC depth=1 (mpc_lookahead=1 → one step lookahead)
+        # MPC depth=1 (online, mpc_lookahead=1 → one step lookahead)
         call_count["n"] = 0
         cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=1,
+            current_params=current_params, target_indices={}, mpc_lookahead=1,
         )
         calls_mpc = call_count["n"]
 
@@ -1293,18 +1245,18 @@ class TestMPCLookahead:
 
         current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
 
-        # Pure greedy (mpc_lookahead=0): maximize speed within [100-50, 100+50] = [50, 150]
+        # Pure greedy (online, mpc_lookahead=0): maximize speed within [100-50, 100+50] = [50, 150]
         result_greedy = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, mpc_lookahead=0,
+            current_params=current_params, target_indices={}, mpc_lookahead=0,
         )
         speed_greedy = float(result_greedy["speed"])
 
-        # MPC mpc_lookahead=1, discount=1.0: also considers step k+1 → can justify a slightly
-        # lower step-k speed to stay centred and avoid hitting the schema boundary.
+        # MPC mpc_lookahead=1, discount=1.0 (online): also considers step k+1 → can justify a
+        # slightly lower step-k speed to stay centred and avoid hitting the schema boundary.
         result_mpc = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, mpc_lookahead=1, mpc_discount=1.0,
+            current_params=current_params, target_indices={}, mpc_lookahead=1, mpc_discount=1.0,
         )
         speed_mpc = float(result_mpc["speed"])
 

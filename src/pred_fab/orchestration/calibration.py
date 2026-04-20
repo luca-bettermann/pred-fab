@@ -55,16 +55,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._n_decay_fn = n_decay_fn
         self._base_buffer_fn = base_buffer_fn
 
-        # Virtual KDE point callbacks for within-trajectory spacing.
+        # Virtual KDE point callbacks for within-schedule spacing.
         # Set by PfabAgent to inject proposed points into the KDE between
-        # trajectory steps, causing subsequent layers to see lower uncertainty
+        # schedule steps, causing subsequent layers to see lower uncertainty
         # at already-proposed speeds and naturally spacing out.
         self._add_virtual_point_fn: Callable[[dict[str, Any]], None] | None = None
         self._clear_virtual_points_fn: Callable[[], None] | None = None
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
-        self.default_mpc_lookahead: int = 0
-        self.default_mpc_discount: float = 0.9
 
         # Active datamodule — set before each optimization run so that
         # _inference_func / _acquisition_func can call array_to_params.
@@ -76,7 +74,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_score: float = 0.0
         self.last_opt_perf: float = 0.0      # normalized performance component
         self.last_opt_unc: float = 0.0       # uncertainty component (with buffer)
-        self.last_trajectory: list[dict[str, Any]] | None = None  # per-layer params for trajectory
+        self.last_schedule: list[dict[str, Any]] | None = None  # per-layer params for schedule
 
         # Set ordered weights
         self.schema = schema
@@ -90,12 +88,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.param_bounds: dict[str, tuple[float, float]] = {}
         self.fixed_params: dict[str, Any] = {}
         self.trust_regions: dict[str, float] = {}
-        self.trajectory_configs: dict[str, str] = {}   # param_code → dimension_code
-
-        # OFAT (One-Factor-At-a-Time) state for online calibration.
-        # Empty list = all_at_once (default); populated via configure_ofat_strategy().
-        self._ofat_codes: list[str] = []
-        self._ofat_index: int = 0
+        self.schedule_configs: dict[str, str] = {}   # param_code → dimension_code
 
         self.optimizer: Optimizer = Optimizer.DE           # offline (exploration + inference)
         self.online_optimizer: Optimizer = Optimizer.LBFGSB  # online (adaptation / trust-region)
@@ -117,9 +110,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._perf_range_min: float | None = None  # lowest predicted performance seen so far
         self._perf_range_max: float | None = None  # highest predicted performance seen so far
 
-        # Trajectory smoothing: penalizes speed changes between adjacent layers
-        # to encourage monotonic trajectories. penalty = 1 - lambda * |delta| / trust_width.
-        self.trajectory_smoothing: float = 0.0  # 0 = disabled, 0.1 = mild, 0.3 = strong
+        # Schedule smoothing: penalizes speed changes between adjacent layers
+        # to encourage monotonic schedules. penalty = 1 - lambda * |delta| / trust_width.
+        self.schedule_smoothing: float = 0.25  # 0 = disabled, 0.1 = mild, 0.3 = strong
 
         # Boundary buffer: penalise acquisition scores near parameter bounds to
         # counteract KDE edge effects (no evidence outside the search space).
@@ -128,7 +121,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._exploration_radius: float = 0.20  # mirrored from PredictionSystem for buffer calc
         self._buffer: float = 0.5              # mirrored from PredictionSystem
         self._decay_exp: float = 0.5           # mirrored from PredictionSystem
-        self._suppress_opt_print: bool = False  # suppress per-step print during trajectory
+        self._suppress_opt_print: bool = False  # suppress per-step print during schedule
 
         # Extract parameter constraints from schema
         self._set_param_constraints_from_schema(schema)
@@ -287,7 +280,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.trust_regions[code] = delta
 
 
-    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
+    def configure_schedule_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
         """Declare that a runtime-adjustable parameter should be re-optimised at each step of the given dimension.
 
         When run_calibration iterates over the step-grid, only parameters whose mapped dimension
@@ -295,7 +288,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         if code not in self.data_objects:
             self.logger.console_warning(
-                f"Object '{code}' not found in schema; ignoring configure_step_parameter."
+                f"Object '{code}' not found in schema; ignoring configure_schedule_parameter."
             )
             return
 
@@ -303,7 +296,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         if not obj.runtime_adjustable:
             raise ValueError(
-                f"Parameter '{code}' is not runtime-adjustable. configure_step_parameter() "
+                f"Parameter '{code}' is not runtime-adjustable. configure_schedule_parameter() "
                 f"requires a parameter declared with runtime=True in the schema."
             )
 
@@ -325,50 +318,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 f"(got {type(dim_obj).__name__})."
             )
 
-        if code in self.trajectory_configs and not force:
+        if code in self.schedule_configs and not force:
             self.logger.console_warning(
-                f"Parameter '{code}' already has a trajectory configuration for "
-                f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
+                f"Parameter '{code}' already has a schedule configuration for "
+                f"'{self.schedule_configs[code]}'; ignoring. Use force=True to overwrite."
             )
             return
 
-        self.trajectory_configs[code] = dimension_code
+        self.schedule_configs[code] = dimension_code
+        if code not in self.trust_regions:
+            lo, hi = self.schema_bounds.get(code, (0.0, 1.0))
+            if lo != -np.inf and hi != np.inf:
+                self.trust_regions[code] = (hi - lo) / 10.0
         self.logger.debug(
-            f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
+            f"Configured schedule for '{code}' stepping through '{dimension_code}'."
         )
-
-    def configure_ofat_strategy(self, codes: list[str]) -> None:
-        """Configure OFAT cycling: only one parameter in ``codes`` is freed per online step.
-
-        Parameters must already have trust regions configured. An empty list resets to
-        all_at_once (default). The cycle index resets to 0 on each call.
-        """
-        for code in codes:
-            if code not in self.trust_regions:
-                raise ValueError(
-                    f"OFAT parameter '{code}' must have a trust region configured first. "
-                    f"Call configure_adaptation_delta() before configure_ofat_strategy()."
-                )
-        self._ofat_codes = list(codes)
-        self._ofat_index = 0
-        if codes:
-            self.logger.info(f"OFAT strategy configured: {codes} (starting at index 0)")
-        else:
-            self.logger.info("OFAT strategy cleared (all_at_once mode).")
-
-    def _get_active_ofat_code(self) -> str | None:
-        """Return the currently active OFAT parameter code, or None if OFAT is not active."""
-        if not self._ofat_codes:
-            return None
-        return self._ofat_codes[self._ofat_index % len(self._ofat_codes)]
-
-    def _advance_ofat(self) -> None:
-        """Advance the OFAT cycle to the next parameter."""
-        if self._ofat_codes:
-            prev = self._ofat_codes[self._ofat_index % len(self._ofat_codes)]
-            self._ofat_index = (self._ofat_index + 1) % len(self._ofat_codes)
-            next_code = self._ofat_codes[self._ofat_index]
-            self.logger.debug(f"OFAT advance: {prev} -> {next_code}")
 
     def _validate_and_clean_config(
         self,
@@ -667,13 +631,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _build_step_grid(self, current_params: dict[str, Any]) -> list[dict[str, int]]:
         """Build flattened Cartesian grid of {dim_code: step_index} dicts, coarsest dimension first.
 
-        Returns [{}] when no trajectory configs are configured (experiment-level use case).
+        Returns [{}] when no schedule configs are configured (experiment-level use case).
         """
         import itertools as _it
 
         dim_key_order = {code: i for i, code in enumerate(self.data_objects.keys())}
         dim_codes = sorted(
-            {dc for dc in self.trajectory_configs.values()},
+            {dc for dc in self.schedule_configs.values()},
             key=lambda dc: dim_key_order.get(dc, 999),
         )
         if not dim_codes:
@@ -690,13 +654,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: dict[str, int] | None,
         curr_indices: dict[str, int],
     ) -> set:
-        """Return trajectory params whose mapped dimension transitions at this step."""
+        """Return schedule params whose mapped dimension transitions at this step."""
         transitioning_dims: set = set()
         for dim_code in curr_indices:
             if prev_indices is None or curr_indices[dim_code] != prev_indices.get(dim_code):
                 transitioning_dims.add(dim_code)
         return {
-            code for code, dim_code in self.trajectory_configs.items()
+            code for code, dim_code in self.schedule_configs.items()
             if dim_code in transitioning_dims
         }
 
@@ -714,12 +678,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Collect unique dims
             dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
             dim_codes = sorted(
-                {dc for dc in self.trajectory_configs.values()},
+                {dc for dc in self.schedule_configs.values()},
                 key=lambda dc: dim_key_order_spec.get(dc, 999),
             )
             for dim_code in dim_codes:
-                traj_codes = [
-                    c for c, dc in self.trajectory_configs.items() if dc == dim_code
+                sched_codes = [
+                    c for c, dc in self.schedule_configs.items() if dc == dim_code
                 ]
                 entries: list[tuple[int, ParameterProposal]] = []
                 prev_idx: int | None = None
@@ -730,7 +694,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         continue
                     if cur_idx != prev_idx:
                         # Dimension transitioned — record schedule entry
-                        seg_vals = {c: proposals[flat_i][c] for c in traj_codes if c in proposals[flat_i]}
+                        seg_vals = {c: proposals[flat_i][c] for c in sched_codes if c in proposals[flat_i]}
                         if seg_vals:
                             entries.append((
                                 cur_idx,
@@ -1151,20 +1115,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         mpc_discount (γ): weight for future steps in the MPC sum Σ γʲ·score(Xⱼ).
           γ=0.9 means step j=1 counts at 90%, j=2 at 81%, etc. — nearer steps matter more.
         """
-        lookahead = self.default_mpc_lookahead if mpc_lookahead is None else mpc_lookahead
-        discount = self.default_mpc_discount if mpc_discount is None else mpc_discount
-
         self._active_datamodule = datamodule
 
         # For exploration, compute global bounds first so we can estimate ranges
         global_bounds = self._get_global_bounds(datamodule) if mode == Mode.EXPLORATION else None
         objective = self._build_objective(mode, kappa, bounds=global_bounds)
-
-        if lookahead > 0:
-            objective = self._wrap_mpc_objective(objective, datamodule, lookahead, discount)
-            self.logger.info(
-                f"MPC lookahead enabled: depth={lookahead}, discount={discount:.3f}"
-            )
 
         if source_step_override is not None:
             source_step = source_step_override
@@ -1177,6 +1132,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None
+        if is_online and mpc_lookahead is not None and mpc_lookahead > 0:
+            discount = mpc_discount if mpc_discount is not None else 0.9
+            objective = self._wrap_mpc_objective(objective, datamodule, mpc_lookahead, discount)
+            self.logger.info(
+                f"MPC lookahead enabled: depth={mpc_lookahead}, discount={discount:.3f}"
+            )
         if target_indices is not None:
             step_grid: list[dict[str, int]] = [target_indices]  # type: ignore[list-item]
         elif current_params is not None:
@@ -1186,7 +1147,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"run_calibration: mode={mode.name}, {'online (trust-region)' if is_online else 'offline (global)'}, "
-            f"kappa={kappa:.2f}, mpc_lookahead={lookahead}, step_grid={len(step_grid)} step(s)"
+            f"kappa={kappa:.2f}, mpc_lookahead={mpc_lookahead}, step_grid={len(step_grid)} step(s)"
         )
 
         # Validate trust regions for online/trust-region optimization
@@ -1202,14 +1163,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Call configure_adaptation_delta() for each."
                 )
 
-        # Validate trajectory params have trust regions if multi-step
+        # Validate schedule params have trust regions if multi-step
         if len(step_grid) > 1:
-            traj_without_delta = [
-                c for c in self.trajectory_configs if c not in self.trust_regions
+            sched_without_delta = [
+                c for c in self.schedule_configs if c not in self.trust_regions
             ]
-            if traj_without_delta:
+            if sched_without_delta:
                 raise RuntimeError(
-                    f"Trajectory parameters {sorted(traj_without_delta)} have no "
+                    f"Schedule parameters {sorted(sched_without_delta)} have no "
                     f"configured trust region. "
                     f"Call configure_adaptation_delta() for each before running."
                 )
@@ -1220,22 +1181,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
         prev_indices: dict[str, int] | None = None
         proposals: list[dict[str, Any]] = []
 
-        # Track previous step's params for trajectory smoothing penalty.
+        # Track previous step's params for schedule smoothing penalty.
         _prev_step_params: dict[str, Any] | None = None
 
-        is_trajectory = len(step_grid) > 1
+        is_schedule = len(step_grid) > 1
         console = self.logger._console_output_enabled
-        if is_trajectory and console:
+        if is_schedule and console:
             self._suppress_opt_print = True
-        total_traj_nfev = 0
+        total_sched_nfev = 0
 
         for step_i, curr_indices in enumerate(step_grid):
             # Build fixed params for this step
             fixed_for_step = dict(self.fixed_params)
             eligible: set = set()
-            if working_params and self.trajectory_configs and curr_indices:
+            if working_params and self.schedule_configs and curr_indices:
                 eligible = self._get_eligible_params(prev_indices, curr_indices)
-                for code in self.trajectory_configs:
+                for code in self.schedule_configs:
                     if code not in eligible and code in working_params:
                         fixed_for_step[code] = working_params[code]
 
@@ -1247,7 +1208,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         fixed_for_step[code] = val
 
             # Use trust-region when online (current_params + target_indices), or when we have a
-            # reference point on a non-experiment-level step (subsequent trajectory steps).
+            # reference point on a non-experiment-level step (subsequent schedule steps).
             # Otherwise use global bounds with random restarts.
             if is_online or (working_params is not None and bool(curr_indices)):
                 bounds = self._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
@@ -1260,18 +1221,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             self.logger.debug(
                 f"Step {step_i + 1}/{len(step_grid)}: indices={curr_indices}, "
-                f"bounds={bounds_mode}, eligible_traj={sorted(eligible) if eligible else '—'}, "
+                f"bounds={bounds_mode}, eligible_sched={sorted(eligible) if eligible else '—'}, "
                 f"fixed={sorted(fixed_for_step.keys())}"
             )
 
-            # Wrap objective with trajectory smoothing penalty for non-first steps.
+            # Wrap objective with schedule smoothing penalty for non-first steps.
             # Multiplicative penalty on the acquisition score (before negation):
             #   score *= (1 - lambda * |delta| / trust_width)
             # This directly reduces the score for large jumps, keeping it in [0, 1].
             step_objective = objective
-            if (self.trajectory_smoothing > 0 and _prev_step_params is not None
+            if (self.schedule_smoothing > 0 and _prev_step_params is not None
                     and len(step_grid) > 1):
-                _lam = self.trajectory_smoothing
+                _lam = self.schedule_smoothing
                 _prev = _prev_step_params
                 _tr = self.trust_regions
                 _dm = datamodule
@@ -1309,37 +1270,33 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _prev_step_params = dict(result)
             working_params = result
             prev_indices = curr_indices
-            total_traj_nfev += self.last_opt_nfev
+            total_sched_nfev += self.last_opt_nfev
 
-            # Trajectory: layer progress bar
-            if is_trajectory and console:
+            # Schedule: layer progress bar
+            if is_schedule and console:
                 if step_i == 0:
-                    _traj_bar = ProgressBar("Trajectory", max_iter=len(step_grid))
-                _traj_bar.step()  # type: ignore[possibly-unbound]
+                    _sched_bar = ProgressBar("Schedule", max_iter=len(step_grid))
+                _sched_bar.step()  # type: ignore[possibly-unbound]
                 if step_i + 1 == len(step_grid):
-                    _traj_bar.finish(nfev=total_traj_nfev)  # type: ignore[possibly-unbound]
+                    _sched_bar.finish(nfev=total_sched_nfev)  # type: ignore[possibly-unbound]
 
-            # Inject virtual KDE point so subsequent trajectory steps see lower
+            # Inject virtual KDE point so subsequent schedule steps see lower
             # uncertainty at this speed, naturally spacing out layer proposals.
-            if is_trajectory and self._add_virtual_point_fn is not None:
+            if is_schedule and self._add_virtual_point_fn is not None:
                 self._add_virtual_point_fn(result)
 
-        # Clear virtual KDE points after trajectory completes.
-        if is_trajectory and self._clear_virtual_points_fn is not None:
+        # Clear virtual KDE points after schedule completes.
+        if is_schedule and self._clear_virtual_points_fn is not None:
             self._clear_virtual_points_fn()
 
-        if is_trajectory:
+        if is_schedule:
             self._suppress_opt_print = False
-            self.last_trajectory = list(proposals)
+            self.last_schedule = list(proposals)
         else:
-            self.last_trajectory = None
+            self.last_schedule = None
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")
-
-        # Advance OFAT cycle after each online step so the next call targets the next parameter.
-        if is_online:
-            self._advance_ofat()
 
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
@@ -1603,15 +1560,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Determine Bounds from Trust Region
             # Note: Trust Regions (deltas) are typically only for continuous parameters.
             # If a parameter is not in trust_regions, it is fixed to current.
-            # OFAT: if active, only the currently active parameter is freed; others fixed.
-            active_ofat = self._get_active_ofat_code()
             if code in self.trust_regions:
-                if active_ofat is not None and code != active_ofat:
-                    # OFAT mode: this param has a trust region but is not the active one → fix.
-                    low, high = curr, curr
-                else:
-                    delta = self.trust_regions[code]
-                    low, high = curr - delta, curr + delta
+                delta = self.trust_regions[code]
+                low, high = curr - delta, curr + delta
             else:
                 # No trust region -> Fixed to current
                 low, high = curr, curr

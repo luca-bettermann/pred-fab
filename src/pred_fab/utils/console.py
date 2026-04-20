@@ -240,20 +240,20 @@ class ConsoleReporter:
         if self._logger._console_output_enabled:
             print("", flush=True)
 
-    def print_trajectory_table(
+    def print_schedule_table(
         self,
         proposals: list[dict[str, Any]],
         tunable_codes: set[str],
-        trajectory_configs: dict[str, str],
+        schedule_configs: dict[str, str],
     ) -> None:
-        """Print per-layer trajectory schedule as a vertical table."""
+        """Print per-step parameter schedule as a vertical table."""
         if not self.enabled or not proposals:
             return
         # Identify which params vary per layer vs fixed across layers
-        traj_params = set(trajectory_configs.keys())
+        sched_params = set(schedule_configs.keys())
         fixed_params: dict[str, str] = {}
         for code in tunable_codes:
-            if code not in traj_params:
+            if code not in sched_params:
                 val = proposals[0].get(code)
                 if val is not None:
                     fmt = f"{val:.2f}" if isinstance(val, float) and abs(val) < 1 else f"{val:.1f}" if isinstance(val, float) else str(val)
@@ -264,17 +264,17 @@ class ConsoleReporter:
             fixed_s = ", ".join(f"{k}={v}" for k, v in fixed_params.items())
             self._print(f"    {_D}\u2192 {fixed_s}{_R}")
 
-        # Per-layer table for trajectory params
-        traj_codes = sorted(traj_params & tunable_codes)
-        if traj_codes:
-            header = f"    {_D}{'layer':<7s}"
-            for code in traj_codes:
+        # Per-step table for schedule params
+        sched_codes = sorted(sched_params & tunable_codes)
+        if sched_codes:
+            header = f"    {_D}{'step':<7s}"
+            for code in sched_codes:
                 header += f"  {code:>8s}"
             header += _R
             self._print(header)
             for i, p in enumerate(proposals):
                 row = f"    {_D}{i+1:<7d}"
-                for code in traj_codes:
+                for code in sched_codes:
                     val = p.get(code, 0)
                     row += f"  {float(val):8.1f}" if isinstance(val, (int, float)) else f"  {str(val):>8s}"
                 row += _R

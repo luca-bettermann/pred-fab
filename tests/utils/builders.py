@@ -74,7 +74,7 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     p2 = Parameter.integer("param_2", min_val=1, max_val=5)
     p3 = Parameter.categorical("param_3", categories=["A", "B", "C"])
-    # Runtime-adjustable parameter for adaptation / trajectory tests.
+    # Runtime-adjustable parameter for adaptation / schedule tests.
     speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
 
     spatial = Domain("spatial", [
@@ -158,7 +158,7 @@ def configure_default_workflow_calibration(agent: PfabAgent) -> None:
         {"param_1": (0.0, 10.0), "param_2": (1, 4), "n_layers": (1, 3), "n_segments": (1, 3)}
     )
     agent.calibration_system.configure_fixed_params({"param_3": "B"})
-    agent.configure_trajectory(adaptation_delta={"speed": 10.0})  # only runtime-adjustable params may have deltas
+    agent.calibration_system.configure_adaptation_delta({"speed": 10.0})  # only runtime-adjustable params may have deltas
 
 
 def build_prepared_workflow_datamodule(
@@ -292,7 +292,7 @@ def build_real_agent_stack(tmp_path):
 def build_runtime_agent_stack(tmp_path):
     """Build a real orchestration stack with a runtime-adjustable ``speed`` parameter.
 
-    Used by adaptation / trajectory tests that need a schema containing at least one
+    Used by adaptation / schedule tests that need a schema containing at least one
     ``runtime=True`` parameter.
     """
     from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain

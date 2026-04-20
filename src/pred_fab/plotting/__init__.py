@@ -19,7 +19,7 @@ from .exploration import (
     plot_optimizer_comparison,
 )
 from .inference import plot_inference_result, plot_inference_convergence
-from .trajectory import plot_trajectory_comparison, plot_adaptation
+from .schedule import plot_schedule_comparison, plot_adaptation, plot_schedule_detail
 from .metrics import plot_metric_topology, plot_cross_sections, plot_sensitivity
 
 __all__ = [
@@ -35,8 +35,9 @@ __all__ = [
     "plot_optimizer_comparison",
     "plot_inference_result",
     "plot_inference_convergence",
-    "plot_trajectory_comparison",
+    "plot_schedule_comparison",
     "plot_adaptation",
+    "plot_schedule_detail",
     "plot_metric_topology",
     "plot_cross_sections",
     "plot_sensitivity",

@@ -1,4 +1,4 @@
-"""Tests for new features: optimizer config, virtual KDE points, trajectory smoothing, perf range."""
+"""Tests for new features: optimizer config, virtual KDE points, schedule smoothing, perf range."""
 
 import pytest
 import numpy as np
@@ -55,10 +55,10 @@ class TestOptimizerConfig:
         agent.configure_optimizer(online_backend=Optimizer.DE)
         assert agent.calibration_system.online_optimizer == Optimizer.DE
 
-    def test_configure_trajectory_smoothing(self, tmp_path):
+    def test_configure_schedule_smoothing(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_trajectory(smoothing=0.2)
-        assert agent.calibration_system.trajectory_smoothing == 0.2
+        agent.calibration_system.schedule_smoothing = 0.2
+        assert agent.calibration_system.schedule_smoothing == 0.2
 
 
 # ===========================================================================
@@ -134,20 +134,20 @@ class TestVirtualKDEPoints:
 
 
 # ===========================================================================
-# Trajectory smoothing
+# Schedule smoothing
 # ===========================================================================
 
-class TestTrajectorySmoothing:
-    """Trajectory smoothing parameter is stored and defaults to 0."""
+class TestScheduleSmoothing:
+    """Schedule smoothing parameter is stored and defaults to 0.25."""
 
     def test_default_smoothing_is_zero(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.trajectory_smoothing == 0.0
+        assert agent.calibration_system.schedule_smoothing == 0.25
 
     def test_smoothing_configurable(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_trajectory(smoothing=0.15)
-        assert agent.calibration_system.trajectory_smoothing == 0.15
+        agent.calibration_system.schedule_smoothing = 0.15
+        assert agent.calibration_system.schedule_smoothing == 0.15
 
 
 # ===========================================================================
