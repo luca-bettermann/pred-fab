@@ -268,8 +268,8 @@ def build_calibration_system(
         similarity_fn=similarity_fn,
     )
     # Fast DE settings for tests (production uses scipy defaults: 1000/15)
-    cal.de_maxiter = 50
-    cal.de_popsize = 5
+    cal.de_maxiter = 5
+    cal.de_popsize = 2
     return cal
 
 
