@@ -332,19 +332,20 @@ class PfabAgent:
 
     # === STEP METHODS ==
     
-    def exploration_step(
+    def acquisition_step(
         self,
         datamodule: DataModule,
         kappa: float = 0.5,
         n_optimization_rounds: int = 5,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """UCB-based exploration proposal. Iterates over schedule dimensions when configured."""
+        """Unified proposal step: κ>0 = exploration, κ=0 = inference."""
         self._check_systems(StepType.FULL)
 
+        mode = Mode.INFERENCE if kappa == 0.0 else Mode.EXPLORATION
         result = self.calibration_system.run_calibration(
             datamodule=datamodule,
-            mode=Mode.EXPLORATION,
+            mode=mode,
             current_params=current_params,
             kappa=kappa,
             n_optimization_rounds=n_optimization_rounds,
@@ -361,16 +362,23 @@ class PfabAgent:
             tunable = {k: v for k, v in params.items() if k in tunable_codes}
 
             if cal.last_schedule and len(cal.last_schedule) > 1:
-                # Schedule: print per-layer schedule table
                 self._console.print_schedule_table(
                     cal.last_schedule, tunable_codes, cal.schedule_configs,
                 )
             else:
-                # Single proposal: show params on grey line
                 self._console.print_params_line(tunable)
 
-        self.logger.info("Successfully completed exploration step.")
+        self.logger.info(f"Successfully completed acquisition step (kappa={kappa}).")
         return result
+
+    # Backward-compatible aliases
+    def exploration_step(self, datamodule: DataModule, kappa: float = 0.5,
+                         n_optimization_rounds: int = 5,
+                         current_params: dict[str, Any] | None = None) -> ExperimentSpec:
+        """Alias for acquisition_step with kappa > 0."""
+        return self.acquisition_step(datamodule, kappa=kappa,
+                                     n_optimization_rounds=n_optimization_rounds,
+                                     current_params=current_params)
 
     def inference_step(
         self,
@@ -381,22 +389,15 @@ class PfabAgent:
         visualize: bool = False,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """Extract features, evaluate, then return a performance-maximizing proposal (kappa=0)."""
+        """Feature extraction + evaluation, then acquisition_step with kappa=0."""
         self._check_systems(StepType.FULL)
 
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
-        result = self.calibration_system.run_calibration(
-            datamodule=datamodule,
-            mode=Mode.INFERENCE,
-            current_params=current_params,
-            kappa=0.0,
-            n_optimization_rounds=n_optimization_rounds,
-        )
-
-        self.logger.info("Successfully completed inference step.")
-        return result
+        return self.acquisition_step(datamodule, kappa=0.0,
+                                     n_optimization_rounds=n_optimization_rounds,
+                                     current_params=current_params)
 
     def adaptation_step(
         self,
