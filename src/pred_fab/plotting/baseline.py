@@ -13,6 +13,7 @@ from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, save_fig, _extract_xy, _apply_axes, _add_fixed_subtitle,
+    _plot_schedule_ranges,
     STEEL_500, ZINC_400, ZINC_600, ZINC_700,
 )
 
@@ -80,6 +81,8 @@ def plot_parameter_space(
     true_grid: np.ndarray,
     pred_grid: np.ndarray,
     *,
+    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    codes: list[str] | None = None,
     title: str = "Baseline",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -92,6 +95,9 @@ def plot_parameter_space(
     fig.suptitle(f"{title} ({n} experiments)", fontsize=14, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
+    # Schedule range lines (before dots so dots are on top)
+    _plot_schedule_ranges(ax1, points, x_axis, y_axis, schedules, codes)
+
     ax1.scatter(px, py, s=60, c=STEEL_500, edgecolors="white", linewidth=0.8, zorder=5)
     for i, (x, y) in enumerate(zip(px, py)):
         ax1.annotate(f"{i+1}", (x, y), fontsize=6, ha="center", va="bottom",
@@ -100,6 +106,9 @@ def plot_parameter_space(
     ax1.set_title("Parameter Space", fontsize=10)
     ax1.grid(True, alpha=0.2)
 
+    # Schedule ranges on heatmaps too
+    _plot_schedule_ranges(ax2, points, x_axis, y_axis, schedules, codes,
+                          color="white", alpha=0.4)
     im2 = ax2.contourf(x_values, y_values, true_grid, levels=20, cmap="RdYlGn",
                         vmin=vmin, vmax=vmax)
     ax2.contour(x_values, y_values, true_grid, levels=10, colors="white",
@@ -109,6 +118,8 @@ def plot_parameter_space(
     ax2.set_title("Ground Truth", fontsize=10)
     plt.colorbar(im2, ax=ax2, shrink=0.8)
 
+    _plot_schedule_ranges(ax3, points, x_axis, y_axis, schedules, codes,
+                          color="white", alpha=0.4)
     im3 = ax3.contourf(x_values, y_values, pred_grid, levels=20, cmap="RdYlGn",
                         vmin=vmin, vmax=vmax)
     ax3.contour(x_values, y_values, pred_grid, levels=10, colors="white",
