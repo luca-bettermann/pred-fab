@@ -1612,27 +1612,30 @@ class CalibrationSystem(BaseOrchestrationSystem):
         including the domain axis dimensions. Phase 2 groups experiments by their
         domain axis value and runs schedule optimization per group.
         """
-        # ═══ PHASE 1: Structural — all params, no schedule ═══
+        # ═══ PHASE 1: Structural — domain axis dims ONLY ═══
         self.logger.info("Two-phase baseline: starting Phase 1 (Structural)")
 
-        # All dims are static in phase 1 (no schedule)
-        static_indices_p1: list[int] = list(range(len(numeric_params)))
-        sched_indices_p1: list[int] = []
-        D_static_p1 = len(static_indices_p1)
+        # Phase 1 only optimizes domain axis parameters
+        structural_indices: list[int] = []
+        for d, (code, lo, hi) in enumerate(numeric_params):
+            if code in domain_axis_sched_dims:
+                structural_indices.append(d)
 
-        static_bounds_p1: list[tuple[float, float]] = []
+        D_structural = len(structural_indices)
+        p = self.baseline_riesz_p
+
+        structural_bounds: list[tuple[float, float]] = []
         integrality_mask_p1: list[bool] = []
-        for d in static_indices_p1:
+        for d in structural_indices:
             if d in int_set:
-                static_bounds_p1.append((0.0, float(int_ranges_map[d])))
+                structural_bounds.append((0.0, float(int_ranges_map[d])))
                 integrality_mask_p1.append(True)
             else:
-                static_bounds_p1.append((0.01, 0.99))
+                structural_bounds.append((0.01, 0.99))
                 integrality_mask_p1.append(False)
 
-        p = self.baseline_riesz_p
         riesz_p1 = self._build_riesz_fn(
-            n, static_indices_p1, sched_indices_p1, int_set, int_ranges_map, D_static_p1, p,
+            n, structural_indices, [], int_set, int_ranges_map, D_structural, p,
         )
 
         # Convert init positions for phase 1
@@ -1641,99 +1644,56 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if d < init_de_p1.shape[1]:
                 init_de_p1[:, d] = np.round(init_de_p1[:, d] * int_ranges_map[d])
 
-        init_flat_p1 = np.zeros(n * D_static_p1)
+        init_flat_p1 = np.zeros(n * D_structural)
         for i in range(n):
-            offset = i * D_static_p1
-            for si, d in enumerate(static_indices_p1):
+            offset = i * D_structural
+            for si, d in enumerate(structural_indices):
                 init_flat_p1[offset + si] = init_de_p1[i, d]
 
         self.logger.info(
-            f"Phase 1 (Structural): N={n}, D_static={D_static_p1}, no schedule"
+            f"Phase 1 (Structural): N={n}, D={D_structural}, dims={[numeric_params[d][0] for d in structural_indices]}"
         )
 
-        opt_p1, static_out_p1, _ = self._run_engine_for_baseline(
-            riesz_p1, n, D_static_p1, 0, 1,
-            static_bounds_p1, [], np.array([]),
+        opt_p1, struct_out, _ = self._run_engine_for_baseline(
+            riesz_p1, n, D_structural, 0, 1,
+            structural_bounds, [], np.array([]),
             [], integrality_mask_p1, init_flat_p1,
             label="Structural",
         )
         self.last_baseline_nfev = opt_p1.nfev
 
-        # Decode phase 1 results: extract base params and structural values per experiment
-        phase1_params: list[dict[str, Any]] = []
-        # Map from domain axis code → value per experiment
+        # Decode phase 1: extract structural values per experiment
         structural_values: list[dict[str, int]] = []
-
         for i in range(n):
-            base_params: dict[str, Any] = dict(self.fixed_params)
             struct_vals: dict[str, int] = {}
-
-            for si, d in enumerate(static_indices_p1):
+            for si, d in enumerate(structural_indices):
                 code, lo, hi = numeric_params[d]
                 if d in int_set:
-                    val = int(np.round(static_out_p1[i, si]) + lo)
-                    base_params[code] = val
-                    if code in domain_axis_sched_dims:
-                        struct_vals[code] = val
+                    struct_vals[code] = int(np.round(struct_out[i, si]) + lo)
                 else:
-                    base_params[code] = float(static_out_p1[i, si] * (hi - lo) + lo)
-
-            for d_cat, code in enumerate(cat_codes):
-                base_params[code] = cat_assignments[i][d_cat]
-
-            phase1_params.append(base_params)
+                    struct_vals[code] = int(np.round(struct_out[i, si] * (hi - lo) + lo))
             structural_values.append(struct_vals)
 
-        # If no schedule params remain active, return phase 1 results directly
-        if not sched_set:
-            specs: list[ExperimentSpec] = []
-            for i in range(n):
-                bp = phase1_params[i]
-                for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                    if code_i in bp:
-                        bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
-                bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
-                proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
-                specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-
-            optimized = static_out_p1.copy()
-            for si, d in enumerate(static_indices_p1):
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    optimized[:, si] = optimized[:, si] / r if r > 0 else 0.5
-            return specs, optimized
-
-        # ═══ PHASE 2: Process — joint schedule optimization over ALL experiments ═══
+        # ═══ PHASE 2: Process — ALL non-structural params (static + scheduled) ═══
 
         # Identify the dimension code for schedule
         dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
         primary_dim_code = dim_codes_for_sched[0] if dim_codes_for_sched else ""
 
-        # Identify schedule param indices in numeric_params
+        # Split non-structural params into static vs scheduled
+        structural_codes = set(numeric_params[d][0] for d in structural_indices)
+        static_params_p2: list[tuple[int, str, float, float]] = []
         sched_params_list: list[tuple[int, str, float, float]] = []
         for d, (code, lo, hi) in enumerate(numeric_params):
+            if code in structural_codes:
+                continue  # handled by phase 1
             if code in sched_set:
                 sched_params_list.append((d, code, lo, hi))
+            else:
+                static_params_p2.append((d, code, lo, hi))
 
+        D_static_p2 = len(static_params_p2)
         D_sched_p2 = len(sched_params_list)
-
-        if not sched_params_list:
-            # No schedule params — return phase 1 results directly
-            all_specs: list[ExperimentSpec] = []
-            for i in range(n):
-                bp = dict(phase1_params[i])
-                for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                    if code_i in bp:
-                        bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
-                bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
-                proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
-                all_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
-            optimized = static_out_p1.copy()
-            for si, d in enumerate(static_indices_p1):
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    optimized[:, si] = optimized[:, si] / r if r > 0 else 0.5
-            return all_specs, optimized
 
         # Per-experiment L from structural values; pad to L_max
         group_key_codes = sorted(domain_axis_sched_dims)
@@ -1741,9 +1701,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
             max(structural_values[i].get(c, 1) for c in group_key_codes)
             for i in range(n)
         ]
-        L_max = max(per_exp_L)
+        L_max = max(per_exp_L) if sched_params_list else 1
 
-        # Build sched bounds and deltas
+        # Build static and sched bounds
+        static_bounds_p2: list[tuple[float, float]] = []
+        static_integrality_p2: list[bool] = []
+        for d, code, lo, hi in static_params_p2:
+            if d in int_set:
+                static_bounds_p2.append((0.0, float(int_ranges_map[d])))
+                static_integrality_p2.append(True)
+            else:
+                static_bounds_p2.append((0.01, 0.99))
+                static_integrality_p2.append(False)
+
         sched_bounds_p2: list[tuple[float, float]] = []
         sched_deltas_norm_p2: list[float] = []
         for d, code, lo, hi in sched_params_list:
@@ -1756,83 +1726,55 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sched_deltas_norm_p2.append(delta / span if span > 0 else 0.0)
         sched_delta_arr_p2 = np.array(sched_deltas_norm_p2)
 
-        # Build per-unit bounds: step0 + offsets, with [0,0] for steps >= exp's L
-        D_unit_p2 = D_sched_p2 + max(L_max - 1, 0) * D_sched_p2
+        # Build per-unit bounds: [static, sched_step0, offset_1, ..., offset_{L_max-1}]
+        D_unit_p2 = D_static_p2 + D_sched_p2 + max(L_max - 1, 0) * D_sched_p2
         de_bounds_p2: list[tuple[float, float]] = []
+        integrality_p2: list[bool] | None = None
+        if any(static_integrality_p2):
+            integrality_p2 = []
+
         for i in range(n):
-            # Step 0 bounds
+            de_bounds_p2.extend(static_bounds_p2)
+            if integrality_p2 is not None:
+                integrality_p2.extend(static_integrality_p2)
             de_bounds_p2.extend(sched_bounds_p2)
-            # Offset bounds for steps 1..L_max-1
+            if integrality_p2 is not None:
+                integrality_p2.extend([False] * D_sched_p2)
             for k in range(1, L_max):
                 for d_s in range(D_sched_p2):
                     if k < per_exp_L[i]:
-                        # Active step — use delta bounds
                         de_bounds_p2.append((-sched_deltas_norm_p2[d_s], sched_deltas_norm_p2[d_s]))
                     else:
-                        # Beyond this experiment's L — lock to 0
                         de_bounds_p2.append((0.0, 0.0))
+                    if integrality_p2 is not None:
+                        integrality_p2.append(False)
 
-        # Build normalized static values from phase 1 for distance computation
-        # These are fixed but must participate in the riesz distance metric
-        # so experiments close in water_ratio get different speeds
-        static_norm_p1 = np.zeros((n, len(static_indices_p1)))
-        for i in range(n):
-            for si, d in enumerate(static_indices_p1):
-                val = static_out_p1[i, si]
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    static_norm_p1[i, si] = val / r if r > 0 else 0.5
-                else:
-                    static_norm_p1[i, si] = val
-        D_static_ctx = static_norm_p1.shape[1]
+        # Build riesz for phase 2 (static + sched dims, full distance metric)
+        all_p2_indices = [d for d, _, _, _ in static_params_p2] + [d for d, _, _, _ in sched_params_list]
+        riesz_p2 = self._build_riesz_fn(
+            n, list(range(D_static_p2)), list(range(D_static_p2, D_static_p2 + D_sched_p2)),
+            int_set, int_ranges_map, D_static_p2, p,
+        )
 
-        # Build riesz that includes fixed static dims in distance computation
-        def riesz_p2(pts_sched: np.ndarray) -> float:
-            """Riesz energy with fixed static context from phase 1."""
-            # pts_sched: (N, D_sched) — the optimized schedule dims
-            # Prepend fixed static dims for full-space distance
-            pts_norm = pts_sched.copy()
-            # Normalize integer sched dims
-            for si, (d, _, _, _) in enumerate(sched_params_list):
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    pts_norm[:, si] = pts_norm[:, si] / r if r > 0 else 0.5
-            full_pts = np.hstack([static_norm_p1, pts_norm])
-            n_pts = full_pts.shape[0]
-            if n_pts <= 1:
-                return 0.0
-            iu_p2 = np.triu_indices(n_pts, k=1)
-            diff = full_pts[:, np.newaxis, :] - full_pts[np.newaxis, :, :]
-            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu_p2], 1e-20)
-            pairwise = float(np.sum(dsq ** (-p / 2)))
-            # Boundary repulsion only on sched dims (static are fixed)
-            for d_s in range(D_sched_p2):
-                orig_d = sched_params_list[d_s][0]
-                if orig_d in int_set:
-                    r = int_ranges_map[orig_d]
-                    min_sp = 0.5 / r if r > 0 else 0.5
-                else:
-                    min_sp = 1e-10
-                d_lo = np.maximum(pts_norm[:, d_s], min_sp)
-                d_hi = np.maximum(1.0 - pts_norm[:, d_s], min_sp)
-                pairwise += float(np.sum((2.0 * d_lo) ** (-p)))
-                pairwise += float(np.sum((2.0 * d_hi) ** (-p)))
-            return pairwise
-
-        # Build init from phase 1 sched values
-        init_flat_p2 = np.zeros(n * D_unit_p2)
+        # Build init from recursive bisection for static, phase 1 sched values for sched
+        n_total_vars_p2 = n * D_unit_p2
+        init_flat_p2 = np.zeros(n_total_vars_p2)
         for i in range(n):
             offset = i * D_unit_p2
-            for si, (d, code, lo, hi) in enumerate(sched_params_list):
+            for si, (d, code, lo, hi) in enumerate(static_params_p2):
                 if d in int_set:
                     init_flat_p2[offset + si] = init_de_p1[i, d]
                 else:
                     init_flat_p2[offset + si] = init_norm[i, d]
+            for si, (d, code, lo, hi) in enumerate(sched_params_list):
+                if d in int_set:
+                    init_flat_p2[offset + D_static_p2 + si] = init_de_p1[i, d]
+                else:
+                    init_flat_p2[offset + D_static_p2 + si] = init_norm[i, d]
 
         # Build init population
         console = self.logger._console_output_enabled
         popsize = max(self.de_popsize, 2)
-        n_total_vars_p2 = n * D_unit_p2
         pop_total_p2 = popsize * n_total_vars_p2
         init_pop_p2 = np.empty((pop_total_p2, n_total_vars_p2))
         for ii in range(pop_total_p2):
@@ -1855,35 +1797,36 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     candidate[v] = np.clip(candidate[v], lo_b + 0.001, hi_b - 0.001)
             init_pop_p2[j] = candidate
 
-        # Build objective wrapper with smoothing
+        # Build objective: riesz at each step over (static + sched) dims + smoothing
         schedule_smoothing = self.schedule_smoothing
 
         def _phase2_objective(x_flat: np.ndarray) -> float:
             units = x_flat.reshape(n, D_unit_p2)
             step_sum = 0.0
             for k in range(L_max):
-                pts = np.zeros((n, D_sched_p2))
+                pts = np.zeros((n, D_static_p2 + D_sched_p2))
                 for u in range(n):
-                    step0 = units[u, :D_sched_p2]
+                    pts[u, :D_static_p2] = units[u, :D_static_p2]
+                    step0 = units[u, D_static_p2:D_static_p2 + D_sched_p2]
                     abs_val = step0.copy()
                     for kk in range(1, k + 1):
-                        off_start = D_sched_p2 + (kk - 1) * D_sched_p2
+                        off_start = D_static_p2 + D_sched_p2 + (kk - 1) * D_sched_p2
                         abs_val = abs_val + units[u, off_start:off_start + D_sched_p2]
                     for d_s in range(D_sched_p2):
                         lo_s, hi_s = sched_bounds_p2[d_s]
                         abs_val[d_s] = np.clip(abs_val[d_s], lo_s, hi_s)
-                    pts[u] = abs_val
+                    pts[u, D_static_p2:] = abs_val
                 step_sum += riesz_p2(pts)
 
             step_avg = step_sum / L_max
-            if schedule_smoothing > 0:
+            if schedule_smoothing > 0 and D_sched_p2 > 0:
                 total_penalty = 0.0
                 for u in range(n):
                     sched_vals = np.zeros((per_exp_L[u], D_sched_p2))
-                    step0 = units[u, :D_sched_p2]
+                    step0 = units[u, D_static_p2:D_static_p2 + D_sched_p2]
                     sched_vals[0] = step0
                     for kk in range(1, per_exp_L[u]):
-                        off_start = D_sched_p2 + (kk - 1) * D_sched_p2
+                        off_start = D_static_p2 + D_sched_p2 + (kk - 1) * D_sched_p2
                         sched_vals[kk] = sched_vals[kk - 1] + units[u, off_start:off_start + D_sched_p2]
                     sf = OptimizationEngine._schedule_smoothing_factor(
                         sched_vals, sched_delta_arr_p2, schedule_smoothing,
@@ -1893,13 +1836,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return step_avg
 
         self.logger.info(
-            f"Phase 2 (Process): N={n}, L_max={L_max}, D_sched={D_sched_p2}, "
+            f"Phase 2 (Process): N={n}, L_max={L_max}, "
+            f"D_static={D_static_p2}, D_sched={D_sched_p2}, "
             f"per_exp_L={sorted(set(per_exp_L))}"
         )
 
         opt_p2 = self.engine._run_de(
             _phase2_objective, de_bounds_p2,
-            init_pop=init_pop_p2, label="Process", show_progress=console,
+            init_pop=init_pop_p2,
+            integrality=integrality_p2,
+            label="Process", show_progress=console,
         )
         self.last_baseline_nfev += opt_p2.nfev
 
@@ -1909,18 +1855,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         all_specs = []
         for i in range(n):
-            bp = dict(phase1_params[i])
+            # Start with structural values from Phase 1 + fixed params
+            bp: dict[str, Any] = dict(self.fixed_params)
+            for sv_code, sv_val in structural_values[i].items():
+                bp[sv_code] = sv_val
+            for d_cat, code in enumerate(cat_codes):
+                bp[code] = cat_assignments[i][d_cat]
+
             L_i = per_exp_L[i]
 
-            # Decode step 0
-            step0 = units_p2[i, :D_sched_p2]
+            # Decode static params from Phase 2
+            for si, (d, code, lo, hi) in enumerate(static_params_p2):
+                val = units_p2[i, si]
+                if d in int_set:
+                    bp[code] = int(np.round(val) + lo)
+                else:
+                    bp[code] = float(val * (hi - lo) + lo)
+
+            # Decode sched step 0
+            step0 = units_p2[i, D_static_p2:D_static_p2 + D_sched_p2]
             for si, (d, code, lo, hi) in enumerate(sched_params_list):
                 bp[code] = float(step0[si] * (hi - lo) + lo)
-
-            # Clamp non-sched integer params
-            for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                if code_i in bp and code_i not in sched_set:
-                    bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
 
             bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
             initial = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
@@ -1929,7 +1884,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             entries: list[tuple[int, ParameterProposal]] = []
             abs_val = step0.copy()
             for k in range(1, L_i):
-                off_start = D_sched_p2 + (k - 1) * D_sched_p2
+                off_start = D_static_p2 + D_sched_p2 + (k - 1) * D_sched_p2
                 abs_val = abs_val + units_p2[i, off_start:off_start + D_sched_p2]
                 step_params: dict[str, Any] = {}
                 for si, (d, code, lo, hi) in enumerate(sched_params_list):
@@ -1949,12 +1904,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
             all_specs.append(ExperimentSpec(initial_params=initial, schedules=schedules))
 
-        # Build optimized matrix from phase 1 static output for distance reporting
-        optimized = static_out_p1.copy()
-        for si, d in enumerate(static_indices_p1):
-            if d in int_set:
-                r = int_ranges_map[d]
-                optimized[:, si] = optimized[:, si] / r if r > 0 else 0.5
+        # Build optimized matrix from phase 2 static output for distance reporting
+        optimized = np.zeros((n, D_static_p2))
+        for i in range(n):
+            for si, (d, code, lo, hi) in enumerate(static_params_p2):
+                val = units_p2[i, si]
+                if d in int_set:
+                    r = int_ranges_map[d]
+                    optimized[i, si] = val / r if r > 0 else 0.5
+                else:
+                    optimized[i, si] = val
 
         return all_specs, optimized
 
