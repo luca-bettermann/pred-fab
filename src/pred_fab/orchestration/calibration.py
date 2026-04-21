@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 import warnings
@@ -27,6 +27,7 @@ class _OptResult:
     nfev: int
     n_starts: int
     score: float  # negated objective (higher = better)
+    convergence_history: list[float] = field(default_factory=list)  # best energy per iteration
 
 
 # Suppress sklearn warnings
@@ -221,9 +222,11 @@ class OptimizationEngine:
         has_int = integrality is not None and any(integrality)
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
         iter_count = [0]
+        history: list[float] = []
 
         def _progress(xk: Any, convergence: Any) -> None:
             iter_count[0] += 1
+            history.append(float(convergence))
             if bar:
                 bar.step()
 
@@ -257,6 +260,7 @@ class OptimizationEngine:
             nfev=result.nfev,
             n_starts=1,
             score=float(-result.fun),
+            convergence_history=history,
         )
 
     def _run_lbfgsb(
@@ -689,6 +693,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_perf: float = 0.0
         self.last_opt_unc: float = 0.0
         self.last_schedule: list[dict[str, Any]] | None = None
+        self.convergence_history: dict[str, list[float]] = {}  # label → per-iteration convergence
 
         # Set ordered weights
         self.schema = schema
@@ -845,9 +850,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # ------------------------------------------------------------------
 
     def _print_optimized_line(self, nfev: int, suffix: str = "") -> None:
-        """Print the optimized line with eval count."""
-        bar = "\u2588" * 12
-        print(f"\033[32m\u2713\033[0m {'Optimized':<10s} [{bar}] \033[2m{nfev} evals\033[0m{suffix}", flush=True)
+        """Deprecated — progress bar finish now handles this."""
+        pass  # kept for backward compat; DE/LBFGSB bars show iter+nfev
 
     def _get_n_exp(self) -> int:
         """Current experiment count from the prediction system."""
@@ -1429,6 +1433,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             label="Structural", show_progress=console,
         )
         self.last_baseline_nfev: int = opt.nfev
+        self.convergence_history["Structural"] = opt.convergence_history
 
         structural_values: list[dict[str, int]] = []
         for i in range(n):
@@ -1593,6 +1598,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 label="Baseline", show_progress=console,
             )
             self.last_baseline_nfev: int = opt.nfev
+            self.convergence_history["Process"] = opt.convergence_history
 
             specs: list[ExperimentSpec] = []
             for i in range(n):
@@ -1763,6 +1769,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.last_baseline_nfev = opt.nfev
         else:
             self.last_baseline_nfev += opt.nfev
+        self.convergence_history["Process"] = opt.convergence_history
 
         best_x = opt.best_x if opt.best_x is not None else init_flat
 
@@ -2024,6 +2031,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.last_opt_nfev = opt.nfev
             self.last_opt_n_starts = opt.n_starts
             self.last_opt_score = opt.score
+            self.convergence_history["Acquisition"] = opt.convergence_history
 
             if console:
                 self._print_optimized_line(opt.nfev)
