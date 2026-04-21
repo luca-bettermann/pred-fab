@@ -1277,11 +1277,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         )
                     if domain_axis_sched_dims:
                         two_phase = True
-                    # Disable schedule for unfixed dims
-                    sched_set = {
-                        code for code in sched_set
-                        if self.schedule_configs[code] in self.fixed_params
-                    }
+                    else:
+                        # Only disable schedule for non-domain-axis unfixed dims
+                        sched_set = {
+                            code for code in sched_set
+                            if self.schedule_configs[code] in self.fixed_params
+                        }
                 # L from fixed schedule dims only
                 fixed_sched = [d for d in sched_dims if d in self.fixed_params]
                 if fixed_sched:
