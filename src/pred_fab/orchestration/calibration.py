@@ -1808,28 +1808,50 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     candidate[v] = np.clip(candidate[v], lo_b + 0.001, hi_b - 0.001)
             init_pop_p2[j] = candidate
 
-        # Build objective: riesz at each step over (static + sched) dims + smoothing
+        # Build objective: ONE riesz energy across full concatenated space
+        # Each experiment = one point in (D_static + L_max * D_sched) dims
+        # This naturally spreads water ratios, initial speeds, AND trajectory shapes
         schedule_smoothing = self.schedule_smoothing
+        D_full = D_static_p2 + L_max * D_sched_p2
+        iu_p2 = np.triu_indices(n, k=1)
 
         def _phase2_objective(x_flat: np.ndarray) -> float:
             units = x_flat.reshape(n, D_unit_p2)
-            step_sum = 0.0
-            for k in range(L_max):
-                pts = np.zeros((n, D_static_p2 + D_sched_p2))
-                for u in range(n):
-                    pts[u, :D_static_p2] = units[u, :D_static_p2]
-                    step0 = units[u, D_static_p2:D_static_p2 + D_sched_p2]
-                    abs_val = step0.copy()
-                    for kk in range(1, k + 1):
-                        off_start = D_static_p2 + D_sched_p2 + (kk - 1) * D_sched_p2
-                        abs_val = abs_val + units[u, off_start:off_start + D_sched_p2]
+            full_pts = np.zeros((n, D_full))
+
+            for u in range(n):
+                # Static dims
+                full_pts[u, :D_static_p2] = units[u, :D_static_p2]
+                # Reconstruct absolute sched values at each step
+                step0 = units[u, D_static_p2:D_static_p2 + D_sched_p2]
+                abs_val = step0.copy()
+                full_pts[u, D_static_p2:D_static_p2 + D_sched_p2] = abs_val
+                for k in range(1, L_max):
+                    off_start = D_static_p2 + D_sched_p2 + (k - 1) * D_sched_p2
+                    abs_val = abs_val + units[u, off_start:off_start + D_sched_p2]
                     for d_s in range(D_sched_p2):
                         lo_s, hi_s = sched_bounds_p2[d_s]
                         abs_val[d_s] = np.clip(abs_val[d_s], lo_s, hi_s)
-                    pts[u, D_static_p2:] = abs_val
-                step_sum += riesz_p2(pts)
+                    col_start = D_static_p2 + (k + 1) * D_sched_p2
+                    # For experiments with fewer layers, padded steps equal last real step
+                    full_pts[u, D_static_p2 + k * D_sched_p2:D_static_p2 + (k + 1) * D_sched_p2] = abs_val
 
-            step_avg = step_sum / L_max
+            # Pairwise repulsion in full space
+            diff = full_pts[:, np.newaxis, :] - full_pts[np.newaxis, :, :]
+            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu_p2], 1e-20)
+            pairwise = float(np.sum(dsq ** (-p / 2)))
+
+            # Boundary repulsion on all dims
+            boundary = 0.0
+            for d in range(D_full):
+                d_lo = np.maximum(full_pts[:, d], 1e-10)
+                d_hi = np.maximum(1.0 - full_pts[:, d], 1e-10)
+                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
+                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
+
+            energy = pairwise + boundary
+
+            # Smoothing penalty
             if schedule_smoothing > 0 and D_sched_p2 > 0:
                 total_penalty = 0.0
                 for u in range(n):
@@ -1842,9 +1864,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     sf = OptimizationEngine._schedule_smoothing_factor(
                         sched_vals, sched_delta_arr_p2, schedule_smoothing,
                     )
-                    total_penalty += abs(step_avg) * (1.0 - sf)
-                return step_avg + total_penalty / n
-            return step_avg
+                    total_penalty += abs(energy) * (1.0 - sf)
+                return energy + total_penalty / n
+            return energy
 
         self.logger.info(
             f"Phase 2 (Process): N={n}, L_max={L_max}, "
