@@ -569,6 +569,7 @@ class PfabAgent:
         online_backend: Optimizer | None = None,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
+        de_tol: float | None = None,
         lbfgsb_maxfun: int | None = None,
         lbfgsb_eps: float | None = None,
         baseline_riesz_p: float | None = None,
@@ -584,6 +585,8 @@ class PfabAgent:
             cal.de_maxiter = de_maxiter
         if de_popsize is not None:
             cal.de_popsize = de_popsize
+        if de_tol is not None:
+            cal.de_tol = de_tol
         if lbfgsb_maxfun is not None:
             cal.lbfgsb_maxfun = lbfgsb_maxfun
         if lbfgsb_eps is not None:

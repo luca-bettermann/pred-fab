@@ -54,11 +54,13 @@ class ProgressBar:
         bar = "\u2588" * filled + "\u2591" * (self._len - filled)
         print(f"  {self._label:<10s} [{bar}] {_D}{self._i}/{self._max}{_R}", end="\r", flush=True)
 
-    def finish(self, nfev: int | None = None) -> None:
+    def finish(self, nfev: int | None = None, suffix: str = "") -> None:
         """Fill the bar completely and print final info."""
         bar = "\u2588" * self._len
-        suffix = f"nfev={nfev}" if nfev is not None else f"{self._i}/{self._max}"
-        print(f"{_G}\u2713{_R} {self._label:<10s} [{bar}] {_D}{suffix}{_R}   ")
+        info = f"nfev={nfev}" if nfev is not None else f"{self._i}/{self._max}"
+        if suffix:
+            info += f"  {suffix}"
+        print(f"{_G}\u2713{_R} {self._label:<10s} [{bar}] {_D}{info}{_R}   ")
 
 
 class ConsoleReporter:

@@ -48,6 +48,7 @@ class OptimizationEngine:
         # DE optimizer parameters (global, population-based + L-BFGS-B polish)
         self.de_maxiter: int = 1000
         self.de_popsize: int = 15
+        self.de_tol: float = 0.001
 
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
         self.lbfgsb_maxfun: int | None = None
@@ -219,8 +220,10 @@ class OptimizationEngine:
         popsize = self.de_popsize
         has_int = integrality is not None and any(integrality)
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
+        iter_count = [0]
 
         def _progress(xk: Any, convergence: Any) -> None:
+            iter_count[0] += 1
             if bar:
                 bar.step()
 
@@ -231,7 +234,7 @@ class OptimizationEngine:
             popsize=popsize,
             mutation=(0.5, 1.0),
             recombination=0.7,
-            tol=0.001,
+            tol=self.de_tol,
             polish=not has_int,
             callback=_progress,
         )
@@ -247,7 +250,7 @@ class OptimizationEngine:
         result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
 
         if bar:
-            bar.finish(nfev=result.nfev)
+            bar.finish(nfev=result.nfev, suffix=f" {iter_count[0]}/{maxiter} iter")
 
         return _OptResult(
             best_x=result.x,
@@ -756,6 +759,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
     @de_popsize.setter
     def de_popsize(self, value: int) -> None:
         self.engine.de_popsize = value
+
+    @property
+    def de_tol(self) -> float:
+        return self.engine.de_tol
+
+    @de_tol.setter
+    def de_tol(self, value: float) -> None:
+        self.engine.de_tol = value
 
     @property
     def lbfgsb_maxfun(self) -> int | None:

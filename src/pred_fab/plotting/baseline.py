@@ -13,7 +13,7 @@ from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, save_fig, _extract_xy, _apply_axes, _add_fixed_subtitle,
-    STEEL_500, ZINC_400, ZINC_700,
+    STEEL_500, ZINC_400, ZINC_600, ZINC_700,
 )
 
 # Colormaps
@@ -65,7 +65,7 @@ def _highlight_style(
         return _STEEL_CMAP, 0.5, 0.7, 1.2, 25
     if code == highlight:
         return _EMERALD_CMAP, 0.9, 1.0, 2.5, 40
-    return _ZINC_CMAP, 0.15, 0.2, 0.8, 15
+    return _ZINC_CMAP, 0.25, 0.35, 1.0, 18
 
 
 # ── 2D parameter space ──
@@ -236,13 +236,21 @@ def plot_dimensional_trajectories(
         # Per-step dots colored by progression
         step_norm = Normalize(vmin=0, vmax=max(n_steps - 1, 1))
         colors = [cmap(step_norm(k)) for k in range(n_steps)]
-        is_faded = highlight is not None and code != highlight
+        is_highlighted = highlight is not None and code == highlight
+        is_faded = highlight is not None and not is_highlighted
         ax.scatter(
             xs, ys, zs,  # type: ignore[arg-type]
             c=colors, s=ms, edgecolors="white" if not is_faded else "none",
             linewidth=0.5, alpha=dot_alpha,
-            zorder=4 if code == highlight else 2, depthshade=False,
+            zorder=4 if is_highlighted else 2, depthshade=False,
         )
+
+        # Value labels on highlighted experiment's dots
+        if is_highlighted:
+            for k in range(n_steps):
+                label = f" {ys[k]:.1f}" if len(set(ys)) > 1 else f" {xs[k]:.3f}"
+                ax.text(xs[k], ys[k], zs[k], label, fontsize=7,
+                        color=ZINC_600, zorder=6)
 
     ax.zaxis.set_major_locator(MaxNLocator(integer=True))  # type: ignore[attr-defined]
 
