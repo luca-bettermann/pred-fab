@@ -44,8 +44,8 @@ def plot_performance_radar(
 
     fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"projection": "polar"})
 
-    # Shrink the radar within the figure to create margin for labels
-    ax.set_position([0.15, 0.18, 0.70, 0.65])  # type: ignore[arg-type]
+    # Shrink the radar to ~50% of figure, centered with room for labels + footer
+    ax.set_position([0.20, 0.22, 0.55, 0.55])  # type: ignore[arg-type]
 
     # Style the polar plot
     ax.set_theta_offset(np.pi / 2)  # type: ignore[attr-defined]
@@ -56,7 +56,7 @@ def plot_performance_radar(
     ax.set_ylim(0, 1.0)
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
     ax.set_yticklabels(["", "0.5", "", "1.0"],
-                       fontsize=8, color=ZINC_400)
+                       fontsize=10, color=ZINC_400)
     ax.spines["polar"].set_color(ZINC_200)
     ax.grid(color=ZINC_200, alpha=0.4, linewidth=0.6)
 
@@ -64,7 +64,7 @@ def plot_performance_radar(
     ax.set_xticks(angles)
     labels = [a.replace("_", " ").title() for a in attributes]
     ax.set_xticklabels(labels, fontsize=11, color=ZINC_600)
-    ax.tick_params(axis="x", pad=18)
+    ax.tick_params(axis="x", pad=20)
 
     # Dataset mean — background polygon
     ax.plot(angles_closed, mean_closed, "o-",
@@ -77,22 +77,21 @@ def plot_performance_radar(
             markeredgecolor="white", markeredgewidth=0.8, zorder=5)
     ax.fill(angles_closed, values_closed, alpha=0.15, color=EMERALD_300)
 
-    # Title
+    # Title — at the very top
     title_text = title
     if exp_code:
         title_text += f"  ·  {exp_code}"
-    fig.suptitle(title_text, fontsize=13, fontweight="bold",
-                 color=ZINC_700, y=0.93)
+    fig.text(0.5, 0.96, title_text, fontsize=13, fontweight="bold",
+             color=ZINC_700, ha="center", va="top")
 
-    # System performance — percentage display
+    # System performance — percentage display (experiment=green, dataset=grey)
     if combined_score is not None:
         pct = combined_score * 100
-        score_color = _score_color(combined_score)
-        fig.text(0.75, 0.10, f"{pct:.0f}%", fontsize=26, fontweight="bold",
-                 color=score_color, ha="center", va="bottom")
+        fig.text(0.78, 0.12, f"{pct:.0f}%", fontsize=28, fontweight="bold",
+                 color=EMERALD_500, ha="center", va="bottom")
         if dataset_combined is not None:
             avg_pct = dataset_combined * 100
-            fig.text(0.75, 0.05, f"{avg_pct:.0f}%", fontsize=16,
+            fig.text(0.78, 0.06, f"{avg_pct:.0f}%", fontsize=17,
                      color=ZINC_400, ha="center", va="bottom")
 
     # Legend (bottom-left)
@@ -104,16 +103,7 @@ def plot_performance_radar(
                markersize=4, alpha=0.5, label="Dataset avg"),
     ]
     fig.legend(handles=legend_elements, loc="lower left",
-               bbox_to_anchor=(0.06, 0.03), fontsize=9,
+               bbox_to_anchor=(0.06, 0.04), fontsize=10,
                frameon=False, labelcolor=ZINC_500)
 
     save_fig(save_path)
-
-
-def _score_color(score: float) -> str:
-    """Return color for a normalized [0,1] score per visual identity."""
-    if score >= 0.70:
-        return "#16a34a"  # green-600
-    elif score >= 0.45:
-        return "#ca8a04"  # yellow-600
-    return "#dc2626"      # red-600

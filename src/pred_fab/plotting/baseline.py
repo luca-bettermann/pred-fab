@@ -127,6 +127,11 @@ def plot_parameter_space_3d(
     if z_axis.bounds:
         ax.set_zlim(*z_axis.bounds)  # type: ignore[attr-defined]
 
+    # Force integer ticks on z-axis when all values are integers
+    from matplotlib.ticker import MaxNLocator
+    if all(z == int(z) for z in pz):
+        ax.zaxis.set_major_locator(MaxNLocator(integer=True))  # type: ignore[attr-defined]
+
     cb = fig.colorbar(sc, ax=ax, shrink=0.6, pad=0.1)
     cb.set_label(z_axis.display_label, fontsize=9)
 
