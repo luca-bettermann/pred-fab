@@ -7,7 +7,7 @@ any specific schema or domain.
 
 from ._style import AxisSpec, save_fig
 
-from .baseline import plot_parameter_space, plot_parameter_space_3d
+from .baseline import plot_parameter_space, plot_parameter_space_3d, plot_dimensional_trajectories
 from .prediction import (
     plot_prediction_scatter,
     plot_topology_comparison,
@@ -28,6 +28,7 @@ __all__ = [
     "save_fig",
     "plot_parameter_space",
     "plot_parameter_space_3d",
+    "plot_dimensional_trajectories",
     "plot_prediction_scatter",
     "plot_topology_comparison",
     "plot_importance_weights",
