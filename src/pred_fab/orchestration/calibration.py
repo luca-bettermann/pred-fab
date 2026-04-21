@@ -48,7 +48,7 @@ class OptimizationEngine:
         # DE optimizer parameters (global, population-based + L-BFGS-B polish)
         self.de_maxiter: int = 1000
         self.de_popsize: int = 15
-        self.de_tol: float = 0.001
+        self.de_tol: float = 0.0001
 
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
         self.lbfgsb_maxfun: int | None = None
