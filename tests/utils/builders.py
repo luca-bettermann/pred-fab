@@ -260,13 +260,17 @@ def build_calibration_system(
     def _default_perf_fn(params_dict):
         return {name: 0.5 for name in perf_names}
 
-    return CalibrationSystem(
+    cal = CalibrationSystem(
         schema=schema,
         logger=logger,
         perf_fn=perf_fn or _default_perf_fn,  # type: ignore[arg-type]
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
         similarity_fn=similarity_fn,
     )
+    # Fast DE settings for tests (production uses scipy defaults: 1000/15)
+    cal.de_maxiter = 50
+    cal.de_popsize = 5
+    return cal
 
 
 def build_real_agent_stack(tmp_path):

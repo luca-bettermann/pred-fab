@@ -1263,13 +1263,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sched_set = set(self.schedule_configs.keys())
             L = 1
             if self.schedule_configs:
-                for dim_code in set(self.schedule_configs.values()):
-                    if dim_code in self.fixed_params:
-                        L = max(L, int(self.fixed_params[dim_code]))
-                    elif dim_code in self.schema_bounds:
-                        _, hi_s = self.schema_bounds[dim_code]
-                        if hi_s != np.inf:
-                            L = max(L, int(hi_s))
+                sched_dims = set(self.schedule_configs.values())
+                unfixed = [d for d in sched_dims if d not in self.fixed_params]
+                if unfixed:
+                    raise RuntimeError(
+                        f"Schedule dimensions {sorted(unfixed)} must be fixed to determine "
+                        f"the number of steps. Call configure_fixed_params() for each."
+                    )
+                L = max(int(self.fixed_params[d]) for d in sched_dims)
 
             static_indices: list[int] = []
             sched_indices: list[int] = []
