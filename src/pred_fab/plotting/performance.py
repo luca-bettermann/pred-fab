@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    save_fig, EMERALD_100, EMERALD_300, EMERALD_500,
+    save_fig, EMERALD_300, EMERALD_500,
     ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
 
@@ -28,7 +28,6 @@ def plot_performance_radar(
     if n < 3:
         return
 
-    # Compute values
     values = [performance[a] for a in attributes]
 
     # Dataset mean
@@ -45,24 +44,27 @@ def plot_performance_radar(
 
     fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"projection": "polar"})
 
+    # Shrink the radar within the figure to create margin for labels
+    ax.set_position([0.15, 0.18, 0.70, 0.65])  # type: ignore[arg-type]
+
     # Style the polar plot
     ax.set_theta_offset(np.pi / 2)  # type: ignore[attr-defined]
     ax.set_theta_direction(-1)  # type: ignore[attr-defined]
-    ax.set_rlabel_position(30)  # type: ignore[attr-defined]
+    ax.set_rlabel_position(45)  # type: ignore[attr-defined]
 
-    # Shrink radar to leave room for labels
-    ax.set_ylim(0, 1.15)
+    # Grid
+    ax.set_ylim(0, 1.0)
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-    ax.set_yticklabels(["", "0.50", "", "1.00"],
-                       fontsize=7, color=ZINC_400)
+    ax.set_yticklabels(["", "0.5", "", "1.0"],
+                       fontsize=8, color=ZINC_400)
     ax.spines["polar"].set_color(ZINC_200)
     ax.grid(color=ZINC_200, alpha=0.4, linewidth=0.6)
 
-    # Axis labels — push outward
+    # Axis labels
     ax.set_xticks(angles)
     labels = [a.replace("_", " ").title() for a in attributes]
-    ax.set_xticklabels(labels, fontsize=9, color=ZINC_600)
-    ax.tick_params(axis="x", pad=12)
+    ax.set_xticklabels(labels, fontsize=11, color=ZINC_600)
+    ax.tick_params(axis="x", pad=18)
 
     # Dataset mean — background polygon
     ax.plot(angles_closed, mean_closed, "o-",
@@ -79,20 +81,19 @@ def plot_performance_radar(
     title_text = title
     if exp_code:
         title_text += f"  ·  {exp_code}"
-    fig.suptitle(title_text, fontsize=12, fontweight="bold",
-                 color=ZINC_700, y=0.95)
+    fig.suptitle(title_text, fontsize=13, fontweight="bold",
+                 color=ZINC_700, y=0.93)
 
-    # System performance — percentage display below the radar
+    # System performance — percentage display
     if combined_score is not None:
         pct = combined_score * 100
         score_color = _score_color(combined_score)
-        fig.text(0.72, 0.10, f"{pct:.0f}%", fontsize=22, fontweight="bold",
+        fig.text(0.75, 0.10, f"{pct:.0f}%", fontsize=26, fontweight="bold",
                  color=score_color, ha="center", va="bottom")
         if dataset_combined is not None:
             avg_pct = dataset_combined * 100
-            avg_color = _score_color(dataset_combined)
-            fig.text(0.72, 0.06, f"{avg_pct:.0f}%", fontsize=14,
-                     color=avg_color, ha="center", va="bottom")
+            fig.text(0.75, 0.05, f"{avg_pct:.0f}%", fontsize=16,
+                     color=ZINC_400, ha="center", va="bottom")
 
     # Legend (bottom-left)
     from matplotlib.lines import Line2D
@@ -102,9 +103,9 @@ def plot_performance_radar(
         Line2D([0], [0], color=ZINC_400, linewidth=1.2, marker="o",
                markersize=4, alpha=0.5, label="Dataset avg"),
     ]
-    leg = fig.legend(handles=legend_elements, loc="lower left",
-                     bbox_to_anchor=(0.05, 0.03), fontsize=8,
-                     frameon=False, labelcolor=ZINC_500)
+    fig.legend(handles=legend_elements, loc="lower left",
+               bbox_to_anchor=(0.06, 0.03), fontsize=9,
+               frameon=False, labelcolor=ZINC_500)
 
     save_fig(save_path)
 
