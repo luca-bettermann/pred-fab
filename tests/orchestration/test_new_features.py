@@ -142,7 +142,7 @@ class TestScheduleSmoothing:
 
     def test_default_smoothing_is_zero(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.schedule_smoothing == 0.25
+        assert agent.calibration_system.schedule_smoothing == 0.05
 
     def test_smoothing_configurable(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
