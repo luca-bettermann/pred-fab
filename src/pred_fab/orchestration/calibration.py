@@ -1266,10 +1266,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sched_dims = set(self.schedule_configs.values())
                 unfixed = [d for d in sched_dims if d not in self.fixed_params]
                 if unfixed:
-                    raise RuntimeError(
+                    self.logger.warning(
                         f"Schedule dimensions {sorted(unfixed)} must be fixed to determine "
-                        f"the number of steps. Call configure_fixed_params() for each."
+                        f"the number of steps. Call configure_fixed_params() for each. "
+                        f"Proceeding without schedule."
                     )
+                    sched_set = set()  # skip schedule for this run
                 L = max(int(self.fixed_params[d]) for d in sched_dims)
 
             static_indices: list[int] = []
