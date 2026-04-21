@@ -402,7 +402,7 @@ class TestOfflineInferenceDimensionalLevel:
 # ===========================================================================
 
 class TestStepLoopInternals:
-    """Low-level tests for _build_step_grid, _get_eligible_params, _build_experiment_spec."""
+    """Low-level tests for _build_step_grid and _build_experiment_spec."""
 
     def test_build_step_grid_no_schedule_returns_single_empty_dict(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
@@ -424,37 +424,6 @@ class TestStepLoopInternals:
         assert len(grid) == 2
         assert grid[0] == {"dim_1": 0}
         assert grid[1] == {"dim_1": 1}
-
-    def test_get_eligible_params_all_transition_at_first_step(self, tmp_path):
-        """At step 0 (prev_indices=None), ALL schedule params are eligible."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
-
-        eligible = cs._get_eligible_params(prev_indices=None, curr_indices={"dim_1": 0})
-        assert "speed" in eligible
-
-    def test_get_eligible_params_unchanged_dim_not_eligible(self, tmp_path):
-        """When a dim doesn't change, its params are NOT eligible."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
-
-        eligible = cs._get_eligible_params(
-            prev_indices={"dim_1": 1}, curr_indices={"dim_1": 1},
-        )
-        assert "speed" not in eligible
-
-    def test_get_eligible_params_transitioning_dim_is_eligible(self, tmp_path):
-        """When a dim changes, its params ARE eligible."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
-
-        eligible = cs._get_eligible_params(
-            prev_indices={"dim_1": 0}, curr_indices={"dim_1": 1},
-        )
-        assert "speed" in eligible
 
     def test_build_experiment_spec_single_step_produces_empty_schedules(self, tmp_path):
         """Single proposal → ExperimentSpec with no schedules."""
@@ -798,40 +767,6 @@ class TestMultiDimMixedScenario:
         ]
         assert grid == expected
 
-    def test_layer_height_eligible_only_when_dim1_transitions(self, tmp_path):
-        """layer_height is only eligible when dim_1 index changes."""
-        agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
-
-        # Step 0: prev=None → dim_1 transitions → layer_height eligible
-        eligible_0 = cs._get_eligible_params(None, {"dim_1": 0, "dim_2": 0})
-        assert "layer_height" in eligible_0
-
-        # Step 1: dim_1 unchanged → layer_height NOT eligible
-        eligible_1 = cs._get_eligible_params({"dim_1": 0, "dim_2": 0}, {"dim_1": 0, "dim_2": 1})
-        assert "layer_height" not in eligible_1
-
-        # Step 3: dim_1 transitions (0→1) → layer_height eligible again
-        eligible_3 = cs._get_eligible_params({"dim_1": 0, "dim_2": 2}, {"dim_1": 1, "dim_2": 0})
-        assert "layer_height" in eligible_3
-
-    def test_speed_eligible_at_all_steps(self, tmp_path):
-        """speed maps to dim_2 which transitions at every step of the flat grid."""
-        agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
-        current_params = {**exp.parameters.get_values_dict()}
-        grid = cs._build_step_grid(current_params)
-
-        prev = None
-        for curr in grid:
-            eligible = cs._get_eligible_params(prev, curr)
-            assert "speed" in eligible, f"speed should be eligible at step {curr}"
-            prev = curr
-
     def test_returns_both_dimension_schedules(self, tmp_path):
         """Both 'dim_1' and 'dim_2' keys must appear in result.schedules."""
         cs, exp, datamodule, current_params = self._configured_cs(tmp_path)
@@ -1041,14 +976,10 @@ class TestTargetIndices:
         assert result["layer_height"] == pytest.approx(lh_before, abs=1e-6)
 
     def test_target_both_dims_both_params_eligible(self, tmp_path):
-        """target_indices covering both dims → both layer_height and speed can change."""
+        """target_indices covering both dims → valid single-step ExperimentSpec."""
         cs, exp, datamodule, current_params = self._configured_cs(tmp_path)
-        # Verify eligibility directly
-        eligible = cs._get_eligible_params(None, {"dim_1": 1, "dim_2": 0})
-        assert "layer_height" in eligible
-        assert "speed" in eligible
 
-        # run_calibration respects this: result is a valid ExperimentSpec
+        # run_calibration with target_indices: single-step, valid ExperimentSpec
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
             current_params=current_params,
@@ -1079,192 +1010,3 @@ class TestTargetIndices:
         assert result.schedules == {}
 
 
-# ===========================================================================
-# 10. MPC lookahead — reduces greedy myopia via simulated rollouts
-# ===========================================================================
-
-class TestMPCLookahead:
-    """mpc_lookahead > 0 augments each step's objective with a short forward rollout
-    .  The step-loop structure and return
-    type are unchanged; only the score landscape seen by the optimizer differs.
-    """
-
-    # --- Helpers ---
-
-    def _configured_cs_with_delta(self, tmp_path):
-        """Return (cs, exp, datamodule, current_params) with speed delta configured."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_adaptation_delta({"speed": 50.0})
-        current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
-        return cs, exp, datamodule, current_params
-
-    def _two_runtime_cs(self, tmp_path):
-        """Return (cs, exp, datamodule, current_params) with both runtime params configured."""
-        agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
-        cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
-        current_params = {**exp.parameters.get_values_dict()}
-        return cs, exp, datamodule, current_params
-
-    # --- Online smoke tests ---
-
-    def test_mpc_online_returns_experiment_spec(self, tmp_path):
-        """MPC applies in online mode (target_indices provided)."""
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION, target_indices={},
-            current_params=current_params, mpc_lookahead=1,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    def test_mpc_ignored_in_offline_mode(self, tmp_path):
-        """mpc_lookahead is silently ignored when target_indices is None (offline)."""
-        cs, exp, datamodule, current_params = self._configured_cs_with_delta(tmp_path)
-        result = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, mpc_lookahead=2,
-        )
-        assert isinstance(result, ExperimentSpec)
-
-    # --- _wrap_mpc_objective unit tests ---
-
-    def test_wrap_mpc_depth_zero_returns_base_unchanged(self, tmp_path):
-        """depth=0 must return the exact same callable object (no wrapping overhead)."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        base = cs._build_objective(Mode.EXPLORATION, 0.5)
-        wrapped = cs._wrap_mpc_objective(base, datamodule, depth=0, discount=0.9)
-        assert wrapped is base
-
-    def test_wrap_mpc_depth_nonzero_returns_new_callable(self, tmp_path):
-        """depth>0 must produce a different callable (the MPC wrapper)."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs._active_datamodule = datamodule
-        base = cs._build_objective(Mode.EXPLORATION, 0.5)
-        wrapped = cs._wrap_mpc_objective(base, datamodule, depth=1, discount=0.9)
-        assert wrapped is not base
-        assert callable(wrapped)
-
-    def test_wrap_mpc_discount_zero_equals_base_score(self, tmp_path):
-        """With discount=0 the MPC objective at any X equals the base objective at X.
-
-        We use a concrete, well-behaved lambda (not the model-based acquisition)
-        to avoid nan-propagation issues (0.0 * nan = nan in IEEE 754).
-        """
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs._active_datamodule = datamodule
-        cs.configure_adaptation_delta({"speed": 50.0})
-
-        # Simple finite objective — no model calls, no NaN risk
-        def simple_base(X: np.ndarray) -> float:
-            return -float(np.sum(X ** 2))
-
-        mpc = cs._wrap_mpc_objective(simple_base, datamodule, depth=2, discount=0.0)
-
-        n_dims = len(datamodule.input_columns)
-        X_test = np.full(n_dims, 0.5)
-
-        base_score = simple_base(X_test)
-        mpc_score = mpc(X_test)
-        assert mpc_score == pytest.approx(base_score, abs=1e-8)
-
-    # --- Call-count: MPC must evaluate the objective more than greedy ---
-
-    def test_mpc_evaluates_objective_more_than_greedy(self, tmp_path):
-        """Each MPC objective evaluation runs an inner minimize → more base calls (online only)."""
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_adaptation_delta({"speed": 50.0})
-
-        call_count = {"n": 0}
-        original_perf_fn = cs.perf_fn
-
-        def counting_perf_fn(params_dict):
-            call_count["n"] += 1
-            return original_perf_fn(params_dict)
-
-        cs.perf_fn = counting_perf_fn
-        current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
-
-        # Greedy baseline (online, mpc_lookahead=0 → no lookahead)
-        call_count["n"] = 0
-        cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, target_indices={}, mpc_lookahead=0,
-        )
-        calls_greedy = call_count["n"]
-
-        # MPC depth=1 (online, mpc_lookahead=1 → one step lookahead)
-        call_count["n"] = 0
-        cs.run_calibration(
-            datamodule=datamodule, mode=Mode.EXPLORATION,
-            current_params=current_params, target_indices={}, mpc_lookahead=1,
-        )
-        calls_mpc = call_count["n"]
-
-        assert calls_mpc > calls_greedy, (
-            f"Expected MPC to call objective more than greedy "
-            f"(greedy={calls_greedy}, mpc={calls_mpc})"
-        )
-
-    # --- MPC on shaped objectives selects different X than pure greedy ---
-
-    def test_mpc_with_shaped_objective_differs_from_greedy(self, tmp_path):
-        """On a strongly directional objective, MPC with discount=1 picks a different
-        starting point than greedy because it anticipates the future trust-region step.
-
-        The shaped objective rewards higher speed linearly.  Pure greedy will
-        pick the maximum of the trust region around current_params (speed=100).
-        MPC looks one step ahead and knows that a moderate speed now leads to a
-        higher speed next step → it discounts the first step and aims for a point
-        that enables a larger overall gain.
-        """
-        from pred_fab.orchestration.calibration import CalibrationSystem as _CS
-        from tests.utils.builders import build_calibration_system, build_dataset_with_single_experiment
-
-        # Build a CS where uncertainty is constant and perf = speed / 200.
-        # The acquisition function then purely rewards high speed.
-        dataset = build_dataset_with_single_experiment(tmp_path)
-
-        agent, exp, datamodule = _setup_runtime_agent(tmp_path)
-        cs = agent.calibration_system
-        cs.configure_adaptation_delta({"speed": 50.0})
-        delta = 50.0
-
-        # Replace perf_fn with a linearly shaped one (higher speed = better)
-        def shaped_perf(params_dict):
-            return {"performance_1": float(params_dict.get("speed", 0.0)) / 200.0}
-
-        cs.perf_fn = shaped_perf  # type: ignore[assignment]
-        cs._active_datamodule = datamodule
-
-        current_params = {"param_1": 2.5, "speed": 100.0, "dim_1": 2, "dim_2": 3}
-
-        # Pure greedy (online, mpc_lookahead=0): maximize speed within [100-50, 100+50] = [50, 150]
-        result_greedy = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, target_indices={}, mpc_lookahead=0,
-        )
-        speed_greedy = float(result_greedy["speed"])
-
-        # MPC mpc_lookahead=1, discount=1.0 (online): also considers step k+1 → can justify a
-        # slightly lower step-k speed to stay centred and avoid hitting the schema boundary.
-        result_mpc = cs.run_calibration(
-            datamodule=datamodule, mode=Mode.INFERENCE,
-            current_params=current_params, target_indices={}, mpc_lookahead=1, mpc_discount=1.0,
-        )
-        speed_mpc = float(result_mpc["speed"])
-
-        # Both must stay within trust-region bounds
-        assert speed_greedy >= 100.0 - delta - 1e-4
-        assert speed_greedy <= 100.0 + delta + 1e-4
-        assert speed_mpc >= 100.0 - delta - 1e-4
-        assert speed_mpc <= 100.0 + delta + 1e-4
-        # Both are valid ExperimentSpecs
-        assert isinstance(result_greedy, ExperimentSpec)
-        assert isinstance(result_mpc, ExperimentSpec)

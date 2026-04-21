@@ -11,7 +11,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models; per-model KDE uncertainty + similarity |
-| `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, MPC (online only) |
+| `CalibrationSystem` | `calibration.py` | Optimization engine: UCB, inference, baseline, joint schedule optimization |
 | `Optimizer` | `calibration.py` | Enum: `DE` (differential evolution + L-BFGS-B polish, default offline) / `LBFGSB` (gradient multi-start, default online) |
 
 ## Configuration
@@ -30,13 +30,13 @@ score = (1 - κ) · performance + κ · evidence
 ```
 | κ | Mode | Purpose |
 |---|------|---------|
-| 1.0 | Baseline | Pure evidence — maximally-spaced coverage via virtual KDE points |
+| 1.0 | Baseline | Pure evidence — maximally-spaced coverage via particle repulsion |
 | 0 < κ < 1 | Exploration | Balance coverage + performance (default κ=0.5) |
 | 0.0 | Inference | Pure performance — first-time-right manufacturing |
 
 - **Performance** is normalized to its running observed range from training data.
 - **Evidence** (KDE uncertainty) is inherently [0, 1] and not renormalized.
-- **Baseline** uses `fit_empty_kde()` + iterative virtual point injection — no separate sampling algorithm (LHS/Sobol) needed.
+- **Baseline** uses Riesz energy particle repulsion via DE — no separate sampling algorithm (LHS/Sobol) needed.
 
 Users interact only with `PfabAgent` — no direct access to subsystems needed.
 
@@ -51,12 +51,11 @@ Convenience prediction methods (no calibration run):
 - `agent.predict_uncertainty(params, datamodule)` → `float`
 
 ## Calibration Architecture
-`run_calibration(mode, current_params, target_indices, mpc_lookahead, …)` is the single optimization entry point.
+`run_calibration(mode, current_params, target_indices, …)` is the single optimization entry point.
 
 - **Offline** (no `current_params`/`target_indices`): global bounds + random restarts
-- **Online** (`current_params` + `target_indices`): trust-region bounds, single-shot
-- **Step-grid** (`schedule_configs` configured): iterates over Cartesian product of dimension steps; only params whose mapped dimension transitions are free at each step
-- **MPC** (`mpc_lookahead > 0`, online only): wraps objective with N-step discounted lookahead via `_wrap_mpc_objective`; ignored in offline mode
+- **Online** (`current_params` + `target_indices`): trust-region bounds, single-shot (L=1)
+- **Joint schedule** (`schedule_configs` configured, L>1): all schedule steps optimized simultaneously via DE with offset reparameterization; decision vector = [static_params, sched_step0, offset_1, ..., offset_{L-1}]; smoothing penalty discourages large jumps
 
 `run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
 

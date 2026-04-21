@@ -33,7 +33,7 @@ class _OptResult:
 warnings.filterwarnings("ignore", category=UserWarning)
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: UCB exploration, inference, LHS baseline, and MPC lookahead."""
+    """Active-learning calibration engine: UCB exploration, inference, LHS baseline, and joint schedule optimization."""
 
     def __init__(
         self,
@@ -55,12 +55,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._n_decay_fn = n_decay_fn
         self._base_buffer_fn = base_buffer_fn
 
-        # Virtual KDE point callbacks for within-schedule spacing.
-        # Set by PfabAgent to inject proposed points into the KDE between
-        # schedule steps, causing subsequent layers to see lower uncertainty
-        # at already-proposed speeds and naturally spacing out.
-        self._add_virtual_point_fn: Callable[[dict[str, Any]], None] | None = None
-        self._clear_virtual_points_fn: Callable[[], None] | None = None
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
@@ -94,8 +88,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.online_optimizer: Optimizer = Optimizer.LBFGSB  # online (adaptation / trust-region)
 
         # DE optimizer parameters (global, population-based + L-BFGS-B polish)
-        self.de_maxiter: int = 100     # maximum generations
-        self.de_popsize: int = 10      # population size per dimension
+        self.de_maxiter: int = 1000    # maximum generations
+        self.de_popsize: int = 15      # population size per dimension
 
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
         self.lbfgsb_maxfun: int | None = None  # max evals per start (None = auto)
@@ -495,59 +489,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === PRIVATE HELPERS ===
 
-    def _wrap_mpc_objective(
-        self,
-        base_objective: Callable,
-        datamodule: DataModule,
-        depth: int,
-        discount: float,
-    ) -> Callable:
-        """Wrap base_objective with MPC lookahead: MPC(X) = Σ γʲ·score(Xⱼ) over depth steps.
-
-        Returns base_objective unchanged when depth <= 0.
-        """
-        if depth <= 0:
-            return base_objective
-
-        calibration_system = self
-
-        class _MpcObjective:
-            """Callable MPC wrapper that tracks total inner evaluations."""
-
-            def __init__(self, weight_sum: float):
-                self._eval_counter = [0]
-                self._weight_sum = weight_sum
-
-            def __call__(self, X: np.ndarray) -> float:
-                base_score = base_objective(X)
-                self._eval_counter[0] += 1
-                total = base_score
-                X_cur = X.copy()
-                for j in range(depth):
-                    try:
-                        params_cur = datamodule.array_to_params(X_cur)
-                        bounds_ahead = calibration_system._get_trust_region_bounds(datamodule, params_cur)
-                        res = minimize(
-                            fun=base_objective,
-                            x0=X_cur,
-                            bounds=bounds_ahead,
-                            method='L-BFGS-B',
-                            options={'maxfun': 20},  # cheap inner solve
-                        )
-                        self._eval_counter[0] += res.nfev
-                        X_cur = res.x
-                        step_score = base_objective(X_cur)
-                        self._eval_counter[0] += 1
-                        discount_factor = discount ** (j + 1)
-                        total += discount_factor * step_score
-                    except Exception:
-                        break
-                return total / self._weight_sum
-
-        # Normalization: sum of discount weights so MPC score stays in same range as single score
-        weight_sum = 1.0 + sum(discount ** (j + 1) for j in range(depth))
-        return _MpcObjective(weight_sum)
-
     def update_perf_range(self, datamodule: DataModule) -> None:
         """Update performance normalization range from training data.
 
@@ -648,21 +589,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             dict(zip(dim_codes, idx))
             for idx in _it.product(*(range(s) for s in sizes))
         ]
-
-    def _get_eligible_params(
-        self,
-        prev_indices: dict[str, int] | None,
-        curr_indices: dict[str, int],
-    ) -> set:
-        """Return schedule params whose mapped dimension transitions at this step."""
-        transitioning_dims: set = set()
-        for dim_code in curr_indices:
-            if prev_indices is None or curr_indices[dim_code] != prev_indices.get(dim_code):
-                transitioning_dims.add(dim_code)
-        return {
-            code for code, dim_code in self.schedule_configs.items()
-            if dim_code in transitioning_dims
-        }
 
     def _build_experiment_spec(
         self,
@@ -1050,35 +976,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 candidate[v] = np.clip(candidate[v], lo + 0.001, hi - 0.001)
             init_pop[j] = candidate
 
-        maxiter = self.de_maxiter
-        bar = ProgressBar("Baseline", max_iter=maxiter) if show_progress else None
-
-        def _progress(xk, convergence):
-            if bar:
-                bar.step()
-
-        result = differential_evolution(
+        opt = self._run_de(
             energy,
-            bounds=de_bounds,
-            init=init_pop,
-            maxiter=maxiter,
-            seed=self._random_seed,  # type: ignore[call-arg]
-            tol=1e-10,
-            polish=not any(integrality_mask),  # polish uses L-BFGS-B, incompatible with integrality
-            integrality=integrality_mask,  # type: ignore[call-arg]
-            callback=_progress,
+            de_bounds,
+            init_pop=init_pop,
+            integrality=integrality_mask,
+            label="Baseline",
+            show_progress=show_progress,
         )
-
-        self.last_baseline_nfev: int = int(result.nfev)
-        if bar:
-            bar.finish(nfev=result.nfev)
+        self.last_baseline_nfev: int = opt.nfev
 
         self.logger.debug(
-            f"Repulsion DE: {result.nfev} evals, energy = {result.fun:.2f}."
+            f"Repulsion DE: {opt.nfev} evals, score = {opt.score:.2f}."
         )
 
         # Convert integer dims from [0, range] back to [0, 1] normalized space.
-        out = result.x.reshape(n, n_dims).copy()
+        best_x = opt.best_x if opt.best_x is not None else init_de.flatten()
+        out = best_x.reshape(n, n_dims).copy()
         for d in int_set:
             out[:, d] = out[:, d] / int_ranges[d] if int_ranges[d] > 0 else 0.5
         return out
@@ -1095,6 +1009,236 @@ class CalibrationSystem(BaseOrchestrationSystem):
         np.fill_diagonal(dist_sq, np.inf)
         return float(np.sqrt(np.min(dist_sq)))
 
+    # ------------------------------------------------------------------
+    # Joint schedule optimization helpers
+    # ------------------------------------------------------------------
+
+    def _run_de(
+        self,
+        objective: Callable,
+        bounds: list[tuple[float, float]],
+        *,
+        init_pop: np.ndarray | None = None,
+        integrality: list[bool] | None = None,
+        label: str = "Optimizing",
+        show_progress: bool = False,
+    ) -> _OptResult:
+        """Unified differential evolution wrapper used by both baseline and acquisition optimization."""
+        maxiter = self.de_maxiter
+        popsize = self.de_popsize
+        has_int = integrality is not None and any(integrality)
+        bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
+
+        def _progress(xk: Any, convergence: Any) -> None:
+            if bar:
+                bar.step()
+
+        de_kwargs: dict[str, Any] = dict(
+            func=objective,
+            bounds=bounds,
+            maxiter=maxiter,
+            popsize=popsize,
+            mutation=(0.5, 1.0),
+            recombination=0.7,
+            tol=0.001,
+            polish=not has_int,
+            callback=_progress,
+        )
+        if init_pop is not None:
+            de_kwargs["init"] = init_pop
+        else:
+            de_kwargs["init"] = "latinhypercube"
+        if integrality is not None:
+            de_kwargs["integrality"] = integrality
+        if self._random_seed is not None:
+            de_kwargs["seed"] = int(self.rng.randint(0, 2**31 - 1))
+
+        result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
+
+        if bar:
+            bar.finish(nfev=result.nfev)
+
+        return _OptResult(
+            best_x=result.x,
+            nfev=result.nfev,
+            n_starts=1,
+            score=float(-result.fun),
+        )
+
+    @staticmethod
+    def _schedule_smoothing_factor(
+        scheduled_values: np.ndarray,
+        deltas: np.ndarray,
+        lam: float,
+    ) -> float:
+        """Multiplicative penalty in (0, 1] for schedule jumps. Called by both objectives."""
+        if lam <= 0 or scheduled_values.shape[0] <= 1:
+            return 1.0
+        factor = 1.0
+        for k in range(1, scheduled_values.shape[0]):
+            for d in range(scheduled_values.shape[1]):
+                if deltas[d] <= 0:
+                    continue
+                change = abs(scheduled_values[k, d] - scheduled_values[k - 1, d])
+                frac = min(change / deltas[d], 1.0)
+                factor *= (1.0 - lam * frac)
+        return factor
+
+    def _build_joint_schedule_bounds(
+        self,
+        datamodule: DataModule,
+        global_bounds: np.ndarray,
+        step_grid: list[dict[str, int]],
+    ) -> tuple[list[tuple[float, float]], list[str], list[str], np.ndarray]:
+        """Build reparameterized bounds for joint schedule optimization.
+
+        Returns (de_bounds, static_codes, sched_codes, sched_deltas_norm).
+        Decision vector layout: [static_params_norm, sched_step0_norm, offset_1, ..., offset_{L-1}].
+        """
+        L = len(step_grid)
+        col_map = datamodule.get_onehot_column_map()
+        context_codes = set(datamodule.context_feature_codes)
+
+        # Separate static vs scheduled input columns
+        sched_set = set(self.schedule_configs.keys())
+        static_codes: list[str] = []
+        sched_codes: list[str] = []
+
+        for code in datamodule.input_columns:
+            if code in context_codes or code in col_map or code in self.fixed_params:
+                static_codes.append(code)
+            elif code in sched_set:
+                sched_codes.append(code)
+            else:
+                static_codes.append(code)
+
+        # Build bounds list: static part (from global_bounds)
+        de_bounds: list[tuple[float, float]] = []
+        code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
+        for code in static_codes:
+            idx = code_to_idx[code]
+            de_bounds.append((float(global_bounds[idx, 0]), float(global_bounds[idx, 1])))
+
+        # Scheduled params: step 0 gets global bounds, steps 1+ get offset bounds
+        sched_deltas_norm = np.zeros(len(sched_codes))
+        for d, code in enumerate(sched_codes):
+            idx = code_to_idx[code]
+            lo_norm, hi_norm = float(global_bounds[idx, 0]), float(global_bounds[idx, 1])
+            # Step 0: global bounds
+            de_bounds.append((lo_norm, hi_norm))
+
+            # Compute normalized delta
+            delta_raw = self.trust_regions.get(code, 0.0)
+            if delta_raw > 0:
+                _, delta_norm = datamodule.normalize_parameter_bounds(code, 0.0, delta_raw)
+                lo_zero, _ = datamodule.normalize_parameter_bounds(code, 0.0, 0.0)
+                delta_norm = abs(delta_norm - lo_zero)
+            else:
+                delta_norm = 0.0
+            sched_deltas_norm[d] = delta_norm
+
+        # Steps 1..L-1: offset bounds [-delta_norm, +delta_norm] per scheduled param
+        for _step in range(1, L):
+            for d in range(len(sched_codes)):
+                dn = sched_deltas_norm[d]
+                de_bounds.append((-dn, dn))
+
+        return de_bounds, static_codes, sched_codes, sched_deltas_norm
+
+    def _decode_joint_schedule_vector(
+        self,
+        X: np.ndarray,
+        static_codes: list[str],
+        sched_codes: list[str],
+        sched_deltas_norm: np.ndarray,
+        L: int,
+        global_bounds: np.ndarray,
+        datamodule: DataModule,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Decode a joint decision vector into per-step normalized arrays.
+
+        Returns (static_norm_1d, sched_abs_per_step) where sched_abs_per_step is (L, D_sched)
+        in normalized space.
+        """
+        D_static = len(static_codes)
+        D_sched = len(sched_codes)
+        code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
+
+        static_norm = X[:D_static]
+        sched_step0 = X[D_static:D_static + D_sched]
+
+        # Reconstruct absolute values at each step
+        sched_abs = np.zeros((L, D_sched))
+        sched_abs[0] = sched_step0
+
+        offset_start = D_static + D_sched
+        for k in range(1, L):
+            offset_k = X[offset_start + (k - 1) * D_sched : offset_start + k * D_sched]
+            sched_abs[k] = sched_abs[k - 1] + offset_k
+
+            # Clip to schema bounds with warning
+            for d, code in enumerate(sched_codes):
+                idx = code_to_idx[code]
+                lo_norm = float(global_bounds[idx, 0])
+                hi_norm = float(global_bounds[idx, 1])
+                val = sched_abs[k, d]
+                if val < lo_norm or val > hi_norm:
+                    self.logger.warning(
+                        f"Schedule step {k}: '{code}' clipped from {val:.4f} "
+                        f"to [{lo_norm:.4f}, {hi_norm:.4f}]"
+                    )
+                    sched_abs[k, d] = np.clip(val, lo_norm, hi_norm)
+
+        return static_norm, sched_abs
+
+    def _joint_schedule_objective(
+        self,
+        X: np.ndarray,
+        *,
+        base_objective: Callable,
+        datamodule: DataModule,
+        static_codes: list[str],
+        sched_codes: list[str],
+        sched_deltas_norm: np.ndarray,
+        sched_deltas_raw: np.ndarray,
+        L: int,
+        global_bounds: np.ndarray,
+    ) -> float:
+        """Joint acquisition/inference objective across all schedule steps."""
+        D_static = len(static_codes)
+        D_sched = len(sched_codes)
+        n_input = len(datamodule.input_columns)
+
+        static_norm, sched_abs = self._decode_joint_schedule_vector(
+            X, static_codes, sched_codes, sched_deltas_norm, L, global_bounds, datamodule,
+        )
+
+        # Build code-to-index for the full input vector
+        code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
+
+        # Evaluate per-step, average scores
+        total_score = 0.0
+        for k in range(L):
+            # Assemble full normalized input vector for this step
+            x_step = np.zeros(n_input)
+            for i, code in enumerate(static_codes):
+                x_step[code_to_idx[code]] = static_norm[i]
+            for d, code in enumerate(sched_codes):
+                x_step[code_to_idx[code]] = sched_abs[k, d]
+            total_score += base_objective(x_step)
+
+        avg_score = total_score / L
+
+        # Apply smoothing penalty (smoothing operates on raw/absolute values)
+        # Denormalize sched_abs for smoothing
+        smoothing = self._schedule_smoothing_factor(
+            sched_abs, sched_deltas_norm, self.schedule_smoothing,
+        )
+
+        # avg_score is negative (minimization); multiply by smoothing in (0,1] makes
+        # it less negative (worse) when there are jumps.
+        return avg_score * smoothing
+
     def run_calibration(
         self,
         datamodule: DataModule,
@@ -1103,17 +1247,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: dict[str, int] | None = None,
         kappa: float = 0.5,
         n_optimization_rounds: int = 10,
-        mpc_lookahead: int | None = None,
-        mpc_discount: float | None = None,
         source_step_override: SourceStep | None = None,
     ) -> ExperimentSpec:
-        """Run a single calibration pass and return an ExperimentSpec.
+        """Run calibration and return an ExperimentSpec.
 
-        Offline (global bounds + random restarts) when current_params/target_indices are omitted;
+        Offline (global bounds) when current_params/target_indices are omitted;
         online (trust-region) when both are provided.
-        mpc_lookahead=0 → greedy single-step; mpc_lookahead=N → N-step discounted lookahead.
-        mpc_discount (γ): weight for future steps in the MPC sum Σ γʲ·score(Xⱼ).
-          γ=0.9 means step j=1 counts at 90%, j=2 at 81%, etc. — nearer steps matter more.
+        Multi-step schedules use joint optimization over all steps simultaneously.
         """
         self._active_datamodule = datamodule
 
@@ -1132,12 +1272,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None
-        if is_online and mpc_lookahead is not None and mpc_lookahead > 0:
-            discount = mpc_discount if mpc_discount is not None else 0.9
-            objective = self._wrap_mpc_objective(objective, datamodule, mpc_lookahead, discount)
-            self.logger.info(
-                f"MPC lookahead enabled: depth={mpc_lookahead}, discount={discount:.3f}"
-            )
+
         if target_indices is not None:
             step_grid: list[dict[str, int]] = [target_indices]  # type: ignore[list-item]
         elif current_params is not None:
@@ -1147,7 +1282,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"run_calibration: mode={mode.name}, {'online (trust-region)' if is_online else 'offline (global)'}, "
-            f"kappa={kappa:.2f}, mpc_lookahead={mpc_lookahead}, step_grid={len(step_grid)} step(s)"
+            f"kappa={kappa:.2f}, step_grid={len(step_grid)} step(s)"
         )
 
         # Validate trust regions for online/trust-region optimization
@@ -1175,124 +1310,172 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"Call configure_adaptation_delta() for each before running."
                 )
 
-        working_params: dict[str, Any] | None = (
-            dict(current_params) if current_params else None
-        )
-        prev_indices: dict[str, int] | None = None
-        proposals: list[dict[str, Any]] = []
-
-        # Track previous step's params for schedule smoothing penalty.
-        _prev_step_params: dict[str, Any] | None = None
-
         is_schedule = len(step_grid) > 1
         console = self.logger._console_output_enabled
-        if is_schedule and console:
-            self._suppress_opt_print = True
-        total_sched_nfev = 0
 
-        for step_i, curr_indices in enumerate(step_grid):
-            # Build fixed params for this step
+        # ------------------------------------------------------------------
+        # JOINT schedule optimization (multi-step)
+        # ------------------------------------------------------------------
+        if is_schedule:
+            L = len(step_grid)
+            all_global_bounds = self._get_global_bounds(datamodule)
+
+            de_bounds, static_codes, sched_codes, sched_deltas_norm = (
+                self._build_joint_schedule_bounds(datamodule, all_global_bounds, step_grid)
+            )
+
+            # Raw deltas for logging
+            sched_deltas_raw = np.array([
+                self.trust_regions.get(c, 0.0) for c in sched_codes
+            ])
+
+            joint_obj = functools.partial(
+                self._joint_schedule_objective,
+                base_objective=objective,
+                datamodule=datamodule,
+                static_codes=static_codes,
+                sched_codes=sched_codes,
+                sched_deltas_norm=sched_deltas_norm,
+                sched_deltas_raw=sched_deltas_raw,
+                L=L,
+                global_bounds=all_global_bounds,
+            )
+
+            self.logger.debug(
+                f"Joint schedule optimization: L={L}, "
+                f"D_static={len(static_codes)}, D_sched={len(sched_codes)}, "
+                f"total_vars={len(de_bounds)}"
+            )
+
+            opt = self._run_de(
+                joint_obj,
+                de_bounds,
+                label="Schedule",
+                show_progress=console,
+            )
+
+            self.last_opt_nfev = opt.nfev
+            self.last_opt_n_starts = opt.n_starts
+            self.last_opt_score = opt.score
+
+            if console:
+                self._print_optimized_line(opt.nfev)
+
+            # Scheduled params not in the datamodule need carry-over from current_params.
+            dm_input_set = set(datamodule.input_columns)
+            non_dm_sched = {
+                c for c in self.schedule_configs if c not in dm_input_set
+            }
+
+            # Decode the best solution into per-step proposals
+            proposals: list[dict[str, Any]] = []
+            if opt.best_x is not None:
+                static_norm, sched_abs = self._decode_joint_schedule_vector(
+                    opt.best_x, static_codes, sched_codes,
+                    sched_deltas_norm, L, all_global_bounds, datamodule,
+                )
+                code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
+                n_input = len(datamodule.input_columns)
+
+                for k in range(L):
+                    x_step = np.zeros(n_input)
+                    for i, code in enumerate(static_codes):
+                        x_step[code_to_idx[code]] = static_norm[i]
+                    for d, code in enumerate(sched_codes):
+                        x_step[code_to_idx[code]] = sched_abs[k, d]
+
+                    step_params = datamodule.array_to_params(x_step)
+                    step_params.update(self.fixed_params)
+                    # Carry over non-datamodule scheduled params from current_params
+                    if current_params and non_dm_sched:
+                        for code in non_dm_sched:
+                            if code in current_params and code not in step_params:
+                                step_params[code] = current_params[code]
+                    # Carry over other params from current_params not in the optimization
+                    if current_params:
+                        for k_param, v_param in current_params.items():
+                            if k_param not in step_params:
+                                step_params[k_param] = v_param
+                    step_params = self.schema.parameters.sanitize_values(
+                        step_params, ignore_unknown=True,
+                    )
+                    proposals.append(step_params)
+            else:
+                self.logger.warning("Joint schedule optimization failed, returning fallback.")
+                fallback = dict(self.fixed_params)
+                if current_params:
+                    fallback.update(current_params)
+                proposals = [fallback] * L
+
+            self.last_schedule = list(proposals)
+
+            # Compute reporting metrics at the first step
+            if opt.best_x is not None:
+                try:
+                    x0_step = np.zeros(n_input)  # type: ignore[possibly-unbound]
+                    for i, code in enumerate(static_codes):
+                        x0_step[code_to_idx[code]] = static_norm[i]  # type: ignore[possibly-unbound]
+                    for d, code in enumerate(sched_codes):
+                        x0_step[code_to_idx[code]] = sched_abs[0, d]  # type: ignore[possibly-unbound]
+                    _params = datamodule.array_to_params(x0_step)
+                    _perf_dict = self.perf_fn(_params)
+                    _perf_values = [
+                        float(v) if (v := _perf_dict.get(n)) is not None else 0.0
+                        for n in self.perf_names_order if n in _perf_dict
+                    ]
+                    raw_perf = self._compute_system_performance(_perf_values) if _perf_values else 0.0
+                    if self._perf_range_min is not None and self._perf_range_max is not None:
+                        span = self._perf_range_max - self._perf_range_min
+                        self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
+                    else:
+                        self.last_opt_perf = raw_perf
+                    self.last_opt_unc = float(self.uncertainty_fn(x0_step))
+                except Exception:
+                    self.last_opt_perf = 0.0
+                    self.last_opt_unc = 0.0
+            else:
+                self.last_opt_perf = 0.0
+                self.last_opt_unc = 0.0
+
+            self.logger.info(
+                f"de: 1 start(s), {opt.nfev} evals, score={opt.score:.6f}"
+            )
+
+        # ------------------------------------------------------------------
+        # SINGLE-STEP optimization (L=1): online trust-region or offline global
+        # ------------------------------------------------------------------
+        else:
+            working_params: dict[str, Any] | None = (
+                dict(current_params) if current_params else None
+            )
+
             fixed_for_step = dict(self.fixed_params)
-            eligible: set = set()
-            if working_params and self.schedule_configs and curr_indices:
-                eligible = self._get_eligible_params(prev_indices, curr_indices)
-                for code in self.schedule_configs:
-                    if code not in eligible and code in working_params:
-                        fixed_for_step[code] = working_params[code]
 
             # Online: explicitly pin all params outside the trust region to current values.
-            # This avoids denormalization drift for params that have zero-width bounds.
             if is_online and working_params is not None:
                 for code, val in working_params.items():
                     if code not in self.trust_regions and code not in fixed_for_step:
                         fixed_for_step[code] = val
 
-            # Use trust-region when online (current_params + target_indices), or when we have a
-            # reference point on a non-experiment-level step (subsequent schedule steps).
-            # Otherwise use global bounds with random restarts.
-            if is_online or (working_params is not None and bool(curr_indices)):
+            if is_online:
                 bounds = self._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
                 n_rounds = 0
-                bounds_mode = "trust-region"
             else:
                 bounds = self._get_global_bounds(datamodule)
                 n_rounds = n_optimization_rounds
-                bounds_mode = "global"
 
-            self.logger.debug(
-                f"Step {step_i + 1}/{len(step_grid)}: indices={curr_indices}, "
-                f"bounds={bounds_mode}, eligible_sched={sorted(eligible) if eligible else '—'}, "
-                f"fixed={sorted(fixed_for_step.keys())}"
-            )
-
-            # Wrap objective with schedule smoothing penalty for non-first steps.
-            # Multiplicative penalty on the acquisition score (before negation):
-            #   score *= (1 - lambda * |delta| / trust_width)
-            # This directly reduces the score for large jumps, keeping it in [0, 1].
-            step_objective = objective
-            if (self.schedule_smoothing > 0 and _prev_step_params is not None
-                    and len(step_grid) > 1):
-                _lam = self.schedule_smoothing
-                _prev = _prev_step_params
-                _tr = self.trust_regions
-                _dm = datamodule
-
-                def _smoothed_objective(X, _base=step_objective, _l=_lam, _p=_prev, _t=_tr, _d=_dm):
-                    base_score = _base(X)  # negative (minimization)
-                    try:
-                        params_dict = _d.array_to_params(X.reshape(-1))
-                    except (ValueError, KeyError):
-                        return base_score
-                    # Penalty: reduce score proportionally to jump size
-                    for code, delta in _t.items():
-                        if code in _p and code in params_dict and delta > 0:
-                            change = abs(float(params_dict[code]) - float(_p[code]))
-                            frac = min(change / delta, 1.0)
-                            # base_score is negative; multiply penalty makes it less negative (worse)
-                            base_score *= (1.0 - _l * frac)
-                    return base_score
-
-                step_objective = _smoothed_objective
-
-            # Online (trust-region) uses the online_optimizer; offline uses the main optimizer.
             opt_for_step = self.online_optimizer if is_online else None
 
             result = self._run_optimization(
                 datamodule,
                 x0_params=working_params,
                 bounds=bounds,
-                objective_func=step_objective,
+                objective_func=objective,
                 n_rounds=n_rounds,
                 fixed_param_values=fixed_for_step,
                 optimizer_override=opt_for_step,
             )
-            proposals.append(result)
-            _prev_step_params = dict(result)
-            working_params = result
-            prev_indices = curr_indices
-            total_sched_nfev += self.last_opt_nfev
-
-            # Schedule: layer progress bar
-            if is_schedule and console:
-                if step_i == 0:
-                    _sched_bar = ProgressBar("Schedule", max_iter=len(step_grid))
-                _sched_bar.step()  # type: ignore[possibly-unbound]
-                if step_i + 1 == len(step_grid):
-                    _sched_bar.finish(nfev=total_sched_nfev)  # type: ignore[possibly-unbound]
-
-            # Inject virtual KDE point so subsequent schedule steps see lower
-            # uncertainty at this speed, naturally spacing out layer proposals.
-            if is_schedule and self._add_virtual_point_fn is not None:
-                self._add_virtual_point_fn(result)
-
-        # Clear virtual KDE points after schedule completes.
-        if is_schedule and self._clear_virtual_points_fn is not None:
-            self._clear_virtual_points_fn()
-
-        if is_schedule:
-            self._suppress_opt_print = False
-            self.last_schedule = list(proposals)
-        else:
+            proposals = [result]
             self.last_schedule = None
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
@@ -1323,13 +1506,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 show_progress=console,
             )
 
-        # Publish result bookkeeping — include MPC inner evals if applicable
-        mpc_counter = getattr(objective_func, '_eval_counter', None)
-        total_nfev = mpc_counter[0] if mpc_counter is not None else opt.nfev
-        self.last_opt_nfev = total_nfev
+        self.last_opt_nfev = opt.nfev
 
         if console:
-            self._print_optimized_line(total_nfev)
+            self._print_optimized_line(opt.nfev)
         self.last_opt_n_starts = opt.n_starts
         self.last_opt_score = opt.score
 
@@ -1447,33 +1627,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         show_progress: bool = False,
     ) -> _OptResult:
         """Differential evolution (global, population-based, with L-BFGS-B polish)."""
-        seed = int(self.rng.randint(0, 2**31 - 1))
-        maxiter = self.de_maxiter
-        popsize = self.de_popsize
-
-        bar = ProgressBar("Optimizing", max_iter=maxiter) if show_progress else None
-
-        def _progress(xk, convergence):
-            if bar:
-                bar.step()
-
-        result = differential_evolution(
-            func=objective_func,
-            bounds=bounds.tolist(),
-            maxiter=maxiter, popsize=popsize,
-            mutation=(0.5, 1.0), recombination=0.7, tol=1e-4,
-            polish=True, init='latinhypercube',
-            callback=_progress,
-        )
-
-        if bar:
-            bar.finish(nfev=result.nfev)
-
-        return _OptResult(
-            best_x=result.x,
-            nfev=result.nfev,
-            n_starts=1,
-            score=float(-result.fun),
+        return self._run_de(
+            objective_func,
+            bounds.tolist(),
+            label="Optimizing",
+            show_progress=show_progress,
         )
 
     # === BOUNDS FOR OPTIMIZATION ===

@@ -21,6 +21,7 @@ from .exploration import (
 from .inference import plot_inference_result, plot_inference_convergence
 from .schedule import plot_schedule_comparison, plot_adaptation, plot_schedule_detail
 from .metrics import plot_metric_topology, plot_cross_sections, plot_sensitivity
+from .performance import plot_performance_radar
 
 __all__ = [
     "AxisSpec",
@@ -41,4 +42,5 @@ __all__ = [
     "plot_metric_topology",
     "plot_cross_sections",
     "plot_sensitivity",
+    "plot_performance_radar",
 ]

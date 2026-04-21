@@ -181,16 +181,6 @@ class PfabAgent:
             base_buffer_fn=lambda: _pred._base_buffer,
         )
 
-        # Wire up virtual KDE point callbacks for within-schedule spacing.
-        # The DataModule reference is captured at call time via the closure.
-        def _add_vp(params: dict[str, Any]) -> None:
-            dm = self.calibration_system._active_datamodule
-            if dm is not None:
-                _pred.add_virtual_point(params, dm)
-
-        self.calibration_system._add_virtual_point_fn = _add_vp
-        self.calibration_system._clear_virtual_points_fn = _pred.clear_virtual_points
-
         # validate against schema
         self._validate_systems_against_schema(schema)
 
