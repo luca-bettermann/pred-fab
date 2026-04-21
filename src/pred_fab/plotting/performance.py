@@ -3,7 +3,10 @@
 from collections.abc import Mapping
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from ._style import (
     save_fig, EMERALD_300, EMERALD_500,
@@ -42,12 +45,20 @@ def plot_performance_radar(
     mean_closed = mean_vals + [mean_vals[0]]
     angles_closed = angles + [angles[0]]
 
-    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"projection": "polar"})
+    # ── Figure layout ──
+    # Use gridspec: row 0 = title, row 1 = radar, row 2 = footer (legend + score)
+    fig = plt.figure(figsize=(7, 8))
+    gs = fig.add_gridspec(3, 1, height_ratios=[0.06, 0.78, 0.16], hspace=0.0)
 
-    # Shrink the radar to ~50% of figure, centered with room for labels + footer
-    ax.set_position([0.20, 0.22, 0.55, 0.55])  # type: ignore[arg-type]
+    # Title
+    title_text = title
+    if exp_code:
+        title_text += f"  ·  {exp_code}"
+    fig.text(0.5, 0.97, title_text, fontsize=13, fontweight="bold",
+             color=ZINC_700, ha="center", va="top")
 
-    # Style the polar plot
+    # ── Radar axes ──
+    ax = fig.add_subplot(gs[1], projection="polar")
     ax.set_theta_offset(np.pi / 2)  # type: ignore[attr-defined]
     ax.set_theta_direction(-1)  # type: ignore[attr-defined]
     ax.set_rlabel_position(45)  # type: ignore[attr-defined]
@@ -64,7 +75,7 @@ def plot_performance_radar(
     ax.set_xticks(angles)
     labels = [a.replace("_", " ").title() for a in attributes]
     ax.set_xticklabels(labels, fontsize=11, color=ZINC_600)
-    ax.tick_params(axis="x", pad=20)
+    ax.tick_params(axis="x", pad=18)
 
     # Dataset mean — background polygon
     ax.plot(angles_closed, mean_closed, "o-",
@@ -77,25 +88,7 @@ def plot_performance_radar(
             markeredgecolor="white", markeredgewidth=0.8, zorder=5)
     ax.fill(angles_closed, values_closed, alpha=0.15, color=EMERALD_300)
 
-    # Title — at the very top
-    title_text = title
-    if exp_code:
-        title_text += f"  ·  {exp_code}"
-    fig.text(0.5, 0.96, title_text, fontsize=13, fontweight="bold",
-             color=ZINC_700, ha="center", va="top")
-
-    # System performance — percentage display (experiment=green, dataset=grey)
-    if combined_score is not None:
-        pct = combined_score * 100
-        fig.text(0.78, 0.12, f"{pct:.0f}%", fontsize=28, fontweight="bold",
-                 color=EMERALD_500, ha="center", va="bottom")
-        if dataset_combined is not None:
-            avg_pct = dataset_combined * 100
-            fig.text(0.78, 0.06, f"{avg_pct:.0f}%", fontsize=17,
-                     color=ZINC_400, ha="center", va="bottom")
-
-    # Legend (bottom-left)
-    from matplotlib.lines import Line2D
+    # ── Footer: legend (left) + system performance (right) ──
     legend_elements = [
         Line2D([0], [0], color=EMERALD_500, linewidth=2, marker="o",
                markersize=5, markeredgecolor="white", label="Experiment"),
@@ -103,7 +96,21 @@ def plot_performance_radar(
                markersize=4, alpha=0.5, label="Dataset avg"),
     ]
     fig.legend(handles=legend_elements, loc="lower left",
-               bbox_to_anchor=(0.06, 0.04), fontsize=10,
+               bbox_to_anchor=(0.08, 0.02), fontsize=10,
                frameon=False, labelcolor=ZINC_500)
+
+    if combined_score is not None:
+        # Header
+        fig.text(0.80, 0.13, "System Performance", fontsize=9,
+                 color=ZINC_500, ha="center", va="bottom")
+        # Experiment score (green)
+        pct = combined_score * 100
+        fig.text(0.80, 0.06, f"{pct:.0f}%", fontsize=28, fontweight="bold",
+                 color=EMERALD_500, ha="center", va="bottom")
+        # Dataset avg (grey)
+        if dataset_combined is not None:
+            avg_pct = dataset_combined * 100
+            fig.text(0.80, 0.01, f"{avg_pct:.0f}%", fontsize=16,
+                     color=ZINC_400, ha="center", va="bottom")
 
     save_fig(save_path)
