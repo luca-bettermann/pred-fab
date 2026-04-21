@@ -14,6 +14,7 @@ Schema-agnostic plotting for every PFAB phase. Users pass `AxisSpec` objects tha
 | `exploration.py` | `plot_uncertainty_map`, `plot_acquisition`, `plot_optimizer_comparison` | Uncertainty 3-panel, acquisition 3-panel, per-optimizer scatter |
 | `inference.py` | `plot_inference_result`, `plot_inference_convergence` | Single-shot result, trajectory + score convergence |
 | `schedule.py` | `plot_schedule_comparison`, `plot_adaptation`, `plot_schedule_detail` | Fixed vs schedule bars, layer-by-layer adaptation, per-param schedule lines |
+| `performance.py` | `plot_performance_radar` | Radar/spider per-attribute plot with dataset avg overlay, score colors |
 | `metrics.py` | `plot_metric_topology`, `plot_cross_sections`, `plot_sensitivity` | Per-metric + combined heatmaps, 1D slices, sensitivity bars |
 
 ## Key Concepts

@@ -19,7 +19,7 @@ All calibration and strategy configuration goes through explicit methods on `Pfa
 ```python
 agent.configure_performance(weights={"perf": 2.0})
 agent.configure_exploration(radius=0.20)
-agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=100)
+agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=1000)
 agent.configure_schedule("speed", "n_layers", delta=5.0, smoothing=0.25)
 ```
 
@@ -50,14 +50,21 @@ Convenience prediction methods (no calibration run):
 - `agent.predict_performance(params)` → `Dict[str, float]`
 - `agent.predict_uncertainty(params, datamodule)` → `float`
 
-## Calibration Architecture
-`run_calibration(mode, current_params, target_indices, …)` is the single optimization entry point.
+## Unified Optimization Engine
+`optimization_engine(per_step_fn, N, D_static, D_sched, L, ...)` is the single optimization method for ALL calibration:
 
-- **Offline** (no `current_params`/`target_indices`): global bounds + random restarts
-- **Online** (`current_params` + `target_indices`): trust-region bounds, single-shot (L=1)
-- **Joint schedule** (`schedule_configs` configured, L>1): all schedule steps optimized simultaneously via DE with offset reparameterization; decision vector = [static_params, sched_step0, offset_1, ..., offset_{L-1}]; smoothing penalty discourages large jumps
+- Takes a **per-step objective** and runs DE or L-BFGS-B depending on the use case
+- **Vector layout per unit:** `[static_params, sched_step0, offset_1, ..., offset_{L-1}]`
+- **Hard delta constraints** on schedule offsets via bounds `[-δ, +δ]`
+- **Universal smoothing** penalty (additive, self-scaling for both energy and acquisition)
+- Returns `(opt_result, static_out[N, D_static], sched_out[N, L, D_sched])`
 
-`run_baseline(n)` is a separate entry point for space-filling proposals (no model required).
+| Caller | N | L | per_step_fn | Optimizer |
+|--------|---|---|-------------|-----------|
+| `run_baseline` (no schedule) | n_exp | 1 | Riesz energy | DE |
+| `run_baseline` (schedule) | n_exp | L | Riesz energy | DE |
+| `run_calibration` (offline) | 1 | 1 or L | Acquisition/inference | DE |
+| `run_calibration` (online) | 1 | 1 | Acquisition/inference | L-BFGS-B |
 
 ### Schedule Configuration
 `configure_schedule(parameter, dimension, delta, smoothing)` declares that a runtime-adjustable parameter should vary per step of a dimension. Auto-delta (1/10 of param range) is applied when no explicit delta is provided. Schedule smoothing penalizes large jumps between adjacent steps (default λ=0.25).
