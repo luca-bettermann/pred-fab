@@ -1146,6 +1146,58 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 factor *= (1.0 - lam * frac)
         return factor
 
+    def _wrap_mpc_objective(
+        self,
+        base_objective: Callable,
+        datamodule: DataModule,
+        depth: int,
+        discount: float,
+    ) -> Callable:
+        """Wrap base_objective with MPC lookahead for online adaptation.
+
+        At each candidate X, simulates `depth` future steps via inner L-BFGS-B
+        solves within trust-region bounds. Returns discounted sum of scores.
+        """
+        if depth <= 0:
+            return base_objective
+
+        calibration_system = self
+
+        class _MpcObjective:
+            """Callable MPC wrapper that tracks total inner evaluations."""
+
+            def __init__(self, weight_sum: float):
+                self._eval_counter = [0]
+                self._weight_sum = weight_sum
+
+            def __call__(self, X: np.ndarray) -> float:
+                base_score = base_objective(X)
+                self._eval_counter[0] += 1
+                total = base_score
+                X_cur = X.copy()
+                for j in range(depth):
+                    try:
+                        params_cur = datamodule.array_to_params(X_cur)
+                        bounds_ahead = calibration_system._get_trust_region_bounds(datamodule, params_cur)
+                        res = minimize(
+                            fun=base_objective,
+                            x0=X_cur,
+                            bounds=bounds_ahead,
+                            method='L-BFGS-B',
+                            options={'maxfun': 20},
+                        )
+                        self._eval_counter[0] += res.nfev
+                        X_cur = res.x
+                        step_score = base_objective(X_cur)
+                        self._eval_counter[0] += 1
+                        total += discount ** (j + 1) * step_score
+                    except Exception:
+                        break
+                return total / self._weight_sum
+
+        weight_sum = 1.0 + sum(discount ** (j + 1) for j in range(depth))
+        return _MpcObjective(weight_sum)
+
     def optimization_engine(
         self,
         per_step_fn: Callable[[np.ndarray], float],
@@ -1334,6 +1386,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         target_indices: dict[str, int] | None = None,
         kappa: float = 0.5,
         n_optimization_rounds: int = 10,
+        mpc_lookahead: int | None = None,
+        mpc_discount: float | None = None,
         source_step_override: SourceStep | None = None,
     ) -> ExperimentSpec:
         """Run calibration and return an ExperimentSpec.
@@ -1341,6 +1395,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Offline (global bounds) when current_params/target_indices are omitted;
         online (trust-region) when both are provided.
         Multi-step schedules use joint optimization over all steps simultaneously.
+        mpc_lookahead/mpc_discount: online-only MPC lookahead for adaptation.
         """
         self._active_datamodule = datamodule
 
@@ -1359,6 +1414,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Online = both current_params AND target_indices provided (target_indices may be empty dict)
         is_online = current_params is not None and target_indices is not None
+
+        # MPC lookahead wraps the objective for online adaptation
+        if is_online and mpc_lookahead is not None and mpc_lookahead > 0:
+            discount = mpc_discount if mpc_discount is not None else 0.9
+            objective = self._wrap_mpc_objective(objective, datamodule, mpc_lookahead, discount)
+            self.logger.info(
+                f"MPC lookahead enabled: depth={mpc_lookahead}, discount={discount:.3f}"
+            )
 
         if target_indices is not None:
             step_grid: list[dict[str, int]] = [target_indices]  # type: ignore[list-item]
