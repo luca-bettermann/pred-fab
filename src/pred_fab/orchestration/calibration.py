@@ -1703,142 +1703,210 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     optimized[:, si] = optimized[:, si] / r if r > 0 else 0.5
             return specs, optimized
 
-        # ═══ PHASE 2: Process — group by structural dim, run schedule per group ═══
-        self.logger.info("Two-phase baseline: starting Phase 2 (Process)")
+        # ═══ PHASE 2: Process — joint schedule optimization over ALL experiments ═══
 
-        # For simplicity, use the first domain axis schedule dim as the grouping key.
-        # All domain axis sched dims contribute to L, but we group by their joint tuple.
-        # Build group key per experiment
-        group_key_codes = sorted(domain_axis_sched_dims)
-        groups: dict[tuple[int, ...], list[int]] = {}
-        for i in range(n):
-            key = tuple(structural_values[i].get(c, 1) for c in group_key_codes)
-            groups.setdefault(key, []).append(i)
-
-        # Identify the dimension code for schedule (from schedule_configs values)
+        # Identify the dimension code for schedule
         dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
-        # Use the first domain axis dim as the schedule dimension code
         primary_dim_code = dim_codes_for_sched[0] if dim_codes_for_sched else ""
 
         # Identify schedule param indices in numeric_params
         sched_params_list: list[tuple[int, str, float, float]] = []
-        non_sched_params_list: list[tuple[int, str, float, float]] = []
         for d, (code, lo, hi) in enumerate(numeric_params):
             if code in sched_set:
                 sched_params_list.append((d, code, lo, hi))
-            else:
-                non_sched_params_list.append((d, code, lo, hi))
 
-        all_specs: list[ExperimentSpec] = [
-            ExperimentSpec(initial_params=ParameterProposal.from_dict({}), schedules={})
-        ] * n  # placeholder
-        total_phase2_nfev = 0
+        D_sched_p2 = len(sched_params_list)
 
-        for group_key, exp_indices in sorted(groups.items()):
-            # L for this group = max structural value across domain axis dims
-            L_group = max(group_key) if group_key else 1
-
-            if L_group <= 1 or not sched_params_list:
-                # No schedule needed for this group
-                for i in exp_indices:
-                    bp = dict(phase1_params[i])
-                    for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                        if code_i in bp:
-                            bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
-                    bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
-                    proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
-                    all_specs[i] = ExperimentSpec(initial_params=proposal, schedules={})
-                continue
-
-            n_group = len(exp_indices)
-
-            # Build schedule optimization for this group
-            sched_indices_p2: list[int] = [d for d, _, _, _ in sched_params_list]
-            static_indices_p2: list[int] = []  # no static dims in phase 2; they are fixed from phase 1
-            D_static_p2 = 0
-            D_sched_p2 = len(sched_indices_p2)
-
-            sched_bounds_p2: list[tuple[float, float]] = []
-            sched_deltas_norm_p2: list[float] = []
-            for d, code, lo, hi in sched_params_list:
-                if d in int_set:
-                    sched_bounds_p2.append((0.0, float(int_ranges_map[d])))
-                else:
-                    sched_bounds_p2.append((0.01, 0.99))
-                delta = self.trust_regions.get(code, 0.0)
-                span = hi - lo
-                sched_deltas_norm_p2.append(delta / span if span > 0 else 0.0)
-
-            sched_delta_arr_p2 = np.array(sched_deltas_norm_p2)
-
-            # Build riesz for phase 2 (schedule dims only)
-            riesz_p2 = self._build_riesz_fn(
-                n_group, static_indices_p2, sched_indices_p2,
-                int_set, int_ranges_map, D_static_p2, p,
-            )
-
-            # Build init for phase 2 from phase 1 sched dim values
-            n_vars_per_unit_p2 = D_sched_p2 + max(L_group - 1, 0) * D_sched_p2
-            n_total_vars_p2 = n_group * n_vars_per_unit_p2
-            init_flat_p2 = np.zeros(n_total_vars_p2)
-            for gi, exp_i in enumerate(exp_indices):
-                offset = gi * n_vars_per_unit_p2
-                for si, (d, code, lo, hi) in enumerate(sched_params_list):
-                    # Use phase 1 value as starting point for step0
-                    if d in int_set:
-                        init_flat_p2[offset + si] = init_de_p1[exp_i, d]
-                    else:
-                        init_flat_p2[offset + si] = init_norm[exp_i, d]
-
-            self.logger.info(
-                f"Phase 2 (Process): group={dict(zip(group_key_codes, group_key))}, "
-                f"N={n_group}, L={L_group}, D_sched={D_sched_p2}"
-            )
-
-            opt_p2, _static_out_p2, sched_out_p2 = self._run_engine_for_baseline(
-                riesz_p2, n_group, D_static_p2, D_sched_p2, L_group,
-                [], sched_bounds_p2, sched_delta_arr_p2,
-                sched_deltas_norm_p2, [], init_flat_p2,
-                label="Process",
-            )
-            total_phase2_nfev += opt_p2.nfev
-
-            # Decode phase 2 results into specs
-            for gi, exp_i in enumerate(exp_indices):
-                bp = dict(phase1_params[exp_i])
-
-                # Set schedule step 0 values
-                for si, (d, code, lo, hi) in enumerate(sched_params_list):
-                    bp[code] = float(sched_out_p2[gi, 0, si] * (hi - lo) + lo)
-
-                # Clamp integer params
+        if not sched_params_list:
+            # No schedule params — return phase 1 results directly
+            all_specs: list[ExperimentSpec] = []
+            for i in range(n):
+                bp = dict(phase1_params[i])
                 for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                    if code_i in bp and code_i not in sched_set:
+                    if code_i in bp:
                         bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
-
                 bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
-                initial = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
+                proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
+                all_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+            optimized = static_out_p1.copy()
+            for si, d in enumerate(static_indices_p1):
+                if d in int_set:
+                    r = int_ranges_map[d]
+                    optimized[:, si] = optimized[:, si] / r if r > 0 else 0.5
+            return all_specs, optimized
 
-                entries: list[tuple[int, ParameterProposal]] = []
-                for k in range(1, L_group):
-                    step_params: dict[str, Any] = {}
-                    for si, (d, code, lo, hi) in enumerate(sched_params_list):
-                        step_params[code] = float(sched_out_p2[gi, k, si] * (hi - lo) + lo)
-                    step_params = self.schema.parameters.sanitize_values(
-                        step_params, ignore_unknown=True,
+        # Per-experiment L from structural values; pad to L_max
+        group_key_codes = sorted(domain_axis_sched_dims)
+        per_exp_L = [
+            max(structural_values[i].get(c, 1) for c in group_key_codes)
+            for i in range(n)
+        ]
+        L_max = max(per_exp_L)
+
+        # Build sched bounds and deltas
+        sched_bounds_p2: list[tuple[float, float]] = []
+        sched_deltas_norm_p2: list[float] = []
+        for d, code, lo, hi in sched_params_list:
+            if d in int_set:
+                sched_bounds_p2.append((0.0, float(int_ranges_map[d])))
+            else:
+                sched_bounds_p2.append((0.01, 0.99))
+            delta = self.trust_regions.get(code, 0.0)
+            span = hi - lo
+            sched_deltas_norm_p2.append(delta / span if span > 0 else 0.0)
+        sched_delta_arr_p2 = np.array(sched_deltas_norm_p2)
+
+        # Build per-unit bounds: step0 + offsets, with [0,0] for steps >= exp's L
+        D_unit_p2 = D_sched_p2 + max(L_max - 1, 0) * D_sched_p2
+        de_bounds_p2: list[tuple[float, float]] = []
+        for i in range(n):
+            # Step 0 bounds
+            de_bounds_p2.extend(sched_bounds_p2)
+            # Offset bounds for steps 1..L_max-1
+            for k in range(1, L_max):
+                for d_s in range(D_sched_p2):
+                    if k < per_exp_L[i]:
+                        # Active step — use delta bounds
+                        de_bounds_p2.append((-sched_deltas_norm_p2[d_s], sched_deltas_norm_p2[d_s]))
+                    else:
+                        # Beyond this experiment's L — lock to 0
+                        de_bounds_p2.append((0.0, 0.0))
+
+        # Build riesz function for phase 2 (sched dims only, N experiments)
+        riesz_p2 = self._build_riesz_fn(
+            n, [], list(range(D_sched_p2)),
+            int_set, int_ranges_map, 0, p,
+        )
+
+        # Build init from phase 1 sched values
+        init_flat_p2 = np.zeros(n * D_unit_p2)
+        for i in range(n):
+            offset = i * D_unit_p2
+            for si, (d, code, lo, hi) in enumerate(sched_params_list):
+                if d in int_set:
+                    init_flat_p2[offset + si] = init_de_p1[i, d]
+                else:
+                    init_flat_p2[offset + si] = init_norm[i, d]
+
+        # Build init population
+        console = self.logger._console_output_enabled
+        popsize = max(self.de_popsize, 2)
+        n_total_vars_p2 = n * D_unit_p2
+        pop_total_p2 = popsize * n_total_vars_p2
+        init_pop_p2 = np.empty((pop_total_p2, n_total_vars_p2))
+        for ii in range(pop_total_p2):
+            for v in range(n_total_vars_p2):
+                lo_b, hi_b = de_bounds_p2[v]
+                if lo_b == hi_b:
+                    init_pop_p2[ii, v] = lo_b
+                else:
+                    init_pop_p2[ii, v] = self.engine.rng.uniform(lo_b + 0.001, hi_b - 0.001)
+        init_pop_p2[0] = init_flat_p2
+        n_jittered = min(pop_total_p2 - 1, 5)
+        for j in range(1, 1 + n_jittered):
+            jitter = self.engine.rng.normal(0, 0.05, size=n_total_vars_p2)
+            candidate = init_flat_p2 + jitter
+            for v in range(n_total_vars_p2):
+                lo_b, hi_b = de_bounds_p2[v]
+                if lo_b == hi_b:
+                    candidate[v] = lo_b
+                else:
+                    candidate[v] = np.clip(candidate[v], lo_b + 0.001, hi_b - 0.001)
+            init_pop_p2[j] = candidate
+
+        # Build objective wrapper with smoothing
+        schedule_smoothing = self.schedule_smoothing
+
+        def _phase2_objective(x_flat: np.ndarray) -> float:
+            units = x_flat.reshape(n, D_unit_p2)
+            step_sum = 0.0
+            for k in range(L_max):
+                pts = np.zeros((n, D_sched_p2))
+                for u in range(n):
+                    step0 = units[u, :D_sched_p2]
+                    abs_val = step0.copy()
+                    for kk in range(1, k + 1):
+                        off_start = D_sched_p2 + (kk - 1) * D_sched_p2
+                        abs_val = abs_val + units[u, off_start:off_start + D_sched_p2]
+                    for d_s in range(D_sched_p2):
+                        lo_s, hi_s = sched_bounds_p2[d_s]
+                        abs_val[d_s] = np.clip(abs_val[d_s], lo_s, hi_s)
+                    pts[u] = abs_val
+                step_sum += riesz_p2(pts)
+
+            step_avg = step_sum / L_max
+            if schedule_smoothing > 0:
+                total_penalty = 0.0
+                for u in range(n):
+                    sched_vals = np.zeros((per_exp_L[u], D_sched_p2))
+                    step0 = units[u, :D_sched_p2]
+                    sched_vals[0] = step0
+                    for kk in range(1, per_exp_L[u]):
+                        off_start = D_sched_p2 + (kk - 1) * D_sched_p2
+                        sched_vals[kk] = sched_vals[kk - 1] + units[u, off_start:off_start + D_sched_p2]
+                    sf = OptimizationEngine._schedule_smoothing_factor(
+                        sched_vals, sched_delta_arr_p2, schedule_smoothing,
                     )
-                    entries.append((k, ParameterProposal.from_dict(
-                        step_params, source_step=SourceStep.BASELINE,
-                    )))
+                    total_penalty += abs(step_avg) * (1.0 - sf)
+                return step_avg + total_penalty / n
+            return step_avg
 
-                schedules: dict[str, ParameterSchedule] = {}
-                if entries:
-                    schedules[primary_dim_code] = ParameterSchedule(
-                        dimension=primary_dim_code, entries=entries,
-                    )
-                all_specs[exp_i] = ExperimentSpec(initial_params=initial, schedules=schedules)
+        self.logger.info(
+            f"Phase 2 (Process): N={n}, L_max={L_max}, D_sched={D_sched_p2}, "
+            f"per_exp_L={sorted(set(per_exp_L))}"
+        )
 
-        self.last_baseline_nfev += total_phase2_nfev
+        opt_p2 = self.engine._run_de(
+            _phase2_objective, de_bounds_p2,
+            init_pop=init_pop_p2, label="Process", show_progress=console,
+        )
+        self.last_baseline_nfev += opt_p2.nfev
+
+        # Decode phase 2 results
+        best_x_p2 = opt_p2.best_x if opt_p2.best_x is not None else init_flat_p2
+        units_p2 = best_x_p2.reshape(n, D_unit_p2)
+
+        all_specs = []
+        for i in range(n):
+            bp = dict(phase1_params[i])
+            L_i = per_exp_L[i]
+
+            # Decode step 0
+            step0 = units_p2[i, :D_sched_p2]
+            for si, (d, code, lo, hi) in enumerate(sched_params_list):
+                bp[code] = float(step0[si] * (hi - lo) + lo)
+
+            # Clamp non-sched integer params
+            for _d_int_i, (code_i, lo_i, hi_i) in enumerate(integer_params):
+                if code_i in bp and code_i not in sched_set:
+                    bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
+
+            bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
+            initial = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
+
+            # Build schedule entries for steps 1..L_i-1
+            entries: list[tuple[int, ParameterProposal]] = []
+            abs_val = step0.copy()
+            for k in range(1, L_i):
+                off_start = D_sched_p2 + (k - 1) * D_sched_p2
+                abs_val = abs_val + units_p2[i, off_start:off_start + D_sched_p2]
+                step_params: dict[str, Any] = {}
+                for si, (d, code, lo, hi) in enumerate(sched_params_list):
+                    val = float(np.clip(abs_val[si], 0.01, 0.99) * (hi - lo) + lo)
+                    step_params[code] = val
+                step_params = self.schema.parameters.sanitize_values(
+                    step_params, ignore_unknown=True,
+                )
+                entries.append((k, ParameterProposal.from_dict(
+                    step_params, source_step=SourceStep.BASELINE,
+                )))
+
+            schedules: dict[str, ParameterSchedule] = {}
+            if entries:
+                schedules[primary_dim_code] = ParameterSchedule(
+                    dimension=primary_dim_code, entries=entries,
+                )
+            all_specs.append(ExperimentSpec(initial_params=initial, schedules=schedules))
 
         # Build optimized matrix from phase 1 static output for distance reporting
         optimized = static_out_p1.copy()
