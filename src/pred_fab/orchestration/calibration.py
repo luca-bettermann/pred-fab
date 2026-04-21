@@ -165,10 +165,8 @@ class OptimizationEngine:
                 show_progress=show_progress,
             )
         else:
-            # L-BFGS-B multi-start
             x0_list: list[np.ndarray] = []
             if x0 is not None:
-                # Pad x0 to full vector (assumes N=1, L=1 for L-BFGS-B)
                 if x0.size == D_static:
                     x0_list.append(x0)
                 else:
@@ -179,40 +177,9 @@ class OptimizationEngine:
             if not x0_list:
                 x0_list.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]))
 
-            n_dims = n_vars
-            max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
-            eps = self.lbfgsb_eps
-            total_starts = len(x0_list)
-
-            best_x, best_val = None, np.inf
-            total_nfev = 0
-            bar = ProgressBar(label, max_iter=total_starts) if show_progress else None
-            for i, x0_i in enumerate(x0_list):
-                if bar:
-                    bar.step()
-                try:
-                    res = minimize(
-                        fun=_objective, x0=x0_i, bounds=bounds_arr, method='L-BFGS-B',
-                        options={'eps': eps, 'maxfun': max_fun},
-                    )
-                    total_nfev += res.nfev
-                    if res.fun < best_val:
-                        best_val = res.fun
-                        best_x = res.x
-                    self.logger.debug(
-                        f"  start {i + 1}/{total_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
-                    )
-                except Exception as e:
-                    self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
-
-            if bar:
-                bar.finish(nfev=total_nfev)
-
-            opt = _OptResult(
-                best_x=best_x,
-                nfev=total_nfev,
-                n_starts=total_starts,
-                score=float(-best_val) if best_val != np.inf else 0.0,
+            opt = self._run_lbfgsb(
+                _objective, bounds_arr.tolist(), x0_list=x0_list,
+                label=label, show_progress=show_progress,
             )
 
         # --- 4. Decode result ---
@@ -287,6 +254,56 @@ class OptimizationEngine:
             nfev=result.nfev,
             n_starts=1,
             score=float(-result.fun),
+        )
+
+    def _run_lbfgsb(
+        self,
+        objective: Callable,
+        bounds: list[tuple[float, float]],
+        *,
+        x0_list: list[np.ndarray] | None = None,
+        label: str = "Optimizing",
+        show_progress: bool = False,
+    ) -> _OptResult:
+        """Multi-start L-BFGS-B optimization."""
+        bounds_arr = np.array(bounds)
+        if x0_list is None or not x0_list:
+            x0_list = [self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1])]
+
+        n_dims = len(bounds)
+        max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
+        eps = self.lbfgsb_eps
+        total_starts = len(x0_list)
+
+        best_x, best_val = None, np.inf
+        total_nfev = 0
+        bar = ProgressBar(label, max_iter=total_starts) if show_progress else None
+        for i, x0_i in enumerate(x0_list):
+            if bar:
+                bar.step()
+            try:
+                res = minimize(
+                    fun=objective, x0=x0_i, bounds=bounds_arr, method='L-BFGS-B',
+                    options={'eps': eps, 'maxfun': max_fun},
+                )
+                total_nfev += res.nfev
+                if res.fun < best_val:
+                    best_val = res.fun
+                    best_x = res.x
+                self.logger.debug(
+                    f"  start {i + 1}/{total_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
+                )
+            except Exception as e:
+                self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
+
+        if bar:
+            bar.finish(nfev=total_nfev)
+
+        return _OptResult(
+            best_x=best_x,
+            nfev=total_nfev,
+            n_starts=total_starts,
+            score=float(-best_val) if best_val != np.inf else 0.0,
         )
 
     @staticmethod
@@ -646,15 +663,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         base_buffer_fn: Callable[[], float] | None = None,
         random_seed: int | None = None,
     ):
-        super().__init__(logger)
+        super().__init__(logger, random_seed=random_seed)
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
         self.similarity_fn = similarity_fn
         self._n_exp_fn = n_exp_fn
         self._n_decay_fn = n_decay_fn
         self._base_buffer_fn = base_buffer_fn
-
-        self._random_seed = random_seed
 
         # Composed subsystems
         self.engine = OptimizationEngine(logger, random_seed=random_seed)
@@ -777,6 +792,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     @random_seed.setter
     def random_seed(self, value: int | None) -> None:
         self._random_seed = value
+        self.rng = np.random.RandomState(value)
         self.engine._random_seed = value
         self.engine.rng = np.random.RandomState(value)
 
@@ -871,36 +887,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     # === OBJECTIVE FUNCTIONS ===
 
-    def _inference_func(self, X: np.ndarray) -> float:
-        """INFERENCE objective: negative predicted performance (for minimisation)."""
-        dm = self._active_datamodule
-        if dm is None:
-            return 0.0
-        try:
-            params_dict = dm.array_to_params(X.reshape(-1))
-        except (ValueError, KeyError):
-            return 0.0
-        try:
-            perf_dict = self.perf_fn(params_dict)
-        except Exception:
-            return 0.0
-        perf_values = [
-            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
-            for name in self.perf_names_order
-            if name in perf_dict
-        ]
-        sys_perf = self._compute_system_performance(perf_values)
-        return -sys_perf
-
     def _acquisition_func(
         self,
         X: np.ndarray,
         kappa: float,
         bounds: np.ndarray | None = None,
         perf_range: tuple[float, float] | None = None,
-        unc_range: tuple[float, float] | None = None,
     ) -> float:
-        """EXPLORATION objective: negative UCB score with min-max normalized components."""
+        """Unified objective: score = (1-κ)·perf + κ·uncertainty. κ=0 is pure inference."""
         dm = self._active_datamodule
         if dm is None:
             return 0.0
@@ -913,19 +907,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
         except Exception:
             perf_dict = {}
         perf_values = [
-            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0 # type: ignore
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
             for name in self.perf_names_order
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
-        u = float(self.uncertainty_fn(X.reshape(-1)))
 
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
 
-        score = (1.0 - kappa) * sys_perf + kappa * u
+        if kappa > 0:
+            u = float(self.uncertainty_fn(X.reshape(-1)))
+            score = (1.0 - kappa) * sys_perf + kappa * u
+        else:
+            score = sys_perf
 
         if bounds is not None:
             score *= self._boundary_factor(X.reshape(-1), bounds)
@@ -1043,18 +1040,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
             raise ValueError(
                 "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
             )
-        if mode == Mode.EXPLORATION:
-            perf_range, unc_range = self._get_acquisition_ranges()
-            return functools.partial(
-                self._acquisition_func,
-                kappa=kappa,
-                bounds=bounds,
-                perf_range=perf_range,
-                unc_range=unc_range,
-            )
-        elif mode == Mode.INFERENCE:
-            return self._inference_func
-        raise ValueError(f"Unknown calibration mode: {mode}")
+        # Inference is acquisition with kappa=0 (pure performance, no uncertainty)
+        effective_kappa = 0.0 if mode == Mode.INFERENCE else kappa
+        perf_range, _ = self._get_acquisition_ranges()
+        return functools.partial(
+            self._acquisition_func,
+            kappa=effective_kappa,
+            bounds=bounds,
+            perf_range=perf_range,
+        )
 
     def _build_step_grid(self, current_params: dict[str, Any]) -> list[dict[str, int]]:
         """Build flattened Cartesian grid of {dim_code: step_index} dicts, coarsest dimension first.
