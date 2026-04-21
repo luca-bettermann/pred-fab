@@ -11,9 +11,10 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models; per-model KDE uncertainty + similarity |
-| `CalibrationSystem` | `calibration.py` | Orchestrator composing OptimizationEngine + BoundsManager |
+| `CalibrationSystem` | `calibration.py` | Orchestrator composing OptimizationEngine + BoundsManager + SolutionSpace |
 | `OptimizationEngine` | `calibration.py` | DE, L-BFGS-B, smoothing, MPC — pure numerical optimization |
 | `BoundsManager` | `calibration.py` | Schema-aware bounds, trust regions, schedule configs |
+| `SolutionSpace` | `calibration.py` | Decision vector layout, bounds, decode/encode for DE optimization |
 | `BaseOrchestrationSystem` | `base_system.py` | Shared base: logger, models, random_seed/rng |
 
 ## Unified Acquisition Function
@@ -28,22 +29,27 @@ score = (1 - κ) · performance + κ · uncertainty
 
 Baseline uses Riesz energy particle repulsion (separate objective, same engine).
 
-## Optimization Engine
-`OptimizationEngine.run(per_step_fn, N, D_static, D_sched, L, ...)` handles ALL optimization:
+## Three-Layer Optimization Architecture
+1. **SolutionSpace** — defines decision vector layout, bounds, decode/encode
+2. **Objective** — evaluates decoded points (riesz energy / acquisition) — just a callable
+3. **Optimizer** — minimizes objective (DE / L-BFGS-B) — `OptimizationEngine._run_de()` / `._run_lbfgsb()`
 
-- Switches between `_run_de()` and `_run_lbfgsb()` internally
-- **Vector layout per unit:** `[static, sched_step0, offset_1, ..., offset_{L-1}]`
+`SolutionSpace` manages:
+- **Vector layout per experiment:** `[static, sched_step0, offset_1, ..., offset_{L-1}]`
 - **Hard delta constraints** via offset bounds `[-δ, +δ]`
-- **Universal smoothing** penalty (additive, self-scaling)
-- **Capped integer boundary**: mirror distance capped at half-step spacing
+- **Decode** to normalized point arrays
+- **Smoothing penalty** (additive, self-scaling)
+- **Init population** (warm-started DE)
+- **Decode to specs** (convert back to ExperimentSpec)
 
-| Caller | N | L | per_step_fn | Optimizer |
-|--------|---|---|-------------|-----------|
+| Caller | N | L | Objective | Optimizer |
+|--------|---|---|-----------|-----------|
 | `run_baseline` (no schedule) | n_exp | 1 | Riesz energy | DE |
 | `run_baseline` (schedule, unfixed dim) | n_exp | varies | Two-phase: structural → process | DE |
 | `run_baseline` (schedule, fixed dim) | n_exp | L | Riesz energy | DE |
-| `run_calibration` (offline) | 1 | 1 or L | Acquisition | DE |
-| `run_calibration` (online) | 1 | 1 | Acquisition + MPC | L-BFGS-B |
+| `run_calibration` (schedule) | 1 | L | Acquisition via SolutionSpace | DE |
+| `run_calibration` (offline, single) | 1 | 1 | Acquisition | DE |
+| `run_calibration` (online, single) | 1 | 1 | Acquisition + MPC | L-BFGS-B |
 
 ## Two-Phase Baseline
 When schedule dimensions are `DataDomainAxis` and not fixed:
