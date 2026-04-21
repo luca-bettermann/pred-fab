@@ -54,7 +54,7 @@ class OptimizationEngine:
         self.lbfgsb_eps: float = 1e-3
 
         # Schedule smoothing: penalizes speed changes between adjacent layers
-        self.schedule_smoothing: float = 0.25
+        self.schedule_smoothing: float = 0.05
 
     def run(
         self,
