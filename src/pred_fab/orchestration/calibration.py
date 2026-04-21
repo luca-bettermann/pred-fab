@@ -1772,11 +1772,52 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         # Beyond this experiment's L — lock to 0
                         de_bounds_p2.append((0.0, 0.0))
 
-        # Build riesz function for phase 2 (sched dims only, N experiments)
-        riesz_p2 = self._build_riesz_fn(
-            n, [], list(range(D_sched_p2)),
-            int_set, int_ranges_map, 0, p,
-        )
+        # Build normalized static values from phase 1 for distance computation
+        # These are fixed but must participate in the riesz distance metric
+        # so experiments close in water_ratio get different speeds
+        static_norm_p1 = np.zeros((n, len(static_indices_p1)))
+        for i in range(n):
+            for si, d in enumerate(static_indices_p1):
+                val = static_out_p1[i, si]
+                if d in int_set:
+                    r = int_ranges_map[d]
+                    static_norm_p1[i, si] = val / r if r > 0 else 0.5
+                else:
+                    static_norm_p1[i, si] = val
+        D_static_ctx = static_norm_p1.shape[1]
+
+        # Build riesz that includes fixed static dims in distance computation
+        def riesz_p2(pts_sched: np.ndarray) -> float:
+            """Riesz energy with fixed static context from phase 1."""
+            # pts_sched: (N, D_sched) — the optimized schedule dims
+            # Prepend fixed static dims for full-space distance
+            pts_norm = pts_sched.copy()
+            # Normalize integer sched dims
+            for si, (d, _, _, _) in enumerate(sched_params_list):
+                if d in int_set:
+                    r = int_ranges_map[d]
+                    pts_norm[:, si] = pts_norm[:, si] / r if r > 0 else 0.5
+            full_pts = np.hstack([static_norm_p1, pts_norm])
+            n_pts = full_pts.shape[0]
+            if n_pts <= 1:
+                return 0.0
+            iu_p2 = np.triu_indices(n_pts, k=1)
+            diff = full_pts[:, np.newaxis, :] - full_pts[np.newaxis, :, :]
+            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu_p2], 1e-20)
+            pairwise = float(np.sum(dsq ** (-p / 2)))
+            # Boundary repulsion only on sched dims (static are fixed)
+            for d_s in range(D_sched_p2):
+                orig_d = sched_params_list[d_s][0]
+                if orig_d in int_set:
+                    r = int_ranges_map[orig_d]
+                    min_sp = 0.5 / r if r > 0 else 0.5
+                else:
+                    min_sp = 1e-10
+                d_lo = np.maximum(pts_norm[:, d_s], min_sp)
+                d_hi = np.maximum(1.0 - pts_norm[:, d_s], min_sp)
+                pairwise += float(np.sum((2.0 * d_lo) ** (-p)))
+                pairwise += float(np.sum((2.0 * d_hi) ** (-p)))
+            return pairwise
 
         # Build init from phase 1 sched values
         init_flat_p2 = np.zeros(n * D_unit_p2)
