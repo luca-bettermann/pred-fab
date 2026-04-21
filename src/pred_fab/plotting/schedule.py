@@ -95,16 +95,26 @@ def plot_schedule_detail(
     *,
     step_label: str = "Step",
     title: str = "Schedule Detail",
+    integer_valued: bool = False,
 ) -> None:
     """Parameter value vs step index, one line per experiment."""
+    from matplotlib.ticker import MaxNLocator
+
     fig, ax = plt.subplots(figsize=(8, 5))
     fig.suptitle(title, fontsize=13, fontweight="bold")
 
     y_label = param_label or param_key
+    all_vals: list[float] = []
     for i, sched in enumerate(schedules):
         if param_key in sched:
             vals = sched[param_key]
+            all_vals.extend(vals)
             ax.plot(range(len(vals)), vals, "o-", label=f"exp_{i+1:02d}", lw=1.5, ms=5)
+
+    # Integer axes: force integer ticks on x (step) and optionally y (param)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    if integer_valued or (all_vals and all(v == int(v) for v in all_vals)):
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
 
     ax.set_xlabel(step_label)
     ax.set_ylabel(y_label)
