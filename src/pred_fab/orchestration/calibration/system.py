@@ -663,7 +663,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, numeric_params, int_set, int_ranges_map, init_norm,
                 domain_axis_sched_dims,
             )
-            self.last_domain_values = structural_values
+            # Include fixed domain params for validation plot
+            fixed_dom = {
+                c: int(self.fixed_params[c])
+                for c in self.data_objects
+                if isinstance(self.data_objects[c], DataDomainAxis) and c in self.fixed_params
+            }
+            for c, obj in self.data_objects.items():
+                if isinstance(obj, DataDomainAxis) and c not in fixed_dom and c in self.bounds.schema_bounds:
+                    lo, hi = self.bounds.schema_bounds[c]
+                    if lo == hi:
+                        fixed_dom[c] = int(lo)
+            self.last_domain_values = [{**sv, **fixed_dom} for sv in structural_values]
             # Console: show domain values per experiment
             console = self.logger._console_output_enabled
             if console and structural_values:

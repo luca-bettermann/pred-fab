@@ -65,15 +65,15 @@ def _draw_domain(
     ax: plt.Axes,  # type: ignore[name-defined]
     domain_values: list[dict[str, int]],
 ) -> None:
-    """1D/2D scatter of domain parameter assignments."""
+    """2D scatter of domain parameter assignments (always show all domain dims)."""
     if not domain_values:
         return
 
     codes = sorted(domain_values[0].keys())
     n = len(domain_values)
 
-    if len(codes) == 1:
-        # 1D: dot plot along x-axis
+    if len(codes) < 2:
+        # Only one domain dim — add a dummy y=0 axis
         code = codes[0]
         vals = [dv[code] for dv in domain_values]
         ax.scatter(vals, [0] * n, s=60, c=STEEL_500, edgecolors="white",
@@ -84,8 +84,8 @@ def _draw_domain(
         ax.set_xlabel(code, fontsize=9, color=ZINC_600)
         ax.set_yticks([])
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    elif len(codes) >= 2:
-        # 2D scatter
+    else:
+        # 2D scatter — all domain dims
         xs = [dv[codes[0]] for dv in domain_values]
         ys = [dv[codes[1]] for dv in domain_values]
         ax.scatter(xs, ys, s=60, c=STEEL_500, edgecolors="white",
@@ -166,6 +166,20 @@ def _draw_schedule(
         py = [float(lo + schedule_points[j, 0] * (hi - lo)) for j in range(n_total)]
     else:
         py = [float(schedule_points[j, 0]) for j in range(n_total)]
+
+    # Connect dots per experiment with grey lines and add experiment number at step0
+    if schedule_exp_ids is not None:
+        n_exp = max(schedule_exp_ids) + 1
+        for eid in range(n_exp):
+            mask = [j for j, e in enumerate(schedule_exp_ids) if e == eid]
+            if len(mask) > 1:
+                ex = [px[j] for j in mask]
+                ey = [py[j] for j in mask]
+                ax.plot(ex, ey, color=ZINC_400, linewidth=0.6, alpha=0.4, zorder=1)
+            if mask:
+                ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=7,
+                           ha="center", va="bottom", xytext=(0, 5),
+                           textcoords="offset points", color=ZINC_400)
 
     ax.scatter(px, py, s=30, c=colors, edgecolors="white",
                linewidth=0.4, zorder=5, alpha=0.8)
