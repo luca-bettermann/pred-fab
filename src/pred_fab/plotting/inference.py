@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 from ._style import (
     AxisSpec, save_fig, _extract_xy, _apply_axes, _add_fixed_subtitle,
+    _plot_schedule_ranges,
     STEEL_500, ACCENT_YELLOW,
 )
 
@@ -24,6 +25,8 @@ def plot_inference_result(
     optimum: dict[str, float] | None = None,
     optimum_score: float | None = None,
     points: list[dict[str, Any]] | None = None,
+    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    codes: list[str] | None = None,
     title: str = "Inference Result",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -38,6 +41,8 @@ def plot_inference_result(
     plt.colorbar(im, ax=ax, shrink=0.8, label="Predicted Combined Score")
 
     if points:
+        _plot_schedule_ranges(ax, points, x_axis, y_axis, schedules, codes,
+                              color="white", alpha=0.4)
         px, py = _extract_xy(points, x_axis, y_axis)
         ax.scatter(px, py, s=15, c="white", edgecolors="black",
                    linewidth=0.4, zorder=4, alpha=0.6)
