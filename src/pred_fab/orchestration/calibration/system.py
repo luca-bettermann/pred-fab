@@ -55,7 +55,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_perf: float = 0.0
         self.last_opt_unc: float = 0.0
         self.last_schedule: list[dict[str, Any]] | None = None
-        self.convergence_history: dict[str, list[float]] = {}  # label -> per-iteration convergence
+        self.convergence_history: dict[str, list[float]] = {}  # label → per-iteration convergence
+        # Phase data for validation plots
+        self.last_domain_values: list[dict[str, int]] | None = None
+        self.last_process_points: list[dict[str, Any]] | None = None
+        self.last_schedule_points: np.ndarray | None = None
+        self.last_schedule_exp_ids: list[int] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -658,6 +663,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, numeric_params, int_set, int_ranges_map, init_norm,
                 domain_axis_sched_dims,
             )
+            self.last_domain_values = structural_values
             # Console: show domain values per experiment
             console = self.logger._console_output_enabled
             if console and structural_values:
@@ -707,6 +713,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 flat_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+
+        # Store process points for validation plot
+        self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
 
         # Console: show process params per experiment (no domain params)
         console = self.logger._console_output_enabled
@@ -1103,6 +1112,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Decode per-layer sched values for each experiment
         pts_all = space.decode(best_x)  # (N_total, D_sched)
+
+        # Store schedule points for validation plot
+        self.last_schedule_points = pts_all
+        exp_ids: list[int] = []
+        for i in range(n):
+            exp_ids.extend([i] * per_exp_L[i])
+        self.last_schedule_exp_ids = exp_ids
 
         # Build final ExperimentSpecs: merge flat_specs initial params with schedule
         specs_out: list[ExperimentSpec] = []

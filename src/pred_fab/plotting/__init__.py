@@ -23,6 +23,7 @@ from .schedule import plot_schedule_comparison, plot_adaptation, plot_schedule_d
 from .metrics import plot_metric_topology, plot_cross_sections, plot_sensitivity
 from .performance import plot_performance_radar
 from .convergence import plot_convergence
+from .validation import plot_phase_validation
 
 __all__ = [
     "AxisSpec",
@@ -46,4 +47,5 @@ __all__ = [
     "plot_sensitivity",
     "plot_performance_radar",
     "plot_convergence",
+    "plot_phase_validation",
 ]
