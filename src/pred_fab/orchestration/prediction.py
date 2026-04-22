@@ -355,9 +355,9 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     @staticmethod
     def _compute_q_max(points: np.ndarray, weights: np.ndarray, h: float) -> float:
-        """Max weighted KDE density over all training latent points."""
+        """Max weighted KDE density over all training latent points (Cauchy kernel)."""
         dists_sq = np.sum((points[:, None, :] - points[None, :, :]) ** 2, axis=2)  # (N, N)
-        q_vals = np.exp(-dists_sq / (2.0 * h ** 2)) @ weights                       # (N,)
+        q_vals = (1.0 / (1.0 + dists_sq / (h ** 2))) @ weights                      # (N,)
         return float(np.max(q_vals))
 
     def configure_exploration(self, exploration_radius: float) -> None:
@@ -421,7 +421,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return 1.0  # no evidence → maximum uncertainty
 
         dists_sq = np.sum((kde.latent_points - z) ** 2, axis=1)
-        q = float(np.dot(kde.weights, np.exp(-dists_sq / (2.0 * h ** 2))))
+        q = float(np.dot(kde.weights, 1.0 / (1.0 + dists_sq / (h ** 2))))
 
         if kde.q_max <= 0:
             return 1.0
@@ -439,7 +439,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         h = self._exploration_radius * np.sqrt(d) * self._n_decay(self._n_exp)
         if h < 1e-10:
             return 0.0
-        return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
+        dist_sq = float(np.sum((z1 - z2) ** 2))
+        return float(1.0 / (1.0 + dist_sq / (h ** 2)))
 
     def _compute_model_uncertainty_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
         """Batch-aware per-model uncertainty; each row sees the other L-1 rows as virtual KDE points.
@@ -496,7 +497,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 dists_sq_real = np.sum((kde.latent_points - z_k) ** 2, axis=1)
                 q += float(np.dot(
                     kde.weights * w_real_scale,
-                    np.exp(-dists_sq_real / (2.0 * h ** 2)),
+                    1.0 / (1.0 + dists_sq_real / (h ** 2)),
                 ))
             # Other virtuals (excluding self).
             mask = np.arange(L) != k
@@ -504,11 +505,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             if len(others) > 0:
                 if has_real:
                     dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
-                    q += w_virt * float(np.sum(np.exp(-dists_sq_virt / (2.0 * h ** 2))))
+                    q += w_virt * float(np.sum(1.0 / (1.0 + dists_sq_virt / (h ** 2))))
                 else:
                     # When has_real is False, others carry uniform 1/L weight (no scaling).
                     dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
-                    q += (1.0 / float(L)) * float(np.sum(np.exp(-dists_sq_virt / (2.0 * h ** 2))))
+                    q += (1.0 / float(L)) * float(np.sum(1.0 / (1.0 + dists_sq_virt / (h ** 2))))
 
             ratio = float(np.clip(q / q_max_aug, 0.0, 1.0))
             n_post = float(n_for_bandwidth) * (ratio ** gamma)
