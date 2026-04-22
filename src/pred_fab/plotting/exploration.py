@@ -81,7 +81,7 @@ def plot_acquisition(
         # Schedule ranges (white on heatmaps)
         if points:
             _plot_schedule_ranges(ax, points, x_axis, y_axis, schedules, codes,
-                                  color="white", alpha=0.4)
+                                  color="white", alpha=0.6)
             px, py = _extract_xy(points, x_axis, y_axis)
             ax.scatter(px, py, s=18, c="white", edgecolors="#3F3F46",
                        linewidth=0.5, zorder=5, label="Evaluated")

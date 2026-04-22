@@ -89,23 +89,23 @@ def plot_parameter_space(
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
 
-    _plot_schedule_ranges(ax1, points, x_axis, y_axis, schedules, codes,
-                          color="white", alpha=0.4)
     im1 = ax1.contourf(x_values, y_values, true_grid, levels=20, cmap="RdYlGn",
                         vmin=vmin, vmax=vmax)
     ax1.contour(x_values, y_values, true_grid, levels=10, colors="white",
                 linewidths=0.3, alpha=0.5)
+    _plot_schedule_ranges(ax1, points, x_axis, y_axis, schedules, codes,
+                          color="white", alpha=0.6)
     ax1.scatter(px, py, s=20, c="white", edgecolors="black", linewidth=0.5, zorder=5)
     _apply_axes(ax1, x_axis, y_axis)
     ax1.set_title("Ground Truth", fontsize=10)
     plt.colorbar(im1, ax=ax1, shrink=0.8)
 
-    _plot_schedule_ranges(ax2, points, x_axis, y_axis, schedules, codes,
-                          color="white", alpha=0.4)
     im2 = ax2.contourf(x_values, y_values, pred_grid, levels=20, cmap="RdYlGn",
                         vmin=vmin, vmax=vmax)
     ax2.contour(x_values, y_values, pred_grid, levels=10, colors="white",
                 linewidths=0.3, alpha=0.5)
+    _plot_schedule_ranges(ax2, points, x_axis, y_axis, schedules, codes,
+                          color="white", alpha=0.6)
     ax2.scatter(px, py, s=20, c="white", edgecolors="black", linewidth=0.5, zorder=5)
     _apply_axes(ax2, x_axis, y_axis)
     ax2.set_title("Initial Model", fontsize=10)
