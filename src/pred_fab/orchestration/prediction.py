@@ -24,11 +24,10 @@ from .base_system import BaseOrchestrationSystem
 
 @dataclass
 class _ModelKDE:
-    """Per-model KDE state for NatPN-light uncertainty estimation."""
+    """Per-model evidence state for uncertainty estimation."""
     model: IPredictionModel
     latent_points: np.ndarray       # (n_configs, n_active_dims)
-    weights: np.ndarray             # (n_configs,) normalized
-    q_max: float
+    sigma: float                    # evidence decay length scale
     active_mask: np.ndarray         # bool mask over latent dims
     n_active_dims: int
     weight: float = 1.0             # performance weight for aggregation
@@ -56,14 +55,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Domain map populated during train(): model id → derived domain code
         self._model_domain_map: dict[int, str | None] = {}
 
-        # Per-model KDE state for NatPN-light uncertainty estimation (populated after training).
+        # Per-model evidence state for uncertainty estimation (populated after training).
         # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._n_latent_points: int = 0                     # total KDE points (segments across all experiments)
-        self._exploration_radius: float = 0.20             # c: bubble radius at N=1
-        self._bandwidth_decay: float = 1/2                 # exponent for N-decay: h ∝ 1/N^decay
-        self._base_buffer: float = 0.5                     # shared buffer for perf/unc floor scaling
+        self._exploration_radius: float = 0.20             # σ base: evidence decay length scale
+        self._kernel_type: str = "cauchy"                  # "cauchy" or "gaussian"
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
@@ -167,11 +164,22 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit KDE on latent representations of training configs (NatPN-light)
         self._fit_kde(datamodule)
     
-    def _n_decay(self, n: int) -> float:
-        """Compute the N-dependent decay factor for KDE bandwidth: 1/N^decay."""
-        return 1.0 / max(n, 1) ** self._bandwidth_decay
+    # === EVIDENCE MODEL ===
 
-    # === UNCERTAINTY ESTIMATION (NatPN-light, per-model KDE) ===
+    def _kernel(self, dists_sq: np.ndarray, sigma: float) -> np.ndarray:
+        """Evaluate kernel on squared distances. Returns array of kernel values."""
+        s2 = sigma ** 2
+        if self._kernel_type == "gaussian":
+            return np.exp(-dists_sq / (2.0 * s2))
+        # Default: Cauchy
+        return 1.0 / (1.0 + dists_sq / s2)
+
+    def _kernel_scalar(self, dist_sq: float, sigma: float) -> float:
+        """Scalar kernel evaluation."""
+        s2 = sigma ** 2
+        if self._kernel_type == "gaussian":
+            return float(np.exp(-dist_sq / (2.0 * s2)))
+        return 1.0 / (1.0 + dist_sq / s2)
 
     def set_uncertainty_weights(self, weights: dict[str, float]) -> None:
         """Set performance-based weights for per-model uncertainty aggregation.
@@ -192,16 +200,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         return total if total > 0 else 1.0
 
     def _fit_kde(self, datamodule: DataModule) -> None:
-        """Fit one KDE per non-deterministic model on latent representations of training configs.
+        """Fit one evidence model per non-deterministic model on latent representations of training configs.
 
-        Each model gets its own KDE in its own latent space. Deterministic models are excluded
-        (zero epistemic uncertainty by definition). The per-model uncertainties are aggregated
-        into a single scalar by ``uncertainty()`` using performance-based weights.
-
-        One latent point per unique effective parameter configuration per model.
-        Each experiment contributes total raw weight 1.0 (process experiments as 1 point; schedule
-        experiments distributed across K segments proportional to segment row counts). After global
-        normalization, each experiment carries weight 1/n_exp in the KDE.
+        Each data point (segment) contributes 1 unit of evidence — no per-experiment
+        normalization. A 7-layer experiment contributes 7 evidence units. The evidence
+        sum grows with data; uncertainty u = 1/(1+E) shrinks accordingly.
         """
         self._model_kdes = {}
         kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
@@ -209,39 +212,29 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info("All models are deterministic — uncertainty defaults to 0.0.")
             return
 
-        # Collect per-experiment config data (shared across models).
-        # Weight policy: each experiment contributes total raw weight 1.0. Process experiments
-        # place it at a single point; schedule experiments split it across segments proportional
-        # to segment row counts. Diminishing-returns on measurement mass is handled downstream
-        # by the nonlinear uncertainty formula, not by sqrt weighting here.
-        exp_configs: list[tuple[dict[str, Any], float]] = []  # (params, weight)
+        # Collect per-segment config data: each segment = 1 evidence unit.
+        exp_configs: list[dict[str, Any]] = []
         n_exp = 0
         for code in datamodule.get_split_codes(SplitType.TRAIN):
             exp = datamodule.dataset.get_experiment(code)
             n_exp += 1
-            n_rows = exp.get_num_rows()
-            total_rows = float(max(n_rows, 1))
 
             if not exp.parameter_updates:
                 params = exp.parameters.get_values_dict().copy()
-                exp_configs.append((params, 1.0))
+                exp_configs.append(params)
             else:
                 events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
                 seg_start = 0
                 for event in events:
                     seg_end = exp._event_start_index(event)
-                    seg_rows = seg_end - seg_start
-                    if seg_rows > 0:
-                        params = exp.get_effective_parameters_for_row(seg_start)
-                        exp_configs.append((params, float(seg_rows) / total_rows))
+                    if seg_end > seg_start:
+                        exp_configs.append(exp.get_effective_parameters_for_row(seg_start))
                     seg_start = seg_end
-                seg_rows = n_rows - seg_start
-                if seg_rows > 0:
-                    params = exp.get_effective_parameters_for_row(seg_start)
-                    exp_configs.append((params, float(seg_rows) / total_rows))
+                n_rows = exp.get_num_rows()
+                if n_rows > seg_start:
+                    exp_configs.append(exp.get_effective_parameters_for_row(seg_start))
 
         self._n_exp = n_exp
-        self._n_latent_points = len(exp_configs)
         if not exp_configs:
             self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
@@ -249,27 +242,23 @@ class PredictionSystem(BaseOrchestrationSystem):
         n_params = len(datamodule.dataset.schema.parameters.data_objects)
         if n_params > n_exp:
             self.logger.console_warning(
-                f"KDE fitted with {n_exp} experiments but {n_params} parameters — "
+                f"Evidence model fitted with {n_exp} experiments but {n_params} parameters — "
                 f"uncertainty estimates may be unreliable."
             )
 
-        # Fit one KDE per non-deterministic model.
+        # Fit one evidence model per non-deterministic model.
         for model in kde_models:
             latent_points: list[np.ndarray] = []
-            point_weights: list[float] = []
 
-            for params, w in exp_configs:
+            for params in exp_configs:
                 z = self._encode_params_for_model(model, params, datamodule)
                 if z is not None:
                     latent_points.append(z)
-                    point_weights.append(w)
 
             if not latent_points:
                 continue
 
             latent_array = np.array(latent_points)
-            weights_array = np.array(point_weights)
-            weights_array = weights_array / weights_array.sum()
 
             # Drop constant dimensions.
             if latent_array.shape[0] > 1:
@@ -282,52 +271,44 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             projected = latent_array[:, active_mask]
             n_active_dims = projected.shape[1]
-            h = self._exploration_radius * np.sqrt(float(n_active_dims)) * self._n_decay(n_exp)
-            q_max = self._compute_q_max(projected, weights_array, h)
+            sigma = self._exploration_radius * np.sqrt(float(n_active_dims))
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=projected,
-                weights=weights_array,
-                q_max=q_max,
+                sigma=sigma,
                 active_mask=active_mask,
                 n_active_dims=n_active_dims,
                 weight=self._get_model_weight(model),
             )
 
             self.logger.info(
-                f"Evidence KDE for {model.__class__.__name__}: "
-                f"{len(latent_points)} configs, {n_active_dims}/{latent_array.shape[1]} active dims, "
-                f"h={h:.4f}, weight={self._model_kdes[id(model)].weight:.2f}."
+                f"Evidence model for {model.__class__.__name__}: "
+                f"{len(latent_points)} points, {n_active_dims}/{latent_array.shape[1]} active dims, "
+                f"σ={sigma:.4f}, weight={self._model_kdes[id(model)].weight:.2f}."
             )
 
         if self._model_kdes:
             total_w = sum(k.weight for k in self._model_kdes.values())
             self.logger.info(
-                f"Evidence model: {len(self._model_kdes)} per-model KDEs from {n_exp} experiments "
-                f"(c={self._exploration_radius}, total_weight={total_w:.2f})."
+                f"Evidence model: {len(self._model_kdes)} models from {n_exp} experiments "
+                f"(radius={self._exploration_radius}, total_weight={total_w:.2f})."
             )
 
     def fit_empty_kde(self, datamodule: DataModule, target_n: int = 1) -> None:
-        """Initialize empty KDE structures for all non-deterministic models.
+        """Initialize empty evidence structures for all non-deterministic models.
 
-        Creates per-model KDEs with zero latent points. Uncertainty returns 1.0
-        everywhere (maximum). Useful for testing or manual virtual point injection.
-
-        target_n pre-sets the bandwidth scaling so uncertainty bubbles are sized
-        for the expected total number of points.
+        Creates per-model evidence with zero latent points. Uncertainty returns
+        ~1.0 everywhere (only boundary evidence). Used for baseline generation.
         """
         self._model_kdes = {}
         self.datamodule = datamodule
         kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
         if not kde_models:
-            self.logger.info("All models are deterministic — empty KDE not needed.")
+            self.logger.info("All models are deterministic — empty evidence not needed.")
             return
 
-        # Use target_n for bandwidth so bubbles are sized for the final arrangement,
-        # not the current (growing) point count. This produces even spacing.
         self._n_exp = target_n
-        self._n_latent_points = target_n
 
         for model in kde_models:
             # Determine latent dimensionality by encoding a dummy point
@@ -337,47 +318,35 @@ class PredictionSystem(BaseOrchestrationSystem):
             dummy_X = np.zeros((1, n_input))
             z = model.encode(dummy_X)[0]
             n_dims = len(z)
+            sigma = self._exploration_radius * np.sqrt(float(n_dims))
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=np.empty((0, n_dims)),  # zero points
-                weights=np.empty(0),
-                q_max=0.0,
+                sigma=sigma,
                 active_mask=np.ones(n_dims, dtype=bool),
                 n_active_dims=n_dims,
                 weight=self._get_model_weight(model),
             )
 
         self.logger.info(
-            f"Empty KDE initialized for {len(self._model_kdes)} models "
-            f"(c={self._exploration_radius}). Ready for virtual point injection."
+            f"Empty evidence initialized for {len(self._model_kdes)} models "
+            f"(radius={self._exploration_radius})."
         )
 
-    @staticmethod
-    def _compute_q_max(points: np.ndarray, weights: np.ndarray, h: float) -> float:
-        """Max weighted KDE density over all training latent points (Cauchy kernel)."""
-        dists_sq = np.sum((points[:, None, :] - points[None, :, :]) ** 2, axis=2)  # (N, N)
-        q_vals = (1.0 / (1.0 + dists_sq / (h ** 2))) @ weights                      # (N,)
-        return float(np.max(q_vals))
-
     def configure_exploration(self, exploration_radius: float) -> None:
-        """Set the exploration radius c that governs KDE bandwidth and sharpness.
+        """Set the exploration radius that governs evidence decay length scale.
 
-        h = c·√d / √N  (dimension-aware bubble radius, d = n_active_latent_dims)
-        γ = max(1, c·√N)  (edge steepness increases as data accumulates)
-
-        Call before train() to take effect immediately, or after train() to
-        update all per-model evidence KDEs in place with the new radius.
+        σ = exploration_radius · √(n_active_dims) per model. Fixed — does NOT
+        shrink with data size. Data size is captured by the evidence sum growing.
         """
         self._exploration_radius = exploration_radius
-        if self._model_kdes and self._n_exp > 0:
+        if self._model_kdes:
             for kde in self._model_kdes.values():
-                d = float(kde.n_active_dims)
-                h = exploration_radius * np.sqrt(d) * self._n_decay(self._n_exp)
-                kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
+                kde.sigma = exploration_radius * np.sqrt(float(kde.n_active_dims))
             self.logger.info(
                 f"Evidence model updated: exploration_radius={exploration_radius}, "
-                f"{len(self._model_kdes)} KDEs, N={self._n_exp}."
+                f"{len(self._model_kdes)} models."
             )
 
     def _encode_params_for_model(
@@ -403,31 +372,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         X_model = X_norm[input_indices].reshape(1, -1)
         return model.encode(X_model)[0]
 
-    def _compute_model_uncertainty(self, kde: _ModelKDE, X_norm: np.ndarray) -> float:
-        """Compute uncertainty for a single model's KDE at a normalized parameter vector."""
+    def _compute_model_evidence(self, kde: _ModelKDE, X_norm: np.ndarray) -> float:
+        """Compute evidence at a normalized parameter vector from one model's latent points."""
         z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
         z = z[kde.active_mask]
 
-        # Bandwidth uses the larger of _n_exp (real experiments) or actual
-        # point count (real + virtual). For baseline, _n_exp is pre-set to
-        # target_n so bubbles are consistently sized from the start.
-        n_for_bandwidth = max(self._n_exp, 1)
-
-        d     = float(kde.n_active_dims)
-        h     = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_bandwidth)
-        gamma = max(1.0, self._exploration_radius / self._n_decay(n_for_bandwidth))
-
         if len(kde.latent_points) == 0:
-            return 1.0  # no evidence → maximum uncertainty
+            return 0.0  # no data → zero evidence
 
         dists_sq = np.sum((kde.latent_points - z) ** 2, axis=1)
-        q = float(np.dot(kde.weights, 1.0 / (1.0 + dists_sq / (h ** 2))))
-
-        if kde.q_max <= 0:
-            return 1.0
-        ratio  = float(np.clip(q / kde.q_max, 0.0, 1.0))
-        n_post = float(n_for_bandwidth) * (ratio ** gamma)
-        return 1.0 / (1.0 + n_post)
+        return float(np.sum(self._kernel(dists_sq, kde.sigma)))
 
     def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
         """Compute kernel similarity for a single model's latent space."""
@@ -435,23 +389,20 @@ class PredictionSystem(BaseOrchestrationSystem):
         z2 = self._encode_from_norm_array_for_model(kde.model, X2.reshape(-1))
         z1 = z1[kde.active_mask]
         z2 = z2[kde.active_mask]
-        d = float(kde.n_active_dims)
-        h = self._exploration_radius * np.sqrt(d) * self._n_decay(self._n_exp)
-        if h < 1e-10:
+        if kde.sigma < 1e-10:
             return 0.0
         dist_sq = float(np.sum((z1 - z2) ** 2))
-        return float(1.0 / (1.0 + dist_sq / (h ** 2)))
+        return self._kernel_scalar(dist_sq, kde.sigma)
 
-    def _compute_model_uncertainty_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware per-model uncertainty; each row sees the other L-1 rows as virtual KDE points.
+    def _compute_model_evidence_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
+        """Batch-aware per-model evidence; each row sees real data + siblings (excluding self).
 
-        The virtual batch collectively represents one future experiment (total virtual mass = 1.0,
-        distributed uniformly as 1/L per row). At L=1 this reduces exactly to
-        ``_compute_model_uncertainty``.
+        Each sibling contributes 1 evidence unit (same as real data). At L=1 this
+        reduces to ``_compute_model_evidence``.
         """
         L = X_batch.shape[0]
         if L == 1:
-            return np.array([self._compute_model_uncertainty(kde, X_batch[0])])
+            return np.array([self._compute_model_evidence(kde, X_batch[0])])
 
         # Encode each row into this model's latent space.
         Z_full = np.stack([
@@ -459,63 +410,27 @@ class PredictionSystem(BaseOrchestrationSystem):
             for k in range(L)
         ])
         Z = Z_full[:, kde.active_mask]  # (L, d_active)
-
-        # Bandwidth uses latent-point count (segment-level resolution) so that
-        # intra-trajectory layers are distinguishable. Process-phase uncertainty()
-        # keeps using _n_exp (experiment-level resolution).
-        n_exp_eff = max(self._n_exp, 1)
-        n_for_bandwidth = max(self._n_latent_points, 1) + 1
-        d = float(kde.n_active_dims)
-        h = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_bandwidth)
-        gamma = max(1.0, self._exploration_radius / self._n_decay(n_for_bandwidth))
+        sigma = kde.sigma
 
         has_real = len(kde.latent_points) > 0
 
-        # Weight scaling: N real experiments → N/(N+1) share; virtual batch (1 exp) → 1/(N+1);
-        # split across L virtuals as 1/(L·(N+1)) each.
-        w_real_scale = float(n_exp_eff) / float(n_exp_eff + 1)
-        w_virt = 1.0 / (float(n_exp_eff + 1) * float(L))
-
-        # q_max over augmented set (real ∪ all L virtuals, each evaluated against all others incl self).
-        if has_real:
-            aug_points = np.vstack([kde.latent_points, Z])
-            aug_weights = np.concatenate([kde.weights * w_real_scale, np.full(L, w_virt)])
-        else:
-            # No real training data: virtuals alone form the KDE, normalized to sum=1.
-            aug_points = Z
-            aug_weights = np.full(L, 1.0 / float(L))
-
-        q_max_aug = self._compute_q_max(aug_points, aug_weights, h)
-        if q_max_aug <= 0:
-            return np.ones(L)
-
-        u_vec = np.empty(L)
+        e_vec = np.empty(L)
         for k in range(L):
             z_k = Z[k]
-            q = 0.0
+            e = 0.0
+            # Real data evidence
             if has_real:
                 dists_sq_real = np.sum((kde.latent_points - z_k) ** 2, axis=1)
-                q += float(np.dot(
-                    kde.weights * w_real_scale,
-                    1.0 / (1.0 + dists_sq_real / (h ** 2)),
-                ))
-            # Other virtuals (excluding self).
+                e += float(np.sum(self._kernel(dists_sq_real, sigma)))
+            # Sibling evidence (excluding self)
             mask = np.arange(L) != k
             others = Z[mask]
             if len(others) > 0:
-                if has_real:
-                    dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
-                    q += w_virt * float(np.sum(1.0 / (1.0 + dists_sq_virt / (h ** 2))))
-                else:
-                    # When has_real is False, others carry uniform 1/L weight (no scaling).
-                    dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
-                    q += (1.0 / float(L)) * float(np.sum(1.0 / (1.0 + dists_sq_virt / (h ** 2))))
+                dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
+                e += float(np.sum(self._kernel(dists_sq_virt, sigma)))
+            e_vec[k] = e
 
-            ratio = float(np.clip(q / q_max_aug, 0.0, 1.0))
-            n_post = float(n_for_bandwidth) * (ratio ** gamma)
-            u_vec[k] = 1.0 / (1.0 + n_post)
-
-        return u_vec
+        return e_vec
 
     # --- Virtual KDE points for within-schedule spacing ---
     #
@@ -531,12 +446,10 @@ class PredictionSystem(BaseOrchestrationSystem):
     # completes. They do not affect the training data or the prediction model.
 
     def add_virtual_point(self, params: dict[str, Any], datamodule: DataModule) -> None:
-        """Inject a virtual point into all per-model KDEs.
+        """Inject a virtual evidence point into all per-model evidence models.
 
-        The point is encoded into each model's latent space, appended to the
-        KDE with a small weight (equivalent to a single-row observation),
-        and q_max is recomputed. Call clear_virtual_points() to restore the
-        original KDE state.
+        The point contributes 1 evidence unit (same as any real data point).
+        Call clear_virtual_points() to restore the original state.
         """
         if not self._model_kdes:
             return
@@ -550,39 +463,22 @@ class PredictionSystem(BaseOrchestrationSystem):
             # Save original state on first virtual point addition
             if not hasattr(kde, '_original_latent_points'):
                 kde._original_latent_points = kde.latent_points.copy()  # type: ignore[attr-defined]
-                kde._original_weights = kde.weights.copy()              # type: ignore[attr-defined]
-                kde._original_q_max = kde.q_max                        # type: ignore[attr-defined]
 
-            # Append with weight 1.0 (single observation), then renormalize
-            w_sum = kde.weights.sum()
-            raw_weights = kde.weights * w_sum if w_sum > 0 else kde.weights.copy()
-            raw_weights = np.append(raw_weights, 1.0)
             kde.latent_points = np.vstack([kde.latent_points, z_proj.reshape(1, -1)])
-            kde.weights = raw_weights / raw_weights.sum()
 
-            # Recompute q_max using consistent bandwidth
-            n_for_h = max(self._n_exp, 1)
-            d = float(kde.n_active_dims)
-            h = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_h)
-            kde.q_max = self._compute_q_max(kde.latent_points, kde.weights, h)
-
-        self.logger.debug(f"Virtual KDE point added: {list(params.keys())}")
+        self.logger.debug(f"Virtual evidence point added: {list(params.keys())}")
 
     def clear_virtual_points(self) -> None:
-        """Restore all per-model KDEs to their pre-virtual-point state."""
+        """Restore all per-model evidence to their pre-virtual-point state."""
         if not self._model_kdes:
             return
 
         for kde in self._model_kdes.values():
             if hasattr(kde, '_original_latent_points'):
                 kde.latent_points = kde._original_latent_points  # type: ignore[attr-defined]
-                kde.weights = kde._original_weights              # type: ignore[attr-defined]
-                kde.q_max = kde._original_q_max                  # type: ignore[attr-defined]
                 del kde._original_latent_points                  # type: ignore[attr-defined]
-                del kde._original_weights                        # type: ignore[attr-defined]
-                del kde._original_q_max                          # type: ignore[attr-defined]
 
-        self.logger.debug("Virtual KDE points cleared.")
+        self.logger.debug("Virtual evidence points cleared.")
 
     # --- Legacy encode helpers (kept for external callers) ---
 
@@ -630,14 +526,26 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Aggregated public API ---
 
+    def _boundary_evidence(self, X_norm: np.ndarray, sigma: float) -> float:
+        """Compute boundary evidence: 0.5 kernel at each bound per dimension.
+
+        E_boundary(x) = Σ_dims [ 0.5·K(d_lo/σ) + 0.5·K(d_hi/σ) ]
+        where d_lo, d_hi are distances to lower (0) and upper (1) bounds in normalized space.
+        """
+        e_boundary = 0.0
+        for i in range(len(X_norm)):
+            d_lo_sq = X_norm[i] ** 2
+            d_hi_sq = (1.0 - X_norm[i]) ** 2
+            e_boundary += 0.5 * self._kernel_scalar(d_lo_sq, sigma)
+            e_boundary += 0.5 * self._kernel_scalar(d_hi_sq, sigma)
+        return e_boundary
+
     def uncertainty(self, X: np.ndarray) -> float:
         """Compute epistemic uncertainty at a normalized parameter vector.
 
-        Aggregates per-model uncertainties as a performance-weighted average:
-            u(x) = Σ(w_i · u_i(x)) / Σ(w_i)
-        where u_i is the NatPN-light uncertainty from model i's KDE.
+        u(x) = 1 / (1 + E(x))  where E is the weighted evidence sum.
 
-        Deterministic models are excluded (zero epistemic uncertainty).
+        Aggregates per-model uncertainties as a performance-weighted average.
         Returns 1.0 before the evidence model is fitted.
         """
         if not self._model_kdes:
@@ -646,25 +554,23 @@ class PredictionSystem(BaseOrchestrationSystem):
         total_w = 0.0
         weighted_u = 0.0
         for kde in self._model_kdes.values():
-            u_i = self._compute_model_uncertainty(kde, X)
+            e_data = self._compute_model_evidence(kde, X)
+            e_boundary = self._boundary_evidence(X.reshape(-1), kde.sigma)
+            u_i = 1.0 / (1.0 + e_data + e_boundary)
             weighted_u += kde.weight * u_i
             total_w += kde.weight
 
-        u_raw = weighted_u / total_w if total_w > 0 else 1.0
+        u = weighted_u / total_w if total_w > 0 else 1.0
 
-        # Apply uncertainty floor: u = buffer + (1 - buffer) * u_raw
-        # Same buffer as performance normalization, symmetric scaling.
-        buffer = self._base_buffer * self._n_decay(max(self._n_exp, 1))
-        u = buffer + (1.0 - buffer) * u_raw
-
-        self.logger.debug(f"uncertainty (aggregated): u_raw={u_raw:.4f}, buffer={buffer:.4f}, u={u:.4f}")
+        self.logger.debug(f"uncertainty (aggregated): u={u:.4f}")
         return u
 
     def uncertainty_batch(self, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware uncertainty; each row treats the others as virtual KDE points.
+        """Batch-aware uncertainty; each row sees real data + siblings as evidence.
 
-        The virtual batch collectively represents one future experiment. At L=1 this returns
-        the same value as ``uncertainty(X_batch[0])`` (no siblings, no augmentation).
+        u_k = 1 / (1 + E_real(x_k) + E_siblings(x_k) + E_boundary(x_k))
+
+        At L=1 this returns the same value as ``uncertainty(X_batch[0])``.
         """
         if X_batch.ndim != 2:
             raise ValueError(f"uncertainty_batch expects 2-D (L, D), got shape {X_batch.shape}")
@@ -677,16 +583,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         total_w = 0.0
         weighted_u = np.zeros(L)
         for kde in self._model_kdes.values():
-            u_vec = self._compute_model_uncertainty_batch(kde, X_batch)
+            e_vec = self._compute_model_evidence_batch(kde, X_batch)
+            # Add boundary evidence per row
+            for k in range(L):
+                e_vec[k] += self._boundary_evidence(X_batch[k].reshape(-1), kde.sigma)
+            u_vec = 1.0 / (1.0 + e_vec)
             weighted_u += kde.weight * u_vec
             total_w += kde.weight
 
-        u_raw = weighted_u / total_w if total_w > 0 else np.ones(L)
-
-        # Same buffer scaling as uncertainty(); at L=1 matches uncertainty() exactly.
-        n_for_floor = max(self._n_exp + (1 if L > 1 else 0), 1)
-        buffer = self._base_buffer * self._n_decay(n_for_floor)
-        return buffer + (1.0 - buffer) * u_raw
+        return weighted_u / total_w if total_w > 0 else np.ones(L)
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
         """Performance-weighted kernel similarity between two parameter vectors.

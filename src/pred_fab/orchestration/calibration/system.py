@@ -29,8 +29,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         uncertainty_batch_fn: Callable[[np.ndarray], np.ndarray] | None = None,
         similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
-        n_decay_fn: Callable[[int], float] | None = None,
-        base_buffer_fn: Callable[[], float] | None = None,
+        fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger, random_seed=random_seed)
@@ -39,8 +38,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.uncertainty_batch_fn = uncertainty_batch_fn
         self.similarity_fn = similarity_fn
         self._n_exp_fn = n_exp_fn
-        self._n_decay_fn = n_decay_fn
-        self._base_buffer_fn = base_buffer_fn
+        self._fit_empty_kde_fn = fit_empty_kde_fn
 
         # Composed subsystems
         self.engine = OptimizationEngine(logger, random_seed=random_seed)
@@ -80,10 +78,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._perf_range_min: float | None = None
         self._perf_range_max: float | None = None
 
-        # Boundary buffer: penalise acquisition scores near parameter bounds.
+        # Exploration config (retained for baseline use)
         self._exploration_radius: float = 0.20
-        self._buffer: float = 0.5
-        self._decay_exp: float = 0.5
         self._suppress_opt_print: bool = False
 
     # ------------------------------------------------------------------
@@ -228,12 +224,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return self._n_exp_fn()
         return 1
 
-    def _n_decay(self, n: int) -> float:
-        """N-dependent decay factor, delegated to prediction system for single source of truth."""
-        if self._n_decay_fn is not None:
-            return self._n_decay_fn(n)
-        return 1.0 / max(n, 1) ** (1/3)
-
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
         _B = "\033[1m"
@@ -245,10 +235,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         pw_parts = [f"{k}={v:g}" for k, v in self.performance_weights.items()]
         lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
 
-        explore_parts = [f"radius={self._exploration_radius:g}",
-                         f"buffer={self._buffer:g}",
-                         f"decay_exp={self._decay_exp:g}"]
-        lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
+        lines.append(f"    {_D}Exploration: radius={self._exploration_radius:g}{_R}")
 
         lines.append(f"\n    {_D}{'Parameter':<20s} {'Bounds':<20s} {'Delta':<8s}{_R}")
         for code in self.data_objects.keys():
@@ -275,7 +262,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         X: np.ndarray,
         kappa: float,
-        bounds: np.ndarray | None = None,
         perf_range: tuple[float, float] | None = None,
     ) -> float:
         """Unified objective: score = (1-kappa)*perf + kappa*uncertainty. kappa=0 is pure inference."""
@@ -308,16 +294,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         else:
             score = sys_perf
 
-        if bounds is not None:
-            score *= self._boundary_factor(X.reshape(-1), bounds)
-
         return -score
 
     def _ucb_scores(
         self,
         X_batch: np.ndarray,
         kappa: float,
-        bounds: np.ndarray | None = None,
         perf_range: tuple[float, float] | None = None,
     ) -> np.ndarray:
         """Per-row UCB scores (higher is better). Uncertainty is batch-aware for L>1; single-point at L=1."""
@@ -360,42 +342,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         score = (1.0 - kappa) * perf_vec + kappa * u_vec
 
-        if bounds is not None:
-            boundary = np.array([self._boundary_factor(X_batch[k].reshape(-1), bounds) for k in range(L)])
-            score = score * boundary
-
         return score
-
-    def _boundary_factor(
-        self,
-        X: np.ndarray,
-        bounds: np.ndarray,
-        strength: float = 0.5,
-        exponent: float = 2.0,
-    ) -> float:
-        """Multiplicative penalty in (0, 1] that decays near parameter boundaries."""
-        radius = self._exploration_radius
-        if radius <= 0:
-            return 1.0
-
-        n_exp = self._get_n_exp()
-        extent = radius * self._n_decay(n_exp)
-
-        factor = 1.0
-        for i in range(len(X)):
-            lo, hi = bounds[i]
-            span = hi - lo
-            if span < 1e-12:
-                continue
-            d_lo = (X[i] - lo) / span
-            d_hi = (hi - X[i]) / span
-            d = min(d_lo, d_hi)
-            if d >= extent:
-                continue
-            t = max(d / extent, 0.0)
-            factor *= 1.0 - strength * (1.0 - t ** exponent)
-
-        return factor
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -414,16 +361,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Update performance normalization range from training data.
 
         Called after each train(). Computes predicted performance at each
-        training experiment, then applies an absolute buffer that decays
-        with the number of experiments:
-
-            half_buffer = (base_buffer / N^decay) / 2
-            perf_min = raw_min - half_buffer
-            perf_max = raw_max + half_buffer
-
-        Early on (few experiments), the buffer is large and performance is
-        compressed — uncertainty naturally dominates. As data grows, the
-        buffer shrinks and performance fills [0, 1].
+        training experiment. Uses raw min/max directly — no buffer.
         """
         self._active_datamodule = datamodule
         train_codes = datamodule.get_split_codes(SplitType.TRAIN)
@@ -452,15 +390,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 raw_max = sys_perf
 
         if raw_min is not None and raw_max is not None:
-            n = len(train_codes)
-            base_buffer = self._base_buffer_fn() if self._base_buffer_fn else 0.2
-            half_buffer = (base_buffer * self._n_decay(n)) / 2
-            self._perf_range_min = raw_min - half_buffer
-            self._perf_range_max = raw_max + half_buffer
+            self._perf_range_min = raw_min
+            self._perf_range_max = raw_max
             self.logger.debug(
-                f"Performance range: [{raw_min:.3f}, {raw_max:.3f}] "
-                f"+ half_buffer {half_buffer:.3f} (N={n}) "
-                f"\u2192 [{self._perf_range_min:.3f}, {self._perf_range_max:.3f}]"
+                f"Performance range: [{raw_min:.3f}, {raw_max:.3f}]"
             )
 
     def _get_acquisition_ranges(self) -> tuple[tuple[float, float] | None, None]:
@@ -471,7 +404,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             perf_range = None
         return perf_range, None
 
-    def _build_objective(self, mode: Mode, kappa: float, bounds: np.ndarray | None = None) -> Callable:
+    def _build_objective(self, mode: Mode, kappa: float) -> Callable:
         """Return the objective function for the given calibration mode."""
         if mode == Mode.BASELINE:
             raise ValueError(
@@ -483,7 +416,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return functools.partial(
             self._acquisition_func,
             kappa=effective_kappa,
-            bounds=bounds,
             perf_range=perf_range,
         )
 
@@ -986,7 +918,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         domain_axis_sched_dims: set[str],
         structural_values: list[dict[str, int]] | None,
     ) -> tuple[list[ExperimentSpec], np.ndarray, np.ndarray]:
-        """Phase 2: flat N-point repulsion in parameter space (no schedule offsets)."""
+        """Phase 2: UCB-based batch placement (κ=1, pure uncertainty) in parameter space."""
         has_structural = structural_values is not None
         structural_codes = set()
         if has_structural:
@@ -1008,7 +940,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 all_int_set.add(si)
                 all_int_ranges[si] = int_ranges_map[d_i]
 
-        p = self.baseline_riesz_p
         console = self.logger._console_output_enabled
 
         init_de = init_norm.copy()
@@ -1025,25 +956,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
             int_set=all_int_set,
             int_ranges_map=all_int_ranges,
             schedule_smoothing=0.0,
-            riesz_p=p,
         )
 
-        iu = np.triu_indices(n, k=1)
+        # Build schema-only datamodule for baseline uncertainty evaluation
+        baseline_dm = self._build_schema_datamodule()
+        self._active_datamodule = baseline_dm
 
-        def _process_energy_objective(x_flat: np.ndarray) -> float:
-            """Baseline Process DE objective: Riesz energy over N static points."""
-            pts = space.decode(x_flat)
-            diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
-            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
-            pw = float(np.sum(dsq ** (-p / 2)))
-            bnd = 0.0
-            for si, (d_i, _, _, _) in enumerate(all_process_params):
-                ms = (0.5 / int_ranges_map[d_i] if int_ranges_map.get(d_i, 0) > 0 else 0.5) if d_i in int_set else 1e-10
-                d_lo = np.maximum(pts[:, si], ms)
-                d_hi = np.maximum(1.0 - pts[:, si], ms)
-                bnd += float(np.sum((2.0 * d_lo) ** (-p)))
-                bnd += float(np.sum((2.0 * d_hi) ** (-p)))
-            return pw + bnd
+        # Initialize empty evidence model so uncertainty = 1/(1+boundary) everywhere
+        if self._fit_empty_kde_fn is not None:
+            self._fit_empty_kde_fn(baseline_dm, n)
+
+        def _process_ucb_objective(x_flat: np.ndarray) -> float:
+            """Baseline Process DE objective: maximize mean batch-aware uncertainty (κ=1)."""
+            pts = space.decode(x_flat)  # (N, D_point)
+            # Map decoded points to datamodule input format
+            X_batch = np.zeros((n, len(baseline_dm.input_columns)))
+            for i in range(n):
+                for si, (_, code, lo, hi) in enumerate(all_process_params):
+                    col_idx = baseline_dm.input_columns.index(code) if code in baseline_dm.input_columns else -1
+                    if col_idx >= 0:
+                        X_batch[i, col_idx] = pts[i, si]
+            scores = self._ucb_scores(X_batch, kappa=1.0)
+            return -float(np.mean(scores))
 
         # Build init_norm for the merged space (remap original indices)
         merged_init = np.zeros((n, len(all_process_params)))
@@ -1059,7 +993,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         opt = self.engine._run_de(
-            _process_energy_objective, space.bounds, init_pop=init_pop,
+            _process_ucb_objective, space.bounds, init_pop=init_pop,
             integrality=space.integrality, label="Process", show_progress=console,
         )
         if not hasattr(self, 'last_baseline_nfev'):
@@ -1082,7 +1016,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         optimized = space.decode_optimized_positions(best_x)
-        # Also return the raw flat decision vector for Phase 3 to extract initial values
         return specs, best_x, optimized
 
     def _phase3_schedule(
@@ -1097,12 +1030,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         cat_assignments: list[tuple[Any, ...]],
         structural_values: list[dict[str, int]] | None,
     ) -> list[ExperimentSpec]:
-        """Phase 3: optimize schedule offsets with fixed initial params from Phase 2."""
+        """Phase 3: UCB-based schedule optimization (κ=1) with fixed initial params from Phase 2."""
         D_sched = len(sched_params)
         if D_sched == 0 or max(per_exp_L) <= 1:
             return flat_specs
 
-        p = self.baseline_riesz_p
         console = self.logger._console_output_enabled
 
         # Build sched_tuples and compute delta norms
@@ -1138,25 +1070,38 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         N_total = space.n_total_points
-        iu = np.triu_indices(N_total, k=1)
 
-        def _schedule_energy_objective(x_flat: np.ndarray) -> float:
-            """Baseline Schedule DE objective: Riesz energy over all trajectory points."""
+        # Use the schema datamodule set in Phase 2
+        baseline_dm = self._active_datamodule
+
+        def _schedule_ucb_objective(x_flat: np.ndarray) -> float:
+            """Baseline Schedule DE objective: maximize mean batch-aware uncertainty (κ=1) over all trajectory points."""
             pts = space.decode(x_flat)  # (N_total, D_sched)
-            diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
-            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
-            pairwise = float(np.sum(dsq ** (-p / 2)))
-            boundary = 0.0
-            for si in range(D_sched):
-                d_lo = np.maximum(pts[:, si], 1e-10)
-                d_hi = np.maximum(1.0 - pts[:, si], 1e-10)
-                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
-                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
-            energy = pairwise + boundary
-            energy += space.smoothing_penalty(x_flat, energy)
-            return energy
+            if baseline_dm is None:
+                return 0.0
+            # Map decoded sched points to datamodule input format
+            X_batch = np.zeros((N_total, len(baseline_dm.input_columns)))
+            pt_i = 0
+            for i_exp in range(n):
+                # Get static params from flat_specs
+                static_dict = flat_specs[i_exp].initial_params.to_dict()
+                for k in range(per_exp_L[i_exp]):
+                    for c_idx, col in enumerate(baseline_dm.input_columns):
+                        if col in static_dict and col not in {code for code, _, _ in sched_params}:
+                            val = static_dict[col]
+                            lo_s, hi_s = self.bounds._get_hierarchical_bounds_for_code(col)
+                            span_s = hi_s - lo_s
+                            X_batch[pt_i, c_idx] = (float(val) - lo_s) / span_s if span_s > 0 else 0.5
+                        elif col in {code for code, _, _ in sched_params}:
+                            si = next(j for j, (c, _, _) in enumerate(sched_params) if c == col)
+                            X_batch[pt_i, c_idx] = pts[pt_i, si]
+                    pt_i += 1
+            scores = self._ucb_scores(X_batch, kappa=1.0)
+            avg = -float(np.mean(scores))
+            avg += space.smoothing_penalty(x_flat, avg)
+            return avg
 
-        # Build initial population: set step0 from flat results
+        # Build initial population
         init_merged = np.zeros((n, D_sched))
         for i in range(n):
             for si in range(D_sched):
@@ -1171,7 +1116,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         opt = self.engine._run_de(
-            _schedule_energy_objective, space.bounds, init_pop=init_pop,
+            _schedule_ucb_objective, space.bounds, init_pop=init_pop,
             label="Schedule", show_progress=console,
         )
         self.last_baseline_nfev += opt.nfev
@@ -1208,7 +1153,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sp: dict[str, Any] = {}
                 for si, (code, lo, hi) in enumerate(sched_params):
                     val_norm = pts_all[pt_idx + k, si]
-                    sp[code] = float(np.clip(val_norm, 0.01, 0.99) * (hi - lo) + lo)
+                    sp[code] = float(val_norm * (hi - lo) + lo)
                 sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
                 entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
 
@@ -1301,8 +1246,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         self._active_datamodule = datamodule
 
-        global_bounds = self.bounds._get_global_bounds(datamodule) if mode == Mode.EXPLORATION else None
-        objective = self._build_objective(mode, kappa, bounds=global_bounds)
+        objective = self._build_objective(mode, kappa)
 
         if source_step_override is not None:
             source_step = source_step_override
@@ -1503,7 +1447,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     """
                     pts = sched_space.decode(x_flat)
                     X_batch = np.stack([_pts_row_to_dm(pts[k]) for k in range(L)])
-                    scores = self._ucb_scores(X_batch, kappa, bounds=global_bounds, perf_range=sched_perf_range)
+                    scores = self._ucb_scores(X_batch, kappa, perf_range=sched_perf_range)
                     # Negate for minimizer (higher UCB is better); then add smoothing penalty.
                     avg = -float(np.mean(scores))
                     avg += sched_space.smoothing_penalty(x_flat, avg)
@@ -1668,9 +1612,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
                     else:
                         self.last_opt_perf = raw_perf
-                    raw_unc = float(self.uncertainty_fn(best_x))
-                    _gbounds = self.bounds._get_global_bounds(datamodule)
-                    self.last_opt_unc = raw_unc * self._boundary_factor(best_x, _gbounds)
+                    self.last_opt_unc = float(self.uncertainty_fn(best_x))
                 except Exception:
                     self.last_opt_perf = 0.0
                     self.last_opt_unc = 0.0

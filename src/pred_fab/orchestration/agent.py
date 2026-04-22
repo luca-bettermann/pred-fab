@@ -178,8 +178,7 @@ class PfabAgent:
             uncertainty_batch_fn=_pred.uncertainty_batch,
             similarity_fn=_pred.kernel_similarity,
             n_exp_fn=lambda: _pred._n_exp,
-            n_decay_fn=_pred._n_decay,
-            base_buffer_fn=lambda: _pred._base_buffer,
+            fit_empty_kde_fn=_pred.fit_empty_kde,
         )
 
         # validate against schema
@@ -548,20 +547,12 @@ class PfabAgent:
         self,
         *,
         radius: float | None = None,
-        buffer: float | None = None,
-        decay_exp: float | None = None,
     ) -> None:
-        """Set exploration parameters (KDE bandwidth, normalization buffer, decay exponent)."""
+        """Set exploration radius (evidence decay length scale: σ = radius · √dims)."""
         self._assert_initialized()
         if radius is not None:
             self.pred_system.configure_exploration(radius)
             self.calibration_system._exploration_radius = radius
-        if buffer is not None:
-            self.pred_system._base_buffer = buffer
-            self.calibration_system._buffer = buffer
-        if decay_exp is not None:
-            self.pred_system._bandwidth_decay = decay_exp
-            self.calibration_system._decay_exp = decay_exp
 
     def configure_optimizer(
         self,
@@ -648,19 +639,16 @@ class PfabAgent:
         return self.calibration_system.perf_fn(params)
 
     def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
-        """Return the predicted uncertainty (0–1) at params, with boundary buffer applied.
+        """Return the predicted uncertainty (0–1) at params.
 
         Uses the same evidence model the acquisition function queries.
-        The boundary buffer suppresses edge effects near parameter bounds.
+        Boundary evidence is included in the uncertainty computation.
         Pass the current datamodule so params are normalized consistently.
         Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
         """
         self._assert_initialized()
         X = datamodule.params_to_array(params)
-        u = float(self.pred_system.uncertainty(X))
-        bounds = self.calibration_system._get_global_bounds(datamodule)
-        u *= self.calibration_system._boundary_factor(X, bounds)
-        return u
+        return float(self.pred_system.uncertainty(X))
 
     def update_context_snapshot(self, values: dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.
@@ -676,11 +664,11 @@ class PfabAgent:
         self,
         n: int,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals via joint particle repulsion.
+        """Generate n space-filling baseline proposals via UCB-based uncertainty maximization.
 
-        Places all N points simultaneously and minimizes Riesz energy (pairwise
-        + boundary repulsion) to maximize spread. Categorical parameters are
-        included in the distance computation for cross-stratum coordination.
+        Uses the same evidence model as exploration, with κ=1 (pure uncertainty).
+        Domain phase uses Riesz energy for structural params; process and schedule
+        phases maximize batch-aware uncertainty for natural space-filling.
         """
         self._assert_initialized()
         result = self.calibration_system.run_baseline(n=n)

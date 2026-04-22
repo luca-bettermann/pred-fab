@@ -100,8 +100,7 @@ class TestBuildObjective:
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
         cal._active_datamodule = datamodule
-        bounds = cal._get_global_bounds(datamodule)
-        obj = cal._build_objective(Mode.EXPLORATION, kappa=0.7, bounds=bounds)
+        obj = cal._build_objective(Mode.EXPLORATION, kappa=0.7)
         assert callable(obj)
 
     def test_inference_objective_callable(self, tmp_path):

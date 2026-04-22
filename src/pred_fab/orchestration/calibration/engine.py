@@ -108,8 +108,6 @@ class OptimizationEngine:
                         integrality.append(False)
 
         # --- 2. Build objective wrapper ---
-        schedule_smoothing = self.schedule_smoothing
-
         def _objective(x_flat: np.ndarray) -> float:
             units = x_flat.reshape(N, D_unit)
             step_sum = 0.0
@@ -117,40 +115,18 @@ class OptimizationEngine:
             for k in range(L):
                 pts = np.zeros((N, D_static + D_sched))
                 for u in range(N):
-                    # Static dims: same for all steps
                     pts[u, :D_static] = units[u, :D_static]
                     if D_sched > 0:
-                        # Scheduled dims: step0 + cumulative offsets, clipped to sched_bounds
                         step0 = units[u, D_static:D_static + D_sched]
                         abs_val = step0.copy()
                         for kk in range(1, k + 1):
                             off_start = D_static + D_sched + (kk - 1) * D_sched
                             abs_val = abs_val + units[u, off_start:off_start + D_sched]
-                        # Clip to sched_bounds
-                        for d in range(D_sched):
-                            lo, hi = sched_bounds[d]
-                            if abs_val[d] < lo or abs_val[d] > hi:
-                                abs_val[d] = np.clip(abs_val[d], lo, hi)
                         pts[u, D_static:] = abs_val
 
                 step_sum += per_step_fn(pts)
 
-            step_avg = step_sum / L
-
-            # Smoothing penalty
-            if L > 1 and D_sched > 0 and schedule_smoothing > 0:
-                total_penalty = 0.0
-                for u in range(N):
-                    sched_vals = np.zeros((L, D_sched))
-                    step0 = units[u, D_static:D_static + D_sched]
-                    sched_vals[0] = step0
-                    for kk in range(1, L):
-                        off_start = D_static + D_sched + (kk - 1) * D_sched
-                        sched_vals[kk] = sched_vals[kk - 1] + units[u, off_start:off_start + D_sched]
-                    sf = OptimizationEngine._schedule_smoothing_factor(sched_vals, sched_deltas, schedule_smoothing)
-                    total_penalty += abs(step_avg) * (1.0 - sf)
-                return step_avg + total_penalty / N
-            return step_avg
+            return step_sum / L
 
         # --- 3. Run optimizer ---
         if active_optimizer == Optimizer.DE:
@@ -195,10 +171,6 @@ class OptimizationEngine:
                 for k in range(1, L):
                     off_start = D_static + D_sched + (k - 1) * D_sched
                     sched_out[u, k] = sched_out[u, k - 1] + units[u, off_start:off_start + D_sched]
-                    # Clip to sched_bounds
-                    for d in range(D_sched):
-                        lo, hi = sched_bounds[d]
-                        sched_out[u, k, d] = np.clip(sched_out[u, k, d], lo, hi)
 
         return opt, static_out, sched_out
 

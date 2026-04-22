@@ -61,7 +61,7 @@ class SolutionSpace:
             total += self._D_static + step0_vars + max(per_exp_L[i] - 1, 0) * self._D_sched
         self._total_vars = total
 
-        self._sched_bounds_list = list(sched_de_bounds) if sched_de_bounds is not None else [(0.01, 0.99)] * self._D_sched
+        self._sched_bounds_list = list(sched_de_bounds) if sched_de_bounds is not None else [(0.0, 1.0)] * self._D_sched
         if sched_delta_norms is not None:
             self._sched_deltas_norm = list(sched_delta_norms)
         else:
@@ -81,7 +81,7 @@ class SolutionSpace:
                 self._static_bounds_list.append(static_de_bounds[d])
                 self._integrality_mask.append(False)
             else:
-                self._static_bounds_list.append((0.01, 0.99))
+                self._static_bounds_list.append((0.0, 1.0))
                 self._integrality_mask.append(False)
 
         self._bounds_list: list[tuple[float, float]] = []
@@ -150,18 +150,20 @@ class SolutionSpace:
                 if k > 0 and self._D_sched > 0:
                     off_k = offset_base + (k - 1) * self._D_sched
                     abs_speed = abs_speed + x_flat[off_k:off_k + self._D_sched]
-                    for d_s in range(self._D_sched):
-                        lo_s, hi_s = self._sched_bounds_list[d_s]
-                        abs_speed[d_s] = np.clip(abs_speed[d_s], lo_s, hi_s)
                 pts[pt_idx, :self._D_static] = static_norm
                 if self._D_sched > 0:
                     pts[pt_idx, self._D_static:self._D_static + self._D_sched] = abs_speed
                 pt_idx += 1
         return pts
 
-    def smoothing_penalty(self, x_flat: np.ndarray, base_energy: float) -> float:
-        """Compute schedule smoothing penalty from raw offsets."""
-        if self._schedule_smoothing <= 0 or self._D_sched == 0:
+    def smoothing_penalty(self, x_flat: np.ndarray, base_energy: float = 0.0) -> float:
+        """Compute absolute schedule smoothing penalty.
+
+        penalty = lam · Σ min(|Δv| / delta, 1.0) / n_experiments.
+        Decoupled from objective magnitude. base_energy is ignored (kept for API compat).
+        """
+        lam = self._schedule_smoothing
+        if lam <= 0 or self._D_sched == 0:
             return 0.0
         total = 0.0
         for i in range(self._n_experiments):
@@ -179,8 +181,14 @@ class SolutionSpace:
             for kk in range(1, L_i):
                 off_k = offset_base + (kk - 1) * self._D_sched
                 sv[kk] = sv[kk - 1] + x_flat[off_k:off_k + self._D_sched]
-            sf = OptimizationEngine._schedule_smoothing_factor(sv, self._sched_delta_arr, self._schedule_smoothing)
-            total += abs(base_energy) * (1.0 - sf)
+            # Absolute cost per adjacent pair per dimension
+            for kk in range(1, L_i):
+                for d in range(self._D_sched):
+                    if self._sched_delta_arr[d] <= 0:
+                        continue
+                    change = abs(sv[kk, d] - sv[kk - 1, d])
+                    frac = min(change / self._sched_delta_arr[d], 1.0)
+                    total += lam * frac
         return total / self._n_experiments
 
     def build_init_population(self, rng: np.random.RandomState, init_norm: np.ndarray) -> np.ndarray:
@@ -246,7 +254,7 @@ class SolutionSpace:
                     abs_val = abs_val + x_flat[off_k:off_k + self._D_sched]
                     sp: dict[str, Any] = {}
                     for si, (code, lo, hi) in enumerate(self._sched_params):
-                        sp[code] = float(np.clip(abs_val[si], 0.01, 0.99) * (hi - lo) + lo)
+                        sp[code] = float(abs_val[si] * (hi - lo) + lo)
                     entries.append((k, ParameterProposal.from_dict(schema_sanitize(sp), source_step=source_step)))
             schedules: dict[str, ParameterSchedule] = {}
             if entries:

@@ -540,11 +540,11 @@ def test_exploration_step_with_schedule_returns_experiment_spec(tmp_path):
 
 
 # ===========================================================================
-# KDE weighting policy: each experiment contributes total weight 1.0
+# Evidence model: data point counting
 # ===========================================================================
 
-def test_kde_weights_equal_across_process_experiments(tmp_path):
-    """Three process experiments: each contributes equal weight (1/n_exp) after normalization."""
+def test_evidence_grows_with_data(tmp_path):
+    """More latent points near a query → lower uncertainty (more evidence)."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
     datamodule = build_prepared_workflow_datamodule(
@@ -554,32 +554,34 @@ def test_kde_weights_equal_across_process_experiments(tmp_path):
 
     pred = agent.pred_system
     if not pred._model_kdes:
-        pytest.skip("KDE not fitted — not enough distinct training configs")
+        pytest.skip("Evidence model not fitted — not enough distinct training configs")
 
     n_exp = len(codes)
     for kde in pred._model_kdes.values():
-        assert len(kde.weights) == n_exp, (
+        # Each process experiment contributes 1 latent point (no weight normalization)
+        assert len(kde.latent_points) == n_exp, (
             f"expected {n_exp} latent points (one per process experiment), "
-            f"got {len(kde.weights)}"
+            f"got {len(kde.latent_points)}"
         )
-        assert np.allclose(kde.weights, 1.0 / n_exp), (
-            f"expected uniform weights 1/{n_exp}, got {kde.weights}"
-        )
-        assert kde.weights.sum() == pytest.approx(1.0)
+
+    # Uncertainty near training data should be lower than far away
+    first_exp = dataset.get_experiment(codes[0])
+    X_train = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+    ood_params = dict(first_exp.parameters.get_values_dict())
+    ood_params["param_1"] = 9.9
+    X_ood = datamodule.params_to_array(ood_params)
+
+    u_train = pred.uncertainty(X_train)
+    u_ood = pred.uncertainty(X_ood)
+    assert u_train < u_ood
 
 
-def test_kde_weights_split_by_row_counts_in_schedule_experiment(tmp_path):
-    """Schedule experiment: segment weights proportional to segment row counts, summing to 1.0."""
+def test_schedule_experiment_contributes_multiple_evidence_points(tmp_path):
+    """Schedule experiment with 2 segments contributes 2 evidence points (one per segment)."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
 
-    # Turn exp_001 into a schedule experiment with one parameter update mid-way.
-    # This creates 2 segments whose row counts are known from the schema's dim sizes.
     first_exp = dataset.get_experiment(codes[0])
-    total_rows = first_exp.get_num_rows()
-
-    # Record an update on the first dimensional axis at step_index=1 → splits rows into
-    # [rows before step 1] and [rows from step 1 onwards]
     dim_names = first_exp.parameters.get_dim_names()
     if not dim_names:
         pytest.skip("workflow schema has no dimensional params — cannot create schedule")
@@ -597,81 +599,12 @@ def test_kde_weights_split_by_row_counts_in_schedule_experiment(tmp_path):
 
     pred = agent.pred_system
     if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
+        pytest.skip("Evidence model not fitted")
 
-    # With 3 experiments total and exp_001 now scheduled with 2 segments, we expect
-    # 4 latent points (2 from exp_001 + 1 each from exp_002, exp_003).
-    # Each experiment contributes total 1/3 weight.
+    # 3 experiments: exp_001 has 2 segments → 2 points; exp_002, exp_003 → 1 each = 4 total
     for kde in pred._model_kdes.values():
-        # The 2 segment weights from exp_001 must sum to 1/3 (one experiment's share).
-        # The 2 process experiments each contribute 1/3 as a single point.
-        assert kde.weights.sum() == pytest.approx(1.0)
-        # Each single process-experiment point has weight 1/3.
-        # The scheduled experiment contributes 2 points whose weights sum to 1/3.
-        # With total_rows split by step_index=1 on dim=dim_names[0], the segment sizes
-        # depend on the schema — we verify the INVARIANT (each experiment contributes 1/3)
-        # rather than the specific split.
-        single_point_weight = 1.0 / 3.0
-        matches = np.isclose(kde.weights, single_point_weight, atol=1e-9)
-        n_process_points = int(matches.sum())
-        assert n_process_points == 2, (
-            f"expected 2 process-experiment points at weight 1/3, got {n_process_points} "
-            f"(all weights: {kde.weights})"
-        )
-        sched_weights = kde.weights[~matches]
-        assert sched_weights.sum() == pytest.approx(1.0 / 3.0, abs=1e-9), (
-            f"schedule experiment's 2 segments must sum to 1/3; got sum={sched_weights.sum()}, "
-            f"weights={sched_weights}"
-        )
-        # Verify segment weights are proportional to their row counts.
-        # Reconstruct expected ratios from the schema.
-        dim_sizes = first_exp.parameters.get_dim_values(dim_names)
-        # step_index=1 on first dim: rows before = dim_sizes[0] >= 1 step worth,
-        # but the exact math depends on storage. Just assert both segments contributed.
-        assert len(sched_weights) == 2, (
-            f"expected 2 segments for schedule experiment, got {len(sched_weights)}"
-        )
-        assert (sched_weights > 0).all()
-        _ = total_rows  # parameter used implicitly via dim_sizes
-
-
-def test_kde_weights_mixed_each_experiment_contributes_equal_share(tmp_path):
-    """Mixed process + schedule: each experiment's total KDE weight = 1/n_exp."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-
-    # Make exp_002 a schedule experiment with an update halfway through.
-    sched_exp = dataset.get_experiment(codes[1])
-    dim_names = sched_exp.parameters.get_dim_names()
-    if not dim_names:
-        pytest.skip("workflow schema has no dimensional params")
-    sched_exp.record_parameter_update(
-        ParameterProposal.from_dict({"param_1": 6.0}, source_step="adaptation_step"),
-        dimension=dim_names[0],
-        step_index=1,
-    )
-
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
-
-    n_exp = len(codes)
-    expected_per_experiment = 1.0 / n_exp
-    for kde in pred._model_kdes.values():
-        # Invariant: total normalized weight per experiment = 1/n_exp, regardless of
-        # whether the experiment is process (1 point at that weight) or schedule
-        # (K points whose weights sum to that total).
-        assert kde.weights.sum() == pytest.approx(1.0)
-        # The two process experiments contribute single points at 1/n_exp each.
-        single_hits = int(np.isclose(kde.weights, expected_per_experiment, atol=1e-9).sum())
-        assert single_hits == 2, (
-            f"expected 2 single-point contributions at 1/{n_exp}, got {single_hits} "
-            f"(weights: {kde.weights})"
+        assert len(kde.latent_points) == 4, (
+            f"expected 4 latent points (2+1+1), got {len(kde.latent_points)}"
         )
 
 
@@ -799,16 +732,15 @@ def test_uncertainty_batch_no_side_effects(tmp_path):
     X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
     X_batch = np.stack([X, X, X])
 
-    snapshots: list[tuple[np.ndarray, np.ndarray, float]] = []
+    snapshots: list[tuple[np.ndarray, float]] = []
     for kde in pred._model_kdes.values():
-        snapshots.append((kde.latent_points.copy(), kde.weights.copy(), kde.q_max))
+        snapshots.append((kde.latent_points.copy(), kde.sigma))
 
     _ = pred.uncertainty_batch(X_batch)
 
-    for (before_pts, before_w, before_q), kde in zip(snapshots, pred._model_kdes.values()):
+    for (before_pts, before_sigma), kde in zip(snapshots, pred._model_kdes.values()):
         assert np.array_equal(kde.latent_points, before_pts)
-        assert np.array_equal(kde.weights, before_w)
-        assert kde.q_max == before_q
+        assert kde.sigma == before_sigma
 
 
 # ------ Schedule DE branch convergence key rename ('Acquisition' -> 'Schedule') ------
