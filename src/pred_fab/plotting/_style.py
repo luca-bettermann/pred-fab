@@ -41,6 +41,7 @@ class AxisSpec:
     label: str
     unit: str = ""
     bounds: tuple[float, float] | None = None
+    integer: bool = False
 
     @property
     def display_label(self) -> str:
@@ -142,10 +143,15 @@ def _apply_axes(
     x_axis: AxisSpec,
     y_axis: AxisSpec,
 ) -> None:
-    """Set axis labels and optional bounds."""
+    """Set axis labels, bounds, and integer ticks."""
+    from matplotlib.ticker import MaxNLocator
     ax.set_xlabel(x_axis.display_label)
     ax.set_ylabel(y_axis.display_label)
     if x_axis.bounds:
         ax.set_xlim(*x_axis.bounds)
     if y_axis.bounds:
         ax.set_ylim(*y_axis.bounds)
+    if x_axis.integer:
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    if y_axis.integer:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))

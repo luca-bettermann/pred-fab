@@ -680,7 +680,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if console and structural_values:
                 _D = "\033[2m"
                 _R = "\033[0m"
-                _S = "\033[38;2;39;39;70m"  # Zinc-800 for experiment names
+                _S = "\033[38;2;39;39;42m"  # Zinc-800 for experiment names
                 # Include fixed domain params too
                 fixed_domain: dict[str, int] = {}
                 for c, obj in self.data_objects.items():
@@ -733,7 +733,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
-            _S = "\033[38;2;39;39;70m"  # Zinc-800
+            _S = "\033[38;2;39;39;42m"  # Zinc-800
             domain_codes = {
                 c for c in self.data_objects if isinstance(self.data_objects[c], DataDomainAxis)
             }
@@ -1166,7 +1166,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console:
             _D = "\033[2m"
             _R = "\033[0m"
-            _S = "\033[38;2;39;39;70m"  # Zinc-800
+            _S = "\033[38;2;39;39;42m"  # Zinc-800
             for si, (code, lo, hi) in enumerate(sched_params):
                 print(f"    {code}")
                 pt_idx2 = 0
