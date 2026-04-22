@@ -35,7 +35,6 @@ def plot_convergence(
                 label=label, alpha=0.8)
 
     ax.set_xscale("log")
-    ax.set_yscale("log")
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
     ax.set_ylabel("Relative Energy", fontsize=9, color=ZINC_700)
     ax.set_title(title, fontsize=12, fontweight="bold", color=ZINC_700)

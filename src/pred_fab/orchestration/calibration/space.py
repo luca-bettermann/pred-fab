@@ -32,6 +32,7 @@ class SolutionSpace:
         static_de_bounds: list[tuple[float, float]] | None = None,
         sched_de_bounds: list[tuple[float, float]] | None = None,
         sched_delta_norms: list[float] | None = None,
+        step0_values: np.ndarray | None = None,           # (n_exp, D_sched) fixed step0 values (normalized)
     ):
         self._n_experiments = n_experiments
         self._static_params = static_params
@@ -42,6 +43,7 @@ class SolutionSpace:
         self._int_ranges_map = int_ranges_map
         self._schedule_smoothing = schedule_smoothing
         self._riesz_p = riesz_p
+        self._step0_values = step0_values
 
         self._D_static = len(static_params)
         self._D_sched = len(sched_params)
@@ -50,11 +52,13 @@ class SolutionSpace:
         self._N_total = sum(per_exp_L)
         self._D_point = self._D_static + self._D_sched
 
+        self._step0_fixed = step0_values is not None
         self._exp_offsets: list[int] = []
         total = 0
         for i in range(n_experiments):
             self._exp_offsets.append(total)
-            total += self._D_static + self._D_sched + max(per_exp_L[i] - 1, 0) * self._D_sched
+            step0_vars = 0 if self._step0_fixed else self._D_sched
+            total += self._D_static + step0_vars + max(per_exp_L[i] - 1, 0) * self._D_sched
         self._total_vars = total
 
         self._sched_bounds_list = list(sched_de_bounds) if sched_de_bounds is not None else [(0.01, 0.99)] * self._D_sched
@@ -86,9 +90,12 @@ class SolutionSpace:
             self._bounds_list.extend(self._static_bounds_list)
             if self._integrality_list is not None:
                 self._integrality_list.extend(self._integrality_mask)
-            self._bounds_list.extend(self._sched_bounds_list)
-            if self._integrality_list is not None:
-                self._integrality_list.extend([False] * self._D_sched)
+            if step0_values is None:
+                # Step0 is optimizable
+                self._bounds_list.extend(self._sched_bounds_list)
+                if self._integrality_list is not None:
+                    self._integrality_list.extend([False] * self._D_sched)
+            # Offsets for steps 1..L_i-1
             for _k in range(1, per_exp_L[i]):
                 for d_s in range(self._D_sched):
                     self._bounds_list.append((-self._sched_deltas_norm[d_s], self._sched_deltas_norm[d_s]))
@@ -123,12 +130,25 @@ class SolutionSpace:
                 if si in self._int_set:
                     r = self._int_ranges_map[si]
                     static_norm[si] = static_vals[si] / r if r > 0 else 0.5
-            step0 = x_flat[off + self._D_static:off + self._D_static + self._D_sched] if self._D_sched > 0 else np.array([])
-            abs_speed = step0.copy() if self._D_sched > 0 else np.array([])
+
+            if self._D_sched > 0:
+                if self._step0_fixed and self._step0_values is not None:
+                    # Step0 is fixed from Process — not in decision vector
+                    step0 = self._step0_values[i].copy()
+                    offset_base = off + self._D_static
+                else:
+                    # Step0 is optimizable — in decision vector
+                    step0 = x_flat[off + self._D_static:off + self._D_static + self._D_sched]
+                    offset_base = off + self._D_static + self._D_sched
+                abs_speed = step0.copy()
+            else:
+                abs_speed = np.array([])
+                offset_base = off + self._D_static
+
             L_i = self._per_exp_L[i]
             for k in range(L_i):
                 if k > 0 and self._D_sched > 0:
-                    off_k = off + self._D_static + self._D_sched + (k - 1) * self._D_sched
+                    off_k = offset_base + (k - 1) * self._D_sched
                     abs_speed = abs_speed + x_flat[off_k:off_k + self._D_sched]
                     for d_s in range(self._D_sched):
                         lo_s, hi_s = self._sched_bounds_list[d_s]
@@ -150,9 +170,14 @@ class SolutionSpace:
                 continue
             off = self._exp_offsets[i]
             sv = np.zeros((L_i, self._D_sched))
-            sv[0] = x_flat[off + self._D_static:off + self._D_static + self._D_sched]
+            if self._step0_fixed and self._step0_values is not None:
+                sv[0] = self._step0_values[i]
+                offset_base = off + self._D_static
+            else:
+                sv[0] = x_flat[off + self._D_static:off + self._D_static + self._D_sched]
+                offset_base = off + self._D_static + self._D_sched
             for kk in range(1, L_i):
-                off_k = off + self._D_static + self._D_sched + (kk - 1) * self._D_sched
+                off_k = offset_base + (kk - 1) * self._D_sched
                 sv[kk] = sv[kk - 1] + x_flat[off_k:off_k + self._D_sched]
             sf = OptimizationEngine._schedule_smoothing_factor(sv, self._sched_delta_arr, self._schedule_smoothing)
             total += abs(base_energy) * (1.0 - sf)

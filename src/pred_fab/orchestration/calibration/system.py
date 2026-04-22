@@ -669,7 +669,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if console and structural_values:
                 _D = "\033[2m"
                 _R = "\033[0m"
-                _S = "\033[38;2;45;95;133m"  # Steel-700 for experiment names
+                _S = "\033[38;2;39;39;70m"  # Zinc-800 for experiment names
                 # Include fixed domain params too
                 fixed_domain: dict[str, int] = {}
                 for c, obj in self.data_objects.items():
@@ -722,7 +722,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
-            _S = "\033[38;2;45;95;133m"  # Steel-700
+            _S = "\033[38;2;39;39;70m"  # Zinc-800
             domain_codes = {
                 c for c in self.data_objects if isinstance(self.data_objects[c], DataDomainAxis)
             }
@@ -1056,7 +1056,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 span = hi - lo
                 step0_norms[i, si] = (raw_val - lo) / span if span > 0 else 0.5
 
-        # SolutionSpace: D_static=0, only sched offsets
+        # SolutionSpace: D_static=0, step0 fixed from Process, only offsets optimized
         space = SolutionSpace(
             n_experiments=n,
             static_params=[],
@@ -1067,6 +1067,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             int_ranges_map={},
             schedule_smoothing=self.schedule_smoothing,
             sched_delta_norms=sched_delta_norms,
+            step0_values=step0_norms,
         )
 
         N_total = space.n_total_points
@@ -1154,7 +1155,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console:
             _D = "\033[2m"
             _R = "\033[0m"
-            _S = "\033[38;2;45;95;133m"  # Steel-700
+            _S = "\033[38;2;39;39;70m"  # Zinc-800
             for si, (code, lo, hi) in enumerate(sched_params):
                 print(f"    {code}")
                 pt_idx2 = 0
