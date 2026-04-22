@@ -665,11 +665,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 _R = "\033[0m"
                 _S = "\033[38;2;45;95;133m"  # Steel-700 for experiment names
                 # Include fixed domain params too
-                fixed_domain = {
-                    c: int(self.fixed_params[c])
-                    for c in self.data_objects
-                    if isinstance(self.data_objects[c], DataDomainAxis) and c in self.fixed_params
-                }
+                fixed_domain: dict[str, int] = {}
+                for c, obj in self.data_objects.items():
+                    if not isinstance(obj, DataDomainAxis):
+                        continue
+                    if c in self.fixed_params:
+                        fixed_domain[c] = int(self.fixed_params[c])
+                    elif c in self.bounds.schema_bounds:
+                        lo, hi = self.bounds.schema_bounds[c]
+                        if lo == hi:
+                            fixed_domain[c] = int(lo)
                 for i in range(n):
                     all_domain = {**structural_values[i], **fixed_domain}
                     vals = "  ".join(f"{k[:3]}={v}" for k, v in sorted(all_domain.items()))
