@@ -663,6 +663,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if console and structural_values:
                 _D = "\033[2m"
                 _R = "\033[0m"
+                _S = "\033[38;2;45;95;133m"  # Steel-700 for experiment names
                 # Include fixed domain params too
                 fixed_domain = {
                     c: int(self.fixed_params[c])
@@ -671,8 +672,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 }
                 for i in range(n):
                     all_domain = {**structural_values[i], **fixed_domain}
-                    vals = "  ".join(f"{k}={v}" for k, v in sorted(all_domain.items()))
-                    print(f"    {_D}baseline_{i+1:02d}  {vals}{_R}")
+                    vals = "  ".join(f"{k[:3]}={v}" for k, v in sorted(all_domain.items()))
+                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{vals}{_R}")
 
             # Compute per_exp_L from structural values
             group_key_codes = sorted(domain_axis_sched_dims)
@@ -707,16 +708,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
+            _S = "\033[38;2;45;95;133m"  # Steel-700
             domain_codes = {
                 c for c in self.data_objects if isinstance(self.data_objects[c], DataDomainAxis)
             }
             for i, spec in enumerate(flat_specs):
                 p = spec.initial_params.to_dict()
                 parts = [
-                    f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
+                    f"{k[:3]}={v:.3f}" if isinstance(v, float) else f"{k[:3]}={v}"
                     for k, v in p.items() if k not in domain_codes and k not in self.fixed_params
                 ]
-                print(f"    {_D}baseline_{i+1:02d}  {'  '.join(parts)}{_R}")
+                print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{'  '.join(parts)}{_R}")
 
         # --- Phase 3: schedule (if scheduled params exist) ---
         if sched_set and per_exp_L is not None and max(per_exp_L) > 1:
@@ -1131,14 +1133,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if console:
             _D = "\033[2m"
             _R = "\033[0m"
+            _S = "\033[38;2;45;95;133m"  # Steel-700
             for si, (code, lo, hi) in enumerate(sched_params):
-                print(f"    {_D}{code}{_R}")
+                print(f"    {code}")
                 pt_idx2 = 0
                 for i in range(n):
                     L_i = per_exp_L[i]
                     vals = [float(pts_all[pt_idx2 + k, si] * (hi - lo) + lo) for k in range(L_i)]
                     vals_str = " \u2192 ".join(f"{v:.1f}" for v in vals)
-                    print(f"    {_D}baseline_{i+1:02d}  {vals_str}{_R}")
+                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{vals_str}{_R}")
                     pt_idx2 += L_i
 
         return specs_out
