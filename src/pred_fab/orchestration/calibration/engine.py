@@ -256,7 +256,7 @@ class OptimizationEngine:
         result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
 
         if bar:
-            bar.finish(nfev=result.nfev, suffix=f" {iter_count[0]}/{maxiter} iter")
+            bar.finish(nfev=result.nfev, suffix=f"{iter_count[0]}/{maxiter} iter")
 
         return _OptResult(
             best_x=result.x,

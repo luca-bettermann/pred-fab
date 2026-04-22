@@ -57,9 +57,11 @@ class ProgressBar:
     def finish(self, nfev: int | None = None, suffix: str = "") -> None:
         """Fill the bar completely and print final info."""
         bar = "\u2588" * self._len
-        info = f"nfev={nfev}" if nfev is not None else f"{self._i}/{self._max}"
-        if suffix:
-            info += f"  {suffix}"
+        info = suffix.strip() if suffix else ""
+        if nfev is not None:
+            info += f"  nfev={nfev}" if info else f"nfev={nfev}"
+        if not info:
+            info = f"{self._i}/{self._max}"
         print(f"{_G}\u2713{_R} {self._label:<10s} [{bar}] {_D}{info}{_R}   ")
 
 

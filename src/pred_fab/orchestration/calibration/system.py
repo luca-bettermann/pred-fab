@@ -650,24 +650,41 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if fixed_sched:
                 L = max(int(self.fixed_params[d]) for d in fixed_sched)
 
-        # --- Phase 1: structural (if unfixed domain axis) ---
+        # --- Phase 1: domain (if unfixed domain axis) ---
         structural_values: list[dict[str, int]] | None = None
+        per_exp_L: list[int] | None = None
         if domain_axis_sched_dims:
-            structural_values = self._phase1_structural(
+            structural_values = self._phase1_domain(
                 n, numeric_params, int_set, int_ranges_map, init_norm,
                 domain_axis_sched_dims,
             )
+            # Console: show domain values per experiment in grey
+            console = self.logger._console_output_enabled
+            if console and structural_values:
+                _D = "\033[2m"
+                _R = "\033[0m"
+                for i in range(n):
+                    vals = " ".join(f"{k}={v}" for k, v in structural_values[i].items())
+                    print(f"  {_D}exp_{i+1:03d}  {vals}{_R}")
 
-        # --- Phase 2: process (always) ---
+            # Compute per_exp_L from structural values
+            group_key_codes = sorted(domain_axis_sched_dims)
+            per_exp_L = [
+                max(structural_values[i].get(c, 1) for c in group_key_codes)
+                for i in range(n)
+            ]
+
+        # --- Phase 2: process (always flat, no schedule) ---
         if n_numeric > 0:
-            specs, optimized = self._phase2_process(
-                n, L, numeric_params, integer_params, int_set, int_indices,
+            flat_specs, flat_params, optimized = self._phase2_process(
+                n, numeric_params, integer_params, int_set, int_indices,
                 int_ranges_map, init_norm, cat_codes, cat_assignments,
                 sched_set, domain_axis_sched_dims, structural_values,
             )
         else:
             optimized = np.zeros((n, 0))
-            specs = []
+            flat_params = np.zeros((n, 0))
+            flat_specs = []
             for i in range(n):
                 params: dict[str, Any] = dict(self.fixed_params)
                 for d, (code, lo, hi) in enumerate(numeric_params):
@@ -676,7 +693,57 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     params[code] = cat_assignments[i][d_cat]
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
-                specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+                flat_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+
+        # Console: show initial params per experiment after Phase 2
+        console = self.logger._console_output_enabled
+        if console and flat_specs:
+            _D = "\033[2m"
+            _R = "\033[0m"
+            for i, spec in enumerate(flat_specs):
+                p = spec.initial_params.to_dict()
+                parts = [f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}" for k, v in p.items()]
+                print(f"  {_D}exp_{i+1:03d}  {' '.join(parts)}{_R}")
+
+        # --- Phase 3: schedule (if scheduled params exist) ---
+        if sched_set and per_exp_L is not None and max(per_exp_L) > 1:
+            # Determine primary dimension code and sched param info
+            dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
+            primary_dim_code = dim_codes_for_sched[0] if dim_codes_for_sched else ""
+
+            sched_params_list: list[tuple[str, float, float]] = []
+            for code in sorted(sched_set):
+                if code in domain_axis_sched_dims:
+                    continue
+                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                sched_params_list.append((code, lo, hi))
+
+            if sched_params_list:
+                specs = self._phase3_schedule(
+                    n, flat_specs, sched_params_list, per_exp_L,
+                    primary_dim_code, integer_params, cat_codes, cat_assignments,
+                    structural_values,
+                )
+            else:
+                specs = flat_specs
+        elif sched_set and L > 1:
+            # Fixed dimension schedule case
+            primary_dim_code = next(iter(set(self.schedule_configs.values())), "")
+            sched_params_list = []
+            for code in sorted(sched_set):
+                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                sched_params_list.append((code, lo, hi))
+
+            if sched_params_list:
+                specs = self._phase3_schedule(
+                    n, flat_specs, sched_params_list, [L] * n,
+                    primary_dim_code, integer_params, cat_codes, cat_assignments,
+                    structural_values,
+                )
+            else:
+                specs = flat_specs
+        else:
+            specs = flat_specs
 
         # --- Log summary ---
         if n > 1 and n_numeric > 0 and optimized.shape[1] > 0:
@@ -698,7 +765,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return specs
 
-    def _phase1_structural(
+    def _phase1_domain(
         self,
         n: int,
         numeric_params: list[tuple[str, float, float]],
@@ -708,7 +775,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         domain_axis_sched_dims: set[str],
     ) -> list[dict[str, int]]:
         """Repulsion over domain axis params only to determine per-experiment structure."""
-        self.logger.info("Two-phase baseline: starting Phase 1 (Structural)")
+        self.logger.info("Phase 1 (Domain): starting")
 
         structural_indices: list[int] = []
         for d, (code, _lo, _hi) in enumerate(numeric_params):
@@ -781,7 +848,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             init_pop[j] = candidate
 
         self.logger.info(
-            f"Phase 1 (Structural): N={n}, D={D}, "
+            f"Phase 1 (Domain): N={n}, D={D}, "
             f"dims={[numeric_params[d][0] for d in structural_indices]}"
         )
 
@@ -792,10 +859,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
             default_optimizer=self.optimizer,
             init_pop=init_pop,
             integrality_static=integrality if any(integrality) else None,
-            label="Structural", show_progress=console,
+            label="Domain", show_progress=console,
         )
         self.last_baseline_nfev: int = opt.nfev
-        self.convergence_history["Structural"] = opt.convergence_history
+        self.convergence_history["Domain"] = opt.convergence_history
 
         structural_values: list[dict[str, int]] = []
         for i in range(n):
@@ -812,7 +879,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _phase2_process(
         self,
         n: int,
-        L: int,
         numeric_params: list[tuple[str, float, float]],
         integer_params: list[tuple[str, int, int]],
         int_set: set[int],
@@ -824,41 +890,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sched_set: set[str],
         domain_axis_sched_dims: set[str],
         structural_values: list[dict[str, int]] | None,
-    ) -> tuple[list[ExperimentSpec], np.ndarray]:
-        """Process optimization: repulsion in (static, speed, layer_id) space."""
+    ) -> tuple[list[ExperimentSpec], np.ndarray, np.ndarray]:
+        """Phase 2: flat N-point repulsion in parameter space (no schedule offsets)."""
         has_structural = structural_values is not None
         structural_codes = set()
         if has_structural:
             for sv in structural_values:  # type: ignore[union-attr]
                 structural_codes.update(sv.keys())
 
-        static_params: list[tuple[int, str, float, float]] = []
-        sched_params: list[tuple[int, str, float, float]] = []
+        # All non-structural numeric params become static (flat, L=1)
+        all_process_params: list[tuple[int, str, float, float]] = []
         for d, (code, lo, hi) in enumerate(numeric_params):
             if code in structural_codes:
                 continue
-            if code in sched_set:
-                sched_params.append((d, code, lo, hi))
-            else:
-                static_params.append((d, code, lo, hi))
+            all_process_params.append((d, code, lo, hi))
 
-        D_static = len(static_params)
-        D_sched = len(sched_params)
-
-        if has_structural and D_sched > 0:
-            dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
-            primary_dim_code = dim_codes_for_sched[0] if dim_codes_for_sched else ""
-            group_key_codes = sorted(domain_axis_sched_dims)
-            per_exp_L = [
-                max(structural_values[i].get(c, 1) for c in group_key_codes)  # type: ignore[union-attr]
-                for i in range(n)
-            ]
-        elif D_sched > 0 and L > 1:
-            primary_dim_code = next(iter(set(self.schedule_configs.values())), "")
-            per_exp_L = [L] * n
-        else:
-            primary_dim_code = ""
-            per_exp_L = [1] * n
+        all_static_tuples = [(code, lo, hi) for _, code, lo, hi in all_process_params]
+        all_int_set: set[int] = set()
+        all_int_ranges: dict[int, int] = {}
+        for si, (d_i, _, _, _) in enumerate(all_process_params):
+            if d_i in int_set:
+                all_int_set.add(si)
+                all_int_ranges[si] = int_ranges_map[d_i]
 
         p = self.baseline_riesz_p
         console = self.logger._console_output_enabled
@@ -868,170 +921,220 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if d < init_de.shape[1]:
                 init_de[:, d] = np.round(init_de[:, d] * int_ranges_map[d])
 
-        # -- Without schedule: N experiments, 1 point each --
-        # Merge static + sched into one flat static list for SolutionSpace
-        if max(per_exp_L) <= 1 or D_sched == 0:
-            all_static = static_params + sched_params
-            all_static_tuples = [(code, lo, hi) for _, code, lo, hi in all_static]
-            all_int_set: set[int] = set()
-            all_int_ranges: dict[int, int] = {}
-            for si, (d_i, _, _, _) in enumerate(all_static):
-                if d_i in int_set:
-                    all_int_set.add(si)
-                    all_int_ranges[si] = int_ranges_map[d_i]
-
-            space = SolutionSpace(
-                n_experiments=n,
-                static_params=all_static_tuples,
-                sched_params=[],
-                per_exp_L=[1] * n,
-                trust_regions={},
-                int_set=all_int_set,
-                int_ranges_map=all_int_ranges,
-                schedule_smoothing=self.schedule_smoothing,
-                riesz_p=p,
-            )
-
-            iu = np.triu_indices(n, k=1)
-
-            def _riesz_objective(x_flat: np.ndarray) -> float:
-                pts = space.decode(x_flat)
-                diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
-                dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
-                pw = float(np.sum(dsq ** (-p / 2)))
-                bnd = 0.0
-                for si, (d_i, _, _, _) in enumerate(all_static):
-                    ms = (0.5 / int_ranges_map[d_i] if int_ranges_map.get(d_i, 0) > 0 else 0.5) if d_i in int_set else 1e-10
-                    d_lo = np.maximum(pts[:, si], ms)
-                    d_hi = np.maximum(1.0 - pts[:, si], ms)
-                    bnd += float(np.sum((2.0 * d_lo) ** (-p)))
-                    bnd += float(np.sum((2.0 * d_hi) ** (-p)))
-                return pw + bnd
-
-            # Build init_norm for the merged space (remap original indices)
-            merged_init = np.zeros((n, len(all_static)))
-            for si, (d_i, _, _, _) in enumerate(all_static):
-                if d_i < init_de.shape[1]:
-                    merged_init[:, si] = init_de[:, d_i]
-
-            init_pop = space.build_init_population(self.engine.rng, merged_init)
-
-            self.logger.info(f"Baseline: N={n}, L=1, D_static={len(all_static)}, D_sched=0, total_vars={space.total_vars}")
-
-            opt = self.engine._run_de(
-                _riesz_objective, space.bounds, init_pop=init_pop,
-                integrality=space.integrality, label="Baseline", show_progress=console,
-            )
-            self.last_baseline_nfev: int = opt.nfev
-            self.convergence_history["Process"] = opt.convergence_history
-
-            best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
-            specs = space.decode_to_specs(
-                best_x,
-                fixed_params=dict(self.fixed_params),
-                cat_codes=cat_codes,
-                cat_assignments=cat_assignments,
-                structural_values=structural_values,
-                primary_dim_code="",
-                schema_sanitize=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
-                integer_params=integer_params,
-                source_step=SourceStep.BASELINE,
-            )
-
-            optimized = space.decode_optimized_positions(best_x)
-            return specs, optimized
-
-        # -- With schedule: variable-length vector, layer_id as fixed coordinate --
-        static_tuples = [(code, lo, hi) for _, code, lo, hi in static_params]
-        sched_tuples = [(code, lo, hi) for _, code, lo, hi in sched_params]
-        # Remap int_set/int_ranges to static-relative indices
-        static_int_set: set[int] = set()
-        static_int_ranges: dict[int, int] = {}
-        for si, (d_i, _, _, _) in enumerate(static_params):
-            if d_i in int_set:
-                static_int_set.add(si)
-                static_int_ranges[si] = int_ranges_map[d_i]
-
         space = SolutionSpace(
             n_experiments=n,
-            static_params=static_tuples,
-            sched_params=sched_tuples,
-            per_exp_L=per_exp_L,
-            trust_regions=dict(self.trust_regions),
-            int_set=static_int_set,
-            int_ranges_map=static_int_ranges,
-            schedule_smoothing=self.schedule_smoothing,
+            static_params=all_static_tuples,
+            sched_params=[],
+            per_exp_L=[1] * n,
+            trust_regions={},
+            int_set=all_int_set,
+            int_ranges_map=all_int_ranges,
+            schedule_smoothing=0.0,
             riesz_p=p,
         )
 
-        N_total = space.n_total_points
-        iu = np.triu_indices(N_total, k=1)
+        iu = np.triu_indices(n, k=1)
 
-        def _objective(x_flat: np.ndarray) -> float:
+        def _riesz_objective(x_flat: np.ndarray) -> float:
             pts = space.decode(x_flat)
             diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
             dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
-            pairwise = float(np.sum(dsq ** (-p / 2)))
-            boundary = 0.0
-            for si, (d_i, _, _, _) in enumerate(static_params):
+            pw = float(np.sum(dsq ** (-p / 2)))
+            bnd = 0.0
+            for si, (d_i, _, _, _) in enumerate(all_process_params):
                 ms = (0.5 / int_ranges_map[d_i] if int_ranges_map.get(d_i, 0) > 0 else 0.5) if d_i in int_set else 1e-10
                 d_lo = np.maximum(pts[:, si], ms)
                 d_hi = np.maximum(1.0 - pts[:, si], ms)
-                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
-                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
-            for si in range(D_sched):
-                col = D_static + si
-                d_lo = np.maximum(pts[:, col], 1e-10)
-                d_hi = np.maximum(1.0 - pts[:, col], 1e-10)
-                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
-                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
-            energy = pairwise + boundary
-            energy += space.smoothing_penalty(x_flat, energy)
-            return energy
+                bnd += float(np.sum((2.0 * d_lo) ** (-p)))
+                bnd += float(np.sum((2.0 * d_hi) ** (-p)))
+            return pw + bnd
 
-        # Build init_norm for space (static + sched columns from init_de)
-        merged_init = np.zeros((n, D_static + D_sched))
-        for si, (d_i, _, _, _) in enumerate(static_params):
+        # Build init_norm for the merged space (remap original indices)
+        merged_init = np.zeros((n, len(all_process_params)))
+        for si, (d_i, _, _, _) in enumerate(all_process_params):
             if d_i < init_de.shape[1]:
                 merged_init[:, si] = init_de[:, d_i]
-        for si, (d_i, _, _, _) in enumerate(sched_params):
-            if d_i < init_de.shape[1]:
-                merged_init[:, D_static + si] = init_de[:, d_i]
 
         init_pop = space.build_init_population(self.engine.rng, merged_init)
 
         self.logger.info(
-            f"Phase 2 (Process): N={n}, N_total={N_total}, L_max={max(per_exp_L)}, "
-            f"D_static={D_static}, D_sched={D_sched}, total_vars={space.total_vars}, "
-            f"per_exp_L={sorted(set(per_exp_L))}"
+            f"Phase 2 (Process): N={n}, D_static={len(all_process_params)}, "
+            f"D_sched=0, total_vars={space.total_vars}"
         )
 
         opt = self.engine._run_de(
-            _objective, space.bounds, init_pop=init_pop,
+            _riesz_objective, space.bounds, init_pop=init_pop,
             integrality=space.integrality, label="Process", show_progress=console,
         )
         if not hasattr(self, 'last_baseline_nfev'):
-            self.last_baseline_nfev = opt.nfev
+            self.last_baseline_nfev: int = opt.nfev
         else:
             self.last_baseline_nfev += opt.nfev
         self.convergence_history["Process"] = opt.convergence_history
 
-        best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()[:space.total_vars]
-
-        specs_out = space.decode_to_specs(
+        best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
+        specs = space.decode_to_specs(
             best_x,
             fixed_params=dict(self.fixed_params),
             cat_codes=cat_codes,
             cat_assignments=cat_assignments,
             structural_values=structural_values,
-            primary_dim_code=primary_dim_code,
+            primary_dim_code="",
             schema_sanitize=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
             integer_params=integer_params,
             source_step=SourceStep.BASELINE,
         )
 
         optimized = space.decode_optimized_positions(best_x)
-        return specs_out, optimized
+        # Also return the raw flat decision vector for Phase 3 to extract initial values
+        return specs, best_x, optimized
+
+    def _phase3_schedule(
+        self,
+        n: int,
+        flat_specs: list[ExperimentSpec],
+        sched_params: list[tuple[str, float, float]],
+        per_exp_L: list[int],
+        primary_dim_code: str,
+        integer_params: list[tuple[str, int, int]],
+        cat_codes: list[str],
+        cat_assignments: list[tuple[Any, ...]],
+        structural_values: list[dict[str, int]] | None,
+    ) -> list[ExperimentSpec]:
+        """Phase 3: optimize schedule offsets with fixed initial params from Phase 2."""
+        D_sched = len(sched_params)
+        if D_sched == 0 or max(per_exp_L) <= 1:
+            return flat_specs
+
+        p = self.baseline_riesz_p
+        console = self.logger._console_output_enabled
+
+        # Build sched_tuples and compute delta norms
+        sched_tuples: list[tuple[str, float, float]] = []
+        sched_delta_norms: list[float] = []
+        for code, lo, hi in sched_params:
+            sched_tuples.append((code, lo, hi))
+            delta_raw = self.trust_regions.get(code, (hi - lo) / 10.0)
+            span = hi - lo
+            sched_delta_norms.append(delta_raw / span if span > 0 else 0.0)
+
+        # Extract step0 speed values from flat_specs (normalized to [0,1])
+        step0_norms = np.zeros((n, D_sched))
+        for i, spec in enumerate(flat_specs):
+            p_dict = spec.initial_params.to_dict()
+            for si, (code, lo, hi) in enumerate(sched_params):
+                raw_val = float(p_dict.get(code, (lo + hi) / 2.0))
+                span = hi - lo
+                step0_norms[i, si] = (raw_val - lo) / span if span > 0 else 0.5
+
+        # SolutionSpace: D_static=0, only sched offsets
+        space = SolutionSpace(
+            n_experiments=n,
+            static_params=[],
+            sched_params=sched_tuples,
+            per_exp_L=per_exp_L,
+            trust_regions=dict(self.trust_regions),
+            int_set=set(),
+            int_ranges_map={},
+            schedule_smoothing=self.schedule_smoothing,
+            sched_delta_norms=sched_delta_norms,
+        )
+
+        N_total = space.n_total_points
+        iu = np.triu_indices(N_total, k=1)
+
+        def _sched_objective(x_flat: np.ndarray) -> float:
+            pts = space.decode(x_flat)  # (N_total, D_sched)
+            diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
+            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
+            pairwise = float(np.sum(dsq ** (-p / 2)))
+            boundary = 0.0
+            for si in range(D_sched):
+                d_lo = np.maximum(pts[:, si], 1e-10)
+                d_hi = np.maximum(1.0 - pts[:, si], 1e-10)
+                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
+                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
+            energy = pairwise + boundary
+            energy += space.smoothing_penalty(x_flat, energy)
+            return energy
+
+        # Build initial population: set step0 from flat results
+        init_merged = np.zeros((n, D_sched))
+        for i in range(n):
+            for si in range(D_sched):
+                init_merged[i, si] = step0_norms[i, si]
+
+        init_pop = space.build_init_population(self.engine.rng, init_merged)
+
+        self.logger.info(
+            f"Phase 3 (Schedule): N={n}, N_total={N_total}, L_max={max(per_exp_L)}, "
+            f"D_static=0, D_sched={D_sched}, total_vars={space.total_vars}, "
+            f"per_exp_L={sorted(set(per_exp_L))}"
+        )
+
+        opt = self.engine._run_de(
+            _sched_objective, space.bounds, init_pop=init_pop,
+            label="Schedule", show_progress=console,
+        )
+        self.last_baseline_nfev += opt.nfev
+        self.convergence_history["Schedule"] = opt.convergence_history
+
+        best_x = opt.best_x if opt.best_x is not None else init_merged.ravel()[:space.total_vars]
+
+        # Decode per-layer sched values for each experiment
+        pts_all = space.decode(best_x)  # (N_total, D_sched)
+
+        # Build final ExperimentSpecs: merge flat_specs initial params with schedule
+        specs_out: list[ExperimentSpec] = []
+        pt_idx = 0
+        for i in range(n):
+            L_i = per_exp_L[i]
+            base_params = dict(flat_specs[i].initial_params.to_dict())
+
+            # Update initial params with step0 sched values from Phase 3
+            for si, (code, lo, hi) in enumerate(sched_params):
+                base_params[code] = float(pts_all[pt_idx, si] * (hi - lo) + lo)
+
+            base_params = self.schema.parameters.sanitize_values(base_params, ignore_unknown=True)
+            initial = ParameterProposal.from_dict(base_params, source_step=SourceStep.BASELINE)
+
+            entries: list[tuple[int, ParameterProposal]] = []
+            for k in range(1, L_i):
+                sp: dict[str, Any] = {}
+                for si, (code, lo, hi) in enumerate(sched_params):
+                    val_norm = pts_all[pt_idx + k, si]
+                    sp[code] = float(np.clip(val_norm, 0.01, 0.99) * (hi - lo) + lo)
+                sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
+                entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
+
+            schedules: dict[str, ParameterSchedule] = {}
+            if entries:
+                schedules[primary_dim_code] = ParameterSchedule(dimension=primary_dim_code, entries=entries)
+
+            specs_out.append(ExperimentSpec(initial_params=initial, schedules=schedules))
+            pt_idx += L_i
+
+        # Console: show per-layer schedule values
+        if console:
+            _D = "\033[2m"
+            _R = "\033[0m"
+            pt_idx = 0
+            for i in range(n):
+                L_i = per_exp_L[i]
+                for si, (code, lo, hi) in enumerate(sched_params):
+                    per_layer_vals = [float(pts_all[pt_idx + k, si] * (hi - lo) + lo) for k in range(L_i)]
+                    if D_sched == 1:
+                        # 1D: one row per experiment
+                        vals_str = " \u2192 ".join(f"{v:.1f}" for v in per_layer_vals)
+                        print(f"    exp_{i+1:03d}  {code}: {vals_str}")
+                    else:
+                        # Multi-D: nested display
+                        print(f"    exp_{i+1:03d}  {code}:")
+                        for layer in range(L_i):
+                            print(f"      L{layer}: {per_layer_vals[layer]:.1f}")
+                pt_idx += L_i
+
+        return specs_out
 
     @staticmethod
     def _recursive_split(
@@ -1198,84 +1301,178 @@ class CalibrationSystem(BaseOrchestrationSystem):
             D_sched = len(sched_codes)
             code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
 
-            # Build sched DE bounds and delta norms in normalized space
-            sched_de_bounds: list[tuple[float, float]] = []
-            sched_delta_norms: list[float] = []
-            sched_param_tuples: list[tuple[str, float, float]] = []
-            for code in sched_codes:
+            # --- Phase 2 (Process): single-point acquisition, no schedule ---
+            # All params (static + sched) treated as flat static for Phase 2
+            all_p2_codes = static_codes + sched_codes
+            D_p2 = len(all_p2_codes)
+
+            if is_online:
+                p2_bounds = self.bounds._get_trust_region_bounds(datamodule, working_params)  # type: ignore[arg-type]
+            else:
+                p2_bounds = all_global_bounds
+
+            # Build p2 bounds for the merged flat vector
+            p2_static_bounds: list[tuple[float, float]] = []
+            for code in all_p2_codes:
                 idx = code_to_idx[code]
-                lo_norm, hi_norm = float(all_global_bounds[idx, 0]), float(all_global_bounds[idx, 1])
-                sched_de_bounds.append((lo_norm, hi_norm))
-                sched_param_tuples.append((code, lo_norm, hi_norm))
-                delta_raw = self.trust_regions.get(code, 0.0)
-                if delta_raw > 0:
-                    _, delta_norm = datamodule.normalize_parameter_bounds(code, 0.0, delta_raw)
-                    lo_zero, _ = datamodule.normalize_parameter_bounds(code, 0.0, 0.0)
-                    sched_delta_norms.append(abs(delta_norm - lo_zero))
-                else:
-                    sched_delta_norms.append(0.0)
+                p2_static_bounds.append((float(p2_bounds[idx, 0]), float(p2_bounds[idx, 1])))
 
-            # Build static param tuples with normalized bounds
-            static_param_tuples: list[tuple[str, float, float]] = []
-            static_de_bounds: list[tuple[float, float]] = []
-            for code in static_codes:
-                idx = code_to_idx[code]
-                lo_n, hi_n = float(all_global_bounds[idx, 0]), float(all_global_bounds[idx, 1])
-                static_param_tuples.append((code, lo_n, hi_n))
-                static_de_bounds.append((lo_n, hi_n))
-
-            space = SolutionSpace(
-                n_experiments=1,
-                static_params=static_param_tuples,
-                sched_params=sched_param_tuples,
-                per_exp_L=[L],
-                trust_regions={},
-                int_set=set(),
-                int_ranges_map={},
-                schedule_smoothing=self.schedule_smoothing,
-                static_de_bounds=static_de_bounds,
-                sched_de_bounds=sched_de_bounds,
-                sched_delta_norms=sched_delta_norms,
-            )
-
-            def _pts_row_to_dm(pts_row: np.ndarray) -> np.ndarray:
-                """Map a decoded row to datamodule input array."""
+            def _p2_objective(pts: np.ndarray) -> float:
+                """Single-point acquisition for Phase 2."""
                 x = np.zeros(n_input)
-                for i_s, c in enumerate(static_codes):
-                    x[code_to_idx[c]] = pts_row[i_s]
-                for d_s, c in enumerate(sched_codes):
-                    x[code_to_idx[c]] = pts_row[D_static + d_s]
-                return x
+                for i_s, c in enumerate(all_p2_codes):
+                    x[code_to_idx[c]] = pts[0, i_s]
+                return objective(x)
 
-            def _sched_objective(x_flat: np.ndarray) -> float:
-                pts = space.decode(x_flat)
-                avg = sum(objective(_pts_row_to_dm(pts[k])) for k in range(L)) / L
-                avg += space.smoothing_penalty(x_flat, avg)
-                return avg
+            opt_for_p2 = self.online_optimizer if is_online else None
+            n_rounds_p2 = 0 if is_online else n_optimization_rounds
 
-            self.logger.debug(
-                f"Joint schedule optimization: L={L}, D_static={D_static}, "
-                f"D_sched={D_sched}, total_vars={space.total_vars}"
+            x0_p2: np.ndarray | None = None
+            if working_params:
+                full_arr = datamodule.params_to_array(working_params)
+                x0_p2 = np.array([full_arr[code_to_idx[c]] for c in all_p2_codes])
+
+            opt_p2, static_out_p2, _ = self.engine.run(
+                _p2_objective, N=1, D_static=D_p2, D_sched=0, L=1,
+                static_bounds=p2_static_bounds, sched_bounds=[], sched_deltas=np.array([]),
+                optimizer=opt_for_p2,
+                default_optimizer=self.optimizer,
+                x0=x0_p2,
+                n_restarts=n_rounds_p2,
+                label="Process", show_progress=console,
             )
 
-            opt = self.engine._run_de(
-                _sched_objective, space.bounds, label="Schedule", show_progress=console,
-            )
-            self.last_opt_nfev = opt.nfev
-            self.last_opt_n_starts = opt.n_starts
-            self.last_opt_score = opt.score
-            self.convergence_history["Acquisition"] = opt.convergence_history
-            if console:
-                self._print_optimized_line(opt.nfev)
+            self.last_opt_nfev = opt_p2.nfev
+            self.last_opt_n_starts = opt_p2.n_starts
+            self.last_opt_score = opt_p2.score
 
-            dm_input_set = set(datamodule.input_columns)
-            non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}
+            # Build flat params from Phase 2
+            flat_x = np.zeros(n_input)
+            if opt_p2.best_x is not None:
+                p2_vals = static_out_p2[0]
+                for i_s, c in enumerate(all_p2_codes):
+                    flat_x[code_to_idx[c]] = p2_vals[i_s]
 
-            proposals: list[dict[str, Any]] = []
-            if opt.best_x is not None:
-                pts = space.decode(opt.best_x)
+            # --- Phase 3 (Schedule): fix static, optimize offsets ---
+            if D_sched > 0:
+                # Build sched DE bounds and delta norms in normalized space
+                sched_de_bounds: list[tuple[float, float]] = []
+                sched_delta_norms: list[float] = []
+                sched_param_tuples: list[tuple[str, float, float]] = []
+                for code in sched_codes:
+                    idx = code_to_idx[code]
+                    lo_norm, hi_norm = float(all_global_bounds[idx, 0]), float(all_global_bounds[idx, 1])
+                    sched_de_bounds.append((lo_norm, hi_norm))
+                    sched_param_tuples.append((code, lo_norm, hi_norm))
+                    delta_raw = self.trust_regions.get(code, 0.0)
+                    if delta_raw > 0:
+                        _, delta_norm = datamodule.normalize_parameter_bounds(code, 0.0, delta_raw)
+                        lo_zero, _ = datamodule.normalize_parameter_bounds(code, 0.0, 0.0)
+                        sched_delta_norms.append(abs(delta_norm - lo_zero))
+                    else:
+                        sched_delta_norms.append(0.0)
+
+                sched_space = SolutionSpace(
+                    n_experiments=1,
+                    static_params=[],
+                    sched_params=sched_param_tuples,
+                    per_exp_L=[L],
+                    trust_regions={},
+                    int_set=set(),
+                    int_ranges_map={},
+                    schedule_smoothing=self.schedule_smoothing,
+                    sched_de_bounds=sched_de_bounds,
+                    sched_delta_norms=sched_delta_norms,
+                )
+
+                def _pts_row_to_dm(pts_row: np.ndarray) -> np.ndarray:
+                    """Map decoded sched-only row + fixed static to datamodule input."""
+                    x = flat_x.copy()
+                    for d_s, c in enumerate(sched_codes):
+                        x[code_to_idx[c]] = pts_row[d_s]
+                    return x
+
+                def _sched_objective(x_flat: np.ndarray) -> float:
+                    pts = sched_space.decode(x_flat)
+                    avg = sum(objective(_pts_row_to_dm(pts[k])) for k in range(L)) / L
+                    avg += sched_space.smoothing_penalty(x_flat, avg)
+                    return avg
+
+                self.logger.debug(
+                    f"Phase 3 schedule optimization: L={L}, D_static=0, "
+                    f"D_sched={D_sched}, total_vars={sched_space.total_vars}"
+                )
+
+                opt = self.engine._run_de(
+                    _sched_objective, sched_space.bounds, label="Schedule", show_progress=console,
+                )
+                self.last_opt_nfev += opt.nfev
+                self.convergence_history["Acquisition"] = opt.convergence_history
+
+                dm_input_set = set(datamodule.input_columns)
+                non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}
+
+                proposals: list[dict[str, Any]] = []
+                if opt.best_x is not None:
+                    pts = sched_space.decode(opt.best_x)
+                    for k in range(L):
+                        step_params = datamodule.array_to_params(_pts_row_to_dm(pts[k]))
+                        step_params.update(self.fixed_params)
+                        if current_params and non_dm_sched:
+                            for code in non_dm_sched:
+                                if code in current_params and code not in step_params:
+                                    step_params[code] = current_params[code]
+                        if current_params:
+                            for k_p, v_p in current_params.items():
+                                if k_p not in step_params:
+                                    step_params[k_p] = v_p
+                        proposals.append(self.schema.parameters.sanitize_values(step_params, ignore_unknown=True))
+                else:
+                    self.logger.warning("Schedule optimization failed, returning fallback.")
+                    fallback = dict(self.fixed_params)
+                    if current_params:
+                        fallback.update(current_params)
+                    proposals = [fallback] * L
+
+                self.last_schedule = list(proposals)
+
+                if opt.best_x is not None:
+                    try:
+                        x0_step = _pts_row_to_dm(sched_space.decode(opt.best_x)[0])
+                        _params = datamodule.array_to_params(x0_step)
+                        _perf_dict = self.perf_fn(_params)
+                        _pv = [
+                            float(v) if (v := _perf_dict.get(n)) is not None else 0.0
+                            for n in self.perf_names_order if n in _perf_dict
+                        ]
+                        raw_perf = self._compute_system_performance(_pv) if _pv else 0.0
+                        if self._perf_range_min is not None and self._perf_range_max is not None:
+                            span = self._perf_range_max - self._perf_range_min
+                            self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
+                        else:
+                            self.last_opt_perf = raw_perf
+                        self.last_opt_unc = float(self.uncertainty_fn(x0_step))
+                    except Exception:
+                        self.last_opt_perf = 0.0
+                        self.last_opt_unc = 0.0
+                else:
+                    self.last_opt_perf = 0.0
+                    self.last_opt_unc = 0.0
+
+                self.logger.info(
+                    f"de: process={opt_p2.nfev} evals, schedule={opt.nfev} evals, "
+                    f"score={opt.score:.6f}"
+                )
+
+            else:
+                # D_sched == 0: sched params not in datamodule input_columns.
+                # Replicate flat result across all steps via non-DM sched param handling.
+                dm_input_set = set(datamodule.input_columns)
+                non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}
+
+                proposals = []
                 for k in range(L):
-                    step_params = datamodule.array_to_params(_pts_row_to_dm(pts[k]))
+                    step_params = datamodule.array_to_params(flat_x)
                     step_params.update(self.fixed_params)
                     if current_params and non_dm_sched:
                         for code in non_dm_sched:
@@ -1286,19 +1483,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                             if k_p not in step_params:
                                 step_params[k_p] = v_p
                     proposals.append(self.schema.parameters.sanitize_values(step_params, ignore_unknown=True))
-            else:
-                self.logger.warning("Joint schedule optimization failed, returning fallback.")
-                fallback = dict(self.fixed_params)
-                if current_params:
-                    fallback.update(current_params)
-                proposals = [fallback] * L
 
-            self.last_schedule = list(proposals)
+                self.last_schedule = list(proposals)
 
-            if opt.best_x is not None:
                 try:
-                    x0_step = _pts_row_to_dm(space.decode(opt.best_x)[0])
-                    _params = datamodule.array_to_params(x0_step)
+                    _params = datamodule.array_to_params(flat_x)
                     _perf_dict = self.perf_fn(_params)
                     _pv = [
                         float(v) if (v := _perf_dict.get(n)) is not None else 0.0
@@ -1310,15 +1499,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
                     else:
                         self.last_opt_perf = raw_perf
-                    self.last_opt_unc = float(self.uncertainty_fn(x0_step))
+                    self.last_opt_unc = float(self.uncertainty_fn(flat_x))
                 except Exception:
                     self.last_opt_perf = 0.0
                     self.last_opt_unc = 0.0
-            else:
-                self.last_opt_perf = 0.0
-                self.last_opt_unc = 0.0
 
-            self.logger.info(f"de: 1 start(s), {opt.nfev} evals, score={opt.score:.6f}")
+                self.logger.info(
+                    f"de: process={opt_p2.nfev} evals, score={opt_p2.score:.6f} "
+                    f"(no sched params in datamodule)"
+                )
 
         # ------------------------------------------------------------------
         # SINGLE-STEP optimization (L=1) via optimization engine

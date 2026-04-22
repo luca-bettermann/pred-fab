@@ -45,16 +45,19 @@ Baseline uses Riesz energy particle repulsion (separate objective, same engine).
 | Caller | N | L | Objective | Optimizer |
 |--------|---|---|-----------|-----------|
 | `run_baseline` (no schedule) | n_exp | 1 | Riesz energy | DE |
-| `run_baseline` (schedule, unfixed dim) | n_exp | varies | Two-phase: structural → process | DE |
-| `run_baseline` (schedule, fixed dim) | n_exp | L | Riesz energy | DE |
-| `run_calibration` (schedule) | 1 | L | Acquisition via SolutionSpace | DE |
+| `run_baseline` (schedule, unfixed dim) | n_exp | varies | 3-phase: domain → process → schedule | DE |
+| `run_baseline` (schedule, fixed dim) | n_exp | L | 2-phase: process → schedule | DE |
+| `run_calibration` (schedule) | 1 | L | Phase 2: acquisition, Phase 3: acquisition per layer | DE |
 | `run_calibration` (offline, single) | 1 | 1 | Acquisition | DE |
 | `run_calibration` (online, single) | 1 | 1 | Acquisition + MPC | L-BFGS-B |
 
-## Two-Phase Baseline
+## Three-Phase Baseline
 When schedule dimensions are `DataDomainAxis` and not fixed:
-1. **Structural** — repulsion over all dims (assigns domain axis values naturally)
-2. **Process** — group by structural values, run schedule optimization per group
+1. **Domain** (Phase 1) — repulsion over domain axis params only (assigns structural values)
+2. **Process** (Phase 2) — flat N-point repulsion in parameter space (water, speed), no schedule offsets
+3. **Schedule** (Phase 3) — fix initial params from Phase 2, optimize only offsets (per-layer speed variations)
+
+Phase 2 always runs flat (L=1 for all experiments). Phase 3 only runs when schedule params exist and L>1.
 
 ## Configuration
 ```python
