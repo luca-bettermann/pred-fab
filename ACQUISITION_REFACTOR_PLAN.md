@@ -160,8 +160,8 @@ Empty-KDE + batch-aware uncertainty (κ=1) produces a Gaussian-kernel space-fill
 
 - [x] Plan approved (this document)
 - [x] Branch created (`feat/batch-aware-exploration-schedule`)
-- [ ] Commit 1: KDE weighting policy
-- [ ] Commit 2: objective-function naming refactor
-- [ ] Commit 3: batch-aware exploration schedule
-- [ ] Validation via mock
+- [x] Commit 1: KDE weighting policy
+- [x] Commit 2: objective-function naming refactor (inner DE closures)
+- [x] Commit 3: batch-aware exploration schedule
+- [ ] Validation via mock (visual — schedule trajectories now diverse)
 - [ ] Phase 2 branch (future)

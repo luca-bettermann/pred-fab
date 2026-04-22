@@ -673,3 +673,145 @@ def test_kde_weights_mixed_each_experiment_contributes_equal_share(tmp_path):
             f"expected 2 single-point contributions at 1/{n_exp}, got {single_hits} "
             f"(weights: {kde.weights})"
         )
+
+
+# ===========================================================================
+# uncertainty_batch: batch-aware KDE uncertainty
+# ===========================================================================
+
+def test_uncertainty_batch_matches_single_point_at_L1(tmp_path):
+    """uncertainty_batch(X[0:1])[0] must equal uncertainty(X[0]) when L=1 (no siblings)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("KDE not fitted")
+
+    first_exp = dataset.get_experiment(codes[0])
+    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+
+    u_single = pred.uncertainty(X)
+    u_batch = pred.uncertainty_batch(X.reshape(1, -1))
+
+    assert u_batch.shape == (1,)
+    assert u_batch[0] == pytest.approx(u_single, abs=1e-9)
+
+
+def test_uncertainty_batch_shape_and_dtype(tmp_path):
+    """uncertainty_batch returns (L,) float array for input shape (L, D)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("KDE not fitted")
+
+    first_exp = dataset.get_experiment(codes[0])
+    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+    X_batch = np.stack([X, X, X, X])
+
+    u_vec = pred.uncertainty_batch(X_batch)
+    assert u_vec.shape == (4,)
+    assert u_vec.dtype == np.float64
+    assert np.all((u_vec >= 0.0) & (u_vec <= 1.0))
+
+
+def test_uncertainty_batch_rejects_non_2d_input(tmp_path):
+    """uncertainty_batch must reject 1-D input to prevent silent mis-use."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    first_exp = dataset.get_experiment(codes[0])
+    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+    with pytest.raises(ValueError, match="2-D"):
+        pred.uncertainty_batch(X)
+
+
+def test_uncertainty_batch_diversity_pressure(tmp_path):
+    """A collapsed batch (all points co-located) should yield lower mean u_batch than a spread batch."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("KDE not fitted")
+
+    # Pick an OOD anchor point (push param_1 to high end) to get high baseline uncertainty.
+    first_exp = dataset.get_experiment(codes[0])
+    base_params = dict(first_exp.parameters.get_values_dict())
+    base_params["param_1"] = 9.5
+    X_ood = datamodule.params_to_array(base_params)
+
+    # Collapsed: 5 copies of the same OOD point.
+    collapsed = np.stack([X_ood] * 5)
+
+    # Spread: 5 variations of param_1 spanning the range.
+    spread_rows = []
+    for val in [1.0, 3.0, 5.0, 7.0, 9.5]:
+        p = dict(base_params)
+        p["param_1"] = val
+        spread_rows.append(datamodule.params_to_array(p))
+    spread = np.stack(spread_rows)
+
+    u_collapsed = pred.uncertainty_batch(collapsed)
+    u_spread = pred.uncertainty_batch(spread)
+
+    # When points collapse, each sees the others as nearby virtuals → density spikes
+    # → uncertainty drops. Spread keeps each point's siblings far → uncertainty stays high.
+    assert u_collapsed.mean() < u_spread.mean(), (
+        f"Collapsed batch mean uncertainty ({u_collapsed.mean():.4f}) must be lower than "
+        f"spread batch ({u_spread.mean():.4f}) to provide diversification pressure."
+    )
+
+
+def test_uncertainty_batch_no_side_effects(tmp_path):
+    """uncertainty_batch must not mutate _model_kdes state (no virtual-point leakage)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("KDE not fitted")
+
+    first_exp = dataset.get_experiment(codes[0])
+    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+    X_batch = np.stack([X, X, X])
+
+    snapshots: list[tuple[np.ndarray, np.ndarray, float]] = []
+    for kde in pred._model_kdes.values():
+        snapshots.append((kde.latent_points.copy(), kde.weights.copy(), kde.q_max))
+
+    _ = pred.uncertainty_batch(X_batch)
+
+    for (before_pts, before_w, before_q), kde in zip(snapshots, pred._model_kdes.values()):
+        assert np.array_equal(kde.latent_points, before_pts)
+        assert np.array_equal(kde.weights, before_w)
+        assert kde.q_max == before_q
+
+
+# ------ Schedule DE branch convergence key rename ('Acquisition' -> 'Schedule') ------
+# The workflow-stack fixture here does not wire 'speed' into any model input, so the
+# exploration Schedule DE branch is not exercised (D_sched=0 fallback). Validation of
+# the rename is performed via the mock integration, not a unit test.

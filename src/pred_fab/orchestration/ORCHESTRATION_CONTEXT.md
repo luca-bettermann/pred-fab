@@ -29,6 +29,11 @@ score = (1 - κ) · performance + κ · uncertainty
 
 Baseline uses Riesz energy particle repulsion (separate objective, same engine).
 
+### Batch-aware UCB for Schedule phase
+For schedule optimization in exploration/inference modes, `CalibrationSystem._ucb_scores(X_batch, ...)` computes per-row UCB where each row's uncertainty is evaluated with the other L-1 rows as **virtual KDE points** representing one future experiment. This provides diversification pressure across scheduled layers: a collapsed batch where all L layers sit at the same parameter point sees high local density (low uncertainty), while a spread batch keeps each layer's neighbors distant (high uncertainty preserved). At L=1, batch-aware uncertainty reduces exactly to single-point uncertainty — the Process-phase objective is the L=1 special case of the Schedule-phase objective.
+
+Wired via `PredictionSystem.uncertainty_batch` → `CalibrationSystem.uncertainty_batch_fn`.
+
 ## Three-Layer Optimization Architecture
 1. **SolutionSpace** — defines decision vector layout, bounds, decode/encode
 2. **Objective** — evaluates decoded points (riesz energy / acquisition) — just a callable

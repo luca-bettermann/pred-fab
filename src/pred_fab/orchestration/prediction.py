@@ -438,6 +438,79 @@ class PredictionSystem(BaseOrchestrationSystem):
             return 0.0
         return float(np.exp(-float(np.sum((z1 - z2) ** 2)) / (h ** 2)))
 
+    def _compute_model_uncertainty_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
+        """Batch-aware per-model uncertainty; each row sees the other L-1 rows as virtual KDE points.
+
+        The virtual batch collectively represents one future experiment (total virtual mass = 1.0,
+        distributed uniformly as 1/L per row). At L=1 this reduces exactly to
+        ``_compute_model_uncertainty``.
+        """
+        L = X_batch.shape[0]
+        if L == 1:
+            return np.array([self._compute_model_uncertainty(kde, X_batch[0])])
+
+        # Encode each row into this model's latent space.
+        Z_full = np.stack([
+            self._encode_from_norm_array_for_model(kde.model, X_batch[k].reshape(-1))
+            for k in range(L)
+        ])
+        Z = Z_full[:, kde.active_mask]  # (L, d_active)
+
+        # Bandwidth accounts for the +1 virtual experiment.
+        n_exp_eff = max(self._n_exp, 1)
+        n_for_bandwidth = n_exp_eff + 1
+        d = float(kde.n_active_dims)
+        h = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_bandwidth)
+        gamma = max(1.0, self._exploration_radius / self._n_decay(n_for_bandwidth))
+
+        has_real = len(kde.latent_points) > 0
+
+        # Weight scaling: N real experiments → N/(N+1) share; virtual batch (1 exp) → 1/(N+1);
+        # split across L virtuals as 1/(L·(N+1)) each.
+        w_real_scale = float(n_exp_eff) / float(n_exp_eff + 1)
+        w_virt = 1.0 / (float(n_exp_eff + 1) * float(L))
+
+        # q_max over augmented set (real ∪ all L virtuals, each evaluated against all others incl self).
+        if has_real:
+            aug_points = np.vstack([kde.latent_points, Z])
+            aug_weights = np.concatenate([kde.weights * w_real_scale, np.full(L, w_virt)])
+        else:
+            # No real training data: virtuals alone form the KDE, normalized to sum=1.
+            aug_points = Z
+            aug_weights = np.full(L, 1.0 / float(L))
+
+        q_max_aug = self._compute_q_max(aug_points, aug_weights, h)
+        if q_max_aug <= 0:
+            return np.ones(L)
+
+        u_vec = np.empty(L)
+        for k in range(L):
+            z_k = Z[k]
+            q = 0.0
+            if has_real:
+                dists_sq_real = np.sum((kde.latent_points - z_k) ** 2, axis=1)
+                q += float(np.dot(
+                    kde.weights * w_real_scale,
+                    np.exp(-dists_sq_real / (2.0 * h ** 2)),
+                ))
+            # Other virtuals (excluding self).
+            mask = np.arange(L) != k
+            others = Z[mask]
+            if len(others) > 0:
+                if has_real:
+                    dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
+                    q += w_virt * float(np.sum(np.exp(-dists_sq_virt / (2.0 * h ** 2))))
+                else:
+                    # When has_real is False, others carry uniform 1/L weight (no scaling).
+                    dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
+                    q += (1.0 / float(L)) * float(np.sum(np.exp(-dists_sq_virt / (2.0 * h ** 2))))
+
+            ratio = float(np.clip(q / q_max_aug, 0.0, 1.0))
+            n_post = float(n_for_bandwidth) * (ratio ** gamma)
+            u_vec[k] = 1.0 / (1.0 + n_post)
+
+        return u_vec
+
     # --- Virtual KDE points for within-schedule spacing ---
     #
     # During schedule optimization, the optimizer proposes one speed per step
@@ -580,6 +653,34 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.debug(f"uncertainty (aggregated): u_raw={u_raw:.4f}, buffer={buffer:.4f}, u={u:.4f}")
         return u
+
+    def uncertainty_batch(self, X_batch: np.ndarray) -> np.ndarray:
+        """Batch-aware uncertainty; each row treats the others as virtual KDE points.
+
+        The virtual batch collectively represents one future experiment. At L=1 this returns
+        the same value as ``uncertainty(X_batch[0])`` (no siblings, no augmentation).
+        """
+        if X_batch.ndim != 2:
+            raise ValueError(f"uncertainty_batch expects 2-D (L, D), got shape {X_batch.shape}")
+        L = X_batch.shape[0]
+        if L == 0:
+            return np.array([], dtype=float)
+        if not self._model_kdes:
+            return np.ones(L)
+
+        total_w = 0.0
+        weighted_u = np.zeros(L)
+        for kde in self._model_kdes.values():
+            u_vec = self._compute_model_uncertainty_batch(kde, X_batch)
+            weighted_u += kde.weight * u_vec
+            total_w += kde.weight
+
+        u_raw = weighted_u / total_w if total_w > 0 else np.ones(L)
+
+        # Same buffer scaling as uncertainty(); at L=1 matches uncertainty() exactly.
+        n_for_floor = max(self._n_exp + (1 if L > 1 else 0), 1)
+        buffer = self._base_buffer * self._n_decay(n_for_floor)
+        return buffer + (1.0 - buffer) * u_raw
 
     def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
         """Performance-weighted kernel similarity between two parameter vectors.

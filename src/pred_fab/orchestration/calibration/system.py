@@ -26,6 +26,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         logger: PfabLogger,
         perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
+        uncertainty_batch_fn: Callable[[np.ndarray], np.ndarray] | None = None,
         similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         n_decay_fn: Callable[[int], float] | None = None,
@@ -35,6 +36,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
+        self.uncertainty_batch_fn = uncertainty_batch_fn
         self.similarity_fn = similarity_fn
         self._n_exp_fn = n_exp_fn
         self._n_decay_fn = n_decay_fn
@@ -45,7 +47,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.bounds = BoundsManager(schema, logger)
 
         # Active datamodule — set before each optimization run so that
-        # _inference_func / _acquisition_func can call array_to_params.
+        # _acquisition_func can call array_to_params.
         self._active_datamodule: DataModule | None = None
 
         # Set after each optimization call for external inspection.
@@ -310,6 +312,59 @@ class CalibrationSystem(BaseOrchestrationSystem):
             score *= self._boundary_factor(X.reshape(-1), bounds)
 
         return -score
+
+    def _ucb_scores(
+        self,
+        X_batch: np.ndarray,
+        kappa: float,
+        bounds: np.ndarray | None = None,
+        perf_range: tuple[float, float] | None = None,
+    ) -> np.ndarray:
+        """Per-row UCB scores (higher is better). Uncertainty is batch-aware for L>1; single-point at L=1."""
+        L = X_batch.shape[0]
+        dm = self._active_datamodule
+        if dm is None:
+            return np.zeros(L)
+
+        # Perf per row.
+        perf_vec = np.zeros(L)
+        for k in range(L):
+            try:
+                params_dict = dm.array_to_params(X_batch[k].reshape(-1))
+            except (ValueError, KeyError):
+                continue
+            try:
+                perf_dict = self.perf_fn(params_dict)
+            except Exception:
+                perf_dict = {}
+            perf_values = [
+                float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
+                for name in self.perf_names_order
+                if name in perf_dict
+            ]
+            sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
+            if perf_range is not None:
+                pmin, pmax = perf_range
+                span = pmax - pmin
+                sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
+            perf_vec[k] = sys_perf
+
+        # Uncertainty per row: batch-aware when available, fallback to scalar for compatibility.
+        if kappa > 0:
+            if self.uncertainty_batch_fn is not None:
+                u_vec = np.asarray(self.uncertainty_batch_fn(X_batch), dtype=float)
+            else:
+                u_vec = np.array([float(self.uncertainty_fn(X_batch[k].reshape(-1))) for k in range(L)])
+        else:
+            u_vec = np.zeros(L)
+
+        score = (1.0 - kappa) * perf_vec + kappa * u_vec
+
+        if bounds is not None:
+            boundary = np.array([self._boundary_factor(X_batch[k].reshape(-1), bounds) for k in range(L)])
+            score = score * boundary
+
+        return score
 
     def _boundary_factor(
         self,
@@ -1437,10 +1492,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         x[code_to_idx[c]] = pts_row[d_s]
                     return x
 
+                sched_perf_range, _ = self._get_acquisition_ranges()
+
                 def _schedule_acquisition_objective(x_flat: np.ndarray) -> float:
-                    """Exploration/inference Schedule DE objective: mean per-layer UCB."""
+                    """Exploration/inference Schedule DE objective: mean batch-aware UCB over L layers.
+
+                    Each layer's uncertainty is computed as if the other L-1 layers had been
+                    observed as virtuals (representing one future experiment). Drives layer
+                    diversification by rewarding batches whose layers occupy distinct regions.
+                    """
                     pts = sched_space.decode(x_flat)
-                    avg = sum(objective(_pts_row_to_dm(pts[k])) for k in range(L)) / L
+                    X_batch = np.stack([_pts_row_to_dm(pts[k]) for k in range(L)])
+                    scores = self._ucb_scores(X_batch, kappa, bounds=global_bounds, perf_range=sched_perf_range)
+                    # Negate for minimizer (higher UCB is better); then add smoothing penalty.
+                    avg = -float(np.mean(scores))
                     avg += sched_space.smoothing_penalty(x_flat, avg)
                     return avg
 
@@ -1453,7 +1518,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     _schedule_acquisition_objective, sched_space.bounds, label="Schedule", show_progress=console,
                 )
                 self.last_opt_nfev += opt.nfev
-                self.convergence_history["Acquisition"] = opt.convergence_history
+                self.convergence_history["Schedule"] = opt.convergence_history
 
                 dm_input_set = set(datamodule.input_columns)
                 non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}

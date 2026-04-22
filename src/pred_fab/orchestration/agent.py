@@ -175,6 +175,7 @@ class PfabAgent:
             logger=self.logger,
             perf_fn=_perf_fn,
             uncertainty_fn=_pred.uncertainty,
+            uncertainty_batch_fn=_pred.uncertainty_batch,
             similarity_fn=_pred.kernel_similarity,
             n_exp_fn=lambda: _pred._n_exp,
             n_decay_fn=_pred._n_decay,
