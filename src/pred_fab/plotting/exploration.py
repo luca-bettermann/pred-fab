@@ -22,14 +22,12 @@ def plot_uncertainty_map(
     bf_grid: np.ndarray,
     *,
     points: list[dict[str, Any]] | None = None,
-    title: str = "KDE Uncertainty",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """3-panel: raw uncertainty | boundary factor | buffered uncertainty."""
     unc_buffered = unc_grid * bf_grid
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
     for ax, data, subtitle in [
@@ -64,12 +62,10 @@ def plot_acquisition(
     proposed: dict[str, Any] | None = None,
     schedules: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
-    title: str = "Acquisition Topology",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """3-panel: performance | uncertainty | combined acquisition."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
     for ax, data, subtitle, cmap in [
@@ -108,7 +104,6 @@ def plot_optimizer_comparison(
     baseline_pts: dict[str, list[dict[str, Any]]],
     *,
     nfev_key: str = "nfev",
-    title: str = "Optimizer Comparison",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """Side-by-side scatter of optimizer proposals per optimizer tag."""
@@ -119,7 +114,6 @@ def plot_optimizer_comparison(
     fig, axes = plt.subplots(1, n, figsize=(6 * n, 5))
     if n == 1:
         axes = [axes]
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
     for ax, tag, color in zip(axes, tags, colors):

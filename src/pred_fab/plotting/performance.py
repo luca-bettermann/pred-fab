@@ -10,7 +10,7 @@ from matplotlib.lines import Line2D
 
 from ._style import (
     save_fig, EMERALD_300, EMERALD_500,
-    ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
+    ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600,
 )
 
 
@@ -23,7 +23,6 @@ def plot_performance_radar(
     combined_score: float | None = None,
     dataset_combined: float | None = None,
     exp_code: str = "",
-    title: str = "Performance Profile",
 ) -> None:
     """Radar/spider plot of per-attribute performance with dataset average overlay."""
     attributes = sorted(performance.keys())
@@ -50,12 +49,7 @@ def plot_performance_radar(
     fig = plt.figure(figsize=(7, 8))
     gs = fig.add_gridspec(3, 1, height_ratios=[0.06, 0.78, 0.16], hspace=0.0)
 
-    # Title
-    title_text = title
-    if exp_code:
-        title_text += f"  ·  {exp_code}"
-    fig.text(0.5, 0.97, title_text, fontsize=13, fontweight="bold",
-             color=ZINC_700, ha="center", va="top")
+    # Title area (reserved by gridspec but left empty)
 
     # ── Radar axes ──
     ax = fig.add_subplot(gs[1], projection="polar")

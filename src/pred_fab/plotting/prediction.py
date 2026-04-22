@@ -12,29 +12,30 @@ def plot_prediction_scatter(
     save_path: str,
     model_results: dict[str, dict[str, Any]],
     *,
-    title: str = "Prediction Accuracy",
+    true_key: str = "y_true",
+    pred_key: str = "y_pred",
+    r2_key: str = "r2",
 ) -> None:
     """Scatter of predicted vs actual for each feature.
 
-    model_results: {feat: {"r2": float, "y_true": ndarray, "y_pred": ndarray}}
+    model_results: {feat: {true_key: ndarray, pred_key: ndarray, r2_key: float}}
     """
     features = list(model_results.keys())
     n = len(features)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 4.5))
     if n == 1:
         axes = [axes]
-    fig.suptitle(title, fontsize=13, fontweight="bold")
 
     for ax, feat in zip(axes, features):
         r = model_results[feat]
-        ax.scatter(r["y_true"], r["y_pred"], s=20, alpha=0.6,
+        ax.scatter(r[true_key], r[pred_key], s=20, alpha=0.6,
                    c="#DD8452", edgecolors="white", linewidth=0.3)
-        lims = [min(r["y_true"].min(), r["y_pred"].min()),
-                max(r["y_true"].max(), r["y_pred"].max())]
+        lims = [min(r[true_key].min(), r[pred_key].min()),
+                max(r[true_key].max(), r[pred_key].max())]
         ax.plot(lims, lims, "k--", lw=1, alpha=0.5)
         ax.set_xlabel("Actual")
         ax.set_ylabel("Predicted")
-        ax.set_title(f"{feat}\nR\u00b2 = {r['r2']:.3f}", fontsize=10)
+        ax.set_title(f"{feat}\nR\u00b2 = {r[r2_key]:.3f}", fontsize=10)
         ax.grid(True, alpha=0.2)
 
     save_fig(save_path)
@@ -48,7 +49,6 @@ def plot_topology_comparison(
     y_values: np.ndarray,
     grids: dict[str, np.ndarray],
     *,
-    title: str = "Topology Comparison",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """Side-by-side contour plots for comparing topologies on shared color scale."""
@@ -56,7 +56,6 @@ def plot_topology_comparison(
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
     if n == 1:
         axes = [axes]
-    fig.suptitle(title, fontsize=13, fontweight="bold")
     _add_fixed_subtitle(fig, fixed_params)
 
     all_vals = np.concatenate([g.ravel() for g in grids.values()])
@@ -80,8 +79,6 @@ def plot_importance_weights(
     floor: float = 0.1,
     steepness: float = 0.8,
     validation_gaps: dict[str, float] | None = None,
-    *,
-    title: str = "R\u00b2_adj Importance Weighting",
 ) -> None:
     """1x2: sigmoid importance curve with experiment dots + per-feature R\u00b2_adj gaps."""
     scores = np.asarray(experiment_scores)
@@ -101,7 +98,6 @@ def plot_importance_weights(
     fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 4.5))
     if n_panels == 1:
         axes = [axes]
-    fig.suptitle(title, fontsize=13, fontweight="bold")
 
     ax1 = axes[0]
     ax1.plot(perf_range, weights_curve, "b-", lw=2, zorder=1)

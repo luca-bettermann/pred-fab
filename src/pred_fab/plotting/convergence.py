@@ -11,8 +11,6 @@ from ._style import save_fig, STEEL_500, EMERALD_500, ZINC_400, ZINC_700
 def plot_convergence(
     save_path: str,
     histories: dict[str, list[float]],
-    *,
-    title: str = "Optimization Convergence",
 ) -> None:
     """Normalized convergence plot: each line shows relative improvement from its start.
 
@@ -37,7 +35,6 @@ def plot_convergence(
     ax.set_xscale("log")
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
     ax.set_ylabel("Relative Energy", fontsize=9, color=ZINC_700)
-    ax.set_title(title, fontsize=12, fontweight="bold", color=ZINC_700)
     ax.legend(fontsize=8, frameon=False)
     ax.grid(True, alpha=0.2)
 

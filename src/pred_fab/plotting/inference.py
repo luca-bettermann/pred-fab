@@ -27,12 +27,10 @@ def plot_inference_result(
     points: list[dict[str, Any]] | None = None,
     schedules: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
-    title: str = "Inference Result",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """Single-shot inference result on the predicted performance topology."""
     fig, ax = plt.subplots(1, 1, figsize=(7, 5.5))
-    fig.suptitle(title, fontsize=13, fontweight="bold")
     _add_fixed_subtitle(fig, fixed_params)
 
     im = ax.contourf(x_values, y_values, pred_grid, levels=20, cmap="RdYlGn")
@@ -74,12 +72,10 @@ def plot_inference_convergence(
     *,
     optimum: dict[str, float] | None = None,
     optimum_score: float | None = None,
-    title: str = "Inference Convergence",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """1x2: convergence trajectory on topology + score per round."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
-    fig.suptitle(title, fontsize=13, fontweight="bold")
     _add_fixed_subtitle(fig, fixed_params)
 
     im = ax1.contourf(x_values, y_values, topology_grid, levels=20, cmap="RdYlGn")

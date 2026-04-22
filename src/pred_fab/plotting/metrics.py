@@ -22,14 +22,12 @@ def plot_metric_topology(
     combined_label: str = "Combined",
     *,
     weights: dict[str, float] | None = None,
-    title: str = "Performance Topology",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """1x(N+1) heatmap: individual metrics (YlGn) + combined (RdYlGn)."""
     n_panels = len(metric_grids) + 1
 
     fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4.5))
-    fig.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
     optima: dict[str, tuple[float, float]] = {}
@@ -83,7 +81,6 @@ def plot_cross_sections(
     grids: dict[str, np.ndarray],
     slice_point: dict[str, float],
     *,
-    title: str = "Cross-Sections",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """1x2: cross-sections through a point, varying each axis while fixing the other."""
@@ -93,7 +90,6 @@ def plot_cross_sections(
     y_idx = int(np.argmin(np.abs(y_values - y_val)))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
-    fig.suptitle(title, fontsize=13, fontweight="bold")
     _add_fixed_subtitle(fig, fixed_params)
 
     for name, data in grids.items():
@@ -122,8 +118,6 @@ def plot_cross_sections(
 def plot_sensitivity(
     save_path: str,
     sensitivities: dict[str, float],
-    *,
-    title: str = "Local Sensitivity Analysis",
 ) -> None:
     """Horizontal bar chart of parameter sensitivity magnitudes."""
     codes = list(sensitivities.keys())
@@ -142,7 +136,6 @@ def plot_sensitivity(
     ax.set_yticklabels(codes, fontsize=9, color=ZINC_600)
     ax.invert_yaxis()
     ax.set_xlabel("|\u2202combined/\u2202param|", fontsize=9, color=ZINC_600)
-    ax.set_title(title, fontsize=12, fontweight="bold", color="#3F3F46")
     ax.tick_params(colors="#71717A", labelsize=8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

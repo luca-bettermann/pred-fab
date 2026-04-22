@@ -8,13 +8,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from matplotlib.colors import LinearSegmentedColormap, Normalize
-from matplotlib.cm import ScalarMappable
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, save_fig, _extract_xy, _apply_axes, _add_fixed_subtitle,
     _plot_schedule_ranges,
-    STEEL_500, ZINC_400, ZINC_600, ZINC_700,
+    STEEL_500, ZINC_400, ZINC_600,
 )
 
 # Colormaps
@@ -35,13 +34,11 @@ def _setup_3d_figure(
     x_axis: AxisSpec,
     y_axis: AxisSpec,
     z_label: str,
-    title: str,
     fixed_params: dict[str, Any] | None = None,
 ) -> tuple[plt.Figure, Any]:  # type: ignore[name-defined]
-    """Create a 3D figure with standard axis labels, bounds, and title."""
+    """Create a 3D figure with standard axis labels, bounds, and subtitle."""
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
-    fig.suptitle(title, fontsize=13, fontweight="bold", color=ZINC_700)
     _add_fixed_subtitle(fig, fixed_params)
 
     ax.set_xlabel(x_axis.display_label, labelpad=8, fontsize=9)
@@ -83,16 +80,13 @@ def plot_parameter_space(
     *,
     schedules: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
-    title: str = "Baseline",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """1x2: ground truth topology + initial model topology."""
     px, py = _extract_xy(points, x_axis, y_axis)
-    n = len(px)
     vmin, vmax = true_grid.min(), true_grid.max()
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
-    fig.suptitle(f"{title} ({n} experiments)", fontsize=14, fontweight="bold", y=1.02)
     _add_fixed_subtitle(fig, fixed_params)
 
     _plot_schedule_ranges(ax1, points, x_axis, y_axis, schedules, codes,
@@ -131,15 +125,12 @@ def plot_parameter_space_3d(
     *,
     codes: list[str] | None = None,
     highlight: str | None = None,
-    title: str = "Parameter Space",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """3D scatter where point color encodes the z-axis value."""
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    n = len(points)
-    title_full = f"{title}  ·  {highlight}" if highlight else f"{title} ({n} experiments)"
-    fig, ax = _setup_3d_figure(x_axis, y_axis, z_axis.display_label, title_full, fixed_params)
+    fig, ax = _setup_3d_figure(x_axis, y_axis, z_axis.display_label, fixed_params)
 
     px = [float(p[x_axis.key]) for p in points]
     py = [float(p[y_axis.key]) for p in points]
@@ -194,7 +185,6 @@ def plot_dimensional_trajectories(
     codes: list[str] | None = None,
     highlight: str | None = None,
     z_label: str = "Layer",
-    title: str = "Parameter Space",
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """3D trajectories along a dimensional axis (e.g., per-layer parameter values).
@@ -205,9 +195,7 @@ def plot_dimensional_trajectories(
     """
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    n = len(points)
-    title_full = f"{title}  ·  {highlight}" if highlight else f"{title} ({n} experiments)"
-    fig, ax = _setup_3d_figure(x_axis, y_axis, z_label, title_full, fixed_params)
+    fig, ax = _setup_3d_figure(x_axis, y_axis, z_label, fixed_params)
 
     for i, params in enumerate(points):
         n_steps = int(params.get(z_dim, 1))
