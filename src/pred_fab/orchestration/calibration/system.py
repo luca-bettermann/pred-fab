@@ -837,7 +837,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         iu = np.triu_indices(n, k=1)
 
-        def _riesz(pts: np.ndarray) -> float:
+        def _riesz_energy(pts: np.ndarray) -> float:
             pts_n = pts.copy()
             for si, d in enumerate(structural_indices):
                 if d in int_set:
@@ -894,7 +894,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         console = self.logger._console_output_enabled
         opt, struct_out, _ = self.engine.run(
-            _riesz, N=n, D_static=D, D_sched=0, L=1,
+            _riesz_energy, N=n, D_static=D, D_sched=0, L=1,
             static_bounds=static_bounds, sched_bounds=[], sched_deltas=np.array([]),
             default_optimizer=self.optimizer,
             init_pop=init_pop,
@@ -975,7 +975,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         iu = np.triu_indices(n, k=1)
 
-        def _riesz_objective(x_flat: np.ndarray) -> float:
+        def _process_energy_objective(x_flat: np.ndarray) -> float:
+            """Baseline Process DE objective: Riesz energy over N static points."""
             pts = space.decode(x_flat)
             diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
             dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
@@ -1003,7 +1004,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         opt = self.engine._run_de(
-            _riesz_objective, space.bounds, init_pop=init_pop,
+            _process_energy_objective, space.bounds, init_pop=init_pop,
             integrality=space.integrality, label="Process", show_progress=console,
         )
         if not hasattr(self, 'last_baseline_nfev'):
@@ -1084,7 +1085,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         N_total = space.n_total_points
         iu = np.triu_indices(N_total, k=1)
 
-        def _sched_objective(x_flat: np.ndarray) -> float:
+        def _schedule_energy_objective(x_flat: np.ndarray) -> float:
+            """Baseline Schedule DE objective: Riesz energy over all trajectory points."""
             pts = space.decode(x_flat)  # (N_total, D_sched)
             diff = pts[:, np.newaxis, :] - pts[np.newaxis, :, :]
             dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
@@ -1114,7 +1116,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         opt = self.engine._run_de(
-            _sched_objective, space.bounds, init_pop=init_pop,
+            _schedule_energy_objective, space.bounds, init_pop=init_pop,
             label="Schedule", show_progress=console,
         )
         self.last_baseline_nfev += opt.nfev
@@ -1360,8 +1362,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 idx = code_to_idx[code]
                 p2_static_bounds.append((float(p2_bounds[idx, 0]), float(p2_bounds[idx, 1])))
 
-            def _p2_objective(pts: np.ndarray) -> float:
-                """Single-point acquisition for Phase 2."""
+            def _process_acquisition_objective(pts: np.ndarray) -> float:
+                """Exploration/inference Process DE objective: single-point UCB."""
                 x = np.zeros(n_input)
                 for i_s, c in enumerate(all_p2_codes):
                     x[code_to_idx[c]] = pts[0, i_s]
@@ -1376,7 +1378,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 x0_p2 = np.array([full_arr[code_to_idx[c]] for c in all_p2_codes])
 
             opt_p2, static_out_p2, _ = self.engine.run(
-                _p2_objective, N=1, D_static=D_p2, D_sched=0, L=1,
+                _process_acquisition_objective, N=1, D_static=D_p2, D_sched=0, L=1,
                 static_bounds=p2_static_bounds, sched_bounds=[], sched_deltas=np.array([]),
                 optimizer=opt_for_p2,
                 default_optimizer=self.optimizer,
@@ -1435,7 +1437,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         x[code_to_idx[c]] = pts_row[d_s]
                     return x
 
-                def _sched_objective(x_flat: np.ndarray) -> float:
+                def _schedule_acquisition_objective(x_flat: np.ndarray) -> float:
+                    """Exploration/inference Schedule DE objective: mean per-layer UCB."""
                     pts = sched_space.decode(x_flat)
                     avg = sum(objective(_pts_row_to_dm(pts[k])) for k in range(L)) / L
                     avg += sched_space.smoothing_penalty(x_flat, avg)
@@ -1447,7 +1450,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
 
                 opt = self.engine._run_de(
-                    _sched_objective, sched_space.bounds, label="Schedule", show_progress=console,
+                    _schedule_acquisition_objective, sched_space.bounds, label="Schedule", show_progress=console,
                 )
                 self.last_opt_nfev += opt.nfev
                 self.convergence_history["Acquisition"] = opt.convergence_history
