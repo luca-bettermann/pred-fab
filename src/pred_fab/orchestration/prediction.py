@@ -60,6 +60,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
+        self._n_latent_points: int = 0                     # total KDE points (segments across all experiments)
         self._exploration_radius: float = 0.20             # c: bubble radius at N=1
         self._bandwidth_decay: float = 1/2                 # exponent for N-decay: h ∝ 1/N^decay
         self._base_buffer: float = 0.5                     # shared buffer for perf/unc floor scaling
@@ -240,6 +241,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                     exp_configs.append((params, float(seg_rows) / total_rows))
 
         self._n_exp = n_exp
+        self._n_latent_points = len(exp_configs)
         if not exp_configs:
             self.logger.info("No training configs for evidence model — uncertainty defaults to 1.0.")
             return
@@ -325,6 +327,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Use target_n for bandwidth so bubbles are sized for the final arrangement,
         # not the current (growing) point count. This produces even spacing.
         self._n_exp = target_n
+        self._n_latent_points = target_n
 
         for model in kde_models:
             # Determine latent dimensionality by encoding a dummy point
@@ -456,9 +459,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         ])
         Z = Z_full[:, kde.active_mask]  # (L, d_active)
 
-        # Bandwidth accounts for the +1 virtual experiment.
+        # Bandwidth uses latent-point count (segment-level resolution) so that
+        # intra-trajectory layers are distinguishable. Process-phase uncertainty()
+        # keeps using _n_exp (experiment-level resolution).
         n_exp_eff = max(self._n_exp, 1)
-        n_for_bandwidth = n_exp_eff + 1
+        n_for_bandwidth = max(self._n_latent_points, 1) + 1
         d = float(kde.n_active_dims)
         h = self._exploration_radius * np.sqrt(d) * self._n_decay(n_for_bandwidth)
         gamma = max(1.0, self._exploration_radius / self._n_decay(n_for_bandwidth))
