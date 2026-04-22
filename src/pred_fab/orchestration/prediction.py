@@ -198,8 +198,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         into a single scalar by ``uncertainty()`` using performance-based weights.
 
         One latent point per unique effective parameter configuration per model.
-        Non-schedule experiments contribute 1 point (weight = sqrt(total_rows)).
-        Schedule experiments contribute K points (weight_k = sqrt(segment_rows)).
+        Each experiment contributes total raw weight 1.0 (process experiments as 1 point; schedule
+        experiments distributed across K segments proportional to segment row counts). After global
+        normalization, each experiment carries weight 1/n_exp in the KDE.
         """
         self._model_kdes = {}
         kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
@@ -208,16 +209,21 @@ class PredictionSystem(BaseOrchestrationSystem):
             return
 
         # Collect per-experiment config data (shared across models).
+        # Weight policy: each experiment contributes total raw weight 1.0. Process experiments
+        # place it at a single point; schedule experiments split it across segments proportional
+        # to segment row counts. Diminishing-returns on measurement mass is handled downstream
+        # by the nonlinear uncertainty formula, not by sqrt weighting here.
         exp_configs: list[tuple[dict[str, Any], float]] = []  # (params, weight)
         n_exp = 0
         for code in datamodule.get_split_codes(SplitType.TRAIN):
             exp = datamodule.dataset.get_experiment(code)
             n_exp += 1
             n_rows = exp.get_num_rows()
+            total_rows = float(max(n_rows, 1))
 
             if not exp.parameter_updates:
                 params = exp.parameters.get_values_dict().copy()
-                exp_configs.append((params, float(np.sqrt(max(n_rows, 1)))))
+                exp_configs.append((params, 1.0))
             else:
                 events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
                 seg_start = 0
@@ -226,12 +232,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                     seg_rows = seg_end - seg_start
                     if seg_rows > 0:
                         params = exp.get_effective_parameters_for_row(seg_start)
-                        exp_configs.append((params, float(np.sqrt(max(seg_rows, 1)))))
+                        exp_configs.append((params, float(seg_rows) / total_rows))
                     seg_start = seg_end
                 seg_rows = n_rows - seg_start
                 if seg_rows > 0:
                     params = exp.get_effective_parameters_for_row(seg_start)
-                    exp_configs.append((params, float(np.sqrt(max(seg_rows, 1)))))
+                    exp_configs.append((params, float(seg_rows) / total_rows))
 
         self._n_exp = n_exp
         if not exp_configs:
