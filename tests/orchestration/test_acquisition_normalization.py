@@ -65,9 +65,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5,
-                                        perf_range=(0.2, 0.8),
-                                        unc_range=(0.0, 1.0))
+        result = cal._acquisition_func(X, kappa=0.5, perf_range=(0.2, 0.8))
         assert np.isfinite(result)
 
     def test_acquisition_without_ranges_returns_finite(self, tmp_path):
@@ -77,9 +75,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5,
-                                        perf_range=None,
-                                        unc_range=None)
+        result = cal._acquisition_func(X, kappa=0.5, perf_range=None)
         assert np.isfinite(result)
 
     def test_normalized_acquisition_is_negative(self, tmp_path):
@@ -89,9 +85,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5,
-                                        perf_range=(0.2, 0.8),
-                                        unc_range=(0.0, 1.0))
+        result = cal._acquisition_func(X, kappa=0.5, perf_range=(0.2, 0.8))
         assert result <= 0.0
 
 

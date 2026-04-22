@@ -375,36 +375,6 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
     assert result == pytest.approx(-((1 - w) * 0.7 + w * 0.3), abs=1e-4)
 
 
-def test_inference_func_uses_perf_fn(tmp_path):
-    """_inference_func should call perf_fn and return negative system performance."""
-    _, dataset, _ = build_workflow_stack(tmp_path)
-
-    expected_perf = 0.75
-    calibration = build_calibration_system(
-        tmp_path / "cal",
-        dataset,
-        perf_fn=lambda p: {"performance_1": expected_perf, "performance_2": expected_perf},
-    )
-
-    datamodule = build_initialized_datamodule(
-        dataset=dataset,
-        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "speed"],
-        input_features=[],
-        output_columns=[],
-        fitted=True,
-        split_codes={SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []},
-    )
-    calibration._active_datamodule = datamodule
-
-    # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
-    valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
-    X = datamodule.params_to_array(valid_params)
-    result = calibration._inference_func(X)
-
-    # System performance = weighted avg of 0.75, 0.75 → 0.75
-    assert result == pytest.approx(-expected_perf, abs=1e-4)
-
-
 def test_acquisition_func_with_no_active_datamodule_returns_zero(tmp_path):
     """_acquisition_func returns 0.0 (and doesn't crash) when _active_datamodule is None."""
     dataset = build_dataset_with_single_experiment(tmp_path)
