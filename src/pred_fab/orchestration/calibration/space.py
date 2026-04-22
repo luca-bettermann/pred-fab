@@ -48,7 +48,7 @@ class SolutionSpace:
         self._L_max = max(per_exp_L) if per_exp_L else 1
         self._is_scheduled = self._L_max > 1 and self._D_sched > 0
         self._N_total = sum(per_exp_L)
-        self._D_point = self._D_static + self._D_sched + (1 if self._is_scheduled else 0)
+        self._D_point = self._D_static + self._D_sched
 
         self._exp_offsets: list[int] = []
         total = 0
@@ -115,7 +115,6 @@ class SolutionSpace:
         """Decode flat decision vector into (N_total, D_point) array."""
         pts = np.zeros((self._N_total, self._D_point))
         pt_idx = 0
-        L_max_denom = max(self._L_max - 1, 1)
         for i in range(self._n_experiments):
             off = self._exp_offsets[i]
             static_vals = x_flat[off:off + self._D_static]
@@ -137,8 +136,6 @@ class SolutionSpace:
                 pts[pt_idx, :self._D_static] = static_norm
                 if self._D_sched > 0:
                     pts[pt_idx, self._D_static:self._D_static + self._D_sched] = abs_speed
-                if self._is_scheduled:
-                    pts[pt_idx, -1] = k / L_max_denom
                 pt_idx += 1
         return pts
 
