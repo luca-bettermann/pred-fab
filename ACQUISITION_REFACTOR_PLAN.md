@@ -138,6 +138,11 @@ Empty-KDE + batch-aware uncertainty (κ=1) produces a Gaussian-kernel space-fill
 - **Boundary handling**: existing `_boundary_factor` is already inward-pushing and could fully replace the Riesz half-step mirror terms. Alternative: mirror-image virtual points at domain edges (more elegant, more invasive).
 - **Bandwidth vs Riesz `p`**: empirical comparison. The current baseline produces a validated point distribution — Phase 2's acceptance criterion is "reproduces the same quality of spread."
 - **Integer/Domain axes**: unchanged — integer repulsion stays in the Domain phase.
+- **Phase structure: Domain + Process unification?** The baseline currently runs three sequential phases (Domain → Process → Schedule). Open question for discussion: do we keep the 3-phase split, or fold Domain and Process into a single "Parameters optimization" phase? The unified scheme would become:
+  1. **Parameters optimization** — jointly optimize structural (integer) and continuous parameters.
+  2. **Schedule optimization** (optional) — per-layer offsets with fixed step0 from Parameters.
+
+  Same structure would apply across all modes. Pro: fewer phases, simpler mental model, consistent vocabulary. Con: combining integer-repulsion and continuous-repulsion into one DE run requires the solution space and engine to handle mixed-integer gracefully (already partly supported via `int_set` in SolutionSpace, but currently the two live in separate phases). Needs empirical validation that mixed-integer DE converges as reliably as the current staged approach. To be decided during Phase 2 scoping.
 
 ### Acceptance criteria
 
