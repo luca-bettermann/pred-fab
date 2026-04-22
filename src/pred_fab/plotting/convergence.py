@@ -1,5 +1,6 @@
 """Optimization convergence plots."""
 
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ def plot_convergence(
     *,
     title: str = "Optimization Convergence",
 ) -> None:
-    """Log-scale plot of best objective value per iteration.
+    """Normalized convergence plot: each line shows relative improvement from its start.
 
     histories: mapping of label → list of best-so-far energy per DE iteration.
     """
@@ -24,15 +25,18 @@ def plot_convergence(
     fig, ax = plt.subplots(figsize=(8, 4))
 
     for i, (label, history) in enumerate(histories.items()):
-        if not history:
+        if not history or history[0] == 0:
             continue
         color = colors[i % len(colors)]
-        ax.plot(range(1, len(history) + 1), history, color=color, linewidth=1.5,
+        # Normalize: value / initial_value → starts at 1.0, decreases
+        h = np.array(history)
+        normalized = h / h[0]
+        ax.plot(range(1, len(normalized) + 1), normalized, color=color, linewidth=1.5,
                 label=label, alpha=0.8)
 
     ax.set_yscale("log")
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("Best Objective", fontsize=9, color=ZINC_700)
+    ax.set_ylabel("Relative Energy", fontsize=9, color=ZINC_700)
     ax.set_title(title, fontsize=12, fontweight="bold", color=ZINC_700)
     ax.legend(fontsize=8, frameon=False)
     ax.grid(True, alpha=0.2)

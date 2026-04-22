@@ -658,14 +658,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, numeric_params, int_set, int_ranges_map, init_norm,
                 domain_axis_sched_dims,
             )
-            # Console: show domain values per experiment in grey
+            # Console: show domain values per experiment
             console = self.logger._console_output_enabled
             if console and structural_values:
                 _D = "\033[2m"
                 _R = "\033[0m"
+                # Include fixed domain params too
+                fixed_domain = {
+                    c: int(self.fixed_params[c])
+                    for c in self.data_objects
+                    if isinstance(self.data_objects[c], DataDomainAxis) and c in self.fixed_params
+                }
                 for i in range(n):
-                    vals = " ".join(f"{k}={v}" for k, v in structural_values[i].items())
-                    print(f"  {_D}exp_{i+1:03d}  {vals}{_R}")
+                    all_domain = {**structural_values[i], **fixed_domain}
+                    vals = "  ".join(f"{k}={v}" for k, v in sorted(all_domain.items()))
+                    print(f"    {_D}baseline_{i+1:02d}  {vals}{_R}")
 
             # Compute per_exp_L from structural values
             group_key_codes = sorted(domain_axis_sched_dims)
@@ -695,15 +702,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 flat_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
 
-        # Console: show initial params per experiment after Phase 2
+        # Console: show process params per experiment (no domain params)
         console = self.logger._console_output_enabled
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
+            domain_codes = {
+                c for c in self.data_objects if isinstance(self.data_objects[c], DataDomainAxis)
+            }
             for i, spec in enumerate(flat_specs):
                 p = spec.initial_params.to_dict()
-                parts = [f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}" for k, v in p.items()]
-                print(f"  {_D}exp_{i+1:03d}  {' '.join(parts)}{_R}")
+                parts = [
+                    f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in p.items() if k not in domain_codes and k not in self.fixed_params
+                ]
+                print(f"    {_D}baseline_{i+1:02d}  {'  '.join(parts)}{_R}")
 
         # --- Phase 3: schedule (if scheduled params exist) ---
         if sched_set and per_exp_L is not None and max(per_exp_L) > 1:
@@ -1114,25 +1127,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
             specs_out.append(ExperimentSpec(initial_params=initial, schedules=schedules))
             pt_idx += L_i
 
-        # Console: show per-layer schedule values
+        # Console: show per-layer schedule values grouped by param
         if console:
             _D = "\033[2m"
             _R = "\033[0m"
-            pt_idx = 0
-            for i in range(n):
-                L_i = per_exp_L[i]
-                for si, (code, lo, hi) in enumerate(sched_params):
-                    per_layer_vals = [float(pts_all[pt_idx + k, si] * (hi - lo) + lo) for k in range(L_i)]
-                    if D_sched == 1:
-                        # 1D: one row per experiment
-                        vals_str = " \u2192 ".join(f"{v:.1f}" for v in per_layer_vals)
-                        print(f"    exp_{i+1:03d}  {code}: {vals_str}")
-                    else:
-                        # Multi-D: nested display
-                        print(f"    exp_{i+1:03d}  {code}:")
-                        for layer in range(L_i):
-                            print(f"      L{layer}: {per_layer_vals[layer]:.1f}")
-                pt_idx += L_i
+            for si, (code, lo, hi) in enumerate(sched_params):
+                print(f"    {_D}{code}{_R}")
+                pt_idx2 = 0
+                for i in range(n):
+                    L_i = per_exp_L[i]
+                    vals = [float(pts_all[pt_idx2 + k, si] * (hi - lo) + lo) for k in range(L_i)]
+                    vals_str = " \u2192 ".join(f"{v:.1f}" for v in vals)
+                    print(f"    {_D}baseline_{i+1:02d}  {vals_str}{_R}")
+                    pt_idx2 += L_i
 
         return specs_out
 
