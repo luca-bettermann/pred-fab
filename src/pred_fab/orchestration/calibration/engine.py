@@ -218,16 +218,23 @@ class OptimizationEngine:
         has_int = integrality is not None and any(integrality)
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
         iter_count = [0]
+        best_so_far = [np.inf]
         history: list[float] = []
+
+        def _tracked_objective(x: np.ndarray) -> float:
+            val = objective(x)
+            if val < best_so_far[0]:
+                best_so_far[0] = val
+            return val
 
         def _progress(xk: Any, convergence: Any) -> None:
             iter_count[0] += 1
-            history.append(float(convergence))
+            history.append(best_so_far[0])
             if bar:
                 bar.step()
 
         de_kwargs: dict[str, Any] = dict(
-            func=objective,
+            func=_tracked_objective,
             bounds=bounds,
             maxiter=maxiter,
             popsize=popsize,

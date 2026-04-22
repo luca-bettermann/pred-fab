@@ -13,9 +13,9 @@ def plot_convergence(
     *,
     title: str = "Optimization Convergence",
 ) -> None:
-    """Log-scale convergence plot showing energy/score improvement per iteration.
+    """Log-scale plot of best objective value per iteration.
 
-    histories: mapping of label → list of convergence values per DE iteration.
+    histories: mapping of label → list of best-so-far energy per DE iteration.
     """
     if not histories or all(len(h) == 0 for h in histories.values()):
         return
@@ -32,7 +32,7 @@ def plot_convergence(
 
     ax.set_yscale("log")
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("Convergence", fontsize=9, color=ZINC_700)
+    ax.set_ylabel("Best Objective", fontsize=9, color=ZINC_700)
     ax.set_title(title, fontsize=12, fontweight="bold", color=ZINC_700)
     ax.legend(fontsize=8, frameon=False)
     ax.grid(True, alpha=0.2)
