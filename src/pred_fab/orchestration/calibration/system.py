@@ -966,16 +966,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if self._fit_empty_kde_fn is not None:
             self._fit_empty_kde_fn(baseline_dm, n)
 
+        # Pre-compute column indices and default values for the datamodule array.
+        # Non-varied columns get 0.5 (center of normalized range) so their boundary
+        # evidence is constant and doesn't bias the optimization.
+        n_dm_cols = len(baseline_dm.input_columns)
+        process_col_map: list[tuple[int, int]] = []  # (space_idx, dm_col_idx)
+        for si, (_, code, lo, hi) in enumerate(all_process_params):
+            if code in baseline_dm.input_columns:
+                process_col_map.append((si, baseline_dm.input_columns.index(code)))
+        base_row = np.full(n_dm_cols, 0.5)  # center for non-varied dims
+        # Fill fixed params at their normalized positions
+        for col_idx, col_code in enumerate(baseline_dm.input_columns):
+            if col_code in self.fixed_params:
+                lo, hi = self.bounds._get_hierarchical_bounds_for_code(col_code)
+                span = hi - lo
+                if span > 0:
+                    base_row[col_idx] = (float(self.fixed_params[col_code]) - lo) / span
+                else:
+                    base_row[col_idx] = 0.5
+
         def _process_ucb_objective(x_flat: np.ndarray) -> float:
             """Baseline Process DE objective: maximize mean batch-aware uncertainty (κ=1)."""
             pts = space.decode(x_flat)  # (N, D_point)
-            # Map decoded points to datamodule input format
-            X_batch = np.zeros((n, len(baseline_dm.input_columns)))
-            for i in range(n):
-                for si, (_, code, lo, hi) in enumerate(all_process_params):
-                    col_idx = baseline_dm.input_columns.index(code) if code in baseline_dm.input_columns else -1
-                    if col_idx >= 0:
-                        X_batch[i, col_idx] = pts[i, si]
+            X_batch = np.tile(base_row, (n, 1))
+            for si, col_idx in process_col_map:
+                for i in range(n):
+                    X_batch[i, col_idx] = pts[i, si]
             scores = self._ucb_scores(X_batch, kappa=1.0)
             return -float(np.mean(scores))
 
@@ -1073,28 +1089,43 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Use the schema datamodule set in Phase 2
         baseline_dm = self._active_datamodule
+        if baseline_dm is None:
+            return flat_specs
+
+        # Pre-compute per-experiment base rows (static params normalized) and
+        # schedule column indices — avoids repeated bounds lookups in hot path.
+        n_dm_cols = len(baseline_dm.input_columns)
+        sched_code_set = {code for code, _, _ in sched_params}
+        sched_col_map: list[tuple[int, int]] = []  # (sched_param_idx, dm_col_idx)
+        for si, (code, _, _) in enumerate(sched_params):
+            if code in baseline_dm.input_columns:
+                sched_col_map.append((si, baseline_dm.input_columns.index(code)))
+
+        exp_base_rows: list[np.ndarray] = []
+        for i_exp in range(n):
+            row = np.full(n_dm_cols, 0.5)
+            static_dict = flat_specs[i_exp].initial_params.to_dict()
+            for c_idx, col in enumerate(baseline_dm.input_columns):
+                if col in static_dict and col not in sched_code_set:
+                    val = static_dict[col]
+                    try:
+                        lo_s, hi_s = self.bounds._get_hierarchical_bounds_for_code(col)
+                        span_s = hi_s - lo_s
+                        row[c_idx] = (float(val) - lo_s) / span_s if span_s > 0 else 0.5
+                    except (ValueError, KeyError):
+                        row[c_idx] = 0.5
+            exp_base_rows.append(row)
 
         def _schedule_ucb_objective(x_flat: np.ndarray) -> float:
-            """Baseline Schedule DE objective: maximize mean batch-aware uncertainty (κ=1) over all trajectory points."""
+            """Baseline Schedule DE objective: maximize mean batch-aware uncertainty (κ=1)."""
             pts = space.decode(x_flat)  # (N_total, D_sched)
-            if baseline_dm is None:
-                return 0.0
-            # Map decoded sched points to datamodule input format
-            X_batch = np.zeros((N_total, len(baseline_dm.input_columns)))
+            X_batch = np.empty((N_total, n_dm_cols))
             pt_i = 0
             for i_exp in range(n):
-                # Get static params from flat_specs
-                static_dict = flat_specs[i_exp].initial_params.to_dict()
                 for k in range(per_exp_L[i_exp]):
-                    for c_idx, col in enumerate(baseline_dm.input_columns):
-                        if col in static_dict and col not in {code for code, _, _ in sched_params}:
-                            val = static_dict[col]
-                            lo_s, hi_s = self.bounds._get_hierarchical_bounds_for_code(col)
-                            span_s = hi_s - lo_s
-                            X_batch[pt_i, c_idx] = (float(val) - lo_s) / span_s if span_s > 0 else 0.5
-                        elif col in {code for code, _, _ in sched_params}:
-                            si = next(j for j, (c, _, _) in enumerate(sched_params) if c == col)
-                            X_batch[pt_i, c_idx] = pts[pt_i, si]
+                    X_batch[pt_i] = exp_base_rows[i_exp]
+                    for si, col_idx in sched_col_map:
+                        X_batch[pt_i, col_idx] = pts[pt_i, si]
                     pt_i += 1
             scores = self._ucb_scores(X_batch, kappa=1.0)
             avg = -float(np.mean(scores))

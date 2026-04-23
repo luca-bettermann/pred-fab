@@ -42,7 +42,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: IResidualModel | None = None):
+    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: IResidualModel | None = None, kernel: str = "cauchy"):
         """Initialize prediction system."""
         super().__init__(logger)
         self.models: list[IPredictionModel] = []
@@ -60,7 +60,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
         self._exploration_radius: float = 0.20             # σ base: evidence decay length scale
-        self._kernel_type: str = "cauchy"                  # "cauchy" or "gaussian"
+        self._kernel_type: str = kernel                    # "cauchy" or "gaussian"
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.

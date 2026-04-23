@@ -135,8 +135,8 @@ Empty-KDE + batch-aware uncertainty (κ=1) produces a Gaussian-kernel space-fill
 
 ### Design questions for Phase 2
 
-- **Boundary handling**: existing `_boundary_factor` is already inward-pushing and could fully replace the Riesz half-step mirror terms. Alternative: mirror-image virtual points at domain edges (more elegant, more invasive).
-- **Bandwidth vs Riesz `p`**: empirical comparison. The current baseline produces a validated point distribution — Phase 2's acceptance criterion is "reproduces the same quality of spread."
+- **Boundary handling**: ~~existing `_boundary_factor` is already inward-pushing and could fully replace the Riesz half-step mirror terms.~~ RESOLVED — `_boundary_factor` replaced with additive `_boundary_evidence` in the evidence model (`feat/evidence-model`). Boundary evidence provides soft inward pressure without penalizing schedule diversity.
+- **Bandwidth vs Riesz `p`**: ~~empirical comparison. The current baseline produces a validated point distribution — Phase 2's acceptance criterion is "reproduces the same quality of spread."~~ PARTIALLY RESOLVED — bandwidth replaced with fixed σ in evidence model. Kernel type (Cauchy/Gaussian) is now configurable via `PredictionSystem.__init__(kernel=...)`. Empirical comparison still needed for baseline equivalence.
 - **Integer/Domain axes**: unchanged — integer repulsion stays in the Domain phase.
 - **Phase structure: Domain + Process unification?** The baseline currently runs three sequential phases (Domain → Process → Schedule). Open question for discussion: do we keep the 3-phase split, or fold Domain and Process into a single "Parameters optimization" phase? The unified scheme would become:
   1. **Parameters optimization** — jointly optimize structural (integer) and continuous parameters.

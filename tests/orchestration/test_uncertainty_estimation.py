@@ -743,6 +743,87 @@ def test_uncertainty_batch_no_side_effects(tmp_path):
         assert kde.sigma == before_sigma
 
 
+# ===========================================================================
+# Boundary evidence at domain edges
+# ===========================================================================
+
+def test_boundary_evidence_at_edge(tmp_path):
+    """With no training data, uncertainty at the boundary should be lower than at the center
+    because boundary evidence is higher at edges (closer to normalized bounds 0/1)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+
+    pred = agent.pred_system
+    # Fit empty KDE so boundary evidence is the only signal
+    pred.fit_empty_kde(datamodule, target_n=1)
+
+    # Edge point: param_1 at lower bound (0.0) → normalizes near 0
+    edge_params = dict(dataset.get_experiment(codes[0]).parameters.get_values_dict())
+    edge_params["param_1"] = 0.0
+    X_edge = datamodule.params_to_array(edge_params)
+
+    # Center point: param_1 at midrange (5.0) → normalizes near 0.5
+    center_params = dict(edge_params)
+    center_params["param_1"] = 5.0
+    X_center = datamodule.params_to_array(center_params)
+
+    u_edge = pred.uncertainty(X_edge)
+    u_center = pred.uncertainty(X_center)
+
+    assert 0.0 <= u_edge <= 1.0
+    assert 0.0 <= u_center <= 1.0
+    assert u_edge < u_center, (
+        f"Edge uncertainty ({u_edge:.4f}) should be lower than center ({u_center:.4f}) "
+        "because boundary evidence is stronger at domain edges."
+    )
+
+
+# ===========================================================================
+# Kernel type: Cauchy vs Gaussian tail behavior
+# ===========================================================================
+
+def test_kernel_cauchy_vs_gaussian(tmp_path):
+    """Cauchy kernel has wider tails than Gaussian: at a far-OOD point, Cauchy uncertainty
+    should be lower (more evidence leaks to far-away points) than Gaussian."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("KDE not fitted — not enough distinct training configs")
+
+    # Far-OOD point
+    ood_params = dict(dataset.get_experiment(codes[0]).parameters.get_values_dict())
+    ood_params["param_1"] = 9.9
+    X_ood = datamodule.params_to_array(ood_params)
+
+    # Cauchy (default)
+    assert pred._kernel_type == "cauchy"
+    u_cauchy = pred.uncertainty(X_ood)
+
+    # Switch to Gaussian and re-evaluate
+    pred._kernel_type = "gaussian"
+    u_gaussian = pred.uncertainty(X_ood)
+
+    # Restore
+    pred._kernel_type = "cauchy"
+
+    assert 0.0 <= u_cauchy <= 1.0
+    assert 0.0 <= u_gaussian <= 1.0
+    # Cauchy's heavier tail means more evidence reaches far-OOD → lower uncertainty there
+    assert u_cauchy < u_gaussian, (
+        f"Cauchy uncertainty ({u_cauchy:.4f}) should be lower than Gaussian ({u_gaussian:.4f}) "
+        "at a far-OOD point due to heavier tails."
+    )
+
+
 # ------ Schedule DE branch convergence key rename ('Acquisition' -> 'Schedule') ------
 # The workflow-stack fixture here does not wire 'speed' into any model input, so the
 # exploration Schedule DE branch is not exercised (D_sched=0 fallback). Validation of

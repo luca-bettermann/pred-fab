@@ -52,7 +52,9 @@ This shifts the investigation away from persistence/_fit_kde and toward:
 
 The second is the critical functional problem.
 
-### FINDING 2 — Boundary factor penalizes schedule spread to range edges (MEDIUM-HIGH) [FAB]
+### FINDING 2 — Boundary factor penalizes schedule spread to range edges (MEDIUM-HIGH) [FAB] — RESOLVED
+
+**Resolution**: Replaced multiplicative `_boundary_factor` with additive `_boundary_evidence` in the evidence model. Boundary evidence is now part of the evidence sum (not a UCB multiplier), so it pushes proposals inward softly without penalizing schedule diversity. Applied consistently across all modes.
 
 **Location**: `system.py:365-398` (`_boundary_factor`) applied per-layer in `_ucb_scores`.
 
@@ -73,7 +75,9 @@ For `radius=0.15`, `n=3`: extent ≈ 0.087 (normalized). For a layer at 5% from 
 - (b) Use a softer/narrower extent for intra-trajectory layers.
 - (c) Move boundary penalty to a SEPARATE additive term that doesn't scale with the UCB value.
 
-### FINDING 3 — KDE bandwidth > typical layer spacing: intra-trajectory layers are KDE-indistinguishable (HIGH) [FAB]
+### FINDING 3 — KDE bandwidth > typical layer spacing: intra-trajectory layers are KDE-indistinguishable (HIGH) [FAB] — RESOLVED
+
+**Resolution**: Replaced bandwidth-based KDE with fixed-σ evidence model. σ = `exploration_radius · √d` is fixed (does not shrink with data size). Data size is captured by the evidence sum growing, not by bandwidth shrinking. Eliminates the bandwidth-vs-layer-spacing problem.
 
 **Location**: `prediction.py:_compute_model_uncertainty` (and `_compute_model_uncertainty_batch`), bandwidth formula `h = c · √d · _n_decay(n_exp)`.
 
@@ -96,7 +100,9 @@ For `radius=0.15`, `n=3`: extent ≈ 0.087 (normalized). For a layer at 5% from 
 
 Option (c) is principled: bandwidth should reflect information content, not experiment-count-as-unit-of-measurement.
 
-### FINDING 4 — `q` vs `q_max` self-inclusion asymmetry (LOW-MEDIUM) [FAB]
+### FINDING 4 — `q` vs `q_max` self-inclusion asymmetry (LOW-MEDIUM) [FAB] — RESOLVED
+
+**Resolution**: Replaced `q/q_max` ratio-based uncertainty with `u = 1/(1+E)` evidence model. No q_max normalization needed; the self-inclusion asymmetry no longer exists. Evidence is a simple sum of kernel values from data points + boundary terms.
 
 **Location**: `prediction.py` — `_compute_q_max` (line ~354) includes self (K(0)=1 diagonal) in the kernel density matrix; `_compute_model_uncertainty` and `_compute_model_uncertainty_batch` exclude self when computing per-query density.
 
@@ -164,11 +170,9 @@ Both compute essentially the same formula (`factor = Π (1 − lam · frac)` the
 
 **Severity LOW**. Fix: extract a single shared helper to avoid drift.
 
-### FINDING 8 — `calibration._buffer` vs `prediction._base_buffer` name drift (LOW) [FAB]
+### FINDING 8 — `calibration._buffer` vs `prediction._base_buffer` name drift (LOW) [FAB] — RESOLVED
 
-Two attributes for the same concept, synced via `agent.configure_exploration`. Future maintenance risk.
-
-**Fix**: rename calibration's `_buffer` to `_base_buffer` for parity.
+**Resolution**: The buffer concept was removed during the evidence model refactor. Boundary handling is now done via `_boundary_evidence` in the evidence model, eliminating the naming inconsistency.
 
 **Severity LOW**.
 
@@ -209,15 +213,15 @@ By combined severity + impact on the reported symptom:
 | # | Severity | Finding | Fix complexity |
 |---|---|---|---|
 | 1 | **CRITICAL** | Smoothing penalty dominates batch-aware diversity | Low — make `schedule_smoothing=0` for exploration, or reformulate as additive (not `abs(energy)·(...)`) |
-| 3 | **HIGH** | KDE bandwidth >> intra-trajectory spacing | Medium — separate `h_virt < h_train`, or scale h by latent-point count |
-| 2 | **MEDIUM-HIGH** | Boundary factor shrinks spread-to-edge UCB | Low — skip for k ≥ 1 in Schedule, or use softer/narrower extent |
+| 3 | **HIGH** | ~~KDE bandwidth >> intra-trajectory spacing~~ | RESOLVED — fixed-σ evidence model |
+| 2 | **MEDIUM-HIGH** | ~~Boundary factor shrinks spread-to-edge UCB~~ | RESOLVED — additive boundary evidence |
 | 0 | **MEDIUM** | Step0 not fixed from Process in exploration | Low — pass `step0_values=` to sched_space |
 | 5 | **MEDIUM** | `update_perf_range` misses schedule segments | Low — iterate effective params per segment |
-| 4 | **MEDIUM** | q vs q_max self-inclusion asymmetry | Trivial — `fill_diagonal(kernel, 0)` in `_compute_q_max` |
+| 4 | **MEDIUM** | ~~q vs q_max self-inclusion asymmetry~~ | RESOLVED — u=1/(1+E) evidence model, no q_max |
 | 12 | **MEDIUM** | Flat schedules erase parameter_updates entries (feedback loop) | N/A — resolves once 1-3 are fixed |
 | [mock] | **MEDIUM** | Redundant `state.schedules` vs `exp.parameter_updates` | Medium — refactor mock's plot data path |
 | 6 | **LOW-MEDIUM** | Silent exception swallow in perf loop | Low — log exceptions |
-| 7-11 | **LOW** | Cosmetic / hygiene | Low — cleanups |
+| 7-11 | **LOW** | Cosmetic / hygiene (8 resolved) | Low — cleanups |
 
 ### Recommended immediate sequence to restore diverse exploration schedules
 
