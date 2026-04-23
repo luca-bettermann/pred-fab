@@ -23,6 +23,13 @@ from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
 
+SIGMA_MIN: float = 0.03
+"""Lower bound for the Gaussian length scale. Below ~0.02 the integrated-evidence
+integral shrinks as σ^D and becomes ill-conditioned under Sobol sampling (kernels
+become sub-cell and samples miss them). Clamping here also prevents the evidence
+model from becoming overconfident about any single point."""
+
+
 @dataclass
 class _ModelKDE:
     """Per-model evidence state. Each latent point carries a Gaussian mass of w_j in ℝ^D."""
@@ -355,10 +362,17 @@ class PredictionSystem(BaseOrchestrationSystem):
         )
 
     def _resolve_sigma(self, n_active_dims: int) -> float:
-        """σ from override if set, else exploration_radius · √(n_active_dims)."""
+        """σ from override if set, else exploration_radius · √(n_active_dims); clamped to SIGMA_MIN."""
         if self._sigma_override is not None:
-            return float(self._sigma_override)
-        return float(self._exploration_radius) * np.sqrt(float(n_active_dims))
+            sigma = float(self._sigma_override)
+        else:
+            sigma = float(self._exploration_radius) * np.sqrt(float(n_active_dims))
+        if sigma < SIGMA_MIN:
+            self.logger.warning(
+                f"σ={sigma:.4f} below floor; clamping to SIGMA_MIN={SIGMA_MIN}."
+            )
+            sigma = SIGMA_MIN
+        return sigma
 
     def configure_exploration(
         self,
