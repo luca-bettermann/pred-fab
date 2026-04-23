@@ -110,7 +110,13 @@ def _draw_panel(
 
     ax.set_xlabel(x_axis.display_label, fontsize=9, color=ZINC_600)
     ax.set_ylabel(y_axis.display_label, fontsize=9, color=ZINC_600)
+    # Pad axis limits so points at exact bounds aren't clipped by the frame
     if x_axis.bounds:
-        ax.set_xlim(*x_axis.bounds)
+        lo, hi = x_axis.bounds
+        pad = (hi - lo) * 0.03
+        ax.set_xlim(lo - pad, hi + pad)
     if y_axis.bounds:
-        ax.set_ylim(*y_axis.bounds)
+        lo, hi = y_axis.bounds
+        pad = (hi - lo) * 0.03
+        ax.set_ylim(lo - pad, hi + pad)
+    ax.set_clip_on(False)
