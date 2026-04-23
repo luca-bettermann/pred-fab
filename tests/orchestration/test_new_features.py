@@ -88,66 +88,35 @@ class TestPerfRange:
 
 
 # ===========================================================================
-# Virtual KDE points
+# Virtual stacking (push/pop) for sequential Phase-2 mode
 # ===========================================================================
 
-class TestVirtualKDEPoints:
-    """Virtual points modify KDE and are cleared after use."""
+class TestVirtualStacking:
+    """push_virtual_points temporarily adds weighted kernel points; pop restores."""
 
-    def test_add_virtual_point_changes_uncertainty(self, tmp_path):
+    def test_push_and_pop_round_trip(self, tmp_path):
         agent, _, dm = _setup_trained_agent(tmp_path)
-        params = {"param_1": 2.5, "dim_1": 2, "dim_2": 3}
-        X = dm.params_to_array(params)
+        pred = agent.pred_system
+        if not pred._model_kdes:
+            pytest.skip("KDE not fitted")
 
-        u_before = agent.pred_system.uncertainty(X)
-        agent.pred_system.add_virtual_point(params, dm)
-        u_after = agent.pred_system.uncertainty(X)
+        # Snapshot counts
+        counts_before = {id_: (kde.latent_points.shape, kde.point_weights.shape)
+                         for id_, kde in pred._model_kdes.items()}
 
-        # Uncertainty should decrease at the virtual point
-        assert u_after <= u_before
+        params_list = [{"param_1": 2.5, "dim_1": 2, "dim_2": 3},
+                       {"param_1": 4.0, "dim_1": 2, "dim_2": 3}]
+        pred.push_virtual_points(params_list, weights_list=[5.0, 3.0])
 
-    def test_clear_virtual_points_restores_uncertainty(self, tmp_path):
-        agent, _, dm = _setup_trained_agent(tmp_path)
-        params = {"param_1": 2.5, "dim_1": 2, "dim_2": 3}
-        X = dm.params_to_array(params)
+        for kde in pred._model_kdes.values():
+            # Two points added with weights 5.0 and 3.0.
+            assert kde.point_weights[-1] == pytest.approx(3.0)
+            assert kde.point_weights[-2] == pytest.approx(5.0)
 
-        u_before = agent.pred_system.uncertainty(X)
-        agent.pred_system.add_virtual_point(params, dm)
-        agent.pred_system.clear_virtual_points()
-        u_after = agent.pred_system.uncertainty(X)
-
-        assert abs(u_after - u_before) < 1e-10
-
-    def test_multiple_virtual_points_cleared(self, tmp_path):
-        agent, _, dm = _setup_trained_agent(tmp_path)
-        params1 = {"param_1": 1.0, "dim_1": 2, "dim_2": 3}
-        params2 = {"param_1": 4.0, "dim_1": 2, "dim_2": 3}
-        X = dm.params_to_array(params1)
-
-        u_before = agent.pred_system.uncertainty(X)
-        agent.pred_system.add_virtual_point(params1, dm)
-        agent.pred_system.add_virtual_point(params2, dm)
-        agent.pred_system.clear_virtual_points()
-        u_after = agent.pred_system.uncertainty(X)
-
-        assert abs(u_after - u_before) < 1e-10
-
-
-# ===========================================================================
-# Schedule smoothing
-# ===========================================================================
-
-class TestScheduleSmoothing:
-    """Schedule smoothing parameter is stored and defaults to 0.25."""
-
-    def test_default_smoothing_is_zero(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.schedule_smoothing == 0.05
-
-    def test_smoothing_configurable(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.calibration_system.schedule_smoothing = 0.15
-        assert agent.calibration_system.schedule_smoothing == 0.15
+        pred.pop_virtual_points()
+        for id_, kde in pred._model_kdes.items():
+            assert kde.latent_points.shape == counts_before[id_][0]
+            assert kde.point_weights.shape == counts_before[id_][1]
 
 
 # ===========================================================================

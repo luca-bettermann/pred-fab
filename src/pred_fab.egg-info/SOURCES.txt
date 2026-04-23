@@ -36,7 +36,7 @@ src/pred_fab/plotting/exploration.py
 src/pred_fab/plotting/inference.py
 src/pred_fab/plotting/metrics.py
 src/pred_fab/plotting/prediction.py
-src/pred_fab/plotting/trajectory.py
+src/pred_fab/plotting/schedule.py
 src/pred_fab/utils/__init__.py
 src/pred_fab/utils/console.py
 src/pred_fab/utils/enum.py

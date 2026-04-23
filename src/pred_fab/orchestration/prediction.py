@@ -12,6 +12,7 @@ import copy
 import pandas as pd
 import numpy as np
 import pickle
+from scipy.stats import qmc
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
@@ -24,13 +25,14 @@ from .base_system import BaseOrchestrationSystem
 
 @dataclass
 class _ModelKDE:
-    """Per-model evidence state for uncertainty estimation."""
+    """Per-model evidence state. Each latent point carries a Gaussian mass of w_j in ℝ^D."""
     model: IPredictionModel
     latent_points: np.ndarray       # (n_configs, n_active_dims)
-    sigma: float                    # evidence decay length scale
+    point_weights: np.ndarray       # (n_configs,) per-datapoint mass; stacking sets >1
+    sigma: float                    # Gaussian length scale
     active_mask: np.ndarray         # bool mask over latent dims
     n_active_dims: int
-    weight: float = 1.0             # performance weight for aggregation
+    weight: float = 1.0             # performance weight for model-level aggregation
 
 
 class PredictionSystem(BaseOrchestrationSystem):
@@ -42,7 +44,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     - Handles feature prediction with automatic denormalization
     """
     
-    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: IResidualModel | None = None, kernel: str = "cauchy"):
+    def __init__(self, logger: PfabLogger, schema: DatasetSchema, local_data: LocalData, res_model: IResidualModel | None = None):
         """Initialize prediction system."""
         super().__init__(logger)
         self.models: list[IPredictionModel] = []
@@ -55,12 +57,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Domain map populated during train(): model id → derived domain code
         self._model_domain_map: dict[int, str | None] = {}
 
-        # Per-model evidence state for uncertainty estimation (populated after training).
-        # Maps model id(model) → _ModelKDE. Deterministic models are excluded.
+        # Per-model evidence state. Gaussian density kernel; integrated-objective acquisition.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._exploration_radius: float = 0.20             # σ base: evidence decay length scale
-        self._kernel_type: str = kernel                    # "cauchy" or "gaussian"
+        self._exploration_radius: float = 0.09             # σ base: exploration_radius · √(n_active_dims)
+        self._sigma_override: float | None = None          # direct σ override if set
+        self._mc_exponent_offset: float = 3.0              # M = round(2^(n_active + offset))
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
@@ -164,22 +166,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit KDE on latent representations of training configs (NatPN-light)
         self._fit_kde(datamodule)
     
-    # === EVIDENCE MODEL ===
-
-    def _kernel(self, dists_sq: np.ndarray, sigma: float) -> np.ndarray:
-        """Evaluate kernel on squared distances. Returns array of kernel values."""
-        s2 = sigma ** 2
-        if self._kernel_type == "gaussian":
-            return np.exp(-dists_sq / (2.0 * s2))
-        # Default: Cauchy
-        return 1.0 / (1.0 + dists_sq / s2)
-
-    def _kernel_scalar(self, dist_sq: float, sigma: float) -> float:
-        """Scalar kernel evaluation."""
-        s2 = sigma ** 2
-        if self._kernel_type == "gaussian":
-            return float(np.exp(-dist_sq / (2.0 * s2)))
-        return 1.0 / (1.0 + dist_sq / s2)
+    # === EVIDENCE MODEL (integrated objective) ===
+    #
+    # ρ_j(z)  = w_j · N(z; z_j, σ²I)      normalized Gaussian density, mass w_j in ℝ^D
+    # D(z)    = Σ_j ρ_j(z)                 raw evidence density, unbounded
+    # E(z)    = D / (1 + D)                actual evidence, [0, 1)
+    # Δ∫E     = ∫_[0,1]^D [E_new − E_old]  info gain from adding a batch
+    #
+    # Acquisition lives in CalibrationSystem; this module provides the math.
+    # No boundary term: leakage is handled by the integration bounds [0,1]^D.
 
     def set_uncertainty_weights(self, weights: dict[str, float]) -> None:
         """Set performance-based weights for per-model uncertainty aggregation.
@@ -271,11 +266,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             projected = latent_array[:, active_mask]
             n_active_dims = projected.shape[1]
-            sigma = self._exploration_radius * np.sqrt(float(n_active_dims))
+            sigma = self._resolve_sigma(n_active_dims)
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=projected,
+                point_weights=np.ones(len(projected)),
                 sigma=sigma,
                 active_mask=active_mask,
                 n_active_dims=n_active_dims,
@@ -341,11 +337,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             if n_active == 0:
                 active_mask = np.ones(n_dims, dtype=bool)
                 n_active = n_dims
-            sigma = self._exploration_radius * np.sqrt(float(n_active))
+            sigma = self._resolve_sigma(n_active)
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=np.empty((0, n_active)),
+                point_weights=np.empty((0,)),
                 sigma=sigma,
                 active_mask=active_mask,
                 n_active_dims=n_active,
@@ -357,18 +354,38 @@ class PredictionSystem(BaseOrchestrationSystem):
             f"(radius={self._exploration_radius})."
         )
 
-    def configure_exploration(self, exploration_radius: float) -> None:
-        """Set the exploration radius that governs evidence decay length scale.
+    def _resolve_sigma(self, n_active_dims: int) -> float:
+        """σ from override if set, else exploration_radius · √(n_active_dims)."""
+        if self._sigma_override is not None:
+            return float(self._sigma_override)
+        return float(self._exploration_radius) * np.sqrt(float(n_active_dims))
 
-        σ = exploration_radius · √(n_active_dims) per model. Fixed — does NOT
-        shrink with data size. Data size is captured by the evidence sum growing.
+    def configure_exploration(
+        self,
+        exploration_radius: float | None = None,
+        sigma: float | None = None,
+        mc_exponent_offset: float | None = None,
+    ) -> None:
+        """Configure the integrated evidence objective.
+
+        `sigma` overrides the length scale directly when provided;
+        otherwise σ = `exploration_radius` · √(n_active_dims) per model.
+        `mc_exponent_offset` sets M = round(2^(n_active + offset)) for Sobol MC.
         """
-        self._exploration_radius = exploration_radius
+        if exploration_radius is not None:
+            self._exploration_radius = float(exploration_radius)
+        if sigma is not None:
+            self._sigma_override = float(sigma)
+        if mc_exponent_offset is not None:
+            self._mc_exponent_offset = float(mc_exponent_offset)
+
         if self._model_kdes:
             for kde in self._model_kdes.values():
-                kde.sigma = exploration_radius * np.sqrt(float(kde.n_active_dims))
+                kde.sigma = self._resolve_sigma(kde.n_active_dims)
             self.logger.info(
-                f"Evidence model updated: exploration_radius={exploration_radius}, "
+                f"Evidence model updated: radius={self._exploration_radius}, "
+                f"sigma_override={self._sigma_override}, "
+                f"mc_exp_offset={self._mc_exponent_offset}, "
                 f"{len(self._model_kdes)} models."
             )
 
@@ -395,110 +412,154 @@ class PredictionSystem(BaseOrchestrationSystem):
         X_model = X_norm[input_indices].reshape(1, -1)
         return model.encode(X_model)[0]
 
-    def _compute_model_evidence(self, kde: _ModelKDE, X_norm: np.ndarray) -> float:
-        """Total evidence (data + boundary) for one model at a normalized parameter vector."""
-        z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
-        z_active = z[kde.active_mask]
+    # --- Integrated evidence math (pure numpy, per-model subspace) ---
 
-        e = self._boundary_evidence(z_active, kde.sigma)
+    @staticmethod
+    def _gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
+        """Normalized Gaussian density ρ(z; z_j, σ²I) with ∫ρ dz = 1 in ℝ^D.
 
-        if len(kde.latent_points) > 0:
-            dists_sq = np.sum((kde.latent_points - z_active) ** 2, axis=1)
-            e += float(np.sum(self._kernel(dists_sq, kde.sigma)))
+        z:       (M, D)
+        centers: (N, D)
+        Returns: (M, N) — each column is the density of one center evaluated at M query points.
+        """
+        D = z.shape[-1]
+        norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
+        d2 = np.sum((z[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
+        return norm * np.exp(-d2 / (2.0 * sigma ** 2))
 
-        return e
+    @classmethod
+    def _raw_density(
+        cls, z: np.ndarray, centers: np.ndarray, weights: np.ndarray, sigma: float,
+    ) -> np.ndarray:
+        """D(z) = Σ_j w_j · ρ_j(z). Returns (M,)."""
+        if len(centers) == 0:
+            return np.zeros(z.shape[0])
+        K = cls._gaussian_density(z, centers, sigma)
+        return (K * weights[None, :]).sum(axis=-1)
 
-    def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
-        """Compute kernel similarity for a single model's latent space."""
-        z1 = self._encode_from_norm_array_for_model(kde.model, X1.reshape(-1))
-        z2 = self._encode_from_norm_array_for_model(kde.model, X2.reshape(-1))
-        z1 = z1[kde.active_mask]
-        z2 = z2[kde.active_mask]
-        if kde.sigma < 1e-10:
+    @classmethod
+    def _integrated_evidence(
+        cls,
+        centers: np.ndarray,
+        weights: np.ndarray,
+        sigma: float,
+        sobol_samples: np.ndarray,
+    ) -> float:
+        """∫_[0,1]^D D/(1+D) dz via fixed Sobol MC. Unit-cube volume = 1."""
+        D_vals = cls._raw_density(sobol_samples, centers, weights, sigma)
+        E_vals = D_vals / (1.0 + D_vals)
+        return float(E_vals.mean())
+
+    def get_sobol_samples(self, n_active_dims: int, seed: int = 0) -> np.ndarray:
+        """Fixed Sobol quasi-random samples on [0,1]^D; M = round(2^(D + mc_exponent_offset))."""
+        if n_active_dims <= 0:
+            return np.empty((0, 0))
+        M = int(round(2.0 ** (n_active_dims + self._mc_exponent_offset)))
+        M = max(M, 2)
+        sampler = qmc.Sobol(d=n_active_dims, scramble=True, rng=seed)
+        return sampler.random(n=M)
+
+    def _kde_delta_integrated(
+        self,
+        kde: _ModelKDE,
+        new_centers_z: np.ndarray,
+        new_weights: np.ndarray,
+        sobol_samples: np.ndarray,
+    ) -> float:
+        """Δ∫E for one model's KDE when new_centers_z are added to its latent points."""
+        old_centers = kde.latent_points
+        old_weights = kde.point_weights
+
+        if len(old_centers) > 0:
+            all_centers = np.vstack([old_centers, new_centers_z])
+            all_weights = np.concatenate([old_weights, new_weights])
+            E_old = self._integrated_evidence(old_centers, old_weights, kde.sigma, sobol_samples)
+        else:
+            all_centers = new_centers_z
+            all_weights = new_weights
+            E_old = 0.0
+
+        E_new = self._integrated_evidence(all_centers, all_weights, kde.sigma, sobol_samples)
+        return E_new - E_old
+
+    def delta_integrated_evidence_aggregated(
+        self,
+        new_norm_batch: np.ndarray,
+        new_weights: np.ndarray | None = None,
+        sobol_seed: int = 0,
+    ) -> float:
+        """Δ∫E aggregated across per-model KDEs, weighted by performance weights.
+
+        new_norm_batch: (L, D_global) normalized parameter vectors (L candidates).
+        new_weights:    (L,) per-candidate mass. Defaults to ones.
+        """
+        if not self._model_kdes or new_norm_batch.size == 0:
             return 0.0
-        dist_sq = float(np.sum((z1 - z2) ** 2))
-        return self._kernel_scalar(dist_sq, kde.sigma)
 
-    def _compute_model_evidence_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware per-model evidence (data + siblings + boundary).
+        L = new_norm_batch.shape[0]
+        weights = np.ones(L) if new_weights is None else np.asarray(new_weights, dtype=float)
 
-        Each sibling contributes 1 evidence unit. At L=1 reduces to _compute_model_evidence.
-        """
-        L = X_batch.shape[0]
-        if L == 1:
-            return np.array([self._compute_model_evidence(kde, X_batch[0])])
+        total_w = 0.0
+        weighted_de = 0.0
+        for kde in self._model_kdes.values():
+            new_centers_z = np.stack([
+                self._encode_from_norm_array_for_model(kde.model, new_norm_batch[k])[kde.active_mask]
+                for k in range(L)
+            ])
+            sobol = self.get_sobol_samples(kde.n_active_dims, seed=sobol_seed)
+            de = self._kde_delta_integrated(kde, new_centers_z, weights, sobol)
+            weighted_de += kde.weight * de
+            total_w += kde.weight
 
-        Z_full = np.stack([
-            self._encode_from_norm_array_for_model(kde.model, X_batch[k].reshape(-1))
-            for k in range(L)
-        ])
-        Z = Z_full[:, kde.active_mask]  # (L, d_active)
-        sigma = kde.sigma
-        has_real = len(kde.latent_points) > 0
+        return weighted_de / total_w if total_w > 0 else 0.0
 
-        e_vec = np.empty(L)
-        for k in range(L):
-            z_k = Z[k]
-            e = self._boundary_evidence(z_k, sigma)
-            if has_real:
-                dists_sq_real = np.sum((kde.latent_points - z_k) ** 2, axis=1)
-                e += float(np.sum(self._kernel(dists_sq_real, sigma)))
-            mask = np.arange(L) != k
-            others = Z[mask]
-            if len(others) > 0:
-                dists_sq_virt = np.sum((others - z_k) ** 2, axis=1)
-                e += float(np.sum(self._kernel(dists_sq_virt, sigma)))
-            e_vec[k] = e
+    # --- Stacking / virtual evidence for sequential-phase schedule mode ---
 
-        return e_vec
+    def push_virtual_points(
+        self,
+        params_list: list[dict[str, Any]],
+        weights_list: list[float] | None = None,
+        datamodule: DataModule | None = None,
+    ) -> None:
+        """Append (params, weight) pairs as temporary evidence in each KDE.
 
-    # --- Virtual KDE points for within-schedule spacing ---
-    #
-    # During schedule optimization, the optimizer proposes one speed per step
-    # in sequence. Without virtual points, the KDE is frozen for the entire
-    # schedule — all steps see the same uncertainty landscape, so they
-    # converge to similar speeds. Virtual points inject proposed-but-not-yet-
-    # executed parameter configurations into the KDE after each step, causing
-    # subsequent steps to see lower uncertainty at that speed and naturally
-    # spacing out across the parameter range.
-    #
-    # Virtual points are temporary: they are cleared after the schedule call
-    # completes. They do not affect the training data or the prediction model.
-
-    def add_virtual_point(self, params: dict[str, Any], datamodule: DataModule) -> None:
-        """Inject a virtual evidence point into all per-model evidence models.
-
-        The point contributes 1 evidence unit (same as any real data point).
-        Call clear_virtual_points() to restore the original state.
+        Used by the sequential-stacked schedule mode to represent
+        not-yet-scheduled experiments as stacks at their step0 with weight L_j.
+        Restore via `pop_virtual_points`.
         """
         if not self._model_kdes:
             return
+        dm = datamodule or self.datamodule
+        if dm is None:
+            return
+        weights = weights_list if weights_list is not None else [1.0] * len(params_list)
 
         for kde in self._model_kdes.values():
-            z = self._encode_params_for_model(kde.model, params, datamodule)
-            if z is None:
-                continue
-            z_proj = z[kde.active_mask]
+            if not hasattr(kde, '_virtual_snapshot'):
+                kde._virtual_snapshot = (           # type: ignore[attr-defined]
+                    kde.latent_points.copy(), kde.point_weights.copy(),
+                )
+            new_z: list[np.ndarray] = []
+            new_w: list[float] = []
+            for params, w in zip(params_list, weights):
+                z = self._encode_params_for_model(kde.model, params, dm)
+                if z is None:
+                    continue
+                new_z.append(z[kde.active_mask])
+                new_w.append(float(w))
+            if new_z:
+                kde.latent_points = np.vstack([kde.latent_points, np.stack(new_z)])
+                kde.point_weights = np.concatenate([kde.point_weights, np.asarray(new_w)])
 
-            # Save original state on first virtual point addition
-            if not hasattr(kde, '_original_latent_points'):
-                kde._original_latent_points = kde.latent_points.copy()  # type: ignore[attr-defined]
-
-            kde.latent_points = np.vstack([kde.latent_points, z_proj.reshape(1, -1)])
-
-        self.logger.debug(f"Virtual evidence point added: {list(params.keys())}")
-
-    def clear_virtual_points(self) -> None:
-        """Restore all per-model evidence to their pre-virtual-point state."""
+    def pop_virtual_points(self) -> None:
+        """Restore each KDE's latent state to the snapshot taken by `push_virtual_points`."""
         if not self._model_kdes:
             return
-
         for kde in self._model_kdes.values():
-            if hasattr(kde, '_original_latent_points'):
-                kde.latent_points = kde._original_latent_points  # type: ignore[attr-defined]
-                del kde._original_latent_points                  # type: ignore[attr-defined]
-
-        self.logger.debug("Virtual evidence points cleared.")
+            snap = getattr(kde, '_virtual_snapshot', None)
+            if snap is not None:
+                kde.latent_points, kde.point_weights = snap
+                del kde._virtual_snapshot          # type: ignore[attr-defined]
 
     # --- Legacy encode helpers (kept for external callers) ---
 
@@ -546,25 +607,11 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Aggregated public API ---
 
-    def _boundary_evidence(self, z_active: np.ndarray, sigma: float) -> float:
-        """Boundary evidence in the active subspace: 0.5 kernel at each bound per active dim.
-
-        Assumes z_active values are in [0, 1] normalized space with boundaries at 0 and 1.
-        Called internally by _compute_model_evidence — not directly from uncertainty().
-        """
-        e = 0.0
-        for i in range(len(z_active)):
-            d_lo_sq = z_active[i] ** 2
-            d_hi_sq = (1.0 - z_active[i]) ** 2
-            e += 0.5 * self._kernel_scalar(d_lo_sq, sigma)
-            e += 0.5 * self._kernel_scalar(d_hi_sq, sigma)
-        return e
-
     def uncertainty(self, X: np.ndarray) -> float:
-        """Epistemic uncertainty at a normalized parameter vector: u = 1/(1+E).
+        """Pointwise uncertainty u(z) = 1 − E(z) = 1 / (1 + D(z)).
 
-        Evidence includes data, boundary (in active subspace). Aggregated
-        as a performance-weighted average across per-model KDEs.
+        For visualization only — the optimizer uses `delta_integrated_evidence_aggregated`.
+        Aggregated as a performance-weighted average across per-model KDEs.
         """
         if not self._model_kdes:
             return 1.0
@@ -572,57 +619,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         total_w = 0.0
         weighted_u = 0.0
         for kde in self._model_kdes.values():
-            e = self._compute_model_evidence(kde, X)
-            u_i = 1.0 / (1.0 + e)
+            z = self._encode_from_norm_array_for_model(kde.model, X.reshape(-1))
+            z_active = z[kde.active_mask].reshape(1, -1)
+            D = float(self._raw_density(z_active, kde.latent_points, kde.point_weights, kde.sigma)[0])
+            u_i = 1.0 / (1.0 + D)
             weighted_u += kde.weight * u_i
             total_w += kde.weight
 
         u = weighted_u / total_w if total_w > 0 else 1.0
         self.logger.debug(f"uncertainty (aggregated): u={u:.4f}")
         return u
-
-    def uncertainty_batch(self, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware uncertainty: u_k = 1/(1 + E_k) where E includes data, siblings, boundary.
-
-        At L=1 returns the same value as uncertainty(X_batch[0]).
-        """
-        if X_batch.ndim != 2:
-            raise ValueError(f"uncertainty_batch expects 2-D (L, D), got shape {X_batch.shape}")
-        L = X_batch.shape[0]
-        if L == 0:
-            return np.array([], dtype=float)
-        if not self._model_kdes:
-            return np.ones(L)
-
-        total_w = 0.0
-        weighted_u = np.zeros(L)
-        for kde in self._model_kdes.values():
-            e_vec = self._compute_model_evidence_batch(kde, X_batch)
-            u_vec = 1.0 / (1.0 + e_vec)
-            weighted_u += kde.weight * u_vec
-            total_w += kde.weight
-
-        return weighted_u / total_w if total_w > 0 else np.ones(L)
-
-    def kernel_similarity(self, X1: np.ndarray, X2: np.ndarray) -> float:
-        """Performance-weighted kernel similarity between two parameter vectors.
-
-        sim(x1, x2) = Σ(w_i · sim_i(x1, x2)) / Σ(w_i)
-        where sim_i is computed in model i's latent space.
-
-        Returns 0.0 if no KDEs are fitted.
-        """
-        if not self._model_kdes or self._n_exp == 0:
-            return 0.0
-
-        total_w = 0.0
-        weighted_sim = 0.0
-        for kde in self._model_kdes.values():
-            s_i = self._compute_model_similarity(kde, X1, X2)
-            weighted_sim += kde.weight * s_i
-            total_w += kde.weight
-
-        return weighted_sim / total_w if total_w > 0 else 0.0
 
     def predict_for_calibration(self, params: dict[str, Any]) -> tuple[dict[str, np.ndarray], Any]:
         """Predict feature arrays for all dimensional positions for calibration use.

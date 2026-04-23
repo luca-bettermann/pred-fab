@@ -175,8 +175,9 @@ class PfabAgent:
             logger=self.logger,
             perf_fn=_perf_fn,
             uncertainty_fn=_pred.uncertainty,
-            uncertainty_batch_fn=_pred.uncertainty_batch,
-            similarity_fn=_pred.kernel_similarity,
+            delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
+            push_virtual_points_fn=_pred.push_virtual_points,
+            pop_virtual_points_fn=_pred.pop_virtual_points,
             n_exp_fn=lambda: _pred._n_exp,
             fit_empty_kde_fn=_pred.fit_empty_kde,
         )
@@ -547,11 +548,24 @@ class PfabAgent:
         self,
         *,
         radius: float | None = None,
+        sigma: float | None = None,
+        mc_exponent_offset: float | None = None,
     ) -> None:
-        """Set exploration radius (evidence decay length scale: σ = radius · √dims)."""
+        """Configure the integrated-evidence exploration settings.
+
+        `radius` (= `exploration_radius`) sets σ = radius · √(n_active_dims) per model.
+        `sigma` overrides σ directly, ignoring radius × √D.
+        `mc_exponent_offset` sets M = round(2^(n_active + offset)) for Sobol MC.
+        """
         self._assert_initialized()
+        if radius is None and sigma is None and mc_exponent_offset is None:
+            return
+        self.pred_system.configure_exploration(
+            exploration_radius=radius,
+            sigma=sigma,
+            mc_exponent_offset=mc_exponent_offset,
+        )
         if radius is not None:
-            self.pred_system.configure_exploration(radius)
             self.calibration_system._exploration_radius = radius
 
     def configure_optimizer(

@@ -39,26 +39,26 @@ def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
     assert models[1].seen_widths and models[1].seen_widths[0] == 2
 
 
-def test_calibration_acquisition_uses_perf_fn_and_uncertainty_fn(tmp_path):
-    """_acquisition_func integrates perf_fn and uncertainty_fn into a UCB score."""
+def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
+    """_acquisition_objective combines perf_fn with delta_integrated_evidence_fn via κ."""
     dataset = build_dataset_with_single_experiment(tmp_path)
 
     perf_calls = []
-    unc_calls = []
+    de_calls = []
 
     def perf_fn(params_dict):
         perf_calls.append(params_dict)
         return {"performance_1": 0.7}
 
-    def uncertainty_fn(X):
-        unc_calls.append(X.shape)
+    def de_fn(batch):
+        de_calls.append(batch.shape)
         return 0.4
 
     calibration = build_calibration_system(
         tmp_path=tmp_path,
         dataset=dataset,
         perf_fn=perf_fn,
-        uncertainty_fn=uncertainty_fn,
+        delta_integrated_evidence_fn=de_fn,
     )
 
     datamodule = build_initialized_datamodule(
@@ -71,15 +71,13 @@ def test_calibration_acquisition_uses_perf_fn_and_uncertainty_fn(tmp_path):
     )
     calibration._active_datamodule = datamodule
 
-    # Build a dummy normalized X array
     X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
     w = 0.5
-    result = calibration._acquisition_func(X, kappa=w)
+    result = calibration._acquisition_objective(X, kappa=w)
 
-    # Both callables should have been invoked
     assert len(perf_calls) == 1
-    assert len(unc_calls) == 1
-    # UCB: -(0.5 * 0.7 + 0.5 * 0.4) = -0.55
+    assert len(de_calls) == 1
+    # score = (1-w)·0.7 + w·0.4 = 0.55 → objective = -0.55
     assert result == pytest.approx(-((1 - w) * 0.7 + w * 0.4), abs=1e-4)
 
 

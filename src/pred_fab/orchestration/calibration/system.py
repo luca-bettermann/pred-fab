@@ -26,8 +26,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         logger: PfabLogger,
         perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
-        uncertainty_batch_fn: Callable[[np.ndarray], np.ndarray] | None = None,
-        similarity_fn: Callable[[np.ndarray, np.ndarray], float] | None = None,
+        delta_integrated_evidence_fn: Callable[[np.ndarray], float] | None = None,
+        push_virtual_points_fn: Callable[[list[dict[str, Any]], list[float], DataModule | None], None] | None = None,
+        pop_virtual_points_fn: Callable[[], None] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
         random_seed: int | None = None,
@@ -35,8 +36,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn = perf_fn
         self.uncertainty_fn = uncertainty_fn
-        self.uncertainty_batch_fn = uncertainty_batch_fn
-        self.similarity_fn = similarity_fn
+        self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
+        self.push_virtual_points_fn = push_virtual_points_fn
+        self.pop_virtual_points_fn = pop_virtual_points_fn
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn
 
@@ -45,7 +47,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.bounds = BoundsManager(schema, logger)
 
         # Active datamodule — set before each optimization run so that
-        # _acquisition_func can call array_to_params.
+        # _acquisition_objective can call array_to_params.
         self._active_datamodule: DataModule | None = None
 
         # Set after each optimization call for external inspection.
@@ -75,8 +77,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._perf_range_min: float | None = None
         self._perf_range_max: float | None = None
 
-        # Exploration config (retained for baseline use)
-        self._exploration_radius: float = 0.20
+        # Exploration config (display only — source of truth is PredictionSystem)
+        self._exploration_radius: float = 0.09
+        self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
     # ------------------------------------------------------------------
@@ -254,92 +257,79 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
 
     # === OBJECTIVE FUNCTIONS ===
+    #
+    # Unified acquisition (higher is better):
+    #
+    #     score(batch) = (1 − κ) · mean_k combined_score(perf(z_k), w)
+    #                   + κ · Δ∫_[0,1]^D E(z | data_old ∪ batch) − E(z | data_old) dz
+    #
+    # κ=1 baseline drops the perf term; κ=0 inference drops the Δ∫E term.
+    # Single-candidate phases pass batch with shape (1, D).
 
-    def _acquisition_func(
+    def _per_candidate_perf(
         self,
-        X: np.ndarray,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
+        x_norm: np.ndarray,
+        perf_range: tuple[float, float] | None,
     ) -> float:
-        """Unified objective: score = (1-kappa)*perf + kappa*uncertainty. kappa=0 is pure inference."""
+        """Weighted performance score for a single normalized parameter vector."""
         dm = self._active_datamodule
         if dm is None:
             return 0.0
         try:
-            params_dict = dm.array_to_params(X.reshape(-1))
+            params_dict = dm.array_to_params(x_norm.reshape(-1))
         except (ValueError, KeyError):
             return 0.0
         try:
             perf_dict = self.perf_fn(params_dict)
         except Exception:
-            perf_dict = {}
+            return 0.0
         perf_values = [
             float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
             for name in self.perf_names_order
             if name in perf_dict
         ]
         sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
-
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
+        return float(sys_perf)
 
-        if kappa > 0:
-            u = float(self.uncertainty_fn(X.reshape(-1)))
-            score = (1.0 - kappa) * sys_perf + kappa * u
-        else:
-            score = sys_perf
-
-        return -score
-
-    def _ucb_scores(
+    def _acquisition(
         self,
-        X_batch: np.ndarray,
+        batch_norm: np.ndarray,
         kappa: float,
         perf_range: tuple[float, float] | None = None,
-    ) -> np.ndarray:
-        """Per-row UCB scores (higher is better). Uncertainty is batch-aware for L>1; single-point at L=1."""
-        L = X_batch.shape[0]
-        dm = self._active_datamodule
-        if dm is None:
-            return np.zeros(L)
+    ) -> float:
+        """Unified acquisition score (higher is better). batch_norm: (L, D_dm)."""
+        if batch_norm.ndim != 2:
+            batch_norm = batch_norm.reshape(1, -1)
+        L = batch_norm.shape[0]
+        if L == 0:
+            return 0.0
 
-        # Perf per row.
-        perf_vec = np.zeros(L)
-        for k in range(L):
-            try:
-                params_dict = dm.array_to_params(X_batch[k].reshape(-1))
-            except (ValueError, KeyError):
-                continue
-            try:
-                perf_dict = self.perf_fn(params_dict)
-            except Exception:
-                perf_dict = {}
-            perf_values = [
-                float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
-                for name in self.perf_names_order
-                if name in perf_dict
-            ]
-            sys_perf = self._compute_system_performance(perf_values) if perf_values else 0.0
-            if perf_range is not None:
-                pmin, pmax = perf_range
-                span = pmax - pmin
-                sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
-            perf_vec[k] = sys_perf
+        score = 0.0
+        if kappa < 1.0:
+            perfs = [self._per_candidate_perf(batch_norm[k], perf_range) for k in range(L)]
+            score += (1.0 - kappa) * float(np.mean(perfs))
 
-        # Uncertainty per row: batch-aware when available, fallback to scalar for compatibility.
-        if kappa > 0:
-            if self.uncertainty_batch_fn is not None:
-                u_vec = np.asarray(self.uncertainty_batch_fn(X_batch), dtype=float)
-            else:
-                u_vec = np.array([float(self.uncertainty_fn(X_batch[k].reshape(-1))) for k in range(L)])
-        else:
-            u_vec = np.zeros(L)
-
-        score = (1.0 - kappa) * perf_vec + kappa * u_vec
+        if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
+            de = float(self.delta_integrated_evidence_fn(batch_norm))
+            score += kappa * de
 
         return score
+
+    def _acquisition_objective(
+        self,
+        x_flat: np.ndarray,
+        kappa: float,
+        perf_range: tuple[float, float] | None = None,
+    ) -> float:
+        """DE-compatible (negated) acquisition for single-candidate phases.
+
+        x_flat: 1-D normalized parameter vector. Inference and exploration use this path.
+        """
+        return -self._acquisition(x_flat.reshape(1, -1), kappa, perf_range)
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -411,7 +401,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         effective_kappa = 0.0 if mode == Mode.INFERENCE else kappa
         perf_range, _ = self._get_acquisition_ranges()
         return functools.partial(
-            self._acquisition_func,
+            self._acquisition_objective,
             kappa=effective_kappa,
             perf_range=perf_range,
         )
@@ -799,14 +789,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 process_col_map.append((si, baseline_dm.input_columns.index(code)))
 
         def _process_ucb_objective(x_flat: np.ndarray) -> float:
-            """Baseline Process: maximize mean batch-aware uncertainty (κ=1)."""
+            """Baseline Process: maximize Δ∫E over joint N-batch placement (κ=1)."""
             pts = space.decode(x_flat)  # (N, D_point)
             X_batch = np.full((n, n_dm_cols), 0.5)
             for si, col_idx in process_col_map:
                 for i in range(n):
                     X_batch[i, col_idx] = pts[i, si]
-            scores = self._ucb_scores(X_batch, kappa=1.0)
-            return -float(np.mean(scores))
+            return -self._acquisition(X_batch, kappa=1.0)
 
         # Build init_norm for the merged space (remap original indices)
         merged_init = np.zeros((n, len(all_process_params)))
@@ -930,7 +919,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             exp_base_rows.append(row)
 
         def _schedule_ucb_objective(x_flat: np.ndarray) -> float:
-            """Baseline Schedule DE objective: maximize mean batch-aware uncertainty (κ=1)."""
+            """Phase 2 joint schedule (κ=1): maximize Δ∫E over all experiment×step placements.
+
+            Adds a small step-to-step smoothness penalty as an engineering bias /
+            tie-breaker when Δ∫E is locally flat across equivalent placements.
+            """
             pts = space.decode(x_flat)  # (N_total, D_sched)
             X_batch = np.empty((N_total, n_dm_cols))
             pt_i = 0
@@ -940,10 +933,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     for si, col_idx in sched_col_map:
                         X_batch[pt_i, col_idx] = pts[pt_i, si]
                     pt_i += 1
-            scores = self._ucb_scores(X_batch, kappa=1.0)
-            avg = -float(np.mean(scores))
-            avg += space.smoothing_penalty(x_flat, avg)
-            return avg
+            neg_score = -self._acquisition(X_batch, kappa=1.0)
+            neg_score += space.smoothing_penalty(x_flat, neg_score)
+            return neg_score
 
         # Build initial population
         init_merged = np.zeros((n, D_sched))
@@ -1283,19 +1275,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sched_perf_range, _ = self._get_acquisition_ranges()
 
                 def _schedule_acquisition_objective(x_flat: np.ndarray) -> float:
-                    """Exploration/inference Schedule DE objective: mean batch-aware UCB over L layers.
+                    """Exploration/inference schedule objective: joint over L layers.
 
-                    Each layer's uncertainty is computed as if the other L-1 layers had been
-                    observed as virtuals (representing one future experiment). Drives layer
-                    diversification by rewarding batches whose layers occupy distinct regions.
+                    Adds a small step-to-step smoothness penalty as a tie-breaker
+                    under the integrated-evidence objective.
                     """
                     pts = sched_space.decode(x_flat)
                     X_batch = np.stack([_pts_row_to_dm(pts[k]) for k in range(L)])
-                    scores = self._ucb_scores(X_batch, kappa, perf_range=sched_perf_range)
-                    # Negate for minimizer (higher UCB is better); then add smoothing penalty.
-                    avg = -float(np.mean(scores))
-                    avg += sched_space.smoothing_penalty(x_flat, avg)
-                    return avg
+                    neg_score = -self._acquisition(X_batch, kappa, perf_range=sched_perf_range)
+                    neg_score += sched_space.smoothing_penalty(x_flat, neg_score)
+                    return neg_score
 
                 self.logger.debug(
                     f"Phase 3 schedule optimization: L={L}, D_static=0, "

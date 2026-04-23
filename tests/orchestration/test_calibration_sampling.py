@@ -499,13 +499,20 @@ def test_baseline_sobol_covers_parameter_range(tmp_path):
 
 # ===== EXPLORATION: follows the acquisition signal =====
 
-def _make_calibration_with_single_param(tmp_path, perf_fn, uncertainty_fn):
-    """Helper: CalibrationSystem + DataModule over param_1 only (no normalization)."""
+def _make_calibration_with_single_param(
+    tmp_path, perf_fn, uncertainty_fn, delta_integrated_evidence_fn=None,
+):
+    """Helper: CalibrationSystem + DataModule over param_1 only (no normalization).
+
+    `uncertainty_fn` is retained for visualization paths.
+    `delta_integrated_evidence_fn(batch: (L, D))` drives the optimizer when κ > 0.
+    """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(
         tmp_path, dataset,
         perf_fn=perf_fn,
         uncertainty_fn=uncertainty_fn,
+        delta_integrated_evidence_fn=delta_integrated_evidence_fn,
     )
     calibration.configure_param_bounds({"param_1": (0.0, 10.0)})
     datamodule = build_initialized_datamodule(
@@ -519,14 +526,15 @@ def _make_calibration_with_single_param(tmp_path, perf_fn, uncertainty_fn):
 
 
 def test_exploration_high_w_targets_uncertainty_region(tmp_path):
-    """With kappa=1 and uncertainty concentrated above param_1=8, the proposal lands there.
+    """With kappa=1 and Δ∫E concentrated above param_1=8, the proposal lands there.
 
-    The performance signal is flat so only uncertainty drives the proposal.
+    The performance signal is flat so only Δ∫E drives the proposal.
     """
     calibration, datamodule = _make_calibration_with_single_param(
         tmp_path,
         perf_fn=lambda p: {"performance_1": 0.5, "performance_2": 0.5},
-        uncertainty_fn=lambda X: 1.0 if X[0] > 8.0 else 0.0,
+        uncertainty_fn=lambda X: 0.5,
+        delta_integrated_evidence_fn=lambda batch: 1.0 if batch[0, 0] > 8.0 else 0.0,
     )
 
     result = calibration.run_calibration(
@@ -537,7 +545,7 @@ def test_exploration_high_w_targets_uncertainty_region(tmp_path):
     )
 
     assert result["param_1"] > 7.0, (
-        f"With kappa=1 and uncertainty above 8, expected param_1 > 7, "
+        f"With kappa=1 and Δ∫E above 8, expected param_1 > 7, "
         f"got {result['param_1']:.2f}"
     )
 
@@ -630,15 +638,19 @@ def test_exploration_and_inference_diverge_when_signals_conflict(tmp_path):
     perf_fn = lambda p: {"performance_1": 1.0 if p.get("param_1", 0) > 8.0 else 0.0,
                          "performance_2": 0.5}
     unc_fn = lambda X: 1.0 if X[0] < 2.0 else 0.0
+    # Under the integrated model, "uncertainty region" = batch position yielding high Δ∫E.
+    de_fn = lambda batch: 1.0 if batch[0, 0] < 2.0 else 0.0
 
     agent, dataset, codes = build_workflow_stack(tmp_path / "a")
     cal_inference = build_calibration_system(tmp_path / "a", dataset,
-                                             perf_fn=perf_fn, uncertainty_fn=unc_fn)
+                                             perf_fn=perf_fn, uncertainty_fn=unc_fn,
+                                             delta_integrated_evidence_fn=de_fn)
     cal_inference.configure_param_bounds({"param_1": (0.0, 10.0)})
 
     agent2, dataset2, codes2 = build_workflow_stack(tmp_path / "b")
     cal_explore = build_calibration_system(tmp_path / "b", dataset2,
-                                           perf_fn=perf_fn, uncertainty_fn=unc_fn)
+                                           perf_fn=perf_fn, uncertainty_fn=unc_fn,
+                                           delta_integrated_evidence_fn=de_fn)
     cal_explore.configure_param_bounds({"param_1": (0.0, 10.0)})
 
     dm_inference = build_initialized_datamodule(

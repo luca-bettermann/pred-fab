@@ -24,6 +24,7 @@ from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, SplitType
 from pred_fab.core import ExperimentSpec, ParameterProposal
 from pred_fab.utils.enum import Mode
+from scipy.stats import qmc
 
 
 
@@ -165,51 +166,10 @@ def test_uncertainty_returns_one_for_single_training_config(tmp_path):
         assert 0.0 <= pred.uncertainty(X) <= 1.0
 
 
-# ===========================================================================
-# kernel_similarity()
-# ===========================================================================
-
-def test_kernel_similarity_returns_zero_before_training(tmp_path):
-    """Without a fitted KDE (no bandwidth), kernel_similarity returns 0.0."""
-    dataset = build_dataset_with_single_experiment(tmp_path)
-    logger = build_test_logger(tmp_path)
-    pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
-
-    X = np.array([0.5, 0.5, 0.5])
-    assert pred.kernel_similarity(X, X) == pytest.approx(0.0)
-
-
-def test_kernel_similarity_identical_points_after_training(tmp_path):
-    """sim(x, x) should be close to 1.0 for identical inputs (when KDE is fitted)."""
-    agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
-    pred = agent.pred_system
-
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted — not enough training configs")
-
-    X = datamodule.params_to_array(exp.parameters.get_values_dict())
-    sim = pred.kernel_similarity(X, X)
-    assert sim == pytest.approx(1.0, abs=1e-6)
-
-
-def test_kernel_similarity_decreases_with_distance(tmp_path):
-    """sim(x, y) < sim(x, x) when x != y (assuming KDE is fitted)."""
-    agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
-    pred = agent.pred_system
-
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted — not enough training configs")
-
-    train_params = exp.parameters.get_values_dict()
-    X1 = datamodule.params_to_array(train_params)
-
-    far_params = dict(train_params)
-    far_params["param_1"] = 9.0
-    X2 = datamodule.params_to_array(far_params)
-
-    sim_self = pred.kernel_similarity(X1, X1)
-    sim_other = pred.kernel_similarity(X1, X2)
-    assert sim_other < sim_self
+# kernel_similarity, uncertainty_batch, and boundary_evidence have been
+# removed with the integrated-objective refactor. Their tests lived here
+# (and in test_new_features.py's TestVirtualKDEPoints) and have been deleted.
+# New tests for the integrated objective live at the bottom of this file.
 
 
 # ===========================================================================
@@ -338,18 +298,18 @@ def test_compute_performance_std_none_for_nan_feature_std(tmp_path):
 # UCB acquisition function integration
 # ===========================================================================
 
-def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
-    """_acquisition_func integrates perf_fn and uncertainty_fn correctly."""
+def test_acquisition_objective_combines_perf_and_delta_evidence(tmp_path):
+    """_acquisition_objective combines combined_score perf with Δ∫E via κ."""
     _, dataset, _ = build_workflow_stack(tmp_path)
 
     perf_calls = []
-    unc_calls = []
+    de_calls = []
 
     calibration = build_calibration_system(
         tmp_path / "cal",
         dataset,
         perf_fn=lambda p: (perf_calls.append(p), {"performance_1": 0.8, "performance_2": 0.6})[1],
-        uncertainty_fn=lambda X: (unc_calls.append(X.shape), 0.3)[1],
+        delta_integrated_evidence_fn=lambda batch: (de_calls.append(batch.shape), 0.3)[1],
     )
 
     datamodule = build_initialized_datamodule(
@@ -362,26 +322,25 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
     )
     calibration._active_datamodule = datamodule
 
-    # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
     valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)
     w = 0.4
-    result = calibration._acquisition_func(X, kappa=w)
+    result = calibration._acquisition_objective(X, kappa=w)
 
     assert len(perf_calls) == 1
-    assert len(unc_calls) == 1
-    # Expected sys_perf = avg(0.8, 0.6) = 0.7; u = 0.3
-    # Score = (1-0.4)*0.7 + 0.4*0.3 = 0.42 + 0.12 = 0.54 → result = -0.54
+    assert len(de_calls) == 1
+    # combined_score with equal weights: (0.8 + 0.6)/2 = 0.7; Δ∫E = 0.3
+    # score = (1-0.4)*0.7 + 0.4*0.3 = 0.54 → objective = -0.54
     assert result == pytest.approx(-((1 - w) * 0.7 + w * 0.3), abs=1e-4)
 
 
-def test_acquisition_func_with_no_active_datamodule_returns_zero(tmp_path):
-    """_acquisition_func returns 0.0 (and doesn't crash) when _active_datamodule is None."""
+def test_acquisition_objective_with_no_active_datamodule_returns_zero(tmp_path):
+    """_acquisition_objective returns 0.0 (and doesn't crash) when _active_datamodule is None."""
     dataset = build_dataset_with_single_experiment(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
     X = np.zeros(3)
-    result = calibration._acquisition_func(X, kappa=0.5)
+    result = calibration._acquisition_objective(X, kappa=0.5)
     assert result == pytest.approx(0.0)
 
 
@@ -609,219 +568,87 @@ def test_schedule_experiment_contributes_multiple_evidence_points(tmp_path):
 
 
 # ===========================================================================
-# uncertainty_batch: batch-aware KDE uncertainty
+# Integrated-objective evidence math
 # ===========================================================================
 
-def test_uncertainty_batch_matches_single_point_at_L1(tmp_path):
-    """uncertainty_batch(X[0:1])[0] must equal uncertainty(X[0]) when L=1 (no siblings)."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
-
-    first_exp = dataset.get_experiment(codes[0])
-    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
-
-    u_single = pred.uncertainty(X)
-    u_batch = pred.uncertainty_batch(X.reshape(1, -1))
-
-    assert u_batch.shape == (1,)
-    assert u_batch[0] == pytest.approx(u_single, abs=1e-9)
+def test_normalized_gaussian_integrates_to_one(tmp_path):
+    """Verify ∫_{ℝ^D} ρ_j(z) dz = 1 for the normalized Gaussian kernel."""
+    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    # Direct static-method test, independent of a fitted system.
+    for D in (1, 2, 3):
+        sigma = 0.15 * np.sqrt(D)
+        # Sample on a wide box centered at origin, evaluate density, integrate via trapezoid.
+        # Trapezoid over 10σ in each dim with 51 points should capture essentially all mass.
+        half = 5.0 * sigma
+        n = 51
+        axes = [np.linspace(-half, half, n) for _ in range(D)]
+        grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, D)
+        centers = np.zeros((1, D))
+        vals = PS._gaussian_density(grid, centers, sigma).reshape([n] * D + [1])[..., 0]
+        mass = np.trapezoid(vals, axes[0], axis=0)
+        for ax in range(1, D):
+            mass = np.trapezoid(mass, axes[ax], axis=0)
+        assert float(mass) == pytest.approx(1.0, abs=1e-2)
 
 
-def test_uncertainty_batch_shape_and_dtype(tmp_path):
-    """uncertainty_batch returns (L,) float array for input shape (L, D)."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
+def test_integrated_evidence_grows_with_data(tmp_path):
+    """∫E dz over the unit cube grows monotonically as more centers are added."""
+    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    rng = np.random.default_rng(0)
+    D = 3
+    sigma = 0.15 * np.sqrt(D)
+    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=128)
 
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
+    E_prev = PS._integrated_evidence(np.empty((0, D)), np.empty((0,)), sigma, sobol)
+    assert E_prev == pytest.approx(0.0)
 
-    first_exp = dataset.get_experiment(codes[0])
-    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
-    X_batch = np.stack([X, X, X, X])
-
-    u_vec = pred.uncertainty_batch(X_batch)
-    assert u_vec.shape == (4,)
-    assert u_vec.dtype == np.float64
-    assert np.all((u_vec >= 0.0) & (u_vec <= 1.0))
+    centers: list[np.ndarray] = []
+    for k in range(6):
+        centers.append(rng.uniform(0.1, 0.9, size=D))
+        arr = np.stack(centers)
+        w = np.ones(len(arr))
+        E_new = PS._integrated_evidence(arr, w, sigma, sobol)
+        assert E_new > E_prev - 1e-8  # monotone non-decreasing
+        E_prev = E_new
 
 
-def test_uncertainty_batch_rejects_non_2d_input(tmp_path):
-    """uncertainty_batch must reject 1-D input to prevent silent mis-use."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    first_exp = dataset.get_experiment(codes[0])
-    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
-    with pytest.raises(ValueError, match="2-D"):
-        pred.uncertainty_batch(X)
+def test_integrated_evidence_saturates():
+    """E → 1 as D(z) grows; ∫E dz bounded by volume of unit cube = 1."""
+    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    D = 2
+    sigma = 0.1
+    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=256)
+    # Stack many kernels at the same center → local D blows up.
+    centers = np.tile(np.array([[0.5, 0.5]]), (50, 1))
+    weights = np.ones(50)
+    E = PS._integrated_evidence(centers, weights, sigma, sobol)
+    assert 0.0 < E < 1.0
 
 
-def test_uncertainty_batch_diversity_pressure(tmp_path):
-    """A collapsed batch (all points co-located) should yield lower mean u_batch than a spread batch."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
-
-    # Pick an OOD anchor point (push param_1 to high end) to get high baseline uncertainty.
-    first_exp = dataset.get_experiment(codes[0])
-    base_params = dict(first_exp.parameters.get_values_dict())
-    base_params["param_1"] = 9.5
-    X_ood = datamodule.params_to_array(base_params)
-
-    # Collapsed: 5 copies of the same OOD point.
-    collapsed = np.stack([X_ood] * 5)
-
-    # Spread: 5 variations of param_1 spanning the range.
-    spread_rows = []
-    for val in [1.0, 3.0, 5.0, 7.0, 9.5]:
-        p = dict(base_params)
-        p["param_1"] = val
-        spread_rows.append(datamodule.params_to_array(p))
-    spread = np.stack(spread_rows)
-
-    u_collapsed = pred.uncertainty_batch(collapsed)
-    u_spread = pred.uncertainty_batch(spread)
-
-    # When points collapse, each sees the others as nearby virtuals → density spikes
-    # → uncertainty drops. Spread keeps each point's siblings far → uncertainty stays high.
-    assert u_collapsed.mean() < u_spread.mean(), (
-        f"Collapsed batch mean uncertainty ({u_collapsed.mean():.4f}) must be lower than "
-        f"spread batch ({u_spread.mean():.4f}) to provide diversification pressure."
-    )
+def test_sobol_samples_are_deterministic_per_seed(tmp_path):
+    """Same seed → identical samples."""
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    logger = build_test_logger(tmp_path)
+    pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
+    a = pred.get_sobol_samples(3, seed=42)
+    b = pred.get_sobol_samples(3, seed=42)
+    assert np.array_equal(a, b)
 
 
-def test_uncertainty_batch_no_side_effects(tmp_path):
-    """uncertainty_batch must not mutate _model_kdes state (no virtual-point leakage)."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted")
-
-    first_exp = dataset.get_experiment(codes[0])
-    X = datamodule.params_to_array(first_exp.parameters.get_values_dict())
-    X_batch = np.stack([X, X, X])
-
-    snapshots: list[tuple[np.ndarray, float]] = []
-    for kde in pred._model_kdes.values():
-        snapshots.append((kde.latent_points.copy(), kde.sigma))
-
-    _ = pred.uncertainty_batch(X_batch)
-
-    for (before_pts, before_sigma), kde in zip(snapshots, pred._model_kdes.values()):
-        assert np.array_equal(kde.latent_points, before_pts)
-        assert kde.sigma == before_sigma
-
-
-# ===========================================================================
-# Boundary evidence at domain edges
-# ===========================================================================
-
-def test_boundary_evidence_at_edge(tmp_path):
-    """With no training data, uncertainty at the boundary should be lower than at the center
-    because boundary evidence is higher at edges (closer to normalized bounds 0/1)."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-
-    pred = agent.pred_system
-    # Fit empty KDE so boundary evidence is the only signal
-    pred.fit_empty_kde(datamodule, target_n=1)
-
-    # Edge point: param_1 at lower bound (0.0) → normalizes near 0
-    edge_params = dict(dataset.get_experiment(codes[0]).parameters.get_values_dict())
-    edge_params["param_1"] = 0.0
-    X_edge = datamodule.params_to_array(edge_params)
-
-    # Center point: param_1 at midrange (5.0) → normalizes near 0.5
-    center_params = dict(edge_params)
-    center_params["param_1"] = 5.0
-    X_center = datamodule.params_to_array(center_params)
-
-    u_edge = pred.uncertainty(X_edge)
-    u_center = pred.uncertainty(X_center)
-
-    assert 0.0 <= u_edge <= 1.0
-    assert 0.0 <= u_center <= 1.0
-    assert u_edge < u_center, (
-        f"Edge uncertainty ({u_edge:.4f}) should be lower than center ({u_center:.4f}) "
-        "because boundary evidence is stronger at domain edges."
-    )
-
-
-# ===========================================================================
-# Kernel type: Cauchy vs Gaussian tail behavior
-# ===========================================================================
-
-def test_kernel_cauchy_vs_gaussian(tmp_path):
-    """Cauchy kernel has wider tails than Gaussian: at a far-OOD point, Cauchy uncertainty
-    should be lower (more evidence leaks to far-away points) than Gaussian."""
-    agent, dataset, codes = build_workflow_stack(tmp_path)
-    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
-    datamodule = build_prepared_workflow_datamodule(
-        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
-    )
-    agent.train(datamodule=datamodule, validate=False, test=False)
-
-    pred = agent.pred_system
-    if not pred._model_kdes:
-        pytest.skip("KDE not fitted — not enough distinct training configs")
-
-    # Far-OOD point
-    ood_params = dict(dataset.get_experiment(codes[0]).parameters.get_values_dict())
-    ood_params["param_1"] = 9.9
-    X_ood = datamodule.params_to_array(ood_params)
-
-    # Cauchy (default)
-    assert pred._kernel_type == "cauchy"
-    u_cauchy = pred.uncertainty(X_ood)
-
-    # Switch to Gaussian and re-evaluate
-    pred._kernel_type = "gaussian"
-    u_gaussian = pred.uncertainty(X_ood)
-
-    # Restore
-    pred._kernel_type = "cauchy"
-
-    assert 0.0 <= u_cauchy <= 1.0
-    assert 0.0 <= u_gaussian <= 1.0
-    # Cauchy's heavier tail means more evidence reaches far-OOD → lower uncertainty there
-    assert u_cauchy < u_gaussian, (
-        f"Cauchy uncertainty ({u_cauchy:.4f}) should be lower than Gaussian ({u_gaussian:.4f}) "
-        "at a far-OOD point due to heavier tails."
-    )
+def test_integrated_evidence_prefers_interior_over_corner(tmp_path):
+    """Regression test for the corner-winning bug: one centered kernel has
+    larger ∫E than one corner kernel, because corner mass leaks outside [0,1]^D.
+    """
+    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    D = 3
+    sigma = 0.15 * np.sqrt(D)
+    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=256)
+    center = np.array([[0.5, 0.5, 0.5]])
+    corner = np.array([[0.0, 0.0, 0.0]])
+    w = np.ones(1)
+    E_center = PS._integrated_evidence(center, w, sigma, sobol)
+    E_corner = PS._integrated_evidence(corner, w, sigma, sobol)
+    assert E_center > E_corner
 
 
 # ------ Schedule DE branch convergence key rename ('Acquisition' -> 'Schedule') ------

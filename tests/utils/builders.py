@@ -250,7 +250,7 @@ def build_calibration_system(
     dataset: Dataset,
     perf_fn: Optional[Callable] = None,
     uncertainty_fn: Optional[Callable] = None,
-    similarity_fn: Optional[Callable] = None,
+    delta_integrated_evidence_fn: Optional[Callable] = None,
 ) -> CalibrationSystem:
     """Build a CalibrationSystem with lightweight no-op callables for unit tests."""
     logger = build_test_logger(tmp_path)
@@ -265,7 +265,7 @@ def build_calibration_system(
         logger=logger,
         perf_fn=perf_fn or _default_perf_fn,  # type: ignore[arg-type]
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
-        similarity_fn=similarity_fn,
+        delta_integrated_evidence_fn=delta_integrated_evidence_fn,
     )
     # Fast DE settings for tests (production uses scipy defaults: 1000/15)
     cal.de_maxiter = 5

@@ -65,7 +65,7 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5, perf_range=(0.2, 0.8))
+        result = cal._acquisition_objective(X, kappa=0.5, perf_range=(0.2, 0.8))
         assert np.isfinite(result)
 
     def test_acquisition_without_ranges_returns_finite(self, tmp_path):
@@ -75,17 +75,26 @@ class TestNormalizedAcquisitionFunc:
         cal._active_datamodule = datamodule
         bounds = cal._get_global_bounds(datamodule)
         X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5, perf_range=None)
+        result = cal._acquisition_objective(X, kappa=0.5, perf_range=None)
         assert np.isfinite(result)
 
     def test_normalized_acquisition_is_negative(self, tmp_path):
-        """Acquisition returns -score (for minimization)."""
+        """Acquisition returns -(non-negative score) for minimization.
+
+        Sampling in the normalized [0,1] domain (where kernels and perfs both
+        produce non-negative scores) should give a negative objective value.
+        Sampling outside the normalized domain is undefined behaviour for the
+        integrated evidence model — we exclude that case here.
+        """
         agent, exp, datamodule = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
         cal._active_datamodule = datamodule
-        bounds = cal._get_global_bounds(datamodule)
-        X = np.random.uniform(bounds[:, 0], bounds[:, 1])
-        result = cal._acquisition_func(X, kappa=0.5, perf_range=(0.2, 0.8))
+        # Sample in normalized [0,1]^D.
+        n_dm = len(datamodule.input_columns)
+        np.random.seed(0)
+        X = np.random.uniform(0.0, 1.0, size=n_dm)
+        # No perf_range renormalization (raw perf ∈ [0,1] already).
+        result = cal._acquisition_objective(X, kappa=0.5, perf_range=None)
         assert result <= 0.0
 
 
