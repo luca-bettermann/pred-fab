@@ -298,8 +298,9 @@ class PredictionSystem(BaseOrchestrationSystem):
     def fit_empty_kde(self, datamodule: DataModule, target_n: int = 1) -> None:
         """Initialize empty evidence structures for all non-deterministic models.
 
-        Creates per-model evidence with zero latent points. Uncertainty returns
-        ~1.0 everywhere (only boundary evidence). Used for baseline generation.
+        active_mask is determined by schema bounds: only dimensions with
+        non-trivial range (lo < hi) are active. This ensures boundary evidence
+        and σ reflect the actual optimization space, not all input columns.
         """
         self._model_kdes = {}
         self.datamodule = datamodule
@@ -309,6 +310,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             return
 
         self._n_exp = target_n
+        schema = datamodule.dataset.schema
 
         for model in kde_models:
             # Determine latent dimensionality by encoding a dummy point
@@ -318,14 +320,35 @@ class PredictionSystem(BaseOrchestrationSystem):
             dummy_X = np.zeros((1, n_input))
             z = model.encode(dummy_X)[0]
             n_dims = len(z)
-            sigma = self._exploration_radius * np.sqrt(float(n_dims))
+
+            # Active mask from schema bounds: only dims with non-trivial range
+            active_mask = np.zeros(n_dims, dtype=bool)
+            dm_cols = datamodule.input_columns
+            model_col_indices = input_indices if input_indices else list(range(len(dm_cols)))
+            for zi, col_idx in enumerate(model_col_indices):
+                if zi >= n_dims:
+                    break
+                col_code = dm_cols[col_idx] if col_idx < len(dm_cols) else None
+                if col_code and col_code in schema.parameters.data_objects:
+                    obj = schema.parameters.data_objects[col_code]
+                    if hasattr(obj, 'constraints'):
+                        lo = obj.constraints.get('min', None)
+                        hi = obj.constraints.get('max', None)
+                        if lo is not None and hi is not None and float(hi) > float(lo):
+                            active_mask[zi] = True
+
+            n_active = int(active_mask.sum())
+            if n_active == 0:
+                active_mask = np.ones(n_dims, dtype=bool)
+                n_active = n_dims
+            sigma = self._exploration_radius * np.sqrt(float(n_active))
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
-                latent_points=np.empty((0, n_dims)),  # zero points
+                latent_points=np.empty((0, n_active)),
                 sigma=sigma,
-                active_mask=np.ones(n_dims, dtype=bool),
-                n_active_dims=n_dims,
+                active_mask=active_mask,
+                n_active_dims=n_active,
                 weight=self._get_model_weight(model),
             )
 
@@ -373,15 +396,17 @@ class PredictionSystem(BaseOrchestrationSystem):
         return model.encode(X_model)[0]
 
     def _compute_model_evidence(self, kde: _ModelKDE, X_norm: np.ndarray) -> float:
-        """Compute evidence at a normalized parameter vector from one model's latent points."""
+        """Total evidence (data + boundary) for one model at a normalized parameter vector."""
         z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
-        z = z[kde.active_mask]
+        z_active = z[kde.active_mask]
 
-        if len(kde.latent_points) == 0:
-            return 0.0  # no data → zero evidence
+        e = self._boundary_evidence(z_active, kde.sigma)
 
-        dists_sq = np.sum((kde.latent_points - z) ** 2, axis=1)
-        return float(np.sum(self._kernel(dists_sq, kde.sigma)))
+        if len(kde.latent_points) > 0:
+            dists_sq = np.sum((kde.latent_points - z_active) ** 2, axis=1)
+            e += float(np.sum(self._kernel(dists_sq, kde.sigma)))
+
+        return e
 
     def _compute_model_similarity(self, kde: _ModelKDE, X1: np.ndarray, X2: np.ndarray) -> float:
         """Compute kernel similarity for a single model's latent space."""
@@ -395,34 +420,29 @@ class PredictionSystem(BaseOrchestrationSystem):
         return self._kernel_scalar(dist_sq, kde.sigma)
 
     def _compute_model_evidence_batch(self, kde: _ModelKDE, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware per-model evidence; each row sees real data + siblings (excluding self).
+        """Batch-aware per-model evidence (data + siblings + boundary).
 
-        Each sibling contributes 1 evidence unit (same as real data). At L=1 this
-        reduces to ``_compute_model_evidence``.
+        Each sibling contributes 1 evidence unit. At L=1 reduces to _compute_model_evidence.
         """
         L = X_batch.shape[0]
         if L == 1:
             return np.array([self._compute_model_evidence(kde, X_batch[0])])
 
-        # Encode each row into this model's latent space.
         Z_full = np.stack([
             self._encode_from_norm_array_for_model(kde.model, X_batch[k].reshape(-1))
             for k in range(L)
         ])
         Z = Z_full[:, kde.active_mask]  # (L, d_active)
         sigma = kde.sigma
-
         has_real = len(kde.latent_points) > 0
 
         e_vec = np.empty(L)
         for k in range(L):
             z_k = Z[k]
-            e = 0.0
-            # Real data evidence
+            e = self._boundary_evidence(z_k, sigma)
             if has_real:
                 dists_sq_real = np.sum((kde.latent_points - z_k) ** 2, axis=1)
                 e += float(np.sum(self._kernel(dists_sq_real, sigma)))
-            # Sibling evidence (excluding self)
             mask = np.arange(L) != k
             others = Z[mask]
             if len(others) > 0:
@@ -526,27 +546,25 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Aggregated public API ---
 
-    def _boundary_evidence(self, X_norm: np.ndarray, sigma: float) -> float:
-        """Compute boundary evidence: 0.5 kernel at each bound per dimension.
+    def _boundary_evidence(self, z_active: np.ndarray, sigma: float) -> float:
+        """Boundary evidence in the active subspace: 0.5 kernel at each bound per active dim.
 
-        E_boundary(x) = Σ_dims [ 0.5·K(d_lo/σ) + 0.5·K(d_hi/σ) ]
-        where d_lo, d_hi are distances to lower (0) and upper (1) bounds in normalized space.
+        Assumes z_active values are in [0, 1] normalized space with boundaries at 0 and 1.
+        Called internally by _compute_model_evidence — not directly from uncertainty().
         """
-        e_boundary = 0.0
-        for i in range(len(X_norm)):
-            d_lo_sq = X_norm[i] ** 2
-            d_hi_sq = (1.0 - X_norm[i]) ** 2
-            e_boundary += 0.5 * self._kernel_scalar(d_lo_sq, sigma)
-            e_boundary += 0.5 * self._kernel_scalar(d_hi_sq, sigma)
-        return e_boundary
+        e = 0.0
+        for i in range(len(z_active)):
+            d_lo_sq = z_active[i] ** 2
+            d_hi_sq = (1.0 - z_active[i]) ** 2
+            e += 0.5 * self._kernel_scalar(d_lo_sq, sigma)
+            e += 0.5 * self._kernel_scalar(d_hi_sq, sigma)
+        return e
 
     def uncertainty(self, X: np.ndarray) -> float:
-        """Compute epistemic uncertainty at a normalized parameter vector.
+        """Epistemic uncertainty at a normalized parameter vector: u = 1/(1+E).
 
-        u(x) = 1 / (1 + E(x))  where E is the weighted evidence sum.
-
-        Aggregates per-model uncertainties as a performance-weighted average.
-        Returns 1.0 before the evidence model is fitted.
+        Evidence includes data, boundary (in active subspace). Aggregated
+        as a performance-weighted average across per-model KDEs.
         """
         if not self._model_kdes:
             return 1.0
@@ -554,23 +572,19 @@ class PredictionSystem(BaseOrchestrationSystem):
         total_w = 0.0
         weighted_u = 0.0
         for kde in self._model_kdes.values():
-            e_data = self._compute_model_evidence(kde, X)
-            e_boundary = self._boundary_evidence(X.reshape(-1), kde.sigma)
-            u_i = 1.0 / (1.0 + e_data + e_boundary)
+            e = self._compute_model_evidence(kde, X)
+            u_i = 1.0 / (1.0 + e)
             weighted_u += kde.weight * u_i
             total_w += kde.weight
 
         u = weighted_u / total_w if total_w > 0 else 1.0
-
         self.logger.debug(f"uncertainty (aggregated): u={u:.4f}")
         return u
 
     def uncertainty_batch(self, X_batch: np.ndarray) -> np.ndarray:
-        """Batch-aware uncertainty; each row sees real data + siblings as evidence.
+        """Batch-aware uncertainty: u_k = 1/(1 + E_k) where E includes data, siblings, boundary.
 
-        u_k = 1 / (1 + E_real(x_k) + E_siblings(x_k) + E_boundary(x_k))
-
-        At L=1 this returns the same value as ``uncertainty(X_batch[0])``.
+        At L=1 returns the same value as uncertainty(X_batch[0]).
         """
         if X_batch.ndim != 2:
             raise ValueError(f"uncertainty_batch expects 2-D (L, D), got shape {X_batch.shape}")
@@ -584,9 +598,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         weighted_u = np.zeros(L)
         for kde in self._model_kdes.values():
             e_vec = self._compute_model_evidence_batch(kde, X_batch)
-            # Add boundary evidence per row
-            for k in range(L):
-                e_vec[k] += self._boundary_evidence(X_batch[k].reshape(-1), kde.sigma)
             u_vec = 1.0 / (1.0 + e_vec)
             weighted_u += kde.weight * u_vec
             total_w += kde.weight

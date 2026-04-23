@@ -28,7 +28,6 @@ class SolutionSpace:
         int_set: set[int],                                 # integer param indices
         int_ranges_map: dict[int, int],                    # integer ranges
         schedule_smoothing: float = 0.05,
-        riesz_p: float = 2.0,
         static_de_bounds: list[tuple[float, float]] | None = None,
         sched_de_bounds: list[tuple[float, float]] | None = None,
         sched_delta_norms: list[float] | None = None,
@@ -42,7 +41,6 @@ class SolutionSpace:
         self._int_set = int_set
         self._int_ranges_map = int_ranges_map
         self._schedule_smoothing = schedule_smoothing
-        self._riesz_p = riesz_p
         self._step0_values = step0_values
 
         self._D_static = len(static_params)

@@ -71,9 +71,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.optimizer: Optimizer = Optimizer.DE
         self.online_optimizer: Optimizer = Optimizer.LBFGSB
 
-        # Baseline particle repulsion: Riesz energy exponent.
-        self.baseline_riesz_p: float = 2.0
-
         # Running min/max of predicted system performance across training data.
         self._perf_range_min: float | None = None
         self._perf_range_max: float | None = None
@@ -520,11 +517,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === OPTIMIZATION WORKFLOW ===
 
     def run_baseline(self, n: int) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals via joint particle repulsion."""
+        """Generate n baseline proposals via UCB-based space-filling (κ=1).
+
+        Unified two-phase optimization:
+          Process — all parameters (continuous + integer + domain axes) jointly
+          Schedule — per-layer offsets for scheduled params (if applicable)
+        """
         if n == 0:
             return []
 
-        # --- Collect parameters ---
+        # --- Collect parameters (ALL types, including domain axes) ---
         continuous_params: list[tuple[str, float, float]] = []
         integer_params: list[tuple[str, int, int]] = []
         categorical_params: list[tuple[str, list[Any]]] = []
@@ -536,7 +538,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 categorical_params.append((code, list(data_obj.constraints["categories"])))
             elif isinstance(data_obj, DataBool):
                 categorical_params.append((code, [False, True]))
-            elif isinstance(data_obj, DataInt):
+            elif isinstance(data_obj, (DataInt, DataDomainAxis)):
                 try:
                     lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
                 except ValueError:
@@ -560,7 +562,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             *[(c, float(lo), float(hi)) for c, lo, hi in integer_params],
         ]
         n_numeric = len(numeric_params)
-        n_integer = len(integer_params)
 
         if not numeric_params and not categorical_params:
             self.logger.warning("No valid parameters for baseline generation.")
@@ -615,7 +616,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # --- Detect schedule config ---
         sched_set = set(self.schedule_configs.keys())
-        L = 1
         domain_axis_sched_dims: set[str] = set()
 
         if self.schedule_configs:
@@ -638,65 +638,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         code for code in sched_set
                         if self.schedule_configs[code] in self.fixed_params
                     }
-            fixed_sched = [d for d in sched_dims if d in self.fixed_params]
-            if fixed_sched:
-                L = max(int(self.fixed_params[d]) for d in fixed_sched)
 
-        # --- Phase 1: domain (if unfixed domain axis) ---
-        structural_values: list[dict[str, int]] | None = None
-        per_exp_L: list[int] | None = None
-        if domain_axis_sched_dims:
-            structural_values = self._phase1_domain(
-                n, numeric_params, int_set, int_ranges_map, init_norm,
-                domain_axis_sched_dims,
-            )
-            # Include fixed domain params for validation plot
-            fixed_dom = {
-                c: int(self.fixed_params[c])
-                for c in self.data_objects
-                if isinstance(self.data_objects[c], DataDomainAxis) and c in self.fixed_params
-            }
-            for c, obj in self.data_objects.items():
-                if isinstance(obj, DataDomainAxis) and c not in fixed_dom and c in self.bounds.schema_bounds:
-                    lo, hi = self.bounds.schema_bounds[c]
-                    if lo == hi:
-                        fixed_dom[c] = int(lo)
-            self.last_domain_values = [{**sv, **fixed_dom} for sv in structural_values]
-            # Console: show domain values per experiment
-            console = self.logger._console_output_enabled
-            if console and structural_values:
-                _D = "\033[2m"
-                _R = "\033[0m"
-                _S = "\033[38;2;39;39;42m"  # Zinc-800 for experiment names
-                # Include fixed domain params too
-                fixed_domain: dict[str, int] = {}
-                for c, obj in self.data_objects.items():
-                    if not isinstance(obj, DataDomainAxis):
-                        continue
-                    if c in self.fixed_params:
-                        fixed_domain[c] = int(self.fixed_params[c])
-                    elif c in self.bounds.schema_bounds:
-                        lo, hi = self.bounds.schema_bounds[c]
-                        if lo == hi:
-                            fixed_domain[c] = int(lo)
-                for i in range(n):
-                    all_domain = {**structural_values[i], **fixed_domain}
-                    vals = "  ".join(f"{k[:3]}={v}" for k, v in sorted(all_domain.items()))
-                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{vals}{_R}")
-
-            # Compute per_exp_L from structural values
-            group_key_codes = sorted(domain_axis_sched_dims)
-            per_exp_L = [
-                max(structural_values[i].get(c, 1) for c in group_key_codes)
-                for i in range(n)
-            ]
-
-        # --- Phase 2: process (always flat, no schedule) ---
+        # --- Process phase: ALL params jointly (continuous + integer + domain) ---
         if n_numeric > 0:
             flat_specs, flat_params, optimized = self._phase2_process(
                 n, numeric_params, integer_params, int_set, int_indices,
                 int_ranges_map, init_norm, cat_codes, cat_assignments,
-                sched_set, domain_axis_sched_dims, structural_values,
+                sched_set, set(), None,
             )
         else:
             optimized = np.zeros((n, 0))
@@ -714,25 +662,38 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Store process points for validation plot
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
+        self.last_domain_values = None  # Domain is now part of Process
 
-        # Console: show process params per experiment (no domain params)
+        # Console: show process params per experiment
         console = self.logger._console_output_enabled
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
             _S = "\033[38;2;39;39;42m"  # Zinc-800
-            domain_codes = {
-                c for c in self.data_objects if isinstance(self.data_objects[c], DataDomainAxis)
-            }
             for i, spec in enumerate(flat_specs):
                 p = spec.initial_params.to_dict()
                 parts = [
                     f"{k[:3]}={v:.3f}" if isinstance(v, float) else f"{k[:3]}={v}"
-                    for k, v in p.items() if k not in domain_codes and k not in self.fixed_params
+                    for k, v in p.items() if k not in self.fixed_params
                 ]
                 print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{'  '.join(parts)}{_R}")
 
-        # --- Phase 3: schedule (if scheduled params exist) ---
+        # --- Derive per_exp_L from domain axis values in Process output ---
+        per_exp_L: list[int] | None = None
+        if domain_axis_sched_dims and flat_specs:
+            group_key_codes = sorted(domain_axis_sched_dims)
+            per_exp_L = []
+            for spec in flat_specs:
+                p = spec.initial_params.to_dict()
+                per_exp_L.append(max(int(p.get(c, 1)) for c in group_key_codes))
+        elif sched_set:
+            # Fixed dimension schedule case
+            fixed_sched = [d for d in set(self.schedule_configs.values()) if d in self.fixed_params]
+            if fixed_sched:
+                L = max(int(self.fixed_params[d]) for d in fixed_sched)
+                per_exp_L = [L] * n
+
+        # --- Schedule phase (if scheduled params exist and L > 1) ---
         if sched_set and per_exp_L is not None and max(per_exp_L) > 1:
             # Determine primary dimension code and sched param info
             dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
@@ -749,23 +710,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 specs = self._phase3_schedule(
                     n, flat_specs, sched_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
-                    structural_values,
-                )
-            else:
-                specs = flat_specs
-        elif sched_set and L > 1:
-            # Fixed dimension schedule case
-            primary_dim_code = next(iter(set(self.schedule_configs.values())), "")
-            sched_params_list = []
-            for code in sorted(sched_set):
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-                sched_params_list.append((code, lo, hi))
-
-            if sched_params_list:
-                specs = self._phase3_schedule(
-                    n, flat_specs, sched_params_list, [L] * n,
-                    primary_dim_code, integer_params, cat_codes, cat_assignments,
-                    structural_values,
+                    None,
                 )
             else:
                 specs = flat_specs
@@ -776,132 +721,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if n > 1 and n_numeric > 0 and optimized.shape[1] > 0:
             min_dist = self._min_pairwise_distance(optimized, None)
             self.logger.info(
-                f"Baseline: {n} experiments via particle repulsion "
-                f"({len(continuous_params)} continuous, {n_integer} integer, "
+                f"Baseline: {n} experiments via UCB space-filling "
+                f"({len(continuous_params)} continuous, {len(integer_params)} integer, "
                 f"{len(categorical_params)} categorical"
                 f"{f', {n_strata} strata' if n_strata > 1 else ''}"
-                f", riesz_p={self.baseline_riesz_p:.1f}"
                 f") \u2014 min dist = {min_dist:.4f}."
             )
         else:
             self.logger.info(
                 f"Baseline: {n} experiment(s) "
-                f"({len(continuous_params)} continuous, {n_integer} integer, "
+                f"({len(continuous_params)} continuous, {len(integer_params)} integer, "
                 f"{len(categorical_params)} categorical)."
             )
 
         return specs
-
-    def _phase1_domain(
-        self,
-        n: int,
-        numeric_params: list[tuple[str, float, float]],
-        int_set: set[int],
-        int_ranges_map: dict[int, int],
-        init_norm: np.ndarray,
-        domain_axis_sched_dims: set[str],
-    ) -> list[dict[str, int]]:
-        """Repulsion over domain axis params only to determine per-experiment structure."""
-        self.logger.info("Phase 1 (Domain): starting")
-
-        structural_indices: list[int] = []
-        for d, (code, _lo, _hi) in enumerate(numeric_params):
-            if code in domain_axis_sched_dims:
-                structural_indices.append(d)
-
-        D = len(structural_indices)
-        p = self.baseline_riesz_p
-
-        static_bounds: list[tuple[float, float]] = []
-        integrality: list[bool] = []
-        for d in structural_indices:
-            if d in int_set:
-                static_bounds.append((0.0, float(int_ranges_map[d])))
-                integrality.append(True)
-            else:
-                static_bounds.append((0.01, 0.99))
-                integrality.append(False)
-
-        iu = np.triu_indices(n, k=1)
-
-        def _riesz_energy(pts: np.ndarray) -> float:
-            pts_n = pts.copy()
-            for si, d in enumerate(structural_indices):
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    pts_n[:, si] = pts_n[:, si] / r if r > 0 else 0.5
-            diff = pts_n[:, np.newaxis, :] - pts_n[np.newaxis, :, :]
-            dsq = np.maximum(np.sum(diff ** 2, axis=2)[iu], 1e-20)
-            pairwise = float(np.sum(dsq ** (-p / 2)))
-            boundary = 0.0
-            for si, d in enumerate(structural_indices):
-                if d in int_set:
-                    r = int_ranges_map[d]
-                    ms = 0.5 / r if r > 0 else 0.5
-                else:
-                    ms = 1e-10
-                d_lo = np.maximum(pts_n[:, si], ms)
-                d_hi = np.maximum(1.0 - pts_n[:, si], ms)
-                boundary += float(np.sum((2.0 * d_lo) ** (-p)))
-                boundary += float(np.sum((2.0 * d_hi) ** (-p)))
-            return pairwise + boundary
-
-        init_de = init_norm.copy()
-        for d in int_set:
-            if d < init_de.shape[1]:
-                init_de[:, d] = np.round(init_de[:, d] * int_ranges_map[d])
-
-        init_flat = np.zeros(n * D)
-        for i in range(n):
-            for si, d in enumerate(structural_indices):
-                init_flat[i * D + si] = init_de[i, d]
-
-        n_vars = n * D
-        popsize = max(self.engine.de_popsize, 2)
-        pop_total = popsize * n_vars
-        init_pop = np.empty((pop_total, n_vars))
-        all_bounds = static_bounds * n
-        for i in range(pop_total):
-            for v in range(n_vars):
-                lo_b, hi_b = all_bounds[v]
-                init_pop[i, v] = self.engine.rng.uniform(lo_b + 0.001, hi_b - 0.001)
-        init_pop[0] = init_flat
-        for j in range(1, min(pop_total, 6)):
-            jitter = self.engine.rng.normal(0, 0.05, size=n_vars)
-            candidate = init_flat + jitter
-            for v in range(n_vars):
-                lo_b, hi_b = all_bounds[v]
-                candidate[v] = np.clip(candidate[v], lo_b + 0.001, hi_b - 0.001)
-            init_pop[j] = candidate
-
-        self.logger.info(
-            f"Phase 1 (Domain): N={n}, D={D}, "
-            f"dims={[numeric_params[d][0] for d in structural_indices]}"
-        )
-
-        console = self.logger._console_output_enabled
-        opt, struct_out, _ = self.engine.run(
-            _riesz_energy, N=n, D_static=D, D_sched=0, L=1,
-            static_bounds=static_bounds, sched_bounds=[], sched_deltas=np.array([]),
-            default_optimizer=self.optimizer,
-            init_pop=init_pop,
-            integrality_static=integrality if any(integrality) else None,
-            label="Domain", show_progress=console,
-        )
-        self.last_baseline_nfev: int = opt.nfev
-        self.convergence_history["Domain"] = opt.convergence_history
-
-        structural_values: list[dict[str, int]] = []
-        for i in range(n):
-            sv: dict[str, int] = {}
-            for si, d in enumerate(structural_indices):
-                code, lo, hi = numeric_params[d]
-                if d in int_set:
-                    sv[code] = int(np.round(struct_out[i, si]) + lo)
-                else:
-                    sv[code] = int(np.round(struct_out[i, si] * (hi - lo) + lo))
-            structural_values.append(sv)
-        return structural_values
 
     def _phase2_process(
         self,
@@ -918,18 +751,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         domain_axis_sched_dims: set[str],
         structural_values: list[dict[str, int]] | None,
     ) -> tuple[list[ExperimentSpec], np.ndarray, np.ndarray]:
-        """Phase 2: UCB-based batch placement (κ=1, pure uncertainty) in parameter space."""
-        has_structural = structural_values is not None
-        structural_codes = set()
-        if has_structural:
-            for sv in structural_values:  # type: ignore[union-attr]
-                structural_codes.update(sv.keys())
-
-        # All non-structural numeric params become static (flat, L=1)
+        """Process phase: UCB-based batch placement (κ=1) over all parameters jointly."""
+        # All numeric params (continuous + integer + domain axes) optimized jointly
         all_process_params: list[tuple[int, str, float, float]] = []
         for d, (code, lo, hi) in enumerate(numeric_params):
-            if code in structural_codes:
-                continue
             all_process_params.append((d, code, lo, hi))
 
         all_static_tuples = [(code, lo, hi) for _, code, lo, hi in all_process_params]
@@ -962,33 +787,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         baseline_dm = self._build_schema_datamodule()
         self._active_datamodule = baseline_dm
 
-        # Initialize empty evidence model so uncertainty = 1/(1+boundary) everywhere
+        # Initialize empty evidence model (active_mask from schema bounds)
         if self._fit_empty_kde_fn is not None:
             self._fit_empty_kde_fn(baseline_dm, n)
 
-        # Pre-compute column indices and default values for the datamodule array.
-        # Non-varied columns get 0.5 (center of normalized range) so their boundary
-        # evidence is constant and doesn't bias the optimization.
+        # Map SolutionSpace indices to datamodule columns
         n_dm_cols = len(baseline_dm.input_columns)
-        process_col_map: list[tuple[int, int]] = []  # (space_idx, dm_col_idx)
+        process_col_map: list[tuple[int, int]] = []
         for si, (_, code, lo, hi) in enumerate(all_process_params):
             if code in baseline_dm.input_columns:
                 process_col_map.append((si, baseline_dm.input_columns.index(code)))
-        base_row = np.full(n_dm_cols, 0.5)  # center for non-varied dims
-        # Fill fixed params at their normalized positions
-        for col_idx, col_code in enumerate(baseline_dm.input_columns):
-            if col_code in self.fixed_params:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(col_code)
-                span = hi - lo
-                if span > 0:
-                    base_row[col_idx] = (float(self.fixed_params[col_code]) - lo) / span
-                else:
-                    base_row[col_idx] = 0.5
 
         def _process_ucb_objective(x_flat: np.ndarray) -> float:
-            """Baseline Process DE objective: maximize mean batch-aware uncertainty (κ=1)."""
+            """Baseline Process: maximize mean batch-aware uncertainty (κ=1)."""
             pts = space.decode(x_flat)  # (N, D_point)
-            X_batch = np.tile(base_row, (n, 1))
+            X_batch = np.full((n, n_dm_cols), 0.5)
             for si, col_idx in process_col_map:
                 for i in range(n):
                     X_batch[i, col_idx] = pts[i, si]
