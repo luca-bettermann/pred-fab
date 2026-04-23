@@ -19,31 +19,23 @@ def plot_uncertainty_map(
     x_values: np.ndarray,
     y_values: np.ndarray,
     unc_grid: np.ndarray,
-    bf_grid: np.ndarray,
     *,
     points: list[dict[str, Any]] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
-    """3-panel: raw uncertainty | boundary factor | buffered uncertainty."""
-    unc_buffered = unc_grid * bf_grid
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    """Single-panel uncertainty heatmap with data points."""
+    fig, ax = plt.subplots(figsize=(7, 5.5))
     _add_fixed_subtitle(fig, fixed_params)
 
-    for ax, data, subtitle in [
-        (axes[0], unc_grid, "Raw Uncertainty"),
-        (axes[1], bf_grid, "Boundary Factor"),
-        (axes[2], unc_buffered, "Uncertainty \u00d7 Boundary"),
-    ]:
-        im = ax.contourf(x_values, y_values, data, levels=20, cmap="Blues")
-        if points:
-            px, py = _extract_xy(points, x_axis, y_axis)
-            ax.scatter(px, py, s=25, c="white", edgecolors="black", linewidth=0.5,
-                       zorder=5, label="Baseline")
-            ax.legend(fontsize=7, loc="upper right")
-        _apply_axes(ax, x_axis, y_axis)
-        ax.set_title(subtitle, fontsize=10)
-        plt.colorbar(im, ax=ax, shrink=0.8)
+    im = ax.contourf(x_values, y_values, unc_grid, levels=20, cmap="Blues")
+    if points:
+        px, py = _extract_xy(points, x_axis, y_axis)
+        ax.scatter(px, py, s=25, c="white", edgecolors="black", linewidth=0.5,
+                   zorder=5, label="Data")
+        ax.legend(fontsize=7, loc="upper right")
+    _apply_axes(ax, x_axis, y_axis)
+    ax.set_title("Uncertainty", fontsize=10)
+    plt.colorbar(im, ax=ax, shrink=0.8)
 
     save_fig(save_path)
 
