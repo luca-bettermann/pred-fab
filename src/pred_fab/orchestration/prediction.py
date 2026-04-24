@@ -12,7 +12,6 @@ import copy
 import pandas as pd
 import numpy as np
 import pickle
-from scipy.stats import qmc
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
@@ -21,13 +20,21 @@ from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
+from .evidence import (
+    EstimatorConfig,
+    EvidenceEstimator,
+    KernelIndex,
+    make_estimator,
+)
 
 
 SIGMA_MIN: float = 0.03
-"""Lower bound for the Gaussian length scale. Below ~0.02 the integrated-evidence
-integral shrinks as σ^D and becomes ill-conditioned under Sobol sampling (kernels
-become sub-cell and samples miss them). Clamping here also prevents the evidence
-model from becoming overconfident about any single point."""
+"""Lower bound for the Gaussian length scale. Below ~0.02 kernels become sub-cell
+under any finite probe budget and the evidence model becomes over-confident about
+any single point."""
+
+SIGMA_DEFAULT: float = 0.075
+"""Default σ when no override is provided."""
 
 
 @dataclass
@@ -67,9 +74,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Per-model evidence state. Gaussian density kernel; integrated-objective acquisition.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._exploration_radius: float = 0.09             # σ base: exploration_radius · √(n_active_dims)
-        self._sigma_override: float | None = None          # direct σ override if set
-        self._mc_exponent_offset: float = 3.0              # M = round(2^(n_active + offset))
+        self._sigma: float = SIGMA_DEFAULT
+        self._estimator_config: EstimatorConfig = EstimatorConfig()
+        self._estimator: EvidenceEstimator = make_estimator(self._estimator_config)
 
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
@@ -273,7 +280,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             projected = latent_array[:, active_mask]
             n_active_dims = projected.shape[1]
-            sigma = self._resolve_sigma(n_active_dims)
+            sigma = self._resolve_sigma()
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
@@ -295,7 +302,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             total_w = sum(k.weight for k in self._model_kdes.values())
             self.logger.info(
                 f"Evidence model: {len(self._model_kdes)} models from {n_exp} experiments "
-                f"(radius={self._exploration_radius}, total_weight={total_w:.2f})."
+                f"(σ={self._sigma}, estimator={self._estimator_config.type}, total_weight={total_w:.2f})."
             )
 
     def fit_empty_kde(self, datamodule: DataModule, target_n: int = 1) -> None:
@@ -344,7 +351,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             if n_active == 0:
                 active_mask = np.ones(n_dims, dtype=bool)
                 n_active = n_dims
-            sigma = self._resolve_sigma(n_active)
+            sigma = self._resolve_sigma()
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
@@ -358,15 +365,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"Empty evidence initialized for {len(self._model_kdes)} models "
-            f"(radius={self._exploration_radius})."
+            f"(σ={self._sigma}, estimator={self._estimator_config.type})."
         )
 
-    def _resolve_sigma(self, n_active_dims: int) -> float:
-        """σ from override if set, else exploration_radius · √(n_active_dims); clamped to SIGMA_MIN."""
-        if self._sigma_override is not None:
-            sigma = float(self._sigma_override)
-        else:
-            sigma = float(self._exploration_radius) * np.sqrt(float(n_active_dims))
+    def _resolve_sigma(self) -> float:
+        """Active σ, clamped to SIGMA_MIN."""
+        sigma = float(self._sigma)
         if sigma < SIGMA_MIN:
             self.logger.warning(
                 f"σ={sigma:.4f} below floor; clamping to SIGMA_MIN={SIGMA_MIN}."
@@ -376,30 +380,23 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     def configure_exploration(
         self,
-        exploration_radius: float | None = None,
         sigma: float | None = None,
-        mc_exponent_offset: float | None = None,
+        estimator: EstimatorConfig | None = None,
     ) -> None:
-        """Configure the integrated evidence objective.
-
-        `sigma` overrides the length scale directly when provided;
-        otherwise σ = `exploration_radius` · √(n_active_dims) per model.
-        `mc_exponent_offset` sets M = round(2^(n_active + offset)) for Sobol MC.
-        """
-        if exploration_radius is not None:
-            self._exploration_radius = float(exploration_radius)
+        """Configure σ and/or the evidence estimator."""
         if sigma is not None:
-            self._sigma_override = float(sigma)
-        if mc_exponent_offset is not None:
-            self._mc_exponent_offset = float(mc_exponent_offset)
+            self._sigma = float(sigma)
+        if estimator is not None:
+            self._estimator_config = estimator
+            self._estimator = make_estimator(estimator)
 
         if self._model_kdes:
+            resolved = self._resolve_sigma()
             for kde in self._model_kdes.values():
-                kde.sigma = self._resolve_sigma(kde.n_active_dims)
+                kde.sigma = resolved
             self.logger.info(
-                f"Evidence model updated: radius={self._exploration_radius}, "
-                f"sigma_override={self._sigma_override}, "
-                f"mc_exp_offset={self._mc_exponent_offset}, "
+                f"Evidence model updated: σ={self._sigma}, "
+                f"estimator={self._estimator_config.type}, "
                 f"{len(self._model_kdes)} models."
             )
 
@@ -451,58 +448,18 @@ class PredictionSystem(BaseOrchestrationSystem):
         K = cls._gaussian_density(z, centers, sigma)
         return (K * weights[None, :]).sum(axis=-1)
 
-    @classmethod
-    def _integrated_evidence(
-        cls,
-        centers: np.ndarray,
-        weights: np.ndarray,
-        sigma: float,
-        sobol_samples: np.ndarray,
-    ) -> float:
-        """∫_[0,1]^D D/(1+D) dz via fixed Sobol MC. Unit-cube volume = 1."""
-        D_vals = cls._raw_density(sobol_samples, centers, weights, sigma)
-        E_vals = D_vals / (1.0 + D_vals)
-        return float(E_vals.mean())
-
-    def get_sobol_samples(self, n_active_dims: int, seed: int = 0) -> np.ndarray:
-        """Fixed Sobol quasi-random samples on [0,1]^D; M = round(2^(D + mc_exponent_offset))."""
-        if n_active_dims <= 0:
-            return np.empty((0, 0))
-        M = int(round(2.0 ** (n_active_dims + self._mc_exponent_offset)))
-        M = max(M, 2)
-        sampler = qmc.Sobol(d=n_active_dims, scramble=True, rng=seed)
-        return sampler.random(n=M)
-
-    def _kde_delta_integrated(
-        self,
-        kde: _ModelKDE,
-        new_centers_z: np.ndarray,
-        new_weights: np.ndarray,
-        sobol_samples: np.ndarray,
-    ) -> float:
-        """Δ∫E for one model's KDE when new_centers_z are added to its latent points."""
-        old_centers = kde.latent_points
-        old_weights = kde.point_weights
-
-        if len(old_centers) > 0:
-            all_centers = np.vstack([old_centers, new_centers_z])
-            all_weights = np.concatenate([old_weights, new_weights])
-            E_old = self._integrated_evidence(old_centers, old_weights, kde.sigma, sobol_samples)
-        else:
-            all_centers = new_centers_z
-            all_weights = new_weights
-            E_old = 0.0
-
-        E_new = self._integrated_evidence(all_centers, all_weights, kde.sigma, sobol_samples)
-        return E_new - E_old
+    def _kernel_index(self, centers: np.ndarray, weights: np.ndarray, sigma: float) -> KernelIndex:
+        return KernelIndex(
+            centers, weights, sigma,
+            cutoff_sigmas=self._estimator_config.cutoff_sigmas,
+        )
 
     def delta_integrated_evidence_aggregated(
         self,
         new_norm_batch: np.ndarray,
         new_weights: np.ndarray | None = None,
-        sobol_seed: int = 0,
     ) -> float:
-        """Δ∫E aggregated across per-model KDEs, weighted by performance weights.
+        """Δ∫E = I(old ∪ new) − I(old), aggregated across per-model KDEs.
 
         new_norm_batch: (L, D_global) normalized parameter vectors (L candidates).
         new_weights:    (L,) per-candidate mass. Defaults to ones.
@@ -520,8 +477,21 @@ class PredictionSystem(BaseOrchestrationSystem):
                 self._encode_from_norm_array_for_model(kde.model, new_norm_batch[k])[kde.active_mask]
                 for k in range(L)
             ])
-            sobol = self.get_sobol_samples(kde.n_active_dims, seed=sobol_seed)
-            de = self._kde_delta_integrated(kde, new_centers_z, weights, sobol)
+
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            all_centers = (
+                np.vstack([kde.latent_points, new_centers_z])
+                if len(kde.latent_points) > 0 else new_centers_z
+            )
+            all_weights = (
+                np.concatenate([kde.point_weights, weights])
+                if len(kde.point_weights) > 0 else weights
+            )
+            index_new = self._kernel_index(all_centers, all_weights, kde.sigma)
+
+            E_old = self._estimator.integrated_evidence(index_old)
+            E_new = self._estimator.integrated_evidence(index_new)
+            de = E_new - E_old
             weighted_de += kde.weight * de
             total_w += kde.weight
 

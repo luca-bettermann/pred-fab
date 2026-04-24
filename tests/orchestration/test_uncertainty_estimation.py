@@ -591,63 +591,61 @@ def test_normalized_gaussian_integrates_to_one(tmp_path):
         assert float(mass) == pytest.approx(1.0, abs=1e-2)
 
 
-def test_integrated_evidence_grows_with_data(tmp_path):
-    """∫E dz over the unit cube grows monotonically as more centers are added."""
-    from pred_fab.orchestration.prediction import PredictionSystem as PS
+def _make_estimator_and_index_helper():
+    from pred_fab.orchestration.evidence import (
+        KernelIndex, SobolLocalEstimator,
+    )
+    return KernelIndex, SobolLocalEstimator
+
+
+def test_integrated_evidence_grows_with_data():
+    """∫E dz grows monotonically as more centers are added."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
     rng = np.random.default_rng(0)
     D = 3
-    sigma = 0.15 * np.sqrt(D)
-    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=128)
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=256)
 
-    E_prev = PS._integrated_evidence(np.empty((0, D)), np.empty((0,)), sigma, sobol)
+    index_empty = KernelIndex(np.empty((0, D)), np.empty((0,)), sigma)
+    E_prev = estimator.integrated_evidence(index_empty)
     assert E_prev == pytest.approx(0.0)
 
     centers: list[np.ndarray] = []
-    for k in range(6):
+    for _ in range(6):
         centers.append(rng.uniform(0.1, 0.9, size=D))
         arr = np.stack(centers)
         w = np.ones(len(arr))
-        E_new = PS._integrated_evidence(arr, w, sigma, sobol)
+        index = KernelIndex(arr, w, sigma)
+        E_new = estimator.integrated_evidence(index)
         assert E_new > E_prev - 1e-8  # monotone non-decreasing
         E_prev = E_new
 
 
 def test_integrated_evidence_saturates():
-    """E → 1 as D(z) grows; ∫E dz bounded by volume of unit cube = 1."""
-    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    """∫E dz stays bounded by the unit-cube volume even with many stacked kernels."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
     D = 2
     sigma = 0.1
-    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=256)
-    # Stack many kernels at the same center → local D blows up.
+    estimator = SobolLocalEstimator(box=3.0, n_samples=256)
     centers = np.tile(np.array([[0.5, 0.5]]), (50, 1))
     weights = np.ones(50)
-    E = PS._integrated_evidence(centers, weights, sigma, sobol)
+    index = KernelIndex(centers, weights, sigma)
+    E = estimator.integrated_evidence(index)
     assert 0.0 < E < 1.0
 
 
-def test_sobol_samples_are_deterministic_per_seed(tmp_path):
-    """Same seed → identical samples."""
-    dataset = build_dataset_with_single_experiment(tmp_path)
-    logger = build_test_logger(tmp_path)
-    pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
-    a = pred.get_sobol_samples(3, seed=42)
-    b = pred.get_sobol_samples(3, seed=42)
-    assert np.array_equal(a, b)
-
-
-def test_integrated_evidence_prefers_interior_over_corner(tmp_path):
-    """Regression test for the corner-winning bug: one centered kernel has
-    larger ∫E than one corner kernel, because corner mass leaks outside [0,1]^D.
-    """
-    from pred_fab.orchestration.prediction import PredictionSystem as PS
+def test_integrated_evidence_prefers_interior_over_corner():
+    """Corner kernel leaks half its mass outside [0,1]^D → smaller ∫E than a centered kernel."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
     D = 3
-    sigma = 0.15 * np.sqrt(D)
-    sobol = qmc.Sobol(d=D, scramble=True, seed=0).random(n=256)
-    center = np.array([[0.5, 0.5, 0.5]])
-    corner = np.array([[0.0, 0.0, 0.0]])
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=512)
     w = np.ones(1)
-    E_center = PS._integrated_evidence(center, w, sigma, sobol)
-    E_corner = PS._integrated_evidence(corner, w, sigma, sobol)
+
+    index_center = KernelIndex(np.array([[0.5, 0.5, 0.5]]), w, sigma)
+    index_corner = KernelIndex(np.array([[0.0, 0.0, 0.0]]), w, sigma)
+    E_center = estimator.integrated_evidence(index_center)
+    E_corner = estimator.integrated_evidence(index_corner)
     assert E_center > E_corner
 
 

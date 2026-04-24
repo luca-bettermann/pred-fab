@@ -10,7 +10,9 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `PfabAgent` | `agent.py` | Registration, initialization, step methods, explicit `configure_*()` methods |
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
-| `PredictionSystem` | `prediction.py` | Trains/infers prediction models; integrated-evidence math (Gaussian density, Sobol MC) |
+| `PredictionSystem` | `prediction.py` | Trains/infers prediction models; owns per-model evidence state and drives Δ∫E via an `EvidenceEstimator` |
+| `EvidenceEstimator` | `evidence.py` | Pluggable estimator for ∫D/(1+D) dz: `KernelFieldEstimator` (deterministic shells) or `SobolLocalEstimator` (QMC cube) |
+| `KernelIndex` | `evidence.py` | cKDTree over kernel centres for O(M·log K) density lookup; cutoff at `cutoff_sigmas · σ` |
 | `CalibrationSystem` | `calibration/system.py` | Orchestrator composing OptimizationEngine + BoundsManager + SolutionSpace |
 | `OptimizationEngine` | `calibration/engine.py` | DE, L-BFGS-B — pure numerical optimization |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds, trust regions, schedule configs |
@@ -31,9 +33,12 @@ D(z) = Σ_j w_j · ρ_j(z)                   ≥ 0       — raw density
 ρ_j  = N(z; z_j, σ²I), normalized (mass w_j in ℝ^D)
 ```
 
-- `Δ∫E` estimated by fixed Sobol quasi-MC: `M = round(2^(n_active_dims + mc_exponent_offset))`, default offset 3.0.
-- σ length scale: `exploration_radius · √(n_active_dims)` by default; `sigma` override is accepted directly when the `√D` scaling is not desired.
-- **No boundary term, no `+1` hack, no α correction.** Boundary behaviour emerges from the integration bounds `[0,1]^D`: a kernel centered near the wall has most of its mass outside the integrand's support, so its Δ∫E contribution is naturally small.
+- `Δ∫E` is evaluated as `I(old ∪ new) − I(old)`, where `I = Σⱼ wⱼ · 𝔼_{z~N(zⱼ,σ²I)}[1/(1+D(z))]` — a sum of per-kernel self-integrals (by IS on each `ρⱼ`). Probes live around each kernel; `D(z)` at each probe is computed via `KernelIndex` over the full kernel set (so cross-terms between old and new kernels are preserved).
+- Two selectable estimators, same interface:
+  - **`KernelFieldEstimator`** (default) — deterministic shell quadrature. Probes at σ · `radii` (default `(0.5, 1, 2, 3)`) along directions meeting an `angular_gap_deg` (default 45°) target on S^{D−1}. Shell weights derived from the Gaussian radial measure.
+  - **`SobolLocalEstimator`** — scrambled Sobol in a `[center ± box·σ]^D` cube, volume-weighted. `n_samples` is a config knob.
+- σ is a direct config value (default `0.075`), clamped to `SIGMA_MIN = 0.03`. No `√D` scaling.
+- **No boundary term, no `+1` hack, no α correction.** Boundary behaviour emerges from the integration bounds `[0,1]^D`: probes that land outside the unit cube are masked out of each kernel's self-integral.
 
 | κ | Mode | Active term(s) | Batch |
 |---|------|-----------------|-------|
@@ -66,12 +71,21 @@ Domain is merged into Process; there is no separate Riesz-energy phase.
 
 ## Configuration
 ```python
+from pred_fab.orchestration.evidence import EstimatorConfig
+
 agent.configure_performance(weights={"perf": 2.0})
 agent.configure_exploration(
-    radius=0.09,              # σ = radius · √(n_active_dims)
-    sigma=None,               # direct σ override, bypasses √D scaling
-    mc_exponent_offset=3.0,   # M = round(2^(D + offset)) Sobol samples
+    sigma=0.075,                           # default
+    estimator=EstimatorConfig(             # default = kernel_field
+        type="kernel_field",
+        radii=(0.5, 1.0, 2.0, 3.0),        # σ-units
+        angular_gap_deg=45.0,
+        cutoff_sigmas=5.0,
+    ),
 )
+# or Sobol-local:
+# EstimatorConfig(type="sobol_local", box=3.0, n_samples=256)
+
 agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=1000)
 agent.configure_schedule("speed", "n_layers", delta=5.0, smoothing=0.05)
 ```

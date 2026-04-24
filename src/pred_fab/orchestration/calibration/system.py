@@ -77,8 +77,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._perf_range_min: float | None = None
         self._perf_range_max: float | None = None
 
-        # Exploration config (display only — source of truth is PredictionSystem)
-        self._exploration_radius: float = 0.09
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
@@ -235,7 +233,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         pw_parts = [f"{k}={v:g}" for k, v in self.performance_weights.items()]
         lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
 
-        lines.append(f"    {_D}Exploration: radius={self._exploration_radius:g}{_R}")
 
         lines.append(f"\n    {_D}{'Parameter':<20s} {'Bounds':<20s} {'Delta':<8s}{_R}")
         for code in self.data_objects.keys():
