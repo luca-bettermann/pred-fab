@@ -5,6 +5,7 @@ __pycache__/
 .idea/
 tests/workflows/local
 logs/
+concepts/plots/
 
 # OS metadata
 .DS_Store
