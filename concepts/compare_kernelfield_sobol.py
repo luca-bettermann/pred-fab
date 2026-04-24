@@ -7,8 +7,8 @@ Two publication figures:
                              matched probe budget, identical camera angle.
 
     convergence_to_truth.png — ∫E dz vs D at matched budget. Truth (dense
-                                Sobol, n = 100k) drawn alongside the two
-                                estimators. Absolute values, not error.
+                                Sobol, 2^17 = 131_072 samples) drawn alongside
+                                the two estimators. Absolute values, not error.
 """
 from __future__ import annotations
 
@@ -152,9 +152,10 @@ def _test_centers(D: int, N: int = 6, seed: int = 0) -> np.ndarray:
 
 def reference_dense_sobol(
     centers: np.ndarray, sigma: float, D: int,
-    n: int = 100_000, seed: int = 42,
+    m: int = 17, seed: int = 42,
 ) -> float:
-    sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random(n=n)
+    """Dense Sobol reference. `m` selects `2^m` samples (17 → 131_072)."""
+    sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random_base2(m=m)
     D_vals = raw_density(sobol, centers, np.ones(len(centers)), sigma)
     return float((D_vals / (1.0 + D_vals)).mean())
 
@@ -202,7 +203,7 @@ def figure_convergence_to_truth(
 
     ax.plot(Ds, truth, color=ZINC_500, lw=1.2, ls="--",
             marker="o", ms=5, mec="none",
-            label="truth  (dense Sobol, n = 100k)", zorder=2)
+            label="truth  (dense Sobol, 2¹⁷ samples)", zorder=2)
     ax.plot(Ds, kf, color=STEEL_500, lw=2.0,
             marker="o", ms=6.5, mec="none",
             label=f"KernelField  (n_dirs = {n_dirs})", zorder=3)
