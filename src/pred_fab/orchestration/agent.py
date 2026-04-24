@@ -19,6 +19,7 @@ from ..orchestration import (
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
+from .evidence import EstimatorConfig
 
 
 class PfabAgent:
@@ -547,26 +548,14 @@ class PfabAgent:
     def configure_exploration(
         self,
         *,
-        radius: float | None = None,
         sigma: float | None = None,
-        mc_exponent_offset: float | None = None,
+        estimator: EstimatorConfig | None = None,
     ) -> None:
-        """Configure the integrated-evidence exploration settings.
-
-        `radius` (= `exploration_radius`) sets σ = radius · √(n_active_dims) per model.
-        `sigma` overrides σ directly, ignoring radius × √D.
-        `mc_exponent_offset` sets M = round(2^(n_active + offset)) for Sobol MC.
-        """
+        """Configure the integrated-evidence objective (σ and estimator choice)."""
         self._assert_initialized()
-        if radius is None and sigma is None and mc_exponent_offset is None:
+        if sigma is None and estimator is None:
             return
-        self.pred_system.configure_exploration(
-            exploration_radius=radius,
-            sigma=sigma,
-            mc_exponent_offset=mc_exponent_offset,
-        )
-        if radius is not None:
-            self.calibration_system._exploration_radius = radius
+        self.pred_system.configure_exploration(sigma=sigma, estimator=estimator)
 
     def configure_optimizer(
         self,
