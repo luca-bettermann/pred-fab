@@ -39,15 +39,23 @@ YELLOW = "#EAB308"
 # ---------- Semantic colormaps ----------
 
 def evidence_cmap() -> LinearSegmentedColormap:
-    """Evidence `E(z) ∈ [0, 1]` — light grey → saturated orange.
+    """Evidence `E(z) ∈ [0, 1]` — very light grey → light yellow → strong orange.
 
     Complements the `Blues` uncertainty colormap: uncertainty is the absence
-    of evidence, so the two are semantically inverse. Orange (warm, confident,
-    attention-grabbing) distinguishes evidence visually from uncertainty-blue.
+    of evidence, so the two are semantically inverse. The heat sequence
+    (grey → yellow → orange) reads as "activity / saturation" without
+    competing with the blue uncertainty palette.
+
+    Stops:
+        0.00  very light grey   (absence)
+        0.25  very light yellow (faint activity)
+        0.50  yellow            (present)
+        0.75  orange            (saturating)
+        1.00  strong orange     (saturated)
     """
     return LinearSegmentedColormap.from_list(
         "evidence",
-        [ZINC_200, "#FDBA74", "#F97316", "#C2410C"],  # grey → orange-300 → 500 → 700
+        ["#F4F4F5", "#FEF9C3", "#FDE047", "#F97316", "#C2410C"],
         N=256,
     )
 
