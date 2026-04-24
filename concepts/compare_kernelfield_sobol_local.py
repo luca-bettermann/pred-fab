@@ -25,6 +25,8 @@ Two figures:
 """
 from __future__ import annotations
 
+import warnings
+from math import ceil, gamma, pi
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -44,6 +46,19 @@ from _style import (
 KF_MULTIPLIERS: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0)
 SOBOL_HALF_EXTENT: float = 3.0
 TRUTH_N: int = 200_000
+ANGULAR_GAP_RAD: float = pi / 4.0  # 45°
+
+
+def angular_gap_n_dirs(D: int, theta: float = ANGULAR_GAP_RAD) -> int:
+    """Direction count to maintain a maximum angular gap `theta` on S^{D-1}.
+
+    Derived from the uniform-packing asymptotic:
+        n_dirs ≈ surface_area(S^{D-1}) / theta^{D-1}
+    For theta = π/4 this gives 8, 21, 41, 70, 104, ... across D = 2..6,
+    tracking a geometric "cardinal + edge-diagonal" construction.
+    """
+    surface = 2.0 * pi ** (D / 2.0) / gamma(D / 2.0)
+    return int(ceil(surface / theta ** (D - 1)))
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
@@ -87,20 +102,19 @@ def estimate_kf(sigma: float, D: int, n_dirs: int) -> tuple[float, int]:
 
 
 def estimate_sobol_local(
-    sigma: float, D: int, budget: int, seed: int = 0,
-) -> tuple[float, int]:
-    """Cube QMC on `[0.5 − 3σ, 0.5 + 3σ]^D`."""
-    n_exp = max(int(round(np.log2(max(budget, 2)))), 1)
-    n = 2 ** n_exp
-    sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random_base2(m=n_exp)
+    sigma: float, D: int, n: int, seed: int = 0,
+) -> float:
+    """Cube QMC on `[0.5 − 3σ, 0.5 + 3σ]^D` with exactly `n` samples."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random(n=n)
     box_side = 2.0 * SOBOL_HALF_EXTENT * sigma
     center = np.full(D, 0.5)
     samples = center + box_side * (sobol - 0.5)
     rho = gaussian_density_iso(samples, center, sigma)
     E = rho / (1.0 + rho)
     volume = box_side ** D
-    est = volume * float(E.mean())
-    return est, n
+    return volume * float(E.mean())
 
 
 # ---------- Cube wireframe ----------
@@ -134,10 +148,11 @@ def _color_by_distance(probes: np.ndarray, center: np.ndarray, sigma: float) -> 
 
 # ---------- Figure 1: probe placement in 3-D ----------
 
-def figure_probe_placement(sigma: float = 0.10, n_dirs: int = 12, seed: int = 0) -> Path:
+def figure_probe_placement(sigma: float = 0.10, seed: int = 0) -> Path:
     apply_style()
     D = 3
     center = np.full(D, 0.5)
+    n_dirs = angular_gap_n_dirs(D)
 
     field = KernelField(
         D=D, sigma=sigma,
@@ -146,11 +161,13 @@ def figure_probe_placement(sigma: float = 0.10, n_dirs: int = 12, seed: int = 0)
     kf_probes = field.probes_at(center)
     kf_budget = kf_probes.shape[0]
 
-    n_exp = max(int(round(np.log2(kf_budget))), 1)
-    n_sobol = 2 ** n_exp
-    sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random_base2(m=n_exp)
+    # Match Sobol probe count exactly to KF budget.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        sobol = qmc.Sobol(d=D, scramble=True, rng=seed).random(n=kf_budget)
     box_side = 2.0 * SOBOL_HALF_EXTENT * sigma
     sobol_probes = center + box_side * (sobol - 0.5)
+    n_sobol = kf_budget
 
     kf_cval = _color_by_distance(kf_probes, center, sigma)
     sobol_cval = _color_by_distance(sobol_probes, center, sigma)
@@ -218,20 +235,27 @@ def figure_probe_placement(sigma: float = 0.10, n_dirs: int = 12, seed: int = 0)
 def figure_error_vs_D(
     sigmas: tuple[float, ...] = (0.05, 0.10, 0.15),
     Ds: tuple[int, ...] = (2, 3, 4, 5, 6),
-    n_dirs: int = 16,
 ) -> Path:
+    """|err| vs D with n_dirs(D) growing per the 45° angular-gap rule.
+
+    KF budget = 4·n_dirs(D) + 1 probes per kernel; Sobol matches that
+    probe count exactly at each D.
+    """
     apply_style()
 
-    fig, axes = plt.subplots(1, len(sigmas), figsize=(12.5, 3.8),
+    n_dirs_schedule = [angular_gap_n_dirs(D) for D in Ds]
+    budgets = [4 * nd + 1 for nd in n_dirs_schedule]
+
+    fig, axes = plt.subplots(1, len(sigmas), figsize=(13.0, 4.2),
                              constrained_layout=True, sharey=True)
 
     for ax, sigma in zip(axes, sigmas):
         kf_errs: list[float] = []
         sb_errs: list[float] = []
-        for D in Ds:
+        for D, n_dirs, budget in zip(Ds, n_dirs_schedule, budgets):
             t = truth_single_kernel(sigma, D)
-            kf_val, kf_n = estimate_kf(sigma, D, n_dirs)
-            sb_val, _ = estimate_sobol_local(sigma, D, kf_n)
+            kf_val, _ = estimate_kf(sigma, D, n_dirs)
+            sb_val = estimate_sobol_local(sigma, D, budget)
             denom = abs(t) + 1e-12
             kf_errs.append(max(100.0 * abs(kf_val - t) / denom, 1e-3))
             sb_errs.append(max(100.0 * abs(sb_val - t) / denom, 1e-3))
@@ -251,13 +275,20 @@ def figure_error_vs_D(
             ax.set_ylabel("|relative error|  [%]")
             ax.legend(loc="best", fontsize=8.5, frameon=False)
 
-        probe_count = 4 * n_dirs + 1
-        ax.text(0.03, 0.96, f"σ = {sigma}  ·  ~{probe_count} probes",
-                transform=ax.transAxes, fontsize=9, color=ZINC_600)
+        ax.text(0.03, 0.96, f"σ = {sigma}",
+                transform=ax.transAxes, fontsize=9.5, color=ZINC_600)
 
         ax.grid(True, which="major", color=ZINC_200, alpha=0.5, lw=0.5)
         ax.grid(True, which="minor", color=ZINC_200, alpha=0.25, lw=0.4)
         clean_spines(ax)
+
+    # Secondary axis on each subplot: probe budget per D
+    for ax in axes:
+        top = ax.secondary_xaxis("top")
+        top.set_xticks(list(Ds))
+        top.set_xticklabels([str(b) for b in budgets], fontsize=7, color=ZINC_500)
+        top.tick_params(colors=ZINC_500, labelsize=7, length=0)
+        top.set_xlabel("probes  (KF = Sobol, matched)", fontsize=8, color=ZINC_500, labelpad=4)
 
     path = PLOTS_DIR / "error_vs_D_local.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
