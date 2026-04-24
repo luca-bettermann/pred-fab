@@ -2,5 +2,10 @@
 __pycache__/
 .pytest_cache/
 .vscode/
+.idea/
 tests/workflows/local
 logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
