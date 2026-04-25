@@ -452,6 +452,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         return KernelIndex(
             centers, weights, sigma,
             cutoff_sigmas=self._estimator_config.cutoff_sigmas,
+            truncation_threshold=self._estimator_config.truncation_threshold,
         )
 
     def delta_integrated_evidence_aggregated(
