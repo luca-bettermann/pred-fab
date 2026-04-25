@@ -288,6 +288,8 @@ def build_real_agent_stack(tmp_path):
     agent.register_prediction_model(MixedPredictionModelD1)
     agent.register_prediction_model(MixedPredictionModelScalar)
     agent.initialize_systems(schema, verbose_flag=False)
+    # Fast DE for tests — production uses scipy defaults (1000/15).
+    agent.configure_optimizer(de_maxiter=5, de_popsize=2)
 
     datamodule = agent.create_datamodule(dataset)
     return agent, dataset, exp, datamodule
