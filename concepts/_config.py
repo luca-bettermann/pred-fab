@@ -32,16 +32,15 @@ EXISTING_POINTS: np.ndarray = np.array([
 Z_NEW: np.ndarray = np.array([0.50, 0.30])
 
 
-def gaussian_unit_peak(grid: np.ndarray, center: np.ndarray, sigma: float) -> np.ndarray:
-    """Peak-1 Gaussian for the saturation figures.
+def gaussian_density(grid: np.ndarray, center: np.ndarray, sigma: float) -> np.ndarray:
+    """Mass-1 Gaussian density — matches production (`∫ρ dz = 1`).
 
-    Production uses the mass-1 normalisation `(σ√2π)^−D · exp(−d²/2σ²)` so that
-    `∫ρ dz = 1`. At our σ that puts a single isolated kernel's peak ρ ≈ 28 in
-    2-D, so `E = D/(1+D) ≈ 0.97` — saturation happens immediately and the
-    visual story collapses. Concept figures therefore plot the peak-rescaled
-    version `exp(−d²/2σ²)`, which keeps the same kernel *shape* and σ but
-    makes the saturation transform visible (single kernel → D=1 → E=0.5).
-    The shape of D, E, and ΔE is identical up to a constant factor.
+    `ρ(z) = (σ√2π)^−D · exp(−‖z−c‖²/2σ²)`. Concept figures use the same
+    normalisation as `KernelIndex.density_at` so what they show is exactly
+    what the optimiser sees, including the strong saturation that follows
+    from production-σ peaks (`E ≈ 0.97` for a single isolated kernel).
     """
+    D = grid.shape[-1]
+    norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
     d2 = np.sum((grid - np.asarray(center)) ** 2, axis=-1)
-    return np.exp(-d2 / (2.0 * sigma ** 2))
+    return norm * np.exp(-d2 / (2.0 * sigma ** 2))

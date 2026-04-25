@@ -27,7 +27,7 @@ from _style import (
     add_kernel_radii_2d,
     ZINC_300, ZINC_400, ZINC_500, ZINC_600, RED,
 )
-from _config import SIGMA, EXISTING_POINTS, Z_NEW, gaussian_unit_peak
+from _config import SIGMA, EXISTING_POINTS, Z_NEW, gaussian_density
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
 
 
@@ -79,11 +79,11 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
     # Existing-only fields. z_new is shown as a marker but does not contribute.
     D_old = np.zeros(Z.shape[:-1])
     for c in EXISTING_POINTS:
-        D_old += gaussian_unit_peak(Z, c, sigma)
+        D_old += gaussian_density(Z, c, sigma)
     E_old = D_old / (1.0 + D_old)
 
     # Gain from hypothetically adding z_new.
-    D_new = gaussian_unit_peak(Z, Z_NEW, sigma)
+    D_new = gaussian_density(Z, Z_NEW, sigma)
     E_after = (D_old + D_new) / (1.0 + D_old + D_new)
     delta_E = E_after - E_old
 
@@ -136,13 +136,13 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
                            ax=axes[2], shrink=0.8, pad=0.02)
     style_colorbar(cbar_dE)
 
-    path = PLOTS_DIR / "evidence_to_objective.png"
+    path = PLOTS_DIR / "density_to_evidence_to_objective.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return path
 
 
 if __name__ == "__main__":
-    print("evidence_to_objective ...")
+    print("density_to_evidence_to_objective ...")
     p = figure()
     print(f"      saved: {p}")
