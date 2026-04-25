@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from ._style import (
-    save_fig, EMERALD_300, EMERALD_500,
+    save_fig, apply_style, EMERALD_300, EMERALD_500,
     ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600,
 )
 
@@ -25,6 +25,7 @@ def plot_performance_radar(
     exp_code: str = "",
 ) -> None:
     """Radar/spider plot of per-attribute performance with dataset average overlay."""
+    apply_style()
     attributes = sorted(performance.keys())
     n = len(attributes)
     if n < 3:

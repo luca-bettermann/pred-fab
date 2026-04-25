@@ -9,13 +9,15 @@ Schema-agnostic plotting for every PFAB phase. Users pass `AxisSpec` objects tha
 | Module | Functions | Description |
 |--------|-----------|-------------|
 | `_style.py` | `AxisSpec`, `save_fig`, helpers | Shared dataclass, palette constants, axis/subtitle utilities |
-| `baseline.py` | `plot_parameter_space`, `plot_parameter_space_3d` | 1×3: scatter + truth + model; 3D scatter with Zinc z-color |
-| `prediction.py` | `plot_prediction_scatter`, `plot_topology_comparison`, `plot_importance_weights` | Pred vs actual, side-by-side topologies, R²_adj sigmoid |
-| `exploration.py` | `plot_uncertainty_map`, `plot_acquisition`, `plot_optimizer_comparison` | Uncertainty 3-panel, acquisition 3-panel, per-optimizer scatter |
-| `inference.py` | `plot_inference_result`, `plot_inference_convergence` | Single-shot result, trajectory + score convergence |
-| `schedule.py` | `plot_schedule_comparison`, `plot_adaptation`, `plot_schedule_detail` | Fixed vs schedule bars, layer-by-layer adaptation, per-param schedule lines |
+| `baseline.py` | `plot_parameter_space`, `plot_parameter_space_3d`, `plot_dimensional_trajectories` | 1×3: scatter + truth + model; 3D scatter with Zinc z-color |
+| `prediction.py` | `plot_topology_comparison`, `plot_importance_weights` | Side-by-side topologies, R²_adj sigmoid |
+| `exploration.py` | `plot_acquisition` | 3-panel: performance + evidence + combined acquisition |
+| `inference.py` | `plot_inference_result` | Single-shot result on predicted topology |
+| `schedule.py` | `plot_schedule_comparison` | Fixed vs schedule bars + per-step parameter schedules |
 | `performance.py` | `plot_performance_radar` | Radar/spider per-attribute plot with dataset avg overlay, score colors |
-| `metrics.py` | `plot_metric_topology`, `plot_cross_sections`, `plot_sensitivity` | Per-metric + combined heatmaps, 1D slices, sensitivity bars |
+| `metrics.py` | `plot_metric_topology` | Per-metric + combined heatmaps |
+| `convergence.py` | `plot_convergence` | Optimizer convergence curves per phase |
+| `validation.py` | `plot_phase_proposals` | Per-phase scatter overlay on uncertainty topology |
 
 ## Key Concepts
 

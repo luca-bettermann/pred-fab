@@ -11,8 +11,8 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
-    AxisSpec, save_fig, _extract_xy, _apply_axes, _add_fixed_subtitle,
-    _plot_schedule_ranges,
+    AxisSpec, save_fig, _extract_xy, _add_fixed_subtitle,
+    apply_style, clean_3d_panes, subplot_topology,
     STEEL_500, ZINC_400, ZINC_600,
 )
 
@@ -37,6 +37,7 @@ def _setup_3d_figure(
     fixed_params: dict[str, Any] | None = None,
 ) -> tuple[plt.Figure, Any]:  # type: ignore[name-defined]
     """Create a 3D figure with standard axis labels, bounds, and subtitle."""
+    apply_style()
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
     _add_fixed_subtitle(fig, fixed_params)
@@ -51,6 +52,7 @@ def _setup_3d_figure(
         ax.set_ylim(*y_axis.bounds)
 
     ax.view_init(elev=25, azim=-50)
+    clean_3d_panes(ax)
     return fig, ax
 
 
@@ -83,33 +85,21 @@ def plot_parameter_space(
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """1x2: ground truth topology + initial model topology."""
-    px, py = _extract_xy(points, x_axis, y_axis)
-    vmin, vmax = true_grid.min(), true_grid.max()
+    apply_style()
+    vmin, vmax = float(true_grid.min()), float(true_grid.max())
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
 
-    im1 = ax1.contourf(x_values, y_values, true_grid, levels=20, cmap="RdYlGn",
-                        vmin=vmin, vmax=vmax)
-    ax1.contour(x_values, y_values, true_grid, levels=10, colors="white",
-                linewidths=0.3, alpha=0.5)
-    _plot_schedule_ranges(ax1, points, x_axis, y_axis, schedules, codes,
-                          color="white", alpha=0.6)
-    ax1.scatter(px, py, s=20, c="white", edgecolors="black", linewidth=0.5, zorder=5)
-    _apply_axes(ax1, x_axis, y_axis)
-    ax1.set_title("Ground Truth", fontsize=10)
-    plt.colorbar(im1, ax=ax1, shrink=0.8)
-
-    im2 = ax2.contourf(x_values, y_values, pred_grid, levels=20, cmap="RdYlGn",
-                        vmin=vmin, vmax=vmax)
-    ax2.contour(x_values, y_values, pred_grid, levels=10, colors="white",
-                linewidths=0.3, alpha=0.5)
-    _plot_schedule_ranges(ax2, points, x_axis, y_axis, schedules, codes,
-                          color="white", alpha=0.6)
-    ax2.scatter(px, py, s=20, c="white", edgecolors="black", linewidth=0.5, zorder=5)
-    _apply_axes(ax2, x_axis, y_axis)
-    ax2.set_title("Initial Model", fontsize=10)
-    plt.colorbar(im2, ax=ax2, shrink=0.8)
+    for ax, grid, label in [
+        (ax1, true_grid, "Ground Truth"),
+        (ax2, pred_grid, "Initial Model"),
+    ]:
+        subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
+                         cmap_name="performance", label=label,
+                         vmin=vmin, vmax=vmax,
+                         points=points, schedules=schedules, codes=codes,
+                         point_size=20, point_edge="black")
 
     save_fig(save_path)
 

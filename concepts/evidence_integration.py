@@ -83,17 +83,18 @@ def _angular_gap_marker(
     """
     r = float(ray_sigma) * float(sigma)
     cx, cy = float(center[0]), float(center[1])
-    # +x ray
+    # +x ray (0°)
     ax.plot([cx, cx + r], [cy, cy],
             color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
-    # +45° ray
-    dx = r * np.cos(np.pi / 4.0)
-    dy = r * np.sin(np.pi / 4.0)
+    # −45° ray (clockwise from +x) — going down-right, away from the
+    # σ-multiplier labels above so the marker sits in unused space.
+    dx = r * np.cos(-np.pi / 4.0)
+    dy = r * np.sin(-np.pi / 4.0)
     ax.plot([cx, cx + dx], [cy, cy + dy],
             color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
     # label, placed inside the angle wedge
     label_r = 0.55 * r
-    label_angle = np.pi / 8.0  # 22.5°, midway between the two rays
+    label_angle = -np.pi / 8.0  # −22.5°, midway between the two rays
     ax.text(cx + label_r * np.cos(label_angle),
             cy + label_r * np.sin(label_angle),
             "45°", fontsize=7, color=ZINC_500,

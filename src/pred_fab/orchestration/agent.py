@@ -664,11 +664,11 @@ class PfabAgent:
         self,
         n: int,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals via UCB-based uncertainty maximization.
+        """Generate n space-filling baseline proposals via batch-aware evidence maximization.
 
-        Uses the same evidence model as exploration, with κ=1 (pure uncertainty).
-        Domain phase uses Riesz energy for structural params; process and schedule
-        phases maximize batch-aware uncertainty for natural space-filling.
+        Uses the acquisition objective with κ=1 (pure exploration: maximize ΔI,
+        the integrated evidence gain). Each new proposal is added to the
+        evidence field so subsequent proposals naturally space-fill.
         """
         self._assert_initialized()
         result = self.calibration_system.run_baseline(n=n)

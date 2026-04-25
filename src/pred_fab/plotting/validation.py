@@ -1,4 +1,4 @@
-"""Phase validation plots: what each optimizer saw."""
+"""Phase validation plot: per-phase scatter overlay on uncertainty topology."""
 
 from typing import Any
 
@@ -8,13 +8,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig,
+    AxisSpec, save_fig, _apply_axes,
+    apply_style, clean_spines, subplot_label, subplot_topology, style_colorbar,
     STEEL_500, ZINC_200, ZINC_400, ZINC_600,
 )
 
 
-# Panel tuple: (title, x_axis, y_axis, points, exp_ids, grid_data)
-# grid_data is optional: (x_vals, y_vals, grid, cmap)
+# Panel tuple: (label, x_axis, y_axis, points, exp_ids, grid_data)
+# grid_data is optional: (x_vals, y_vals, grid, cmap_name)
 PanelSpec = tuple[
     str, AxisSpec, AxisSpec,
     list[dict[str, Any]] | np.ndarray,
@@ -22,51 +23,55 @@ PanelSpec = tuple[
 ]
 
 
-def plot_phase_validation(
+def plot_phase_proposals(
     save_path: str,
     panels: list[PanelSpec | tuple],
 ) -> None:
     """Generic multi-panel scatter for phase validation diagnostics.
 
-    Each panel is (title, x_axis, y_axis, points, exp_ids[, grid_data]).
+    Each panel is (label, x_axis, y_axis, points, exp_ids[, grid_data]).
     points: list[dict] (access via axis.key) or np.ndarray (columns 0=x, 1=y).
-    grid_data: optional (x_vals, y_vals, grid_2d, cmap_str) drawn as contourf background.
+    grid_data: optional (x_vals, y_vals, grid_2d, cmap_name) — drawn as the
+    topology background; ``cmap_name`` accepts semantic registry names.
     """
     if not panels:
         return
 
+    apply_style()
     n_panels = len(panels)
     fig, axes = plt.subplots(1, n_panels, figsize=(5.5 * n_panels, 4.5))
     if n_panels == 1:
         axes = [axes]
 
     for ax, panel in zip(axes, panels):
-        title, x_axis, y_axis, points, exp_ids = panel[:5]
+        label, x_axis, y_axis, points, exp_ids = panel[:5]
         grid_data = panel[5] if len(panel) > 5 else None
-        _draw_panel(ax, title, x_axis, y_axis, points, exp_ids, grid_data)
+        _draw_panel(ax, label, x_axis, y_axis, points, exp_ids, grid_data)
 
     save_fig(save_path)
 
 
 def _draw_panel(
     ax: plt.Axes,  # type: ignore[name-defined]
-    panel_title: str,
+    panel_label: str,
     x_axis: AxisSpec,
     y_axis: AxisSpec,
     points: list[dict[str, Any]] | np.ndarray,
     exp_ids: list[int] | None,
     grid_data: tuple[np.ndarray, np.ndarray, np.ndarray, str] | None = None,
 ) -> None:
-    """Draw a single validation panel: optional contourf + scatter with per-experiment lines."""
-    ax.set_title(panel_title, fontsize=10, color=ZINC_600)
-
-    # Background topology if provided
+    """Draw a single validation panel: optional topology background + scatter."""
     if grid_data is not None:
-        gx, gy, grid, cmap = grid_data
-        im = ax.contourf(gx, gy, grid, levels=20, cmap=cmap, alpha=0.7)
-        plt.colorbar(im, ax=ax, shrink=0.75, pad=0.02)
+        gx, gy, grid, cmap_name = grid_data
+        subplot_topology(ax, x_axis, y_axis, gx, gy, grid,
+                         cmap_name=cmap_name, contour_overlay=False,
+                         show_colorbar=True)
     else:
+        _apply_axes(ax, x_axis, y_axis)
+        clean_spines(ax)
         ax.grid(True, alpha=0.2, color=ZINC_200)
+
+    subplot_label(ax, panel_label)
 
     # Extract x/y coordinates
     if isinstance(points, np.ndarray):
@@ -86,7 +91,6 @@ def _draw_panel(
         px = [float(p.get(x_axis.key, 0)) for p in points]
         py = [float(p.get(y_axis.key, 0)) for p in points]
 
-    # Connect dots per experiment and label first point
     if exp_ids is not None:
         n_exp = max(exp_ids) + 1
         for eid in range(n_exp):
@@ -108,8 +112,6 @@ def _draw_panel(
             ax.annotate(f"{i+1}", (x, y), fontsize=7, ha="center", va="bottom",
                        xytext=(0, 5), textcoords="offset points", color=ZINC_400)
 
-    ax.set_xlabel(x_axis.display_label, fontsize=9, color=ZINC_600)
-    ax.set_ylabel(y_axis.display_label, fontsize=9, color=ZINC_600)
     # Pad axis limits so points at exact bounds aren't clipped by the frame
     if x_axis.bounds:
         lo, hi = x_axis.bounds

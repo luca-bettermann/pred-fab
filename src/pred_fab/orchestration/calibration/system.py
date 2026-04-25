@@ -18,7 +18,7 @@ from .space import SolutionSpace
 # ======================================================================
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: UCB exploration, inference, LHS baseline, and joint schedule optimization."""
+    """Active-learning calibration engine: acquisition-driven exploration, inference, batch baseline, and joint schedule optimization."""
 
     def __init__(
         self,
@@ -79,6 +79,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
+
+        # Baseline phase strategy. False (default) = single Process phase over all
+        # numeric params jointly. True = Domain phase first (DataDomainAxis only),
+        # then Process phase with domain values held fixed. Only affects baseline;
+        # exploration/inference are single-point and don't have batch coupling to
+        # benefit from a split.
+        self.split_domain_phase: bool = False
 
     # ------------------------------------------------------------------
     # Proxy properties for backward compatibility
@@ -504,10 +511,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # === OPTIMIZATION WORKFLOW ===
 
     def run_baseline(self, n: int) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals via UCB-based space-filling (κ=1).
+        """Generate n baseline proposals via batch acquisition (κ=1, joint over N points).
 
-        Unified two-phase optimization:
-          Process — all parameters (continuous + integer + domain axes) jointly
+        Two- or three-phase optimization:
+          Domain   — DataDomainAxis params only (only when ``split_domain_phase`` is True)
+          Process  — continuous + integer params (with domain values held if Domain ran)
           Schedule — per-layer offsets for scheduled params (if applicable)
         """
         if n == 0:
@@ -626,14 +634,61 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         if self.schedule_configs[code] in self.fixed_params
                     }
 
-        # --- Process phase: ALL params jointly (continuous + integer + domain) ---
-        if n_numeric > 0:
-            flat_specs, flat_params, optimized = self._phase2_process(
-                n, numeric_params, integer_params, int_set, int_indices,
-                int_ranges_map, init_norm, cat_codes, cat_assignments,
-                sched_set, set(), None,
+        # --- Detect domain axes among unfixed numeric params ---
+        domain_axis_codes = {
+            code for code, _, _ in numeric_params
+            if code in self.data_objects and isinstance(self.data_objects[code], DataDomainAxis)
+        }
+        do_split = (
+            self.split_domain_phase and bool(domain_axis_codes) and n_numeric > 0
+        )
+
+        # --- Phase: Domain (only when split is requested and domain axes exist) ---
+        structural_values: list[dict[str, int]] | None = None
+        domain_specs: list[ExperimentSpec] = []
+        if do_split:
+            d_params, d_init, d_int_set, d_int_ranges = self._filter_phase_params(
+                numeric_params, init_norm, int_set, int_ranges_map, domain_axis_codes
             )
+            domain_specs, _, _ = self._run_acquisition_phase(
+                n, d_params, integer_params, d_int_set, d_int_ranges,
+                d_init, cat_codes, cat_assignments,
+                structural_values=None,
+                label="Domain", init_evidence=True,
+            )
+            structural_values = []
+            for spec in domain_specs:
+                p = spec.initial_params.to_dict()
+                structural_values.append({c: int(p[c]) for c in domain_axis_codes if c in p})
+
+        # --- Phase: Process (single call; inputs branched on do_split) ---
+        if do_split:
+            process_codes = {code for code, _, _ in numeric_params} - domain_axis_codes
+            p_params, p_init, p_int_set, p_int_ranges = self._filter_phase_params(
+                numeric_params, init_norm, int_set, int_ranges_map, process_codes
+            )
+            p_init_evidence = False
         else:
+            p_params = numeric_params
+            p_init = init_norm
+            p_int_set = int_set
+            p_int_ranges = int_ranges_map
+            p_init_evidence = True
+
+        if p_params:
+            flat_specs, flat_params, optimized = self._run_acquisition_phase(
+                n, p_params, integer_params, p_int_set, p_int_ranges,
+                p_init, cat_codes, cat_assignments,
+                structural_values=structural_values,
+                label="Process", init_evidence=p_init_evidence,
+            )
+        elif do_split:
+            # Pure-domain case: all non-domain params fixed. Use Domain results as-is.
+            flat_specs = domain_specs
+            flat_params = np.zeros((n, 0))
+            optimized = np.zeros((n, 0))
+        else:
+            # No numeric params anywhere — fall back to centre-of-bounds + cats.
             optimized = np.zeros((n, 0))
             flat_params = np.zeros((n, 0))
             flat_specs = []
@@ -647,9 +702,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 flat_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
 
-        # Store process points for validation plot
+        # Store phase points for validation plot
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
-        self.last_domain_values = None  # Domain is now part of Process
+        self.last_domain_values = list(structural_values) if structural_values is not None else None
 
         # Console: show process params per experiment
         console = self.logger._console_output_enabled
@@ -708,7 +763,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if n > 1 and n_numeric > 0 and optimized.shape[1] > 0:
             min_dist = self._min_pairwise_distance(optimized, None)
             self.logger.info(
-                f"Baseline: {n} experiments via UCB space-filling "
+                f"Baseline: {n} experiments via batch acquisition (κ=1) "
                 f"({len(continuous_params)} continuous, {len(integer_params)} integer, "
                 f"{len(categorical_params)} categorical"
                 f"{f', {n_strata} strata' if n_strata > 1 else ''}"
@@ -723,31 +778,61 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return specs
 
-    def _phase2_process(
+    @staticmethod
+    def _filter_phase_params(
+        numeric_params: list[tuple[str, float, float]],
+        init_norm: np.ndarray,
+        int_set: set[int],
+        int_ranges_map: dict[int, int],
+        codes_keep: set[str],
+    ) -> tuple[list[tuple[str, float, float]], np.ndarray, set[int], dict[int, int]]:
+        """Slice ``numeric_params`` (and the matching int / init bookkeeping)
+        down to the subset whose codes appear in ``codes_keep``. The returned
+        int-set / range-map are re-keyed against the filtered list so the
+        acquisition-phase helper sees consistent indices."""
+        keep_indices = [d for d, (c, _, _) in enumerate(numeric_params) if c in codes_keep]
+        sub_params = [numeric_params[d] for d in keep_indices]
+        sub_init = init_norm[:, keep_indices] if init_norm.size > 0 else init_norm
+        sub_int_set: set[int] = set()
+        sub_int_ranges: dict[int, int] = {}
+        for new_d, old_d in enumerate(keep_indices):
+            if old_d in int_set:
+                sub_int_set.add(new_d)
+                sub_int_ranges[new_d] = int_ranges_map[old_d]
+        return sub_params, sub_init, sub_int_set, sub_int_ranges
+
+    def _run_acquisition_phase(
         self,
         n: int,
         numeric_params: list[tuple[str, float, float]],
         integer_params: list[tuple[str, int, int]],
         int_set: set[int],
-        int_indices: list[int],
         int_ranges_map: dict[int, int],
         init_norm: np.ndarray,
         cat_codes: list[str],
         cat_assignments: list[tuple[Any, ...]],
-        sched_set: set[str],
-        domain_axis_sched_dims: set[str],
         structural_values: list[dict[str, int]] | None,
+        *,
+        label: str,
+        init_evidence: bool,
     ) -> tuple[list[ExperimentSpec], np.ndarray, np.ndarray]:
-        """Process phase: UCB-based batch placement (κ=1) over all parameters jointly."""
-        # All numeric params (continuous + integer + domain axes) optimized jointly
-        all_process_params: list[tuple[int, str, float, float]] = []
-        for d, (code, lo, hi) in enumerate(numeric_params):
-            all_process_params.append((d, code, lo, hi))
+        """Run one batch acquisition phase: maximize ΔI (κ=1) jointly over N points
+        in the given parameter subspace, with prior-phase values fed via
+        ``structural_values``. Used for both Domain and Process baseline phases.
 
-        all_static_tuples = [(code, lo, hi) for _, code, lo, hi in all_process_params]
+        ``int_set`` and ``int_ranges_map`` are keyed against the passed-in
+        ``numeric_params`` (not against any global merged list). ``init_evidence``
+        should be True for the first phase of a baseline run; subsequent phases
+        reuse the evidence model from the first.
+        """
+        all_phase_params: list[tuple[int, str, float, float]] = []
+        for d, (code, lo, hi) in enumerate(numeric_params):
+            all_phase_params.append((d, code, lo, hi))
+
+        all_static_tuples = [(code, lo, hi) for _, code, lo, hi in all_phase_params]
         all_int_set: set[int] = set()
         all_int_ranges: dict[int, int] = {}
-        for si, (d_i, _, _, _) in enumerate(all_process_params):
+        for si, (d_i, _, _, _) in enumerate(all_phase_params):
             if d_i in int_set:
                 all_int_set.add(si)
                 all_int_ranges[si] = int_ranges_map[d_i]
@@ -770,52 +855,70 @@ class CalibrationSystem(BaseOrchestrationSystem):
             schedule_smoothing=0.0,
         )
 
-        # Build schema-only datamodule for baseline uncertainty evaluation
+        # Build schema-only datamodule for batch uncertainty evaluation
         baseline_dm = self._build_schema_datamodule()
         self._active_datamodule = baseline_dm
 
-        # Initialize empty evidence model (active_mask from schema bounds)
-        if self._fit_empty_kde_fn is not None:
+        # Initialize empty evidence model (active_mask from schema bounds).
+        # Skipped on later phases — the first phase already populated it.
+        if init_evidence and self._fit_empty_kde_fn is not None:
             self._fit_empty_kde_fn(baseline_dm, n)
 
         # Map SolutionSpace indices to datamodule columns
         n_dm_cols = len(baseline_dm.input_columns)
-        process_col_map: list[tuple[int, int]] = []
-        for si, (_, code, lo, hi) in enumerate(all_process_params):
+        phase_col_map: list[tuple[int, int]] = []
+        for si, (_, code, lo, hi) in enumerate(all_phase_params):
             if code in baseline_dm.input_columns:
-                process_col_map.append((si, baseline_dm.input_columns.index(code)))
+                phase_col_map.append((si, baseline_dm.input_columns.index(code)))
 
-        def _process_ucb_objective(x_flat: np.ndarray) -> float:
-            """Baseline Process: maximize Δ∫E over joint N-batch placement (κ=1)."""
+        # Pre-fill batch with structural values from prior phases (e.g. Domain
+        # values pinned when running Process after Domain). Filled at 0.5 for
+        # any column the previous phase didn't touch.
+        prior_fill = np.full((n, n_dm_cols), 0.5)
+        if structural_values is not None:
+            for i, sv in enumerate(structural_values):
+                for code, val in sv.items():
+                    if code in baseline_dm.input_columns:
+                        col = baseline_dm.input_columns.index(code)
+                        # Normalize against schema bounds
+                        try:
+                            lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                            span = hi - lo
+                            prior_fill[i, col] = (float(val) - lo) / span if span > 0 else 0.5
+                        except ValueError:
+                            prior_fill[i, col] = 0.5
+
+        def _acquisition_batch_objective(x_flat: np.ndarray) -> float:
+            """Maximize Δ∫E over joint N-batch placement (κ=1)."""
             pts = space.decode(x_flat)  # (N, D_point)
-            X_batch = np.full((n, n_dm_cols), 0.5)
-            for si, col_idx in process_col_map:
+            X_batch = prior_fill.copy()
+            for si, col_idx in phase_col_map:
                 for i in range(n):
                     X_batch[i, col_idx] = pts[i, si]
             return -self._acquisition(X_batch, kappa=1.0)
 
-        # Build init_norm for the merged space (remap original indices)
-        merged_init = np.zeros((n, len(all_process_params)))
-        for si, (d_i, _, _, _) in enumerate(all_process_params):
+        # Build init_norm for the phase-local space (remap original indices)
+        merged_init = np.zeros((n, len(all_phase_params)))
+        for si, (d_i, _, _, _) in enumerate(all_phase_params):
             if d_i < init_de.shape[1]:
                 merged_init[:, si] = init_de[:, d_i]
 
         init_pop = space.build_init_population(self.engine.rng, merged_init)
 
         self.logger.info(
-            f"Phase 2 (Process): N={n}, D_static={len(all_process_params)}, "
+            f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
             f"D_sched=0, total_vars={space.total_vars}"
         )
 
         opt = self.engine._run_de(
-            _process_ucb_objective, space.bounds, init_pop=init_pop,
-            integrality=space.integrality, label="Process", show_progress=console,
+            _acquisition_batch_objective, space.bounds, init_pop=init_pop,
+            integrality=space.integrality, label=label, show_progress=console,
         )
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
         else:
             self.last_baseline_nfev += opt.nfev
-        self.convergence_history["Process"] = opt.convergence_history
+        self.convergence_history[label] = opt.convergence_history
 
         best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
         specs = space.decode_to_specs(

@@ -1,10 +1,11 @@
-"""Schedule and adaptation phase plots."""
+"""Schedule phase plot: fixed-params vs scheduled-params comparison."""
 
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 
-from ._style import AxisSpec, save_fig, STEEL_500
+from ._style import (
+    AxisSpec, save_fig, apply_style, clean_spines,
+    STEEL_500, ZINC_300,
+)
 
 
 def plot_schedule_comparison(
@@ -17,6 +18,7 @@ def plot_schedule_comparison(
     n_steps: int | None = None,
 ) -> None:
     """1x2: fixed vs schedule scores + per-step parameter schedules."""
+    apply_style()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     n_fixed = len(fixed_scores)
@@ -29,7 +31,8 @@ def plot_schedule_comparison(
     ax1.set_ylabel("Combined Score")
     ax1.set_title("Performance per Round")
     ax1.legend(fontsize=8)
-    ax1.grid(True, alpha=0.2, axis="y")
+    ax1.grid(True, alpha=0.2, axis="y", color=ZINC_300)
+    clean_spines(ax1)
 
     for i, sched in enumerate(schedules):
         if y_axis.key in sched:
@@ -42,72 +45,7 @@ def plot_schedule_comparison(
     ax2.set_title(f"Per-Step {y_axis.display_label}")
     if any(y_axis.key in s for s in schedules):
         ax2.legend(fontsize=7)
-    ax2.grid(True, alpha=0.2)
-
-    save_fig(save_path)
-
-
-def plot_adaptation(
-    save_path: str,
-    step_values: list[float],
-    deviations: list[float],
-    step_label: str = "Adapted Parameter",
-    deviation_label: str = "Avg Deviation",
-    *,
-    counterfactual: list[float] | None = None,
-) -> None:
-    """2x1: adapted parameter + deviation over steps, optionally with counterfactual."""
-    n = len(step_values)
-    steps = [f"L{i}" for i in range(n)]
-
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
-
-    ax1.plot(steps, step_values, "o-", color=STEEL_500, lw=2, ms=6)
-    ax1.set_ylabel(step_label)
-    ax1.set_title(step_label)
-    ax1.grid(True, alpha=0.2)
-
-    ax2.plot(steps, deviations, "o-", color="#D65F5F", lw=2, ms=6, label="Adapted")
-    if counterfactual:
-        ax2.plot(steps, counterfactual, "o--", color="#D65F5F", lw=1.5, ms=5,
-                 alpha=0.5, label="No adaptation")
-        ax2.fill_between(range(n), deviations, counterfactual,
-                         alpha=0.15, color="#D65F5F", label="Deviation saved")
-    ax2.set_xlabel("Step")
-    ax2.set_ylabel(deviation_label)
-    ax2.set_title(deviation_label)
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.2)
-
-    save_fig(save_path)
-
-
-def plot_schedule_detail(
-    save_path: str,
-    schedules: list[dict[str, list[float]]],
-    y_axis: AxisSpec,
-    *,
-    step_label: str = "Step",
-    integer_valued: bool = False,
-) -> None:
-    """Parameter value vs step index, one line per experiment."""
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    all_vals: list[float] = []
-    for i, sched in enumerate(schedules):
-        if y_axis.key in sched:
-            vals = sched[y_axis.key]
-            all_vals.extend(vals)
-            ax.plot(range(len(vals)), vals, "o-", label=f"exp_{i+1:02d}", lw=1.5, ms=5)
-
-    # Integer axes: force integer ticks on x (step) and optionally y (param)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    if integer_valued or (all_vals and all(v == int(v) for v in all_vals)):
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-
-    ax.set_xlabel(step_label)
-    ax.set_ylabel(y_axis.display_label)
-    ax.legend(fontsize=7)
-    ax.grid(True, alpha=0.2)
+    ax2.grid(True, alpha=0.2, color=ZINC_300)
+    clean_spines(ax2)
 
     save_fig(save_path)

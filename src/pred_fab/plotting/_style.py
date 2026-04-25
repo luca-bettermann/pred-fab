@@ -253,6 +253,70 @@ def style_colorbar(cbar) -> None:
         cbar.outline.set_linewidth(0.6)  # type: ignore[attr-defined]
 
 
+def _resolve_cmap(name: str):
+    """Resolve a colormap by semantic registry name first, then fall back to mpl."""
+    if name in _CMAP_REGISTRY:
+        return cmap(name)
+    return plt.get_cmap(name)
+
+
+def subplot_topology(
+    ax,
+    x_axis: "AxisSpec",
+    y_axis: "AxisSpec",
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    grid: np.ndarray,
+    *,
+    cmap_name: str = "performance",
+    label: str | None = None,
+    levels: int = 20,
+    contour_overlay: bool = True,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    points: list[dict[str, Any]] | None = None,
+    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    codes: list[str] | None = None,
+    point_color: str = "white",
+    point_edge: str = ZINC_700,
+    point_size: float = 18,
+    point_alpha: float = 1.0,
+    show_colorbar: bool = True,
+    cbar_label: str | None = None,
+):
+    """Render a topology panel: contourf + optional white contours + scatter + colorbar.
+
+    Returns the QuadContourSet so callers can attach further markers or replace
+    the colorbar. ``cmap_name`` accepts a semantic key from the registry
+    (density, evidence, evidence_gain, performance, mixed) or any raw
+    matplotlib colormap name.
+    """
+    cm = _resolve_cmap(cmap_name)
+    im = ax.contourf(x_values, y_values, grid, levels=levels, cmap=cm,
+                     vmin=vmin, vmax=vmax)
+    if contour_overlay:
+        ax.contour(x_values, y_values, grid, levels=max(levels // 2, 4),
+                   colors="white", linewidths=0.3, alpha=0.5)
+
+    if points:
+        _plot_schedule_ranges(ax, points, x_axis, y_axis, schedules, codes,
+                              color=point_color, alpha=0.6 * point_alpha)
+        px, py = _extract_xy(points, x_axis, y_axis)
+        ax.scatter(px, py, s=point_size, c=point_color, edgecolors=point_edge,
+                   linewidth=0.5, zorder=5, alpha=point_alpha)
+
+    _apply_axes(ax, x_axis, y_axis)
+    clean_spines(ax)
+    if label is not None:
+        subplot_label(ax, label)
+
+    if show_colorbar:
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8, label=cbar_label or "")
+        style_colorbar(cbar)
+
+    return im
+
+
 def cube_wireframe(
     ax,
     lo: np.ndarray,

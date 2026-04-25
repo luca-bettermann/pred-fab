@@ -13,6 +13,7 @@ from ._style import (
     clean_spines,
     clean_3d_panes,
     subplot_label,
+    subplot_topology,
     add_kernel_radii_2d,
     add_kernel_radii_3d,
     cube_wireframe,
@@ -26,22 +27,14 @@ from ._style import (
 )
 
 from .baseline import plot_parameter_space, plot_parameter_space_3d, plot_dimensional_trajectories
-from .prediction import (
-    plot_prediction_scatter,
-    plot_topology_comparison,
-    plot_importance_weights,
-)
-from .exploration import (
-    plot_uncertainty_map,
-    plot_acquisition,
-    plot_optimizer_comparison,
-)
-from .inference import plot_inference_result, plot_inference_convergence
-from .schedule import plot_schedule_comparison, plot_adaptation, plot_schedule_detail
-from .metrics import plot_metric_topology, plot_cross_sections, plot_sensitivity
+from .prediction import plot_topology_comparison, plot_importance_weights
+from .exploration import plot_acquisition
+from .inference import plot_inference_result
+from .schedule import plot_schedule_comparison
+from .metrics import plot_metric_topology
 from .performance import plot_performance_radar
 from .convergence import plot_convergence
-from .validation import plot_phase_validation
+from .validation import plot_phase_proposals
 
 __all__ = [
     "AxisSpec",
@@ -51,6 +44,7 @@ __all__ = [
     "clean_spines",
     "clean_3d_panes",
     "subplot_label",
+    "subplot_topology",
     "add_kernel_radii_2d",
     "add_kernel_radii_3d",
     "cube_wireframe",
@@ -59,21 +53,13 @@ __all__ = [
     "plot_parameter_space",
     "plot_parameter_space_3d",
     "plot_dimensional_trajectories",
-    "plot_prediction_scatter",
     "plot_topology_comparison",
     "plot_importance_weights",
-    "plot_uncertainty_map",
     "plot_acquisition",
-    "plot_optimizer_comparison",
     "plot_inference_result",
-    "plot_inference_convergence",
     "plot_schedule_comparison",
-    "plot_adaptation",
-    "plot_schedule_detail",
     "plot_metric_topology",
-    "plot_cross_sections",
-    "plot_sensitivity",
     "plot_performance_radar",
     "plot_convergence",
-    "plot_phase_validation",
+    "plot_phase_proposals",
 ]

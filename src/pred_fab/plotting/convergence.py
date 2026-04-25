@@ -5,7 +5,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from ._style import save_fig, STEEL_500, EMERALD_500, ZINC_400, ZINC_700
+from ._style import (
+    save_fig, apply_style, clean_spines,
+    STEEL_500, EMERALD_500, ZINC_300, ZINC_400, ZINC_700,
+)
 
 
 def plot_convergence(
@@ -19,6 +22,7 @@ def plot_convergence(
     if not histories or all(len(h) == 0 for h in histories.values()):
         return
 
+    apply_style()
     colors = [STEEL_500, EMERALD_500, "#DD8452", "#D65F5F", ZINC_400]
     fig, ax = plt.subplots(figsize=(8, 4))
 
@@ -39,6 +43,7 @@ def plot_convergence(
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
     ax.set_ylabel("Relative Objective", fontsize=9, color=ZINC_700)
     ax.legend(fontsize=8, frameon=False)
-    ax.grid(True, alpha=0.2)
+    ax.grid(True, alpha=0.2, color=ZINC_300)
+    clean_spines(ax)
 
     save_fig(save_path)

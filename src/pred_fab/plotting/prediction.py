@@ -5,40 +5,10 @@ from typing import Any
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ._style import AxisSpec, save_fig, _apply_axes, _add_fixed_subtitle, ACCENT_RED
-
-
-def plot_prediction_scatter(
-    save_path: str,
-    model_results: dict[str, dict[str, Any]],
-    *,
-    true_key: str = "y_true",
-    pred_key: str = "y_pred",
-    r2_key: str = "r2",
-) -> None:
-    """Scatter of predicted vs actual for each feature.
-
-    model_results: {feat: {true_key: ndarray, pred_key: ndarray, r2_key: float}}
-    """
-    features = list(model_results.keys())
-    n = len(features)
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 4.5))
-    if n == 1:
-        axes = [axes]
-
-    for ax, feat in zip(axes, features):
-        r = model_results[feat]
-        ax.scatter(r[true_key], r[pred_key], s=20, alpha=0.6,
-                   c="#DD8452", edgecolors="white", linewidth=0.3)
-        lims = [min(r[true_key].min(), r[pred_key].min()),
-                max(r[true_key].max(), r[pred_key].max())]
-        ax.plot(lims, lims, "k--", lw=1, alpha=0.5)
-        ax.set_xlabel("Actual")
-        ax.set_ylabel("Predicted")
-        ax.set_title(f"{feat}\nR\u00b2 = {r[r2_key]:.3f}", fontsize=10)
-        ax.grid(True, alpha=0.2)
-
-    save_fig(save_path)
+from ._style import (
+    AxisSpec, save_fig, _add_fixed_subtitle, subplot_topology,
+    apply_style, clean_spines, style_colorbar, ACCENT_RED, ZINC_300,
+)
 
 
 def plot_topology_comparison(
@@ -52,6 +22,7 @@ def plot_topology_comparison(
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
     """Side-by-side contour plots for comparing topologies on shared color scale."""
+    apply_style()
     n = len(grids)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
     if n == 1:
@@ -59,16 +30,12 @@ def plot_topology_comparison(
     _add_fixed_subtitle(fig, fixed_params)
 
     all_vals = np.concatenate([g.ravel() for g in grids.values()])
-    vmin, vmax = all_vals.min(), all_vals.max()
+    vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
     for ax, (label, data) in zip(axes, grids.items()):
-        im = ax.contourf(x_values, y_values, data, levels=20, cmap="RdYlGn",
-                          vmin=vmin, vmax=vmax)
-        ax.contour(x_values, y_values, data, levels=10, colors="white",
-                    linewidths=0.3, alpha=0.5)
-        _apply_axes(ax, x_axis, y_axis)
-        ax.set_title(label, fontsize=10)
-        plt.colorbar(im, ax=ax, shrink=0.8)
+        subplot_topology(ax, x_axis, y_axis, x_values, y_values, data,
+                         cmap_name="performance", label=label,
+                         vmin=vmin, vmax=vmax)
 
     save_fig(save_path)
 
@@ -80,7 +47,8 @@ def plot_importance_weights(
     steepness: float = 0.8,
     validation_gaps: dict[str, float] | None = None,
 ) -> None:
-    """1x2: sigmoid importance curve with experiment dots + per-feature R\u00b2_adj gaps."""
+    """1x2: sigmoid importance curve with experiment dots + per-feature R²_adj gaps."""
+    apply_style()
     scores = np.asarray(experiment_scores)
     s_mean = float(scores.mean())
     s_std = float(scores.std())
@@ -114,11 +82,12 @@ def plot_importance_weights(
     ax1.fill_between(perf_range, floor, weights_curve, alpha=0.08, color="blue")
     ax1.set_xlabel("Combined Performance Score")
     ax1.set_ylabel("Importance Weight")
-    ax1.set_title(f"sigmoid(k\u00b7(perf \u2212 mean)),  k = {steepness}/\u03c3 = {k:.1f}")
+    ax1.set_title(f"sigmoid(k·(perf − mean)),  k = {steepness}/σ = {k:.1f}")
     ax1.set_xlim(0, 1)
     ax1.set_ylim(0, 1.08)
     ax1.legend(fontsize=8)
-    ax1.grid(True, alpha=0.2)
+    ax1.grid(True, alpha=0.2, color=ZINC_300)
+    clean_spines(ax1)
 
     if validation_gaps and n_panels == 2:
         ax2 = axes[1]
@@ -135,11 +104,12 @@ def plot_importance_weights(
         ax2.set_yticklabels(features, fontsize=8)
         ax2.invert_yaxis()
         ax2.axvline(0, color="black", lw=1)
-        ax2.set_xlabel("Gap (R\u00b2_adj \u2212 R\u00b2)")
+        ax2.set_xlabel("Gap (R²_adj − R²)")
         ax2.set_title("Actual Validation Gaps")
         max_gap = max(abs(g) for g in gaps) if gaps else 0.05
         margin = max(max_gap * 1.5, 0.02)
         ax2.set_xlim(-margin, margin)
-        ax2.grid(True, alpha=0.2, axis="x")
+        ax2.grid(True, alpha=0.2, axis="x", color=ZINC_300)
+        clean_spines(ax2)
 
     save_fig(save_path)
