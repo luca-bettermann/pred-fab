@@ -294,7 +294,7 @@ class KernelFieldEstimator(EvidenceEstimator):
 class SobolLocalEstimator(EvidenceEstimator):
     """Volume-weighted QMC in a [center ± box·σ]^D cube."""
 
-    box: float = 3.0
+    box: float = 2.0
     n_samples: int = 256
     seed: int = 0
 
@@ -339,7 +339,7 @@ class EstimatorConfig:
     radii: tuple[float, ...] = DEFAULT_RADII
     angular_gap_deg: float = DEFAULT_ANGULAR_GAP_DEG
     # Sobol-local
-    box: float = 3.0
+    box: float = 2.0
     n_samples: int = 256
     seed: int = 0
     # Shared

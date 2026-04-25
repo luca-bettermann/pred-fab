@@ -23,9 +23,11 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 
 from _style import (
-    apply_style, clean_spines, subplot_label, cmap,
+    apply_style, clean_spines, subplot_label, cmap, style_colorbar,
     ZINC_300, ZINC_500, ZINC_600, ZINC_700,
     STEEL_500, EMERALD_500,
 )
@@ -67,13 +69,14 @@ def figure_single_kernel(sigma: float = 0.10, lim: float = 0.5, res: int = 301) 
     fwhm_c = sigma
     theta = np.linspace(0, 2 * np.pi, 240)
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.6), constrained_layout=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.6), constrained_layout=True)
     density_cm = cmap("density")
+    norm = Normalize(vmin=0.0, vmax=vmax)
 
     for ax, field, label, color, fwhm in zip(
         axes, [G, C], ["Gaussian", "Cauchy"], [STEEL_500, EMERALD_500], [fwhm_g, fwhm_c]
     ):
-        ax.contourf(x, x, field, levels=24, cmap=density_cm, vmin=0, vmax=vmax)
+        ax.contourf(x, x, field, levels=24, cmap=density_cm, norm=norm)
         ax.contour(x, x, field, levels=6, colors=[ZINC_300], linewidths=0.4, alpha=0.55)
         ax.plot(fwhm * np.cos(theta), fwhm * np.sin(theta),
                 color=color, lw=1.6, alpha=0.9,
@@ -86,6 +89,11 @@ def figure_single_kernel(sigma: float = 0.10, lim: float = 0.5, res: int = 301) 
         ax.set_aspect("equal")
         ax.legend(loc="upper right", fontsize=8, frameon=False)
         clean_spines(ax)
+
+    cbar = fig.colorbar(ScalarMappable(norm=norm, cmap=density_cm),
+                        ax=axes, location="right", shrink=0.7, pad=0.02)
+    style_colorbar(cbar)
+    cbar.set_label("ρ(z)", color=ZINC_600, fontsize=9)
 
     path = PLOTS_DIR / "kernel_shape_single.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
@@ -114,11 +122,12 @@ def figure_mixture(sigma: float = 0.10, res: int = 301) -> Path:
     vmax = max(G.max(), C.max())
     density_cm = cmap("density")
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.8, 4.8), constrained_layout=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8), constrained_layout=True)
+    norm = Normalize(vmin=0.0, vmax=vmax)
     for ax, field, label, color in zip(
         axes, [G, C], ["Gaussian mixture", "Cauchy mixture"], [STEEL_500, EMERALD_500]
     ):
-        ax.contourf(u, u, field, levels=28, cmap=density_cm, vmin=0, vmax=vmax)
+        ax.contourf(u, u, field, levels=28, cmap=density_cm, norm=norm)
         ax.contour(u, u, field, levels=8, colors=[ZINC_300], linewidths=0.4, alpha=0.5)
         ax.scatter(centers[:, 0], centers[:, 1],
                    c=color, s=22, edgecolors="none", zorder=5)
@@ -127,6 +136,11 @@ def figure_mixture(sigma: float = 0.10, res: int = 301) -> Path:
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
         ax.set_aspect("equal")
         clean_spines(ax)
+
+    cbar = fig.colorbar(ScalarMappable(norm=norm, cmap=density_cm),
+                        ax=axes, location="right", shrink=0.7, pad=0.02)
+    style_colorbar(cbar)
+    cbar.set_label("D(z)", color=ZINC_600, fontsize=9)
 
     path = PLOTS_DIR / "kernel_shape_mixture.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")

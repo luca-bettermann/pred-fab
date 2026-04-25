@@ -20,6 +20,7 @@ from scipy.stats import qmc
 
 from pred_fab.orchestration.evidence import (
     DEFAULT_RADII,
+    EstimatorConfig,
     KernelFieldEstimator,
 )
 from _style import (
@@ -28,10 +29,12 @@ from _style import (
     add_kernel_radii_2d, add_kernel_radii_3d,
     ZINC_300, ZINC_500, ZINC_600, RED,
 )
+from _config import SIGMA  # single source of truth across all concept figures
 
 
-SOBOL_HALF_EXTENT: float = 3.0  # σ-units; matches SobolLocalEstimator default
-SIGMA: float = 0.075
+# Sobol half-extent in σ units — pulled from production EstimatorConfig
+# default so the figure tracks whatever the estimator actually does.
+SOBOL_HALF_EXTENT: float = EstimatorConfig().box
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
 
@@ -66,12 +69,35 @@ def _zoom_extent(center: np.ndarray, sigma: float, pad_sigmas: float = 3.5) -> t
     return lo, hi
 
 
-def _light_axes(ax, center: np.ndarray, lo: float, hi: float) -> None:
-    """Light-grey horizontal + vertical reference lines through the kernel centre."""
-    ax.plot([lo, hi], [center[1], center[1]],
-            color=ZINC_300, lw=0.5, alpha=0.6, zorder=0)
-    ax.plot([center[0], center[0]], [lo, hi],
-            color=ZINC_300, lw=0.5, alpha=0.6, zorder=0)
+def _angular_gap_marker(
+    ax,
+    center: np.ndarray,
+    sigma: float,
+    *,
+    ray_sigma: float = 2.0,
+) -> None:
+    """Two short segments from the kernel centre showing the 45° angular gap.
+
+    One ray along +x, one ray at +45°, both extending to `ray_sigma · σ` so they
+    line up with the outer KernelField shell. Small "45°" label between them.
+    """
+    r = float(ray_sigma) * float(sigma)
+    cx, cy = float(center[0]), float(center[1])
+    # +x ray
+    ax.plot([cx, cx + r], [cy, cy],
+            color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
+    # +45° ray
+    dx = r * np.cos(np.pi / 4.0)
+    dy = r * np.sin(np.pi / 4.0)
+    ax.plot([cx, cx + dx], [cy, cy + dy],
+            color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
+    # label, placed inside the angle wedge
+    label_r = 0.55 * r
+    label_angle = np.pi / 8.0  # 22.5°, midway between the two rays
+    ax.text(cx + label_r * np.cos(label_angle),
+            cy + label_r * np.sin(label_angle),
+            "45°", fontsize=7, color=ZINC_500,
+            ha="left", va="center", zorder=1)
 
 
 def _radii_labels(ax, center: np.ndarray, sigma: float, multipliers, color=ZINC_500) -> None:
@@ -125,7 +151,7 @@ def figure_2d(sigma: float = SIGMA, seed: int = 0) -> Path:
     # KernelField
     ax = axes[0]
     ax.contourf(g_x, g_x, bg, levels=18, cmap=cm, norm=norm, alpha=0.18, zorder=0)
-    _light_axes(ax, center, lo, hi)
+    _angular_gap_marker(ax, center, sigma, ray_sigma=2.0)
     add_kernel_radii_2d(ax, center, sigma, DEFAULT_RADII, color_scale=True)
     _radii_labels(ax, center, sigma, DEFAULT_RADII)
     ax.scatter(kf_pts[:, 0], kf_pts[:, 1],
@@ -143,7 +169,6 @@ def figure_2d(sigma: float = SIGMA, seed: int = 0) -> Path:
     # Sobol-local
     ax = axes[1]
     ax.contourf(g_x, g_x, bg, levels=18, cmap=cm, norm=norm, alpha=0.18, zorder=0)
-    _light_axes(ax, center, lo, hi)
     box_lo = center - SOBOL_HALF_EXTENT * sigma
     box_hi = center + SOBOL_HALF_EXTENT * sigma
     square_wireframe(ax, box_lo, box_hi, color=ZINC_500, lw=0.9, alpha=0.55)

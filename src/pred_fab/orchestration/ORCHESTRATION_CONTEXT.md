@@ -84,7 +84,7 @@ agent.configure_exploration(
     ),
 )
 # or Sobol-local:
-# EstimatorConfig(type="sobol_local", box=3.0, n_samples=256)
+# EstimatorConfig(type="sobol_local", box=2.0, n_samples=256)
 
 agent.configure_optimizer(backend=Optimizer.DE, de_maxiter=1000)
 agent.configure_schedule("speed", "n_layers", delta=5.0, smoothing=0.05)
