@@ -180,6 +180,19 @@ def _angular_gap_n_dirs(D: int, angular_gap_deg: float) -> int:
     return int(np.ceil(surface / theta ** (D - 1)))
 
 
+def kernel_field_probe_count(
+    D: int,
+    radii: tuple[float, ...] = DEFAULT_RADII,
+    angular_gap_deg: float = DEFAULT_ANGULAR_GAP_DEG,
+) -> int:
+    """Total probe count for a KernelField configuration: centre + shells × directions.
+
+    Used by SobolLocalEstimator's `n_samples=None` default to match KernelField's
+    sample budget at the same dimensionality (fair compute / accuracy comparison).
+    """
+    return 1 + len(radii) * _angular_gap_n_dirs(D, angular_gap_deg)
+
+
 def _in_unit_cube(points: np.ndarray) -> np.ndarray:
     return np.all((points >= 0.0) & (points <= 1.0), axis=-1)
 
@@ -292,11 +305,21 @@ class KernelFieldEstimator(EvidenceEstimator):
 
 @dataclass
 class SobolLocalEstimator(EvidenceEstimator):
-    """Volume-weighted QMC in a [center ± box·σ]^D cube."""
+    """Volume-weighted QMC in a [center ± box·σ]^D cube.
+
+    `n_samples=None` (default) ties the Sobol probe count to the KernelField
+    probe count at the same `D` — gives matched compute and matched extent
+    (with `box=2.0`) for fair comparison. Set an explicit integer to override.
+    """
 
     box: float = 2.0
-    n_samples: int = 256
+    n_samples: int | None = None
     seed: int = 0
+
+    def _resolve_n_samples(self, D: int) -> int:
+        if self.n_samples is not None:
+            return int(self.n_samples)
+        return kernel_field_probe_count(D)
 
     def self_integral(
         self, center: np.ndarray, index: KernelIndex, kernel_idx: int | None = None,
@@ -306,10 +329,11 @@ class SobolLocalEstimator(EvidenceEstimator):
         sigma = index.sigma
         box_side = 2.0 * self.box * sigma
         volume = box_side ** D
+        n = self._resolve_n_samples(D)
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            unit = qmc.Sobol(d=D, scramble=True, rng=self.seed).random(n=self.n_samples)
+            unit = qmc.Sobol(d=D, scramble=True, rng=self.seed).random(n=n)
         samples = center + box_side * (unit - 0.5)
 
         # ρⱼ(z; center, σ²I) — normalized Gaussian without the kernel weight
@@ -340,7 +364,7 @@ class EstimatorConfig:
     angular_gap_deg: float = DEFAULT_ANGULAR_GAP_DEG
     # Sobol-local
     box: float = 2.0
-    n_samples: int = 256
+    n_samples: int | None = None  # None → match KernelField probe count at runtime
     seed: int = 0
     # Shared
     cutoff_sigmas: float = 5.0
