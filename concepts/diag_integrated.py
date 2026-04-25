@@ -33,18 +33,15 @@ from scipy.stats import qmc
 # ---------- Kernel and evidence ----------
 
 def gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-    """Evaluate proper Gaussian density at z for each center.
+    """Peak-1 Gaussian density — matches production (ρ(c) = 1 per centre).
 
     z:       (M, D)
     centers: (N, D)
     Returns: (M, N) density values; each column is ρ(· ; centers[n], σ²I)
-             with ∫_{ℝ^D} ρ dz = 1 per center.
+             with peak ρ = 1 at the centre.
     """
-    D = z.shape[-1]
-    norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
-    # (M, N)
     d2 = np.sum((z[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
-    return norm * np.exp(-d2 / (2.0 * sigma ** 2))
+    return np.exp(-d2 / (2.0 * sigma ** 2))
 
 
 def raw_density(z: np.ndarray, centers: np.ndarray, weights: np.ndarray, sigma: float) -> np.ndarray:

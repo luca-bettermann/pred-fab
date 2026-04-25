@@ -78,27 +78,27 @@ def _angular_gap_marker(
 ) -> None:
     """Two short segments from the kernel centre showing the 45° angular gap.
 
-    One ray along +x, one ray at +45°, both extending to `ray_sigma · σ` so they
-    line up with the outer KernelField shell. Small "45°" label between them.
+    One ray straight up (12 o'clock), one ray 45° clockwise from up, both
+    extending to `ray_sigma · σ` so they line up with the outer KernelField
+    shell. Small "45°" label inside the wedge between them.
     """
     r = float(ray_sigma) * float(sigma)
     cx, cy = float(center[0]), float(center[1])
-    # +x ray (0°)
-    ax.plot([cx, cx + r], [cy, cy],
+    # Straight up (12 o'clock, angle = π/2 in math convention)
+    ax.plot([cx, cx], [cy, cy + r],
             color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
-    # −45° ray (clockwise from +x) — going down-right, away from the
-    # σ-multiplier labels above so the marker sits in unused space.
-    dx = r * np.cos(-np.pi / 4.0)
-    dy = r * np.sin(-np.pi / 4.0)
+    # 45° clockwise from up → angle π/4 in math convention (1:30 position)
+    dx = r * np.cos(np.pi / 4.0)
+    dy = r * np.sin(np.pi / 4.0)
     ax.plot([cx, cx + dx], [cy, cy + dy],
             color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
-    # label, placed inside the angle wedge
+    # label, placed inside the angle wedge (midway: 67.5° from +x)
     label_r = 0.55 * r
-    label_angle = -np.pi / 8.0  # −22.5°, midway between the two rays
+    label_angle = 3.0 * np.pi / 8.0
     ax.text(cx + label_r * np.cos(label_angle),
             cy + label_r * np.sin(label_angle),
             "45°", fontsize=7, color=ZINC_500,
-            ha="left", va="center", zorder=1)
+            ha="center", va="center", zorder=1)
 
 
 def _radii_labels(ax, center: np.ndarray, sigma: float, multipliers, color=ZINC_500) -> None:

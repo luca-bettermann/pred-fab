@@ -73,7 +73,12 @@ class KernelIndex:
         return self.cutoff_sigmas * self.sigma
 
     def density_at(self, points: np.ndarray, exclude_idx: int | None = None) -> np.ndarray:
-        """D(z) = Σⱼ wⱼ·N(z; zⱼ, σ²I) at each row of `points`.
+        """D(z) = Σⱼ wⱼ · exp(−‖z−zⱼ‖²/2σ²) at each row of `points`.
+
+        Peak-1 Gaussian per kernel — ρⱼ(zⱼ) = 1 — so D is bounded by the
+        sum of weights when kernels overlap, and the saturation transform
+        E = D/(1+D) keeps a usable gradient instead of pinning at 1 from a
+        single kernel.
 
         If `exclude_idx` is given, kernel at that index is skipped — used by
         the KernelField estimator to substitute a precomputed self-density.
@@ -85,7 +90,6 @@ class KernelIndex:
         if self.is_empty or self._D == 0:
             return np.zeros(M)
 
-        norm = 1.0 / (self.sigma * np.sqrt(2.0 * np.pi)) ** self._D
         inv_2sig2 = 1.0 / (2.0 * self.sigma ** 2)
 
         if self._tree is None:
@@ -95,8 +99,8 @@ class KernelIndex:
             exp_term = np.exp(-d2 * inv_2sig2)
             if exclude_idx is not None:
                 mask = np.arange(self._n) != exclude_idx
-                return norm * (exp_term[:, mask] * self.weights[mask]).sum(axis=-1)
-            return norm * (exp_term * self.weights).sum(axis=-1)
+                return (exp_term[:, mask] * self.weights[mask]).sum(axis=-1)
+            return (exp_term * self.weights).sum(axis=-1)
 
         neighbor_lists = self._tree.query_ball_point(points, r=self.cutoff)
         out = np.zeros(M)
@@ -109,7 +113,7 @@ class KernelIndex:
                 if len(idxs_arr) == 0:
                     continue
             d2 = np.sum((points[i] - self.centers[idxs_arr]) ** 2, axis=-1)
-            out[i] = norm * np.sum(self.weights[idxs_arr] * np.exp(-d2 * inv_2sig2))
+            out[i] = np.sum(self.weights[idxs_arr] * np.exp(-d2 * inv_2sig2))
         return out
 
 
@@ -122,8 +126,13 @@ def _surface_area_unit_sphere(D: int) -> float:
 
 
 def _gaussian_radial_pdf(r: float, sigma: float, D: int) -> float:
-    """Isotropic Gaussian pdf at radius r (1-D value; spherical shell handled separately)."""
-    return (2.0 * pi * sigma * sigma) ** (-D / 2.0) * float(np.exp(-r * r / (2.0 * sigma * sigma)))
+    """Peak-1 Gaussian density at radius r — ρ(0) = 1.
+
+    Used as the integration measure for radial shell quadrature, kept
+    consistent with the peak-1 kernel definition in :class:`KernelIndex`.
+    """
+    del D  # peak-1 normalization is dimension-agnostic
+    return float(np.exp(-r * r / (2.0 * sigma * sigma)))
 
 
 def _radial_shell_weights(
@@ -251,10 +260,10 @@ class KernelFieldEstimator(EvidenceEstimator):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Probe offsets, quadrature weights, and self-density at each probe.
 
-        Self-density `ρ_self[k] = (1/(σ√2π))^D · exp(−‖offsets[k]‖²/2σ²)` is
-        independent of which kernel owns the probe — it is the same constant
-        for every kernel of weight 1, so we cache it once per (D, σ) and
-        scale by the kernel's weight at use-time.
+        Self-density `ρ_self[k] = exp(−‖offsets[k]‖²/2σ²)` is peak-1 at the
+        kernel centre, matching :meth:`KernelIndex.density_at`. Same constant
+        for every kernel of weight 1 — cached once per (D, σ) and scaled by
+        the kernel's weight at use-time.
         """
         key = (D, sigma)
         if key in self._cache:
@@ -275,10 +284,9 @@ class KernelFieldEstimator(EvidenceEstimator):
         offsets = np.stack(offsets_list)
         weights = np.asarray(weights_list, dtype=float)
 
-        norm = 1.0 / (sigma * np.sqrt(2.0 * pi)) ** D
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
         offset_sq = np.sum(offsets ** 2, axis=-1)
-        self_density = norm * np.exp(-offset_sq * inv_2sig2)
+        self_density = np.exp(-offset_sq * inv_2sig2)
 
         self._cache[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
@@ -336,16 +344,14 @@ class SobolLocalEstimator(EvidenceEstimator):
             unit = qmc.Sobol(d=D, scramble=True, rng=self.seed).random(n=n)
         samples = center + box_side * (unit - 0.5)
 
-        # ρⱼ(z; center, σ²I) — normalized Gaussian without the kernel weight
-        norm = 1.0 / (sigma * np.sqrt(2.0 * pi)) ** D
+        # ρⱼ(z; center) — peak-1 Gaussian, no weight (caller scales by w_j)
         d2 = np.sum((samples - center) ** 2, axis=-1)
-        rho_j = norm * np.exp(-d2 / (2.0 * sigma * sigma))
+        rho_j = np.exp(-d2 / (2.0 * sigma * sigma))
 
         D_vals = index.density_at(samples)
         in_domain = _in_unit_cube(samples).astype(float)
 
         # ∫ρⱼ/(1+D) dz ≈ volume · mean[ρⱼ/(1+D) · 1_cube]
-        # self_integral returns the unit-mass expectation → divide by ∫ρⱼ dz = 1 (cancels).
         integrand = rho_j / (1.0 + D_vals) * in_domain
         return volume * float(integrand.mean())
 

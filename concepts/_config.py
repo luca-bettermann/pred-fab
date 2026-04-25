@@ -33,14 +33,13 @@ Z_NEW: np.ndarray = np.array([0.50, 0.30])
 
 
 def gaussian_density(grid: np.ndarray, center: np.ndarray, sigma: float) -> np.ndarray:
-    """Mass-1 Gaussian density — matches production (`∫ρ dz = 1`).
+    """Peak-1 Gaussian density — matches production (`ρ(c) = 1`).
 
-    `ρ(z) = (σ√2π)^−D · exp(−‖z−c‖²/2σ²)`. Concept figures use the same
-    normalisation as `KernelIndex.density_at` so what they show is exactly
-    what the optimiser sees, including the strong saturation that follows
-    from production-σ peaks (`E ≈ 0.97` for a single isolated kernel).
+    `ρ(z) = exp(−‖z−c‖²/2σ²)`. Concept figures use the same normalisation
+    as `KernelIndex.density_at` so what they show is exactly what the
+    optimiser sees: D bounded by the sum of overlapping kernel weights,
+    E = D/(1+D) keeping a usable gradient instead of saturating ≈ 1 from a
+    single kernel.
     """
-    D = grid.shape[-1]
-    norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
     d2 = np.sum((grid - np.asarray(center)) ** 2, axis=-1)
-    return norm * np.exp(-d2 / (2.0 * sigma ** 2))
+    return np.exp(-d2 / (2.0 * sigma ** 2))

@@ -427,16 +427,19 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     @staticmethod
     def _gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-        """Normalized Gaussian density ρ(z; z_j, σ²I) with ∫ρ dz = 1 in ℝ^D.
+        """Peak-1 Gaussian density ρ(z; z_j, σ²I) — ρ(z_j; z_j) = 1.
+
+        Matches the kernel definition used by :class:`KernelIndex`. KDE
+        prediction uses ratios of weighted densities, so the chosen
+        normalization cancels and the prediction is invariant; this just
+        keeps the shared kernel definition consistent across the package.
 
         z:       (M, D)
         centers: (N, D)
-        Returns: (M, N) — each column is the density of one center evaluated at M query points.
+        Returns: (M, N) — each column is one centre's density at M points.
         """
-        D = z.shape[-1]
-        norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
         d2 = np.sum((z[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
-        return norm * np.exp(-d2 / (2.0 * sigma ** 2))
+        return np.exp(-d2 / (2.0 * sigma ** 2))
 
     @classmethod
     def _raw_density(

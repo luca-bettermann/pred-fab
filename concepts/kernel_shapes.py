@@ -36,15 +36,15 @@ from _style import (
 # ---------- Kernel densities ----------
 
 def gaussian_density(z: np.ndarray, z_j: np.ndarray, sigma: float) -> np.ndarray:
-    D = z.shape[-1]
+    """Peak-1 Gaussian: ρ(z_j) = 1, matches production."""
     d2 = np.sum((z - z_j) ** 2, axis=-1)
-    norm = 1.0 / (sigma * np.sqrt(2.0 * np.pi)) ** D
-    return norm * np.exp(-d2 / (2.0 * sigma ** 2))
+    return np.exp(-d2 / (2.0 * sigma ** 2))
 
 
 def cauchy_density(z: np.ndarray, z_j: np.ndarray, sigma: float) -> np.ndarray:
+    """Peak-1 Cauchy product: ρ(z_j) = 1 (one factor per dim)."""
     diff = z - z_j
-    per_dim = (sigma / np.pi) / (diff ** 2 + sigma ** 2)
+    per_dim = 1.0 / (1.0 + (diff / sigma) ** 2)
     return np.prod(per_dim, axis=-1)
 
 
