@@ -23,11 +23,10 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 
 from _style import (
-    apply_style, clean_spines,
-    ZINC_100, ZINC_300, ZINC_500, ZINC_600, ZINC_700, ZINC_900,
+    apply_style, clean_spines, subplot_label, cmap,
+    ZINC_300, ZINC_500, ZINC_600, ZINC_700,
     STEEL_500, EMERALD_500,
 )
 
@@ -51,12 +50,6 @@ PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
 
 
-def _density_cmap() -> LinearSegmentedColormap:
-    return LinearSegmentedColormap.from_list(
-        "density", ["white", ZINC_100, "#D4D4D8", ZINC_500, ZINC_900], N=256,
-    )
-
-
 # ---------- Figure 1: single kernel ----------
 
 def figure_single_kernel(sigma: float = 0.10, lim: float = 0.5, res: int = 301) -> Path:
@@ -75,32 +68,25 @@ def figure_single_kernel(sigma: float = 0.10, lim: float = 0.5, res: int = 301) 
     theta = np.linspace(0, 2 * np.pi, 240)
 
     fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.6), constrained_layout=True)
-    cmap = _density_cmap()
+    density_cm = cmap("density")
 
     for ax, field, label, color, fwhm in zip(
         axes, [G, C], ["Gaussian", "Cauchy"], [STEEL_500, EMERALD_500], [fwhm_g, fwhm_c]
     ):
-        ax.contourf(x, x, field, levels=24, cmap=cmap, vmin=0, vmax=vmax)
+        ax.contourf(x, x, field, levels=24, cmap=density_cm, vmin=0, vmax=vmax)
         ax.contour(x, x, field, levels=6, colors=[ZINC_300], linewidths=0.4, alpha=0.55)
         ax.plot(fwhm * np.cos(theta), fwhm * np.sin(theta),
                 color=color, lw=1.6, alpha=0.9,
                 label=f"half-height  r = {fwhm:.3f}")
         ax.scatter([0], [0], c=color, s=28, edgecolors="none", zorder=5)
 
-        ax.set_title(
-            f"{label}  ·  σ = {sigma}   peak ρ = {field.max():.1f}",
-            pad=6, color=ZINC_700,
-        )
+        subplot_label(ax, f"{label}  ·  σ = {sigma}   peak ρ = {field.max():.1f}")
         ax.set_xlabel("z₁ − zⱼ,1"); ax.set_ylabel("z₂ − zⱼ,2")
         ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
         ax.set_aspect("equal")
         ax.legend(loc="upper right", fontsize=8, frameon=False)
         clean_spines(ax)
 
-    fig.suptitle(
-        "Kernel shape — single datapoint, same σ, different tails",
-        fontsize=12, color=ZINC_700,
-    )
     path = PLOTS_DIR / "kernel_shape_single.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -126,26 +112,22 @@ def figure_mixture(sigma: float = 0.10, res: int = 301) -> Path:
         C += cauchy_density(Z, z_j, sigma)
 
     vmax = max(G.max(), C.max())
-    cmap = _density_cmap()
+    density_cm = cmap("density")
 
     fig, axes = plt.subplots(1, 2, figsize=(9.8, 4.8), constrained_layout=True)
     for ax, field, label, color in zip(
         axes, [G, C], ["Gaussian mixture", "Cauchy mixture"], [STEEL_500, EMERALD_500]
     ):
-        ax.contourf(u, u, field, levels=28, cmap=cmap, vmin=0, vmax=vmax)
+        ax.contourf(u, u, field, levels=28, cmap=density_cm, vmin=0, vmax=vmax)
         ax.contour(u, u, field, levels=8, colors=[ZINC_300], linewidths=0.4, alpha=0.5)
         ax.scatter(centers[:, 0], centers[:, 1],
                    c=color, s=22, edgecolors="none", zorder=5)
-        ax.set_title(f"{label}  ·  σ = {sigma}", pad=6, color=ZINC_700)
+        subplot_label(ax, f"{label}  ·  σ = {sigma}")
         ax.set_xlabel("z₁"); ax.set_ylabel("z₂")
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
         ax.set_aspect("equal")
         clean_spines(ax)
 
-    fig.suptitle(
-        "Kernel mixture  D(z) = Σⱼ ρⱼ(z) — five datapoints, same σ",
-        fontsize=12, color=ZINC_700,
-    )
     path = PLOTS_DIR / "kernel_shape_mixture.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)

@@ -27,12 +27,11 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import Normalize
 
 from _style import (
-    apply_style, clean_spines,
-    evidence_cmap,
-    ZINC_100, ZINC_300, ZINC_500, ZINC_600, ZINC_700, ZINC_900,
+    apply_style, clean_spines, subplot_label, cmap, style_colorbar,
+    ZINC_300, ZINC_500, ZINC_700,
     STEEL_500, EMERALD_500,
 )
 from kernel_shapes import gaussian_density
@@ -40,12 +39,6 @@ from kernel_shapes import gaussian_density
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
-
-
-def _density_cmap() -> LinearSegmentedColormap:
-    return LinearSegmentedColormap.from_list(
-        "density", ["white", ZINC_100, "#D4D4D8", ZINC_500, ZINC_900], N=256,
-    )
 
 
 # ---------- Figure 1: scalar transform ----------
@@ -108,21 +101,19 @@ def figure_field_comparison(sigma: float = 0.10, res: int = 301) -> Path:
     fig, axes = plt.subplots(1, 2, figsize=(11.8, 4.8), constrained_layout=True)
 
     # Left: raw density D(z) — unbounded
-    cmap_D = _density_cmap()
+    cmap_D = cmap("density")
     im_D = axes[0].contourf(u, u, D_field, levels=28, cmap=cmap_D, vmin=0, vmax=D_field.max())
     axes[0].contour(u, u, D_field, levels=8, colors=[ZINC_300], linewidths=0.4, alpha=0.5)
     axes[0].scatter(centers[:, 0], centers[:, 1], c=ZINC_700, s=18, edgecolors="none", zorder=5)
-    axes[0].text(0.02, 0.96, f"D(z)  ·  peak ≈ {D_field.max():.0f}",
-                 transform=axes[0].transAxes, fontsize=9.5, color=ZINC_600)
+    subplot_label(axes[0], f"D(z)  ·  peak ≈ {D_field.max():.0f}")
 
     # Right: evidence E(z) — bounded in [0, 1)
-    cmap_E = evidence_cmap()
+    cmap_E = cmap("evidence")
     im_E = axes[1].contourf(u, u, E_field, levels=28, cmap=cmap_E, vmin=0, vmax=1.0)
     axes[1].contour(u, u, E_field, levels=[0.25, 0.5, 0.75], colors=[ZINC_300],
                     linewidths=0.5, alpha=0.55)
     axes[1].scatter(centers[:, 0], centers[:, 1], c=ZINC_700, s=18, edgecolors="none", zorder=5)
-    axes[1].text(0.02, 0.96, "E(z) = D / (1 + D)  ·  bounded in [0, 1)",
-                 transform=axes[1].transAxes, fontsize=9.5, color=ZINC_600)
+    subplot_label(axes[1], "E(z) = D / (1 + D)  ·  bounded in [0, 1)")
 
     for ax in axes:
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
@@ -132,15 +123,11 @@ def figure_field_comparison(sigma: float = 0.10, res: int = 301) -> Path:
 
     # Two separate narrow colorbars, one per panel
     cbar_D = fig.colorbar(im_D, ax=axes[0], shrink=0.8, pad=0.02)
-    cbar_D.ax.tick_params(colors=ZINC_500, labelsize=7)
-    cbar_D.outline.set_edgecolor(ZINC_300)
-    cbar_D.outline.set_linewidth(0.6)
+    style_colorbar(cbar_D)
 
     cbar_E = fig.colorbar(ScalarMappable(norm=Normalize(0, 1), cmap=cmap_E),
                           ax=axes[1], shrink=0.8, pad=0.02)
-    cbar_E.ax.tick_params(colors=ZINC_500, labelsize=7)
-    cbar_E.outline.set_edgecolor(ZINC_300)
-    cbar_E.outline.set_linewidth(0.6)
+    style_colorbar(cbar_E)
 
     path = PLOTS_DIR / "evidence_field_comparison.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
