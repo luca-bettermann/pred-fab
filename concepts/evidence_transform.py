@@ -1,12 +1,10 @@
 """Concept: the saturating evidence transform  E(z) = D(z) / (1 + D(z)).
 
-Raw density `D(z) = Σⱼ wⱼ ρⱼ(z)` is unbounded — it grows without limit as
-kernels stack, and its peak scales with `σ^−D` so the magnitude is
-σ-dependent. We want an "evidence" field that:
+Raw density `D(z) = Σⱼ wⱼ ρⱼ(z)` is unbounded — it grows as kernels stack.
+We want an "evidence" field that:
 
   · is bounded in `[0, 1)` so it can be integrated and interpreted directly
-  · saturates (diminishing returns) — a second kernel at the same point
-    adds less than the first, a fourth less than a third, etc.
+  · saturates — a second kernel at the same point adds less than the first
   · has a non-trivial gradient everywhere `D > 0`
 
 The simplest map satisfying all three is the Möbius-style transform
@@ -17,9 +15,15 @@ The simplest map satisfying all three is the Möbius-style transform
 for every finite `D` — the optimiser never sees a flat patch as long as any
 kernel has non-zero mass locally.
 
+For pedagogical clarity these field figures use a **peak-1 Gaussian** —
+`ρ(z; z_j) = exp(−‖z−z_j‖²/2σ²)` — so a single isolated kernel reaches
+`D=1` at its centre, hence `E=0.5`. The production codepath uses the
+mass-1 normalisation (`∫ρ dz = 1`) which gives different absolute values
+but the same qualitative saturation behaviour.
+
 Two figures:
-    evidence_scalar_curve.png  — E(D) and u(D) as scalar curves on [0, 10]
-    evidence_field_comparison.png — D(z) and E(z) for a 5-kernel mixture
+    evidence_scalar_curve.png      — E(D) and u(D) as scalar curves on [0, 10]
+    evidence_field_comparison.png  — D(z) and E(z) for a 5-kernel mixture
 """
 from __future__ import annotations
 
@@ -34,7 +38,12 @@ from _style import (
     ZINC_300, ZINC_500, ZINC_700,
     STEEL_500, EMERALD_500,
 )
-from kernel_shapes import gaussian_density
+
+
+def gaussian_unit_peak(z: np.ndarray, z_j: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian rescaled so peak = 1 (single point gives D=1, hence E=0.5)."""
+    d2 = np.sum((z - z_j) ** 2, axis=-1)
+    return np.exp(-d2 / (2.0 * sigma ** 2))
 
 
 PLOTS_DIR = Path(__file__).parent / "plots"
@@ -95,17 +104,17 @@ def figure_field_comparison(sigma: float = 0.10, res: int = 301) -> Path:
 
     D_field = np.zeros(Z.shape[:-1])
     for z_j in centers:
-        D_field += gaussian_density(Z, z_j, sigma)
+        D_field += gaussian_unit_peak(Z, z_j, sigma)
     E_field = D_field / (1.0 + D_field)
 
     fig, axes = plt.subplots(1, 2, figsize=(11.8, 4.8), constrained_layout=True)
 
-    # Left: raw density D(z) — unbounded
+    # Left: raw density D(z) — unbounded, scale colorbar to actual peak
     cmap_D = cmap("density")
     im_D = axes[0].contourf(u, u, D_field, levels=28, cmap=cmap_D, vmin=0, vmax=D_field.max())
     axes[0].contour(u, u, D_field, levels=8, colors=[ZINC_300], linewidths=0.4, alpha=0.5)
     axes[0].scatter(centers[:, 0], centers[:, 1], c=ZINC_700, s=18, edgecolors="none", zorder=5)
-    subplot_label(axes[0], f"D(z)  ·  peak ≈ {D_field.max():.0f}")
+    subplot_label(axes[0], f"D(z)  ·  peak ≈ {D_field.max():.2f}")
 
     # Right: evidence E(z) — bounded in [0, 1)
     cmap_E = cmap("evidence")

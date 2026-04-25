@@ -195,42 +195,54 @@ def add_kernel_radii_3d(
     alpha_max: float = 0.5,
     lw: float = 0.7,
     n_points: int = 200,
+    orbitals_per_shell: int = 3,
 ) -> None:
-    """Tilted great-circle orbitals at σ·multipliers around `center` (atom-style 3-D).
+    """Great-circle orbitals at σ·multipliers around `center` (atom-style 3-D).
 
-    One orbital per shell, each rotated successively so the cluster reads as
-    nested orbital paths rather than a heavy sphere wireframe.
+    `orbitals_per_shell` controls how many great circles are drawn per shell:
+    1 → minimal (one tilted ring per radius), 3 → xy, xz, yz planes (default,
+    reads as a sphere wireframe-lite), 2 → two orthogonal rings.
     """
     cm = cmap("evidence") if color_scale else None
     theta = np.linspace(0.0, 2.0 * np.pi, n_points)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
+    zero = np.zeros_like(theta)
     cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
     multipliers = list(multipliers)
+
+    # Per-orbital base curves (unit circle in three principal planes).
+    # Index 0: xy-plane;  1: xz-plane;  2: yz-plane.
+    plane_curves = [
+        (cos_t, sin_t, zero),
+        (cos_t, zero, sin_t),
+        (zero, cos_t, sin_t),
+    ]
+
+    n_orbitals = max(1, min(int(orbitals_per_shell), 3))
+
     for k, m in enumerate(multipliers):
         r = float(m) * sigma
         density_frac = float(np.exp(-(r ** 2) / (2.0 * sigma ** 2)))
-        if cm is not None:
-            color = cm(0.25 + 0.55 * density_frac)
-        else:
-            color = base_color
-        # Rotate plane around y-axis by tilt_y, then around z by tilt_z
-        tilt_y = (k * 35.0) * np.pi / 180.0
-        tilt_z = (k * 50.0) * np.pi / 180.0
-        # base circle in xy-plane
-        x = r * cos_t
-        y = r * sin_t
-        z = np.zeros_like(theta)
-        # rotate around y-axis: (x, z) -> (x cos − z sin, x sin + z cos)
-        cy_, sy_ = np.cos(tilt_y), np.sin(tilt_y)
-        x2 = x * cy_ - z * sy_
-        z2 = x * sy_ + z * cy_
-        # rotate around z-axis
-        cz_, sz_ = np.cos(tilt_z), np.sin(tilt_z)
-        x3 = x2 * cz_ - y * sz_
-        y3 = x2 * sz_ + y * cz_
-        ax.plot(cx + x3, cy + y3, cz + z2,
-                color=color, lw=lw, alpha=alpha_max * (0.4 + 0.6 * density_frac),
-                zorder=2)
+        color = cm(0.25 + 0.55 * density_frac) if cm is not None else base_color
+        alpha = alpha_max * (0.4 + 0.6 * density_frac)
+
+        if n_orbitals == 1:
+            # One tilted ring per shell — old "atomic orbital" look.
+            tilt_y = (k * 35.0) * np.pi / 180.0
+            tilt_z = (k * 50.0) * np.pi / 180.0
+            x, y, z = r * cos_t, r * sin_t, zero
+            cy_, sy_ = np.cos(tilt_y), np.sin(tilt_y)
+            x2, z2 = x * cy_ - z * sy_, x * sy_ + z * cy_
+            cz_, sz_ = np.cos(tilt_z), np.sin(tilt_z)
+            x3, y3 = x2 * cz_ - y * sz_, x2 * sz_ + y * cz_
+            ax.plot(cx + x3, cy + y3, cz + z2,
+                    color=color, lw=lw, alpha=alpha, zorder=2)
+            continue
+
+        for plane in plane_curves[:n_orbitals]:
+            xs, ys, zs = plane
+            ax.plot(cx + r * xs, cy + r * ys, cz + r * zs,
+                    color=color, lw=lw, alpha=alpha, zorder=2)
 
 
 def style_colorbar(cbar) -> None:
