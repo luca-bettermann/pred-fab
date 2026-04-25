@@ -1,14 +1,27 @@
-"""Shared style utilities and AxisSpec for schema-agnostic PFAB plots."""
+"""Shared style utilities, palette, and semantic colormaps for PFAB plots.
+
+Single source of truth for visual identity across pred-fab and pred-fab-mock.
+Five semantic colormaps:
+    density        -> Greys     raw kernel sum (unbounded)
+    evidence       -> Blues     saturated D/(1+D) ∈ [0, 1)
+    evidence_gain  -> Purples   ΔI acquisition signal
+    performance    -> RdYlGn    perf score, bad → good
+    mixed          -> cividis   (1−κ)·perf + κ·ΔI, distinct from components
+"""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import Colormap
+
 
 # Visual Identity — core palette
 STEEL_100 = "#D6E4F0"
@@ -19,6 +32,8 @@ STEEL_900 = "#1A3A5C"
 EMERALD_100 = "#D1FAE5"
 EMERALD_300 = "#6EE7B7"
 EMERALD_500 = "#10B981"
+EMERALD_700 = "#047857"
+EMERALD_900 = "#064E3B"
 ZINC_50 = "#FAFAFA"
 ZINC_100 = "#F4F4F5"
 ZINC_200 = "#E4E4E7"
@@ -31,7 +46,246 @@ ZINC_800 = "#27272A"
 ZINC_900 = "#18181B"
 ACCENT_YELLOW = "#EAB308"
 ACCENT_RED = "#DC2626"
+RED = ACCENT_RED
+YELLOW = ACCENT_YELLOW
 
+
+# ---------------------------------------------------------------------------
+# Colormap registry
+# ---------------------------------------------------------------------------
+
+_CMAP_REGISTRY: dict[str, str] = {
+    "density": "Greys",
+    "evidence": "Blues",
+    "evidence_gain": "Purples",
+    "performance": "RdYlGn",
+    "mixed": "cividis",
+}
+
+
+def cmap(name: str) -> Colormap:
+    """Return the canonical matplotlib colormap for a semantic surface.
+
+    Valid names: density, evidence, evidence_gain, performance, mixed.
+    """
+    if name not in _CMAP_REGISTRY:
+        valid = ", ".join(sorted(_CMAP_REGISTRY))
+        raise ValueError(f"unknown cmap {name!r}; expected one of: {valid}")
+    return plt.get_cmap(_CMAP_REGISTRY[name])
+
+
+# ---------------------------------------------------------------------------
+# rcParams / style application
+# ---------------------------------------------------------------------------
+
+def apply_style() -> None:
+    """Set matplotlib rcParams to the PFAB visual-identity defaults."""
+    mpl.rcParams.update({
+        "font.family": "sans-serif",
+        "font.size": 9,
+        "axes.titlesize": 10,
+        "axes.titlecolor": ZINC_700,
+        "axes.labelsize": 9,
+        "axes.labelcolor": ZINC_600,
+        "axes.edgecolor": ZINC_300,
+        "axes.linewidth": 0.8,
+        "xtick.color": ZINC_500,
+        "ytick.color": ZINC_500,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "xtick.major.size": 3,
+        "ytick.major.size": 3,
+        "xtick.major.width": 0.6,
+        "ytick.major.width": 0.6,
+        "legend.frameon": False,
+        "legend.fontsize": 8,
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Axis / spine helpers
+# ---------------------------------------------------------------------------
+
+def clean_spines(ax) -> None:
+    """Remove top/right spines; tone down left/bottom."""
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["left"].set_color(ZINC_300)
+    ax.spines["bottom"].set_color(ZINC_300)
+
+
+def clean_3d_panes(ax) -> None:
+    """Transparent panes, light edges, muted ticks — 3blue1brown-style 3-D."""
+    for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+        pane.set_alpha(0.0)
+        pane.set_edgecolor(ZINC_300)
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.set_tick_params(colors=ZINC_500, labelsize=7, pad=1)
+        axis.label.set_color(ZINC_600)
+        axis.line.set_color(ZINC_300)
+    ax.grid(False)
+
+
+def subplot_label(
+    ax,
+    text: str,
+    x: float = 0.02,
+    y: float = 0.96,
+    *,
+    color: str = ZINC_600,
+    fontsize: float = 9.5,
+) -> None:
+    """Small in-axes label (top-left) replacing ax.set_title for the no-suptitle convention."""
+    kw = dict(transform=ax.transAxes, fontsize=fontsize, color=color,
+              ha="left", va="top")
+    if hasattr(ax, "text2D"):
+        ax.text2D(x, y, text, **kw)
+    else:
+        ax.text(x, y, text, **kw)
+
+
+# ---------------------------------------------------------------------------
+# Geometric overlays for evidence figures
+# ---------------------------------------------------------------------------
+
+def add_kernel_radii_2d(
+    ax,
+    center: np.ndarray,
+    sigma: float,
+    multipliers: Iterable[float],
+    *,
+    color_scale: bool = True,
+    base_color: str = STEEL_500,
+    alpha_max: float = 0.7,
+    lw: float = 0.7,
+    n_points: int = 240,
+) -> None:
+    """Concentric circles at σ·multipliers around `center` (atom-style 2-D).
+
+    If `color_scale` is True, each ring is shaded by `exp(-r²/2σ²)` (peak-density
+    fraction at that radius) using the evidence cmap.
+    """
+    cm = cmap("evidence") if color_scale else None
+    theta = np.linspace(0.0, 2.0 * np.pi, n_points)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    cx, cy = float(center[0]), float(center[1])
+    for m in multipliers:
+        r = float(m) * sigma
+        density_frac = float(np.exp(-(r ** 2) / (2.0 * sigma ** 2)))
+        if cm is not None:
+            color = cm(0.25 + 0.55 * density_frac)
+        else:
+            color = base_color
+        ax.plot(cx + r * cos_t, cy + r * sin_t,
+                color=color, lw=lw, alpha=alpha_max * (0.4 + 0.6 * density_frac),
+                zorder=2)
+
+
+def add_kernel_radii_3d(
+    ax,
+    center: np.ndarray,
+    sigma: float,
+    multipliers: Iterable[float],
+    *,
+    color_scale: bool = True,
+    base_color: str = STEEL_500,
+    alpha_max: float = 0.5,
+    lw: float = 0.7,
+    n_points: int = 200,
+) -> None:
+    """Tilted great-circle orbitals at σ·multipliers around `center` (atom-style 3-D).
+
+    One orbital per shell, each rotated successively so the cluster reads as
+    nested orbital paths rather than a heavy sphere wireframe.
+    """
+    cm = cmap("evidence") if color_scale else None
+    theta = np.linspace(0.0, 2.0 * np.pi, n_points)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+    multipliers = list(multipliers)
+    for k, m in enumerate(multipliers):
+        r = float(m) * sigma
+        density_frac = float(np.exp(-(r ** 2) / (2.0 * sigma ** 2)))
+        if cm is not None:
+            color = cm(0.25 + 0.55 * density_frac)
+        else:
+            color = base_color
+        # Rotate plane around y-axis by tilt_y, then around z by tilt_z
+        tilt_y = (k * 35.0) * np.pi / 180.0
+        tilt_z = (k * 50.0) * np.pi / 180.0
+        # base circle in xy-plane
+        x = r * cos_t
+        y = r * sin_t
+        z = np.zeros_like(theta)
+        # rotate around y-axis: (x, z) -> (x cos − z sin, x sin + z cos)
+        cy_, sy_ = np.cos(tilt_y), np.sin(tilt_y)
+        x2 = x * cy_ - z * sy_
+        z2 = x * sy_ + z * cy_
+        # rotate around z-axis
+        cz_, sz_ = np.cos(tilt_z), np.sin(tilt_z)
+        x3 = x2 * cz_ - y * sz_
+        y3 = x2 * sz_ + y * cz_
+        ax.plot(cx + x3, cy + y3, cz + z2,
+                color=color, lw=lw, alpha=alpha_max * (0.4 + 0.6 * density_frac),
+                zorder=2)
+
+
+def style_colorbar(cbar) -> None:
+    """Apply PFAB tick / outline styling to a matplotlib Colorbar."""
+    cbar.ax.tick_params(colors=ZINC_500, labelsize=8)
+    if cbar.outline is not None:
+        cbar.outline.set_edgecolor(ZINC_300)  # type: ignore[attr-defined]
+        cbar.outline.set_linewidth(0.6)  # type: ignore[attr-defined]
+
+
+def cube_wireframe(
+    ax,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    *,
+    color: str = ZINC_300,
+    lw: float = 0.5,
+    alpha: float = 0.32,
+) -> None:
+    """Draw the 12 edges of an axis-aligned cube on a 3-D axis."""
+    corners = np.array([
+        [lo[0], lo[1], lo[2]], [hi[0], lo[1], lo[2]],
+        [hi[0], hi[1], lo[2]], [lo[0], hi[1], lo[2]],
+        [lo[0], lo[1], hi[2]], [hi[0], lo[1], hi[2]],
+        [hi[0], hi[1], hi[2]], [lo[0], hi[1], hi[2]],
+    ], dtype=float)
+    edges = [
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ]
+    for i, j in edges:
+        p1, p2 = corners[i], corners[j]
+        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                color=color, lw=lw, alpha=alpha, zorder=-1)
+
+
+def square_wireframe(
+    ax,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    *,
+    color: str = ZINC_300,
+    lw: float = 0.5,
+    alpha: float = 0.45,
+) -> None:
+    """Draw the 4 edges of an axis-aligned square on a 2-D axis."""
+    xs = [lo[0], hi[0], hi[0], lo[0], lo[0]]
+    ys = [lo[1], lo[1], hi[1], hi[1], lo[1]]
+    ax.plot(xs, ys, color=color, lw=lw, alpha=alpha, zorder=-1)
+
+
+# ---------------------------------------------------------------------------
+# AxisSpec + existing utilities (kept for plotting subpackage callers)
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class AxisSpec:
@@ -45,7 +299,6 @@ class AxisSpec:
 
     @property
     def display_label(self) -> str:
-        """Label with unit suffix for axis display."""
         return f"{self.label} [{self.unit}]" if self.unit else self.label
 
 
@@ -62,7 +315,6 @@ def _extract_xy(
     x_axis: AxisSpec,
     y_axis: AxisSpec,
 ) -> tuple[list[float], list[float]]:
-    """Extract x and y coordinate lists from point dicts."""
     return (
         [float(p[x_axis.key]) for p in points],
         [float(p[y_axis.key]) for p in points],
@@ -73,7 +325,6 @@ def _add_fixed_subtitle(
     fig: plt.Figure,  # type: ignore[name-defined]
     fixed_params: dict[str, Any] | None,
 ) -> None:
-    """Add a small gray subtitle showing fixed parameter values."""
     if not fixed_params:
         return
     parts = [f"{k} = {v}" for k, v in fixed_params.items()]
@@ -95,11 +346,7 @@ def _plot_schedule_ranges(
     linewidth: float = 1.2,
     cap_size: float = 3.0,
 ) -> None:
-    """Draw T-ended range lines for scheduled parameters on a 2D scatter.
-
-    For each experiment with a schedule, draws a vertical or horizontal line
-    showing the min-max range of the scheduled parameter across layers.
-    """
+    """Draw T-ended range lines for scheduled parameters on a 2D scatter."""
     if not schedules or not codes:
         return
 
@@ -115,11 +362,9 @@ def _plot_schedule_ranges(
         y_varies = max(y_vals) - min(y_vals) > 1e-8
 
         if y_varies:
-            # Vertical range line (speed varies across layers)
             x_center = float(points[i].get(x_axis.key, 0))
             ax.plot([x_center, x_center], [min(y_vals), max(y_vals)],
                     color=color, alpha=alpha, linewidth=linewidth, zorder=1)
-            # T caps
             x_span = (x_axis.bounds[1] - x_axis.bounds[0]) if x_axis.bounds else 1.0
             cap = x_span * 0.008 * cap_size
             for y_end in [min(y_vals), max(y_vals)]:
@@ -127,7 +372,6 @@ def _plot_schedule_ranges(
                         color=color, alpha=alpha, linewidth=linewidth, zorder=1)
 
         if x_varies:
-            # Horizontal range line (water varies across layers)
             y_center = float(points[i].get(y_axis.key, 0))
             ax.plot([min(x_vals), max(x_vals)], [y_center, y_center],
                     color=color, alpha=alpha, linewidth=linewidth, zorder=1)
@@ -143,7 +387,6 @@ def _apply_axes(
     x_axis: AxisSpec,
     y_axis: AxisSpec,
 ) -> None:
-    """Set axis labels, bounds, and integer ticks."""
     from matplotlib.ticker import MaxNLocator
     ax.set_xlabel(x_axis.display_label)
     ax.set_ylabel(y_axis.display_label)
