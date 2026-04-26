@@ -80,12 +80,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
-        # Baseline phase strategy. False (default) = single Process phase over all
-        # numeric params jointly. True = Domain phase first (DataDomainAxis only),
-        # then Process phase with domain values held fixed. Only affects baseline;
-        # exploration/inference are single-point and don't have batch coupling to
-        # benefit from a split.
-        self.split_domain_phase: bool = False
+        # Baseline phase strategy. True (default) = Domain phase first
+        # (DataDomainAxis only), then Process phase with domain values held
+        # fixed. False = single Process phase over all numeric params jointly.
+        # Empirically the joint regime is intractable at typical baseline
+        # sizes: N=5 with 3 numeric params (incl. domain axes) timed out at
+        # 5+ minutes per call. Split keeps each per-phase DE small enough
+        # to converge in seconds.
+        self.split_domain_phase: bool = True
 
     # ------------------------------------------------------------------
     # Proxy properties for backward compatibility
@@ -514,7 +516,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Generate n baseline proposals via batch acquisition (κ=1, joint over N points).
 
         Two- or three-phase optimization:
-          Domain   — DataDomainAxis params only (only when ``split_domain_phase`` is True)
+          Domain   — DataDomainAxis params only (when ``split_domain_phase`` is True)
           Process  — continuous + integer params (with domain values held if Domain ran)
           Schedule — per-layer offsets for scheduled params (if applicable)
         """
@@ -643,7 +645,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.split_domain_phase and bool(domain_axis_codes) and n_numeric > 0
         )
 
-        # --- Phase: Domain (only when split is requested and domain axes exist) ---
+        # --- Phase: Domain (only when split is on and domain axes exist) ---
         structural_values: list[dict[str, int]] | None = None
         domain_specs: list[ExperimentSpec] = []
         if do_split:
