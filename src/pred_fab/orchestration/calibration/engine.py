@@ -183,10 +183,14 @@ class OptimizationEngine:
         integrality: list[bool] | None = None,
         label: str = "Optimizing",
         show_progress: bool = False,
+        maxiter: int | None = None,
+        popsize: int | None = None,
     ) -> _OptResult:
         """Unified differential evolution wrapper."""
-        maxiter = self.de_maxiter
-        popsize = self.de_popsize
+        if maxiter is None:
+            maxiter = self.de_maxiter
+        if popsize is None:
+            popsize = self.de_popsize
         has_int = integrality is not None and any(integrality)
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
         iter_count = [0]
