@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any, Callable
 import functools
 
@@ -11,6 +12,46 @@ from ..base_system import BaseOrchestrationSystem
 from .engine import OptimizationEngine, Optimizer, _OptResult
 from .bounds import BoundsManager
 from .space import SolutionSpace
+
+
+# Trust region for continuous static drift around Phase-2 warm start during the
+# Schedule phase — 10% of normalised range. Small enough to preserve Process's
+# joint coverage, large enough to capture static<->schedule coupling.
+_STATIC_DRIFT_NORM = 0.1
+
+
+@dataclass
+class _ScheduleState:
+    """Per-call state for the iterative Schedule phase (Phase 3).
+
+    Holds warm-starts, mutable optimisation state, and pre-computed lookups
+    that the inner-DE machinery reads on every per-experiment call.
+    """
+    n: int
+    flat_specs: list[ExperimentSpec]
+    sched_params: list[tuple[str, float, float]]
+    static_params: list[tuple[str, float, float]]
+    per_exp_L: list[int]
+    primary_dim_code: str
+    sched_delta_norms: list[float]
+
+    # Mutable state — updated each pass.
+    static_norms: np.ndarray              # (n, D_static)
+    schedule_norms: list[np.ndarray]      # n × (L_i, D_sched)
+
+    # Pre-computed lookups for X_batch construction.
+    n_dm_cols: int
+    exp_base_rows: list[np.ndarray]       # n × (n_dm_cols,)
+    sched_col_map: list[tuple[int, int]]  # (sched_idx, dm_col_idx)
+    static_col_map: list[tuple[int, int]] # (static_idx, dm_col_idx)
+
+    @property
+    def D_sched(self) -> int:
+        return len(self.sched_params)
+
+    @property
+    def D_static(self) -> int:
+        return len(self.static_params)
 
 
 # ======================================================================
@@ -979,71 +1020,66 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Smoothness retains its full lookahead within the per-experiment DE.
         Cross-experiment coupling becomes symmetric at convergence.
         """
-        D_sched = len(sched_params)
-        if D_sched == 0 or max(per_exp_L) <= 1:
+        if len(sched_params) == 0 or max(per_exp_L) <= 1:
             return flat_specs
 
-        static_params = static_params or []
-        D_static = len(static_params)
-        # Trust region for continuous static drift around Phase-2 warm start.
-        # 10% of normalised range — small enough to preserve Process's joint
-        # coverage, large enough to capture static<->trajectory coupling.
-        STATIC_DRIFT_NORM = 0.1
+        state = self._init_schedule_state(
+            n, flat_specs, sched_params, static_params or [],
+            per_exp_L, primary_dim_code,
+        )
+        if state is None:
+            return flat_specs
 
-        console = self.logger._console_output_enabled
+        self._run_schedule_passes(state)
+        return self._decode_schedule_specs(state)
 
-        # Trust-region delta in normalised space per sched param
-        sched_delta_norms: list[float] = []
-        for code, lo, hi in sched_params:
-            delta_raw = self.trust_regions.get(code, (hi - lo) / 10.0)
-            span = hi - lo
-            sched_delta_norms.append(delta_raw / span if span > 0 else 0.0)
+    def _init_schedule_state(
+        self,
+        n: int,
+        flat_specs: list[ExperimentSpec],
+        sched_params: list[tuple[str, float, float]],
+        static_params: list[tuple[str, float, float]],
+        per_exp_L: list[int],
+        primary_dim_code: str,
+    ) -> _ScheduleState | None:
+        """Build warm-starts, base rows, and column maps for the Schedule phase."""
+        baseline_dm = self._active_datamodule
+        if baseline_dm is None:
+            return None
 
-        # Step-0 warm start from Phase 2 (used as DE init for step 0; step 0 is now optimisable).
-        step0_warmstart = np.zeros((n, D_sched))
-        for i, spec in enumerate(flat_specs):
-            p_dict = spec.initial_params.to_dict()
-            for si, (code, lo, hi) in enumerate(sched_params):
-                raw_val = float(p_dict.get(code, (lo + hi) / 2.0))
-                span = hi - lo
-                step0_warmstart[i, si] = (raw_val - lo) / span if span > 0 else 0.5
+        # Trust-region delta in normalised space per sched param.
+        sched_delta_norms = [
+            (self.trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
+            for code, lo, hi in sched_params
+        ]
 
-        # Continuous-static warm start from Phase 2 (used as trust-region centre + DE init).
-        static_warmstart = np.zeros((n, D_static))
-        for i, spec in enumerate(flat_specs):
-            p_dict = spec.initial_params.to_dict()
-            for si, (code, lo, hi) in enumerate(static_params):
-                raw_val = float(p_dict.get(code, (lo + hi) / 2.0))
-                span = hi - lo
-                static_warmstart[i, si] = (raw_val - lo) / span if span > 0 else 0.5
+        # Phase-2 warm starts — step 0 is now optimisable; static is the trust-region centre.
+        step0_warmstart = self._warmstart_from_specs(flat_specs, sched_params, n)
+        static_warmstart = self._warmstart_from_specs(flat_specs, static_params, n)
 
-        # State arrays — updated in place across passes.
+        # Initial state — schedule starts flat at the step-0 warm start.
         static_norms = static_warmstart.copy()
-        # Schedule starts flat at the step-0 warm start.
-        schedule_norms: list[np.ndarray] = [
+        schedule_norms = [
             np.tile(step0_warmstart[i], (per_exp_L[i], 1)) for i in range(n)
         ]
 
-        baseline_dm = self._active_datamodule
-        if baseline_dm is None:
-            return flat_specs
-
-        # Pre-compute per-experiment static rows + column index maps.
+        # Datamodule column index maps for X_batch construction.
         n_dm_cols = len(baseline_dm.input_columns)
+        sched_col_map = [
+            (si, baseline_dm.input_columns.index(code))
+            for si, (code, _, _) in enumerate(sched_params)
+            if code in baseline_dm.input_columns
+        ]
+        static_col_map = [
+            (si, baseline_dm.input_columns.index(code))
+            for si, (code, _, _) in enumerate(static_params)
+            if code in baseline_dm.input_columns
+        ]
+
+        # Base rows hold frozen columns (integer static, fixed params).
+        # Continuous static + sched columns are overlaid per-call.
         sched_code_set = {code for code, _, _ in sched_params}
         static_code_set = {code for code, _, _ in static_params}
-        sched_col_map: list[tuple[int, int]] = []
-        for si, (code, _, _) in enumerate(sched_params):
-            if code in baseline_dm.input_columns:
-                sched_col_map.append((si, baseline_dm.input_columns.index(code)))
-        # Continuous static columns get overlaid with current static_norms each call.
-        static_col_map: list[tuple[int, int]] = []
-        for si, (code, _, _) in enumerate(static_params):
-            if code in baseline_dm.input_columns:
-                static_col_map.append((si, baseline_dm.input_columns.index(code)))
-
-        # Base row holds frozen columns (integer static, domain axes, fixed params, etc.).
-        # Continuous static and sched columns are overlaid per-call.
         exp_base_rows: list[np.ndarray] = []
         for i_exp in range(n):
             row = np.full(n_dm_cols, 0.5)
@@ -1059,143 +1095,49 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         row[c_idx] = 0.5
             exp_base_rows.append(row)
 
-        def _build_background(skip: int) -> np.ndarray:
-            """All experiments' current rows (static + schedule), except experiment ``skip``."""
-            rows: list[np.ndarray] = []
-            for i_exp in range(n):
-                if i_exp == skip:
-                    continue
-                for k in range(per_exp_L[i_exp]):
-                    row = exp_base_rows[i_exp].copy()
-                    for si, col_idx in static_col_map:
-                        row[col_idx] = static_norms[i_exp, si]
-                    for si, col_idx in sched_col_map:
-                        row[col_idx] = schedule_norms[i_exp][k, si]
-                    rows.append(row)
-            return np.stack(rows) if rows else np.zeros((0, n_dm_cols))
+        return _ScheduleState(
+            n=n, flat_specs=flat_specs,
+            sched_params=sched_params, static_params=static_params,
+            per_exp_L=per_exp_L, primary_dim_code=primary_dim_code,
+            sched_delta_norms=sched_delta_norms,
+            static_norms=static_norms, schedule_norms=schedule_norms,
+            n_dm_cols=n_dm_cols, exp_base_rows=exp_base_rows,
+            sched_col_map=sched_col_map, static_col_map=static_col_map,
+        )
 
-        lam_smooth = float(self.schedule_smoothing)
+    @staticmethod
+    def _warmstart_from_specs(
+        flat_specs: list[ExperimentSpec],
+        params: list[tuple[str, float, float]],
+        n: int,
+    ) -> np.ndarray:
+        """Extract normalised values from Phase-2 specs as a warm start."""
+        out = np.zeros((n, len(params)))
+        for i, spec in enumerate(flat_specs):
+            p_dict = spec.initial_params.to_dict()
+            for si, (code, lo, hi) in enumerate(params):
+                raw_val = float(p_dict.get(code, (lo + hi) / 2.0))
+                span = hi - lo
+                out[i, si] = (raw_val - lo) / span if span > 0 else 0.5
+        return out
 
-        def _optimise_one(i_exp: int) -> tuple[np.ndarray, np.ndarray]:
-            """Run DE on exp_i's full design (static + step 0 + offsets).
-
-            Returns (new_static, new_trajectory) — both updated arrays.
-            Variable layout in the DE vector:
-              [0 .. D_static)              continuous static (drift trust region)
-              [D_static .. D_static+D_sched)  step 0 (free in [0, 1])
-              [D_static+D_sched ..)         offsets for steps 1..L_i-1 (in [-δ, +δ])
-            """
-            L_i = per_exp_L[i_exp]
-            background = _build_background(skip=i_exp)
-            n_free_steps = L_i - 1
-            n_vars = D_static + D_sched + n_free_steps * D_sched
-
-            # Bounds — order matches the variable layout in the docstring above.
-            bounds: list[tuple[float, float]] = []
-            for si in range(D_static):
-                centre = static_norms[i_exp, si]
-                lo_b = max(0.0, centre - STATIC_DRIFT_NORM)
-                hi_b = min(1.0, centre + STATIC_DRIFT_NORM)
-                if hi_b <= lo_b:
-                    hi_b = min(1.0, lo_b + 1e-6)
-                bounds.append((lo_b, hi_b))
-            bounds.extend([(0.0, 1.0)] * D_sched)
-            for _k in range(n_free_steps):
-                for si, dnorm in enumerate(sched_delta_norms):
-                    d_eff = dnorm if dnorm > 0 else 1.0
-                    bounds.append((-d_eff, d_eff))
-
-            # Init vector: warm start from current state (zeros for offsets = flat trajectory).
-            init = np.zeros(n_vars)
-            init[:D_static] = static_norms[i_exp]
-            init[D_static:D_static + D_sched] = schedule_norms[i_exp][0]
-            # Offsets initialised from current trajectory differences.
-            traj_curr = schedule_norms[i_exp]
-            for k in range(1, L_i):
-                base = D_static + D_sched + (k - 1) * D_sched
-                init[base:base + D_sched] = traj_curr[k] - traj_curr[k - 1]
-
-            def objective(x_flat: np.ndarray) -> float:
-                stat = x_flat[:D_static]
-                step0 = x_flat[D_static:D_static + D_sched]
-                # Reconstruct full trajectory by integrating offsets from step 0.
-                traj = np.empty((L_i, D_sched))
-                traj[0] = step0
-                for k in range(1, L_i):
-                    base = D_static + D_sched + (k - 1) * D_sched
-                    traj[k] = traj[k - 1] + x_flat[base:base + D_sched]
-
-                # Build candidate rows: base row + new static + per-step sched.
-                cand = np.empty((L_i, n_dm_cols))
-                for k in range(L_i):
-                    cand[k] = exp_base_rows[i_exp]
-                    for si, col_idx in static_col_map:
-                        cand[k, col_idx] = stat[si]
-                    for si, col_idx in sched_col_map:
-                        cand[k, col_idx] = traj[k, si]
-
-                X_batch = np.concatenate([background, cand], axis=0)
-                neg_score = -self._acquisition(X_batch, kappa=1.0)
-
-                # Trust-region penalty: step-to-step jumps within delta_norm
-                # (offset bounds already enforce this hard, but a soft penalty
-                # near the boundary keeps the search stable).
-                tr_penalty = 0.0
-                for si, dnorm in enumerate(sched_delta_norms):
-                    if dnorm <= 0:
-                        continue
-                    diffs = np.abs(np.diff(traj[:, si]))
-                    excess = np.maximum(diffs - dnorm, 0.0)
-                    tr_penalty += float((excess * excess).sum())
-
-                # Second-difference smoothness: penalises zigzag, allows steady drift
-                smooth = 0.0
-                if lam_smooth > 0 and L_i >= 3:
-                    sd = traj[2:] - 2.0 * traj[1:-1] + traj[:-2]
-                    smooth = float(lam_smooth * (sd * sd).sum())
-
-                return neg_score + tr_penalty * 10.0 + smooth
-
-            # Inner DE sizing — respect user de_maxiter/de_popsize as upper bounds
-            # so test runs (e.g. de-maxiter=10) actually throttle the inner loop.
-            # scipy DE requires population > 4, so floor at 5.
-            popsize = min(max(10, 4 * n_vars), max(self.de_popsize, 5))
-            init_pop = np.tile(init, (popsize, 1))
-            jitter = self.engine.rng.normal(0, 0.02, size=init_pop.shape)
-            init_pop = init_pop + jitter
-            for v_idx, (lo_b, hi_b) in enumerate(bounds):
-                init_pop[:, v_idx] = np.clip(init_pop[:, v_idx], lo_b, hi_b)
-            init_pop[0] = init  # keep one centre exact
-
-            inner_maxiter = min(max(40, 15 * n_vars), max(self.de_maxiter, 5))
-            opt = self.engine._run_de(
-                objective, bounds, init_pop=init_pop,
-                label=f"Schedule {i_exp + 1}/{n}",
-                show_progress=console,
-                maxiter=inner_maxiter,
-                popsize=popsize,
-            )
-            best_x = opt.best_x if opt.best_x is not None else init
-            new_static = best_x[:D_static].copy()
-            new_traj = np.empty((L_i, D_sched))
-            new_traj[0] = best_x[D_static:D_static + D_sched]
-            for k in range(1, L_i):
-                base = D_static + D_sched + (k - 1) * D_sched
-                new_traj[k] = new_traj[k - 1] + best_x[base:base + D_sched]
-            self.last_baseline_nfev += opt.nfev
-            return new_static, new_traj
-
-        # ── Outer pass loop ──
-        max_passes = 4
-        tol = 0.001  # convergence: max normalised parameter change
-
+    def _run_schedule_passes(
+        self,
+        state: _ScheduleState,
+        max_passes: int = 4,
+        tol: float = 0.001,
+    ) -> None:
+        """Outer pass loop — mutates state.static_norms / schedule_norms in place."""
+        console = self.logger._console_output_enabled
         if console:
-            print(f"\n  Phase 3 (Schedule): N={n}, max_passes={max_passes}, "
-                  f"D_static={D_static}, D_sched={D_sched}, L_max={max(per_exp_L)}")
+            print(f"\n  Phase 3 (Schedule): N={state.n}, max_passes={max_passes}, "
+                  f"D_static={state.D_static}, D_sched={state.D_sched}, "
+                  f"L_max={max(state.per_exp_L)}")
 
         prev_max_static = float("inf")
         prev_max_sched = float("inf")
         converged_pass: int | None = None
+
         for pass_idx in range(max_passes):
             if console:
                 if pass_idx == 0:
@@ -1206,15 +1148,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             max_static_delta = 0.0
             max_sched_delta = 0.0
-            for i_exp in range(n):
-                old_static = static_norms[i_exp].copy()
-                old_sched = schedule_norms[i_exp].copy()
-                new_static, new_sched = _optimise_one(i_exp)
-                if D_static > 0:
-                    max_static_delta = max(max_static_delta, float(np.max(np.abs(new_static - old_static))))
-                max_sched_delta = max(max_sched_delta, float(np.max(np.abs(new_sched - old_sched))))
-                static_norms[i_exp] = new_static
-                schedule_norms[i_exp] = new_sched
+            for i_exp in range(state.n):
+                old_static = state.static_norms[i_exp].copy()
+                old_sched = state.schedule_norms[i_exp].copy()
+                new_static, new_sched = self._optimise_schedule_for_experiment(state, i_exp)
+                if state.D_static > 0:
+                    max_static_delta = max(
+                        max_static_delta, float(np.max(np.abs(new_static - old_static)))
+                    )
+                max_sched_delta = max(
+                    max_sched_delta, float(np.max(np.abs(new_sched - old_sched)))
+                )
+                state.static_norms[i_exp] = new_static
+                state.schedule_norms[i_exp] = new_sched
 
             self.convergence_history[f"Schedule pass {pass_idx + 1}"] = []
             prev_max_static = max_static_delta
@@ -1231,25 +1177,202 @@ class CalibrationSystem(BaseOrchestrationSystem):
             print(f"\n  Hit max_passes={max_passes} "
                   f"(final max Δstatic: {prev_max_static:.4f}, max Δsched: {prev_max_sched:.4f})")
 
-        # ── Decode all schedules into ExperimentSpecs ──
-        all_pts = np.concatenate(schedule_norms, axis=0)
-        self.last_schedule_points = all_pts
+    def _optimise_schedule_for_experiment(
+        self,
+        state: _ScheduleState,
+        i_exp: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Run the inner DE for one experiment; return (new_static, new_trajectory).
+
+        Variable layout in the DE vector:
+          [0 .. D_static)                   continuous static (drift trust region)
+          [D_static .. D_static+D_sched)    step 0 (free in [0, 1])
+          [D_static+D_sched ..)             offsets for steps 1..L_i-1 (in [-δ, +δ])
+        """
+        bounds = self._build_schedule_per_exp_bounds(state, i_exp)
+        init = self._build_schedule_per_exp_init(state, i_exp)
+        background = self._build_schedule_background(state, skip=i_exp)
+        objective = self._make_schedule_objective(state, i_exp, background)
+        n_vars = len(init)
+
+        # Inner DE sizing — respect user de_maxiter/de_popsize as upper bounds
+        # so test runs (e.g. de-maxiter=10) actually throttle the inner loop.
+        # scipy DE requires population > 4, so floor at 5.
+        popsize = min(max(10, 4 * n_vars), max(self.de_popsize, 5))
+        init_pop = np.tile(init, (popsize, 1))
+        jitter = self.engine.rng.normal(0, 0.02, size=init_pop.shape)
+        init_pop = init_pop + jitter
+        for v_idx, (lo_b, hi_b) in enumerate(bounds):
+            init_pop[:, v_idx] = np.clip(init_pop[:, v_idx], lo_b, hi_b)
+        init_pop[0] = init  # keep one centre exact
+
+        inner_maxiter = min(max(40, 15 * n_vars), max(self.de_maxiter, 5))
+        opt = self.engine._run_de(
+            objective, bounds, init_pop=init_pop,
+            label=f"Schedule {i_exp + 1}/{state.n}",
+            show_progress=self.logger._console_output_enabled,
+            maxiter=inner_maxiter,
+            popsize=popsize,
+        )
+        best_x = opt.best_x if opt.best_x is not None else init
+        self.last_baseline_nfev += opt.nfev
+        return self._decode_schedule_per_exp_x(state, best_x, i_exp)
+
+    def _build_schedule_background(
+        self,
+        state: _ScheduleState,
+        skip: int,
+    ) -> np.ndarray:
+        """All experiments' current rows (static + schedule), except experiment ``skip``."""
+        rows: list[np.ndarray] = []
+        for i_exp in range(state.n):
+            if i_exp == skip:
+                continue
+            for k in range(state.per_exp_L[i_exp]):
+                row = state.exp_base_rows[i_exp].copy()
+                for si, col_idx in state.static_col_map:
+                    row[col_idx] = state.static_norms[i_exp, si]
+                for si, col_idx in state.sched_col_map:
+                    row[col_idx] = state.schedule_norms[i_exp][k, si]
+                rows.append(row)
+        return np.stack(rows) if rows else np.zeros((0, state.n_dm_cols))
+
+    def _build_schedule_per_exp_bounds(
+        self,
+        state: _ScheduleState,
+        i_exp: int,
+    ) -> list[tuple[float, float]]:
+        """Bounds for the per-experiment DE vector — order matches variable layout."""
+        bounds: list[tuple[float, float]] = []
+        # Static drift trust region centred on current value.
+        for si in range(state.D_static):
+            centre = state.static_norms[i_exp, si]
+            lo_b = max(0.0, centre - _STATIC_DRIFT_NORM)
+            hi_b = min(1.0, centre + _STATIC_DRIFT_NORM)
+            if hi_b <= lo_b:
+                hi_b = min(1.0, lo_b + 1e-6)
+            bounds.append((lo_b, hi_b))
+        # Step 0 free in [0, 1].
+        bounds.extend([(0.0, 1.0)] * state.D_sched)
+        # Offsets for steps 1..L_i-1 in [-δ, +δ].
+        n_free_steps = state.per_exp_L[i_exp] - 1
+        for _k in range(n_free_steps):
+            for dnorm in state.sched_delta_norms:
+                d_eff = dnorm if dnorm > 0 else 1.0
+                bounds.append((-d_eff, d_eff))
+        return bounds
+
+    def _build_schedule_per_exp_init(
+        self,
+        state: _ScheduleState,
+        i_exp: int,
+    ) -> np.ndarray:
+        """Init vector — current static + step 0, with offsets from current trajectory diffs."""
+        L_i = state.per_exp_L[i_exp]
+        n_vars = state.D_static + state.D_sched + (L_i - 1) * state.D_sched
+        init = np.zeros(n_vars)
+        init[:state.D_static] = state.static_norms[i_exp]
+        init[state.D_static:state.D_static + state.D_sched] = state.schedule_norms[i_exp][0]
+        traj_curr = state.schedule_norms[i_exp]
+        for k in range(1, L_i):
+            base = state.D_static + state.D_sched + (k - 1) * state.D_sched
+            init[base:base + state.D_sched] = traj_curr[k] - traj_curr[k - 1]
+        return init
+
+    def _make_schedule_objective(
+        self,
+        state: _ScheduleState,
+        i_exp: int,
+        background: np.ndarray,
+    ) -> Callable[[np.ndarray], float]:
+        """Build the per-experiment DE objective (closure over state + background)."""
+        L_i = state.per_exp_L[i_exp]
+        D_static = state.D_static
+        D_sched = state.D_sched
+        lam_smooth = float(self.schedule_smoothing)
+
+        def objective(x_flat: np.ndarray) -> float:
+            stat = x_flat[:D_static]
+            step0 = x_flat[D_static:D_static + D_sched]
+            # Reconstruct full trajectory by integrating offsets from step 0.
+            traj = np.empty((L_i, D_sched))
+            traj[0] = step0
+            for k in range(1, L_i):
+                base = D_static + D_sched + (k - 1) * D_sched
+                traj[k] = traj[k - 1] + x_flat[base:base + D_sched]
+
+            # Build candidate rows: base row + new static + per-step sched.
+            cand = np.empty((L_i, state.n_dm_cols))
+            for k in range(L_i):
+                cand[k] = state.exp_base_rows[i_exp]
+                for si, col_idx in state.static_col_map:
+                    cand[k, col_idx] = stat[si]
+                for si, col_idx in state.sched_col_map:
+                    cand[k, col_idx] = traj[k, si]
+
+            X_batch = np.concatenate([background, cand], axis=0)
+            neg_score = -self._acquisition(X_batch, kappa=1.0)
+
+            # Trust-region penalty: step-to-step jumps within delta_norm.
+            # Offset bounds enforce this hard, but a soft penalty near the
+            # boundary keeps the search stable.
+            tr_penalty = 0.0
+            for si, dnorm in enumerate(state.sched_delta_norms):
+                if dnorm <= 0:
+                    continue
+                diffs = np.abs(np.diff(traj[:, si]))
+                excess = np.maximum(diffs - dnorm, 0.0)
+                tr_penalty += float((excess * excess).sum())
+
+            # Second-difference smoothness: penalises zigzag, allows steady drift.
+            smooth = 0.0
+            if lam_smooth > 0 and L_i >= 3:
+                sd = traj[2:] - 2.0 * traj[1:-1] + traj[:-2]
+                smooth = float(lam_smooth * (sd * sd).sum())
+
+            return neg_score + tr_penalty * 10.0 + smooth
+
+        return objective
+
+    def _decode_schedule_per_exp_x(
+        self,
+        state: _ScheduleState,
+        x_flat: np.ndarray,
+        i_exp: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Decode an inner-DE result vector into (new_static, new_trajectory)."""
+        L_i = state.per_exp_L[i_exp]
+        new_static = x_flat[:state.D_static].copy()
+        new_traj = np.empty((L_i, state.D_sched))
+        new_traj[0] = x_flat[state.D_static:state.D_static + state.D_sched]
+        for k in range(1, L_i):
+            base = state.D_static + state.D_sched + (k - 1) * state.D_sched
+            new_traj[k] = new_traj[k - 1] + x_flat[base:base + state.D_sched]
+        return new_static, new_traj
+
+    def _decode_schedule_specs(
+        self,
+        state: _ScheduleState,
+    ) -> list[ExperimentSpec]:
+        """Decode final state into a list of ExperimentSpec + emit per-layer console summary."""
+        # Cache for plot validation.
+        self.last_schedule_points = np.concatenate(state.schedule_norms, axis=0)
         exp_ids: list[int] = []
-        for i in range(n):
-            exp_ids.extend([i] * per_exp_L[i])
+        for i in range(state.n):
+            exp_ids.extend([i] * state.per_exp_L[i])
         self.last_schedule_exp_ids = exp_ids
 
         specs_out: list[ExperimentSpec] = []
-        for i in range(n):
-            L_i = per_exp_L[i]
-            base_params = dict(flat_specs[i].initial_params.to_dict())
-            traj = schedule_norms[i]
+        for i in range(state.n):
+            L_i = state.per_exp_L[i]
+            base_params = dict(state.flat_specs[i].initial_params.to_dict())
+            traj = state.schedule_norms[i]
 
             # Apply schedule-phase refinement of continuous static params.
-            for si, (code, lo, hi) in enumerate(static_params):
-                base_params[code] = float(static_norms[i, si] * (hi - lo) + lo)
-            # Update initial params with step-0 sched values
-            for si, (code, lo, hi) in enumerate(sched_params):
+            for si, (code, lo, hi) in enumerate(state.static_params):
+                base_params[code] = float(state.static_norms[i, si] * (hi - lo) + lo)
+            # Update initial params with step-0 sched values.
+            for si, (code, lo, hi) in enumerate(state.sched_params):
                 base_params[code] = float(traj[0, si] * (hi - lo) + lo)
 
             base_params = self.schema.parameters.sanitize_values(base_params, ignore_unknown=True)
@@ -1258,27 +1381,29 @@ class CalibrationSystem(BaseOrchestrationSystem):
             entries: list[tuple[int, ParameterProposal]] = []
             for k in range(1, L_i):
                 sp: dict[str, Any] = {}
-                for si, (code, lo, hi) in enumerate(sched_params):
+                for si, (code, lo, hi) in enumerate(state.sched_params):
                     sp[code] = float(traj[k, si] * (hi - lo) + lo)
                 sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
                 entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
 
             schedules: dict[str, ParameterSchedule] = {}
             if entries:
-                schedules[primary_dim_code] = ParameterSchedule(dimension=primary_dim_code, entries=entries)
+                schedules[state.primary_dim_code] = ParameterSchedule(
+                    dimension=state.primary_dim_code, entries=entries
+                )
 
             specs_out.append(ExperimentSpec(initial_params=initial, schedules=schedules))
 
-        # Console: per-layer schedule values grouped by param
-        if console:
+        # Per-layer schedule values grouped by param.
+        if self.logger._console_output_enabled:
             _D = "\033[2m"
             _R = "\033[0m"
             _S = "\033[38;2;39;39;42m"  # Zinc-800
-            for si, (code, lo, hi) in enumerate(sched_params):
+            for si, (code, lo, hi) in enumerate(state.sched_params):
                 print(f"    {code}")
-                for i in range(n):
-                    vals = [float(schedule_norms[i][k, si] * (hi - lo) + lo)
-                            for k in range(per_exp_L[i])]
+                for i in range(state.n):
+                    vals = [float(state.schedule_norms[i][k, si] * (hi - lo) + lo)
+                            for k in range(state.per_exp_L[i])]
                     vals_str = " → ".join(f"{v:.1f}" for v in vals)
                     print(f"    {_S}baseline_{i + 1:02d}{_R}  {_D}{vals_str}{_R}")
 
