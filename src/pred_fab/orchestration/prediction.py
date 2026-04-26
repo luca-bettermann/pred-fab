@@ -75,6 +75,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
         self._sigma: float = SIGMA_DEFAULT
+
+        # When True, evidence/KDE bypasses model.encode() and operates in raw
+        # normalised input space. Auto-toggled by agent.baseline_step() so the
+        # initial random encoder doesn't taint baseline placement. Not user-facing.
+        self._bypass_encoder: bool = False
         self._estimator_config: EstimatorConfig = EstimatorConfig()
         self._estimator: EvidenceEstimator = make_estimator(self._estimator_config)
 
@@ -324,11 +329,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         for model in kde_models:
             # Determine latent dimensionality by encoding a dummy point
+            # (skipping encoder when bypass is on — latent space = raw input space).
             input_cols = model.input_parameters + model.input_features
             input_indices = datamodule.get_input_indices(input_cols, skip_missing=True)
             n_input = len(input_indices) if input_indices else len(datamodule.input_columns)
             dummy_X = np.zeros((1, n_input))
-            z = model.encode(dummy_X)[0]
+            z = dummy_X[0] if self._bypass_encoder else model.encode(dummy_X)[0]
             n_dims = len(z)
 
             # Active mask from schema bounds: only dims with non-trivial range
@@ -413,7 +419,11 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _encode_from_norm_array_for_model(
         self, model: IPredictionModel, X_norm: np.ndarray,
     ) -> np.ndarray:
-        """Encode a 1-D normalized parameter array via a specific model's encode()."""
+        """Encode a 1-D normalized parameter array via a specific model's encode().
+
+        When ``self._bypass_encoder`` is set (baseline mode), returns the raw
+        sliced input directly so the evidence/KDE works in raw input space.
+        """
         if self.datamodule is None:
             return X_norm
         input_cols = model.input_parameters + model.input_features
@@ -421,6 +431,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not input_indices:
             return X_norm
         X_model = X_norm[input_indices].reshape(1, -1)
+        if self._bypass_encoder:
+            return X_model[0]
         return model.encode(X_model)[0]
 
     # --- Integrated evidence math (pure numpy, per-model subspace) ---
@@ -591,6 +603,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not input_indices:
             return X
         X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
+        if self._bypass_encoder:
+            return X_model
         return model.encode(X_model)
 
     # --- Aggregated public API ---

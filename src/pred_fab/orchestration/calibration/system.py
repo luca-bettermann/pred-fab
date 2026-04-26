@@ -14,10 +14,12 @@ from .bounds import BoundsManager
 from .space import SolutionSpace
 
 
-# Trust region for continuous static drift around Phase-2 warm start during the
-# Schedule phase — 10% of normalised range. Small enough to preserve Process's
-# joint coverage, large enough to capture static<->schedule coupling.
-_STATIC_DRIFT_NORM = 0.1
+# How far static params can drift from their Phase-2 warm start during the
+# Schedule phase, as a fraction of normalised range. Internal heuristic that
+# anchors per-experiment refinement near Process's globally-coherent placement;
+# intentionally not user-exposed (distinct concept from the per-step
+# ``trust_regions`` configured for runtime params).
+_STATIC_DRIFT_FRAC = 0.2
 
 
 @dataclass
@@ -1236,11 +1238,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> list[tuple[float, float]]:
         """Bounds for the per-experiment DE vector — order matches variable layout."""
         bounds: list[tuple[float, float]] = []
-        # Static drift trust region centred on current value.
+        # Static stays within ±_STATIC_DRIFT_FRAC of its Phase-2 warm start.
         for si in range(state.D_static):
             centre = state.static_norms[i_exp, si]
-            lo_b = max(0.0, centre - _STATIC_DRIFT_NORM)
-            hi_b = min(1.0, centre + _STATIC_DRIFT_NORM)
+            lo_b = max(0.0, centre - _STATIC_DRIFT_FRAC)
+            hi_b = min(1.0, centre + _STATIC_DRIFT_FRAC)
             if hi_b <= lo_b:
                 hi_b = min(1.0, lo_b + 1e-6)
             bounds.append((lo_b, hi_b))

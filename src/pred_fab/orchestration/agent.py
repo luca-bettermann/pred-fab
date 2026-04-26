@@ -671,7 +671,14 @@ class PfabAgent:
         evidence field so subsequent proposals naturally space-fill.
         """
         self._assert_initialized()
-        result = self.calibration_system.run_baseline(n=n)
+        # Bypass the encoder during baseline so the (random-init) prediction
+        # model can't taint placement: evidence/KDE operates on raw normalised
+        # input space here. Auto-managed; not user-facing.
+        self.pred_system._bypass_encoder = True
+        try:
+            result = self.calibration_system.run_baseline(n=n)
+        finally:
+            self.pred_system._bypass_encoder = False
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
         return result
 
