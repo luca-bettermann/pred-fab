@@ -759,7 +759,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sched_params_list.append((code, lo, hi))
 
             if sched_params_list:
-                # Continuous static params eligible for trajectory-phase
+                # Continuous static params eligible for schedule-phase
                 # drift refinement (excludes integer / domain-axis / sched).
                 static_params_list = [
                     (code, lo, hi) for code, lo, hi in continuous_params
@@ -966,10 +966,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         structural_values: list[dict[str, int]] | None,
         static_params: list[tuple[str, float, float]] | None = None,
     ) -> list[ExperimentSpec]:
-        """Phase 3 (Trajectory): per-experiment joint over (static + schedule).
+        """Phase 3 (Schedule): per-experiment joint over (static + schedule).
 
         For each experiment, jointly optimise its continuous static params (in
-        a trust region around Phase-2 warm start), step 0 of the trajectory
+        a trust region around Phase-2 warm start), step 0 of the schedule
         (free in [0, 1]), and the L_i-1 offsets — all in one DE call. Other
         experiments' current full designs are held in the X_batch background.
         Outer passes iterate until max change across (static, step 0, offsets)
@@ -1170,7 +1170,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             inner_maxiter = min(max(40, 15 * n_vars), max(self.de_maxiter, 5))
             opt = self.engine._run_de(
                 objective, bounds, init_pop=init_pop,
-                label=f"Trajectory {i_exp + 1}/{n}",
+                label=f"Schedule {i_exp + 1}/{n}",
                 show_progress=console,
                 maxiter=inner_maxiter,
                 popsize=popsize,
@@ -1190,7 +1190,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         tol = 0.001  # convergence: max normalised parameter change
 
         if console:
-            print(f"\n  Phase 3 (Trajectory): N={n}, max_passes={max_passes}, "
+            print(f"\n  Phase 3 (Schedule): N={n}, max_passes={max_passes}, "
                   f"D_static={D_static}, D_sched={D_sched}, L_max={max(per_exp_L)}")
 
         prev_max_static = float("inf")
@@ -1216,7 +1216,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 static_norms[i_exp] = new_static
                 schedule_norms[i_exp] = new_sched
 
-            self.convergence_history[f"Trajectory pass {pass_idx + 1}"] = []
+            self.convergence_history[f"Schedule pass {pass_idx + 1}"] = []
             prev_max_static = max_static_delta
             prev_max_sched = max_sched_delta
             max_delta = max(max_static_delta, max_sched_delta)
@@ -1245,7 +1245,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             base_params = dict(flat_specs[i].initial_params.to_dict())
             traj = schedule_norms[i]
 
-            # Apply trajectory-phase refinement of continuous static params.
+            # Apply schedule-phase refinement of continuous static params.
             for si, (code, lo, hi) in enumerate(static_params):
                 base_params[code] = float(static_norms[i, si] * (hi - lo) + lo)
             # Update initial params with step-0 sched values
