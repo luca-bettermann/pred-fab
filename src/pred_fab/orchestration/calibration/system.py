@@ -697,7 +697,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, d_params, integer_params, d_int_set, d_int_ranges,
                 d_init, cat_codes, cat_assignments,
                 structural_values=None,
-                label="Domain", init_evidence=True,
+                label=f"Domain (D={len(d_params)})", init_evidence=True,
             )
             structural_values = []
             for spec in domain_specs:
@@ -723,7 +723,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, p_params, integer_params, p_int_set, p_int_ranges,
                 p_init, cat_codes, cat_assignments,
                 structural_values=structural_values,
-                label="Process", init_evidence=p_init_evidence,
+                label=f"Process (D={len(p_params)})", init_evidence=p_init_evidence,
             )
         elif do_split:
             # Pure-domain case: all non-domain params fixed. Use Domain results as-is.
@@ -1130,21 +1130,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Outer pass loop — mutates state.static_norms / schedule_norms in place."""
         console = self.logger._console_output_enabled
         if console:
-            print(f"\n  Phase 3 (Schedule): N={state.n}, max_passes={max_passes}, "
-                  f"D_static={state.D_static}, D_sched={state.D_sched}, "
-                  f"L_max={max(state.per_exp_L)}")
+            print(f"\n  Schedule (D={state.D_static}+{state.D_sched})")
 
-        prev_max_static = float("inf")
-        prev_max_sched = float("inf")
         converged_pass: int | None = None
 
         for pass_idx in range(max_passes):
             if console:
-                if pass_idx == 0:
-                    print(f"\n  Pass {pass_idx + 1}/{max_passes}")
-                else:
-                    print(f"\n  Pass {pass_idx + 1}/{max_passes}  "
-                          f"(max Δstatic: {prev_max_static:.4f}, max Δsched: {prev_max_sched:.4f})")
+                print(f"\n  Pass {pass_idx + 1}/{max_passes}")
 
             max_static_delta = 0.0
             max_sched_delta = 0.0
@@ -1163,19 +1155,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 state.schedule_norms[i_exp] = new_sched
 
             self.convergence_history[f"Schedule pass {pass_idx + 1}"] = []
-            prev_max_static = max_static_delta
-            prev_max_sched = max_sched_delta
+            self.logger.info(
+                f"Schedule pass {pass_idx + 1}: max Δstatic={max_static_delta:.4f}, "
+                f"max Δsched={max_sched_delta:.4f}"
+            )
             max_delta = max(max_static_delta, max_sched_delta)
 
             if max_delta < tol:
                 converged_pass = pass_idx + 1
                 if console:
-                    print(f"\n  Converged at pass {converged_pass} "
-                          f"(max Δstatic: {max_static_delta:.4f}, max Δsched: {max_sched_delta:.4f} < tol={tol})")
+                    print(f"\n  Converged at pass {converged_pass}")
                 break
         if converged_pass is None and console:
-            print(f"\n  Hit max_passes={max_passes} "
-                  f"(final max Δstatic: {prev_max_static:.4f}, max Δsched: {prev_max_sched:.4f})")
+            print(f"\n  Hit max_passes={max_passes}")
 
     def _optimise_schedule_for_experiment(
         self,
