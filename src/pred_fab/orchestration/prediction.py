@@ -159,12 +159,19 @@ class PredictionSystem(BaseOrchestrationSystem):
         train_batches = self.datamodule.get_batches(SplitType.TRAIN)
         val_batches = self.datamodule.get_batches(SplitType.VAL)
 
-        # Train each registered model with inline progress
+        # Train each registered model with its own progress line so the user
+        # can see which model is being fit at any moment.
         total = len(self.models)
         trained_count = 0
         for model in self.models:
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
+
+            label = f"Training {model.__class__.__name__}"
+            console = self.logger._console_output_enabled
+            _bar = ProgressBar(label, max_iter=1) if console else None
+            if _bar is not None:
+                _bar.step()
 
             self.logger.info(f"Training model for features {model.outputs}...")
             model.train(model_train_batches, model_val_batches, **kwargs)
@@ -173,12 +180,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             primary_feature = model.outputs[0] if model.outputs else "unknown"
             self.logger.info(f"Trained model for '{primary_feature}'")
 
-            if self.logger._console_output_enabled:
-                if trained_count == 1:
-                    _train_bar = ProgressBar("Training", max_iter=total)
-                _train_bar.step()  # type: ignore[possibly-unbound]
-                if trained_count == total:
-                    _train_bar.finish()  # type: ignore[possibly-unbound]
+            if _bar is not None:
+                _bar.finish(suffix="done")
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
 

@@ -717,6 +717,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 p = spec.initial_params.to_dict()
                 structural_values.append({c: int(p[c]) for c in domain_axis_codes if c in p})
 
+            # Per-exp Domain results, shown right after the Domain progress bar
+            # so Process output below only needs to repeat what *it* optimized.
+            if self.logger._console_output_enabled and structural_values:
+                _D = "\033[2m"
+                _R = "\033[0m"
+                _S = "\033[38;2;39;39;42m"  # Zinc-800
+                for i, sv in enumerate(structural_values):
+                    parts = "  ".join(f"{k[:3]}={v}" for k, v in sv.items())
+                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{parts}{_R}")
+
         # --- Phase: Process (single call; inputs branched on do_split) ---
         if do_split:
             process_codes = {code for code, _, _ in numeric_params} - domain_axis_codes
@@ -762,19 +772,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
         self.last_domain_values = list(structural_values) if structural_values is not None else None
 
-        # Console: show process params per experiment
+        # Console: show process params per experiment. Domain axes are excluded
+        # because they were already printed under the Domain phase header.
         console = self.logger._console_output_enabled
         if console and flat_specs:
             _D = "\033[2m"
             _R = "\033[0m"
             _S = "\033[38;2;39;39;42m"  # Zinc-800
+            skip_codes = set(self.fixed_params) | domain_axis_codes
             for i, spec in enumerate(flat_specs):
                 p = spec.initial_params.to_dict()
                 parts = [
                     f"{k[:3]}={v:.3f}" if isinstance(v, float) else f"{k[:3]}={v}"
-                    for k, v in p.items() if k not in self.fixed_params
+                    for k, v in p.items() if k not in skip_codes
                 ]
-                print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{'  '.join(parts)}{_R}")
+                if parts:
+                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{'  '.join(parts)}{_R}")
 
         # --- Derive per_exp_L from domain axis values in Process output ---
         per_exp_L: list[int] | None = None
@@ -1143,7 +1156,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Outer pass loop — mutates state.static_norms / schedule_norms in place."""
         console = self.logger._console_output_enabled
         if console:
-            print(f"\n  Schedule (D={state.D_static + state.D_sched})")
+            sched_info = ", ".join(
+                f"{code} over {self.schedule_configs.get(code, '?')}"
+                for code, _, _ in state.sched_params
+            )
+            header_suffix = f": {sched_info}" if sched_info else ""
+            print(f"\n  Schedule (D={state.D_static + state.D_sched}){header_suffix}")
 
         converged_pass: int | None = None
 
@@ -1409,6 +1427,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _D = "\033[2m"
             _R = "\033[0m"
             _S = "\033[38;2;39;39;42m"  # Zinc-800
+            print()  # blank line after "Hit max_passes" / "Converged at pass X"
             for si, (code, lo, hi) in enumerate(state.sched_params):
                 print(f"    {code}")
                 for i in range(state.n):
