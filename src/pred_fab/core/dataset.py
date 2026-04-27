@@ -476,8 +476,18 @@ class Dataset:
         return exp_code in self._experiments
 
     def get_populated_experiment_codes(self) -> list[str]:
-        """Get list of experiments that have all features in schema populated."""
-        feature_names = list(self.schema.features.keys())
+        """Get list of experiments that have all stored features in schema populated.
+
+        Iterator features have no stored tensor — they're computed at export
+        time from row position — so they're skipped here. Without this skip,
+        any schema using ``Feature.iterator(...)`` would never report any
+        experiment as populated, blocking training entirely.
+        """
+        from pred_fab.core.data_objects import DataArray
+        feature_names = [
+            name for name, obj in self.schema.features.items()
+            if not (isinstance(obj, DataArray) and obj.is_iterator)
+        ]
         return [
             code for code in self.get_experiment_codes()
             if all(self.get_experiment(code).is_feature_populated(f) for f in feature_names)
