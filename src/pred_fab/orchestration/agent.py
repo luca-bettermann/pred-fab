@@ -587,6 +587,30 @@ class PfabAgent:
         if lbfgsb_eps is not None:
             cal.lbfgsb_eps = lbfgsb_eps
 
+    def configure_scheduled_sampling(
+        self,
+        n_rounds: int = 4,
+        schedule_floor: float = 0.0,
+    ) -> None:
+        """Configure scheduled sampling for models with recursive input features.
+
+        Models declaring a Feature.recursive(...) input are trained across
+        ``n_rounds`` refit passes, with the recursive-feature column values
+        annealed from measured prior values (round 0) to the model's own
+        predictions (last round). Closes the train/inference distribution gap
+        for autoregressive prediction. See PFAB - Scheduled Sampling.
+
+        Args:
+            n_rounds: Number of refit rounds. Default 4. Set to 1 to disable
+                scheduled sampling (single teacher-forced training pass).
+            schedule_floor: Minimum student probability in round 1 (default 0).
+                Use a small positive floor (e.g. 0.1) to skip the pure
+                teacher-forcing baseline.
+        """
+        self._assert_initialized()
+        self.pred_system.n_ss_rounds = int(n_rounds)
+        self.pred_system.ss_schedule_floor = float(schedule_floor)
+
     def configure_schedule(
         self,
         parameter: str,
