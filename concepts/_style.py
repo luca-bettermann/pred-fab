@@ -15,7 +15,7 @@ from pred_fab.plotting._style import (  # noqa: F401
     # colormap registry
     cmap,
     # style helpers
-    apply_style, clean_spines, clean_3d_panes, subplot_label,
+    apply_style, clean_spines, clean_3d_panes, subplot_label, figure_subtitle,
     # geometric overlays
     add_kernel_radii_2d, add_kernel_radii_3d,
     cube_wireframe, square_wireframe,

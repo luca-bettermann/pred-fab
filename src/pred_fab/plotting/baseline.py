@@ -12,7 +12,7 @@ from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, save_fig, _extract_xy, _add_fixed_subtitle,
-    apply_style, clean_3d_panes, subplot_topology,
+    apply_style, subplot_topology,
     STEEL_500, ZINC_400, ZINC_600,
 )
 
@@ -52,7 +52,6 @@ def _setup_3d_figure(
         ax.set_ylim(*y_axis.bounds)
 
     ax.view_init(elev=25, azim=-50)
-    clean_3d_panes(ax)
     return fig, ax
 
 

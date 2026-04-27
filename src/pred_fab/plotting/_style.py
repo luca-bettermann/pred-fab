@@ -132,19 +132,39 @@ def clean_3d_panes(ax) -> None:
 def subplot_label(
     ax,
     text: str,
-    x: float = 0.02,
-    y: float = 0.96,
     *,
-    color: str = ZINC_600,
+    color: str = ZINC_700,
     fontsize: float = 9.5,
+    pad: float = 8.0,
+    loc: str = "left",
 ) -> None:
-    """Small in-axes label (top-left) replacing ax.set_title for the no-suptitle convention."""
-    kw = dict(transform=ax.transAxes, fontsize=fontsize, color=color,
-              ha="left", va="top")
-    if hasattr(ax, "text2D"):
-        ax.text2D(x, y, text, **kw)
-    else:
-        ax.text(x, y, text, **kw)
+    """Subplot title placed *above* the axes (PFAB convention).
+
+    Renders via ``ax.set_title(loc=loc, pad=pad)`` so it sits outside the plot
+    area and never overlaps plot contents. Pair with ``figure_subtitle`` for
+    figure-wide context — the figure subtitle sits above all subplot titles.
+    """
+    ax.set_title(text, loc=loc, fontsize=fontsize, color=color, pad=pad)
+
+
+def figure_subtitle(
+    fig,
+    text: str,
+    *,
+    y: float = 0.995,
+    fontsize: float = 8.0,
+    color: str = ZINC_400,
+    style: str = "italic",
+) -> None:
+    """Figure-level subtitle (info common to all subplots), top-center.
+
+    Sits *above* subplot titles. Marks the figure so :func:`save_fig`
+    reserves top room — preventing subplot titles from colliding with this
+    band.
+    """
+    fig.text(0.5, y, text, ha="center", va="top",
+             fontsize=fontsize, color=color, style=style)
+    setattr(fig, "_pfab_has_subtitle", True)
 
 
 # ---------------------------------------------------------------------------
@@ -322,11 +342,20 @@ def cube_wireframe(
     lo: np.ndarray,
     hi: np.ndarray,
     *,
-    color: str = ZINC_300,
-    lw: float = 0.5,
-    alpha: float = 0.32,
+    color: str = STEEL_300,
+    lw: float = 0.7,
+    alpha: float = 0.55,
+    view: tuple[float, float] | None = None,
+    front_zorder: float = 10.0,
+    back_zorder: float = -10.0,
 ) -> None:
-    """Draw the 12 edges of an axis-aligned cube on a 3-D axis."""
+    """Draw the 12 edges of an axis-aligned cube on a 3-D axis.
+
+    When ``view=(elev_deg, azim_deg)`` is given, edges are split into a back
+    layer (drawn behind contents) and a front layer (drawn in front), so
+    points/glyphs inside the cube read as being inside it. Without ``view``,
+    all edges share one low zorder (legacy behaviour).
+    """
     corners = np.array([
         [lo[0], lo[1], lo[2]], [hi[0], lo[1], lo[2]],
         [hi[0], hi[1], lo[2]], [lo[0], hi[1], lo[2]],
@@ -338,10 +367,33 @@ def cube_wireframe(
         (4, 5), (5, 6), (6, 7), (7, 4),
         (0, 4), (1, 5), (2, 6), (3, 7),
     ]
+    if view is None:
+        for i, j in edges:
+            p1, p2 = corners[i], corners[j]
+            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                    color=color, lw=lw, alpha=alpha, zorder=-1)
+        return
+
+    # Project edge midpoints onto the camera view direction; near half = front.
+    elev, azim = np.deg2rad(view[0]), np.deg2rad(view[1])
+    view_vec = np.array([
+        np.cos(elev) * np.cos(azim),
+        np.cos(elev) * np.sin(azim),
+        np.sin(elev),
+    ])
+    center = 0.5 * (lo + hi)
+    spans = np.maximum(hi - lo, 1e-12)
+    proj = []
     for i, j in edges:
+        mid = 0.5 * (corners[i] + corners[j])
+        # Normalize mid by span so scale doesn't bias the split.
+        proj.append(np.dot((mid - center) / spans, view_vec))
+    median = float(np.median(proj))
+    for (i, j), p in zip(edges, proj):
+        zo = front_zorder if p >= median else back_zorder
         p1, p2 = corners[i], corners[j]
         ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                color=color, lw=lw, alpha=alpha, zorder=-1)
+                color=color, lw=lw, alpha=alpha, zorder=zo)
 
 
 def square_wireframe(
@@ -349,9 +401,9 @@ def square_wireframe(
     lo: np.ndarray,
     hi: np.ndarray,
     *,
-    color: str = ZINC_300,
-    lw: float = 0.5,
-    alpha: float = 0.45,
+    color: str = STEEL_300,
+    lw: float = 0.8,
+    alpha: float = 0.7,
 ) -> None:
     """Draw the 4 edges of an axis-aligned square on a 2-D axis."""
     xs = [lo[0], hi[0], hi[0], lo[0], lo[0]]
@@ -379,9 +431,18 @@ class AxisSpec:
 
 
 def save_fig(path: str, dpi: int = 150) -> None:
-    """Save current figure and close."""
+    """Save current figure and close.
+
+    If the active figure carries a PFAB subtitle (set by
+    :func:`figure_subtitle`), reserves the top band so subplot titles do not
+    collide with it.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    plt.tight_layout()
+    fig = plt.gcf()
+    if getattr(fig, "_pfab_has_subtitle", False):
+        plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
+    else:
+        plt.tight_layout()
     plt.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close()
 
@@ -404,9 +465,7 @@ def _add_fixed_subtitle(
     if not fixed_params:
         return
     parts = [f"{k} = {v}" for k, v in fixed_params.items()]
-    text = "fixed: " + ", ".join(parts)
-    fig.text(0.5, 0.98, text, ha="center", va="top",
-             fontsize=7, color=ZINC_400, style="italic")
+    figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=7)
 
 
 def _plot_schedule_ranges(

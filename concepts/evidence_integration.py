@@ -92,8 +92,9 @@ def _angular_gap_marker(
     dy = r * np.sin(np.pi / 4.0)
     ax.plot([cx, cx + dx], [cy, cy + dy],
             color=ZINC_300, lw=0.6, alpha=0.7, zorder=0)
-    # label, placed inside the angle wedge (midway: 67.5° from +x)
-    label_r = 0.55 * r
+    # label, placed inside the angle wedge (midway: 67.5° from +x), pushed
+    # outward past the 1σ ring so it doesn't collide with ring lines/labels.
+    label_r = 0.85 * r
     label_angle = 3.0 * np.pi / 8.0
     ax.text(cx + label_r * np.cos(label_angle),
             cy + label_r * np.sin(label_angle),
@@ -137,8 +138,8 @@ def figure_2d(sigma: float = SIGMA, seed: int = 0) -> Path:
     cm = cmap("evidence")
     norm = Normalize(vmin=0.0, vmax=1.0)
 
-    lo, hi = _zoom_extent(center, sigma, pad_sigmas=3.5)
-    ticks = [round(center[0] - 3 * sigma, 2), 0.5, round(center[0] + 3 * sigma, 2)]
+    lo, hi = _zoom_extent(center, sigma, pad_sigmas=2.6)
+    ticks = [round(center[0] - 2 * sigma, 2), 0.5, round(center[0] + 2 * sigma, 2)]
 
     # Faint Gaussian background — same field on both panels — shows where the kernel mass lives.
     grid_res = 240
@@ -172,7 +173,7 @@ def figure_2d(sigma: float = SIGMA, seed: int = 0) -> Path:
     ax.contourf(g_x, g_x, bg, levels=18, cmap=cm, norm=norm, alpha=0.18, zorder=0)
     box_lo = center - SOBOL_HALF_EXTENT * sigma
     box_hi = center + SOBOL_HALF_EXTENT * sigma
-    square_wireframe(ax, box_lo, box_hi, color=ZINC_500, lw=0.9, alpha=0.55)
+    square_wireframe(ax, box_lo, box_hi)
     ax.scatter(sb_pts[:, 0], sb_pts[:, 1],
                c=sb_density, cmap=cm, norm=norm,
                s=20, alpha=0.95, edgecolors="none", zorder=5)
@@ -229,11 +230,13 @@ def figure_3d(sigma: float = SIGMA, seed: int = 0) -> Path:
     cm = cmap("evidence")
     norm = Normalize(vmin=0.0, vmax=1.0)
 
-    # Zoom: same convention as 2-D — ±3.5σ around the kernel.
-    pad = 3.5 * sigma
+    # Zoom: tighter than 2-D (no scatter overflow) — ±2.6σ keeps the cube
+    # cleanly inside the visible volume with a small breathing margin.
+    pad = 2.6 * sigma
     lo = float(center[0] - pad)
     hi = float(center[0] + pad)
-    ticks = [round(center[0] - 3 * sigma, 2), 0.5, round(center[0] + 3 * sigma, 2)]
+    ticks = [round(center[0] - 2 * sigma, 2), 0.5, round(center[0] + 2 * sigma, 2)]
+    view = (20.0, 35.0)  # elev, azim — matched to ax.view_init below
 
     fig = plt.figure(figsize=(12.5, 5.8))
     fig.subplots_adjust(left=0.01, right=0.88, top=0.98, bottom=0.02, wspace=0.02)
@@ -254,7 +257,7 @@ def figure_3d(sigma: float = SIGMA, seed: int = 0) -> Path:
     ax.set_zticks(ticks)  # type: ignore[operator]
     ax.set_xlabel("z₁"); ax.set_ylabel("z₂")
     ax.set_zlabel("z₃")  # type: ignore[operator]
-    ax.view_init(elev=20, azim=35)
+    ax.view_init(elev=view[0], azim=view[1])
     _tinted_3d_panes(ax)
     subplot_label(ax, f"KernelField  ·  {n_probes} probes  ·  σ = {sigma:g}")
 
@@ -262,7 +265,7 @@ def figure_3d(sigma: float = SIGMA, seed: int = 0) -> Path:
     ax = fig.add_subplot(122, projection="3d")
     box_lo = center - SOBOL_HALF_EXTENT * sigma
     box_hi = center + SOBOL_HALF_EXTENT * sigma
-    cube_wireframe(ax, box_lo, box_hi, color=ZINC_500, lw=0.9, alpha=0.55)
+    cube_wireframe(ax, box_lo, box_hi, view=view)
     ax.scatter(sb_pts[:, 0], sb_pts[:, 1], sb_pts[:, 2],  # type: ignore[arg-type]
                c=sb_density, cmap=cm, norm=norm,
                s=22, alpha=0.95, edgecolors="none",
@@ -275,7 +278,7 @@ def figure_3d(sigma: float = SIGMA, seed: int = 0) -> Path:
     ax.set_zticks(ticks)  # type: ignore[operator]
     ax.set_xlabel("z₁"); ax.set_ylabel("z₂")
     ax.set_zlabel("z₃")  # type: ignore[operator]
-    ax.view_init(elev=20, azim=35)
+    ax.view_init(elev=view[0], azim=view[1])
     _tinted_3d_panes(ax)
     subplot_label(ax, f"Sobol (local cube)  ·  {n_probes} probes  ·  σ = {sigma:g}")
 
