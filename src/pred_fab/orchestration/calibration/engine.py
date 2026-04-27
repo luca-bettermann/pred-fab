@@ -51,7 +51,7 @@ class OptimizationEngine:
         self.de_maxiter: int = 1000
         self.de_popsize: int = 15
         self.de_tol: float = 0.0  # passed to scipy; 0 effectively disables std/mean exit
-        self.de_no_improve_window: int = 20  # generations without improvement → halt
+        self.de_no_improve_window: int = 10  # generations without improvement → halt
         self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
 
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
@@ -218,7 +218,7 @@ class OptimizationEngine:
             iter_count[0] += 1
             history.append(best_so_far[0])
             if bar:
-                bar.step()
+                bar.step(obj=best_so_far[0])
             # Improvement-window check: halt if best_so_far hasn't moved by at
             # least improvement_eps in no_improve_window consecutive generations.
             if best_so_far[0] < best_at_last_check[0] - improvement_eps:
@@ -257,7 +257,7 @@ class OptimizationEngine:
         result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
 
         if bar:
-            bar.finish(suffix=f"{iter_count[0]}/{maxiter} iter  obj={result.fun:.4f}")
+            bar.finish(suffix=f"{iter_count[0]}/{maxiter} iter  obj={result.fun:.3f}")
 
         return _OptResult(
             best_x=result.x,
@@ -308,7 +308,7 @@ class OptimizationEngine:
                 self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
 
         if bar:
-            obj_str = f"obj={best_val:.4f}" if best_val < np.inf else "no solution"
+            obj_str = f"obj={best_val:.3f}" if best_val < np.inf else "no solution"
             bar.finish(suffix=obj_str)
 
         return _OptResult(

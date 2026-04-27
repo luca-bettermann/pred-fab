@@ -1005,14 +1005,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         init_pop = space.build_init_population(self.engine.rng, merged_init)
 
+        # Smart per-phase maxiter, capped by the global ceiling. Scales with
+        # total decision-variable count so small problems show a meaningful
+        # X/cap ratio in the progress bar instead of X/1000.
+        smart_maxiter = min(max(40, 15 * space.total_vars), self.de_maxiter)
+
         self.logger.info(
             f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
-            f"D_sched=0, total_vars={space.total_vars}"
+            f"D_sched=0, total_vars={space.total_vars}, maxiter={smart_maxiter}"
         )
 
         opt = self.engine._run_de(
             _acquisition_batch_objective, space.bounds, init_pop=init_pop,
             integrality=space.integrality, label=label, show_progress=console,
+            maxiter=smart_maxiter,
         )
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev

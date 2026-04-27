@@ -47,12 +47,14 @@ class ProgressBar:
         self._len = bar_len
         self._i = 0
 
-    def step(self, i: int | None = None) -> None:
-        """Advance by one (or jump to ``i``) and redraw."""
+    def step(self, i: int | None = None, obj: float | None = None) -> None:
+        """Advance by one (or jump to ``i``) and redraw. Optional ``obj`` is
+        the current best objective value, displayed live (3 decimals)."""
         self._i = (self._i + 1) if i is None else i
         filled = int(self._len * min(self._i / self._max, 1.0))
         bar = "\u2588" * filled + "\u2591" * (self._len - filled)
-        print(f"  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{_R}", end="\r", flush=True)
+        obj_str = f"  obj={obj:.3f}" if obj is not None else ""
+        print(f"  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{obj_str}{_R}", end="\r", flush=True)
 
     def finish(self, nfev: int | None = None, suffix: str = "") -> None:
         """Fill the bar completely and print final info."""
@@ -62,7 +64,9 @@ class ProgressBar:
             info += f"  nfev={nfev}" if info else f"nfev={nfev}"
         if not info:
             info = f"{self._i}/{self._max}"
-        print(f"{_G}\u2713{_R} {self._label:<14s} [{bar}] {_D}{info}{_R}   ")
+        # Pad to overwrite any leftover characters from the longer step() line
+        # that may have included an obj=X.XXX suffix during optimization.
+        print(f"{_G}\u2713{_R} {self._label:<14s} [{bar}] {_D}{info}{_R}            ")
 
 
 class ConsoleReporter:
