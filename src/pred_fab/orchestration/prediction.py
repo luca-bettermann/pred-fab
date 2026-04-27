@@ -779,16 +779,17 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         predictions = self._predict_from_params(params=params, batch_size=1000)
 
-        # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val]
+        # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val].
+        # Vectorized via np.indices instead of a Python loop over flat positions.
         feature_arrays: dict[str, np.ndarray] = {}
         for feat_name, tensor in predictions.items():
             feat_shape = tensor.shape
-            flat = tensor.reshape(-1)
-            rows = []
-            for pos, feat_val in enumerate(flat):
-                idx = np.unravel_index(pos, feat_shape) if feat_shape else ()
-                rows.append(list(idx) + [float(feat_val)])
-            feature_arrays[feat_name] = np.array(rows, dtype=np.float64)
+            flat = tensor.reshape(-1, 1).astype(np.float64)
+            if feat_shape:
+                indices = np.indices(feat_shape).reshape(len(feat_shape), -1).T.astype(np.float64)
+                feature_arrays[feat_name] = np.hstack([indices, flat])
+            else:
+                feature_arrays[feat_name] = flat
 
         # Build Parameters block with values from params
         params_block = copy.deepcopy(self.schema.parameters)

@@ -49,7 +49,11 @@ class OptimizationEngine:
         # with a clustered population. Setting scipy's tol to 0 disables that
         # fragile check; the callback is the authoritative exit signal.
         self.de_maxiter: int = 1000
-        self.de_popsize: int = 15
+        # scipy treats popsize as a *multiplier* of D — total population is
+        # popsize × D individuals per generation. Default 8 (was scipy's 15)
+        # gives sufficient diversity for our smooth-ish acquisition landscapes
+        # while halving evaluations per generation. Tunable via configure_optimizer.
+        self.de_popsize: int = 8
         self.de_tol: float = 0.0  # passed to scipy; 0 effectively disables std/mean exit
         self.de_no_improve_window: int = 10  # generations without improvement → halt
         self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
