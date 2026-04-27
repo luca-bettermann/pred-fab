@@ -586,6 +586,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 if lo == -np.inf or hi == np.inf:
                     self.logger.warning(f"Parameter '{code}' has infinite bounds; skipping in baseline.")
                     continue
+                if lo == hi:
+                    # Degenerate bounds: structurally fixed. Pin to fixed_params
+                    # so downstream spec construction picks it up; nothing for
+                    # the optimiser to choose, no extra DE/KDE dimensionality.
+                    self.bounds.fixed_params[code] = int(lo)
+                    self.logger.debug(f"Auto-fixed integer param '{code}' = {int(lo)} (degenerate bounds).")
+                    continue
                 integer_params.append((code, int(lo), int(hi)))
             else:
                 try:
@@ -594,6 +601,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     continue
                 if lo == -np.inf or hi == np.inf:
                     self.logger.warning(f"Parameter '{code}' has infinite bounds; skipping in baseline.")
+                    continue
+                if lo == hi:
+                    self.bounds.fixed_params[code] = float(lo)
+                    self.logger.debug(f"Auto-fixed continuous param '{code}' = {lo} (degenerate bounds).")
                     continue
                 continuous_params.append((code, lo, hi))
 
@@ -1126,13 +1137,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _run_schedule_passes(
         self,
         state: _ScheduleState,
-        max_passes: int = 4,
+        max_passes: int = 5,
         tol: float = 0.001,
     ) -> None:
         """Outer pass loop — mutates state.static_norms / schedule_norms in place."""
         console = self.logger._console_output_enabled
         if console:
-            print(f"\n  Schedule (D={state.D_static}+{state.D_sched})")
+            print(f"\n  Schedule (D={state.D_static + state.D_sched})")
 
         converged_pass: int | None = None
 
