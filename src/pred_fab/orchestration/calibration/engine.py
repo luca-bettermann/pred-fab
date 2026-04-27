@@ -140,6 +140,12 @@ class OptimizationEngine:
             return step_sum / L
 
         # --- 3. Run optimizer ---
+        # Smart per-call maxiter: scale with problem dimensionality, capped by
+        # the global ceiling. Same rule as _run_acquisition_phase /
+        # _optimise_schedule_for_experiment so the X/cap ratio in the progress
+        # bar is consistent across all DE phases.
+        smart_maxiter = min(max(40, 15 * n_vars), self.de_maxiter)
+
         if active_optimizer == Optimizer.DE:
             opt = self._run_de(
                 _objective,
@@ -148,6 +154,7 @@ class OptimizationEngine:
                 integrality=integrality,
                 label=label,
                 show_progress=show_progress,
+                maxiter=smart_maxiter,
             )
         else:
             x0_list: list[np.ndarray] = []

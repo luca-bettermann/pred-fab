@@ -1186,6 +1186,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             print(f"\n  Schedule (D={state.D_static + state.D_sched}){header_suffix}")
 
         converged_pass: int | None = None
+        prev_total_obj: float | None = None
+        obj_tol = 1e-4  # absolute improvement on summed best-obj across exps
 
         for pass_idx in range(max_passes):
             if console:
@@ -1193,10 +1195,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             max_static_delta = 0.0
             max_sched_delta = 0.0
+            total_obj = 0.0
             for i_exp in range(state.n):
                 old_static = state.static_norms[i_exp].copy()
                 old_sched = state.schedule_norms[i_exp].copy()
-                new_static, new_sched = self._optimise_schedule_for_experiment(state, i_exp)
+                new_static, new_sched, best_obj = self._optimise_schedule_for_experiment(state, i_exp)
                 if state.D_static > 0:
                     max_static_delta = max(
                         max_static_delta, float(np.max(np.abs(new_static - old_static)))
@@ -1206,19 +1209,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
                 state.static_norms[i_exp] = new_static
                 state.schedule_norms[i_exp] = new_sched
+                total_obj += best_obj
 
             self.convergence_history[f"Schedule pass {pass_idx + 1}"] = []
             self.logger.info(
                 f"Schedule pass {pass_idx + 1}: max Δstatic={max_static_delta:.4f}, "
-                f"max Δsched={max_sched_delta:.4f}"
+                f"max Δsched={max_sched_delta:.4f}, total_obj={total_obj:.4f}"
             )
             max_delta = max(max_static_delta, max_sched_delta)
 
-            if max_delta < tol:
+            # Two-track convergence: parameter delta OR objective improvement.
+            # Param delta catches genuinely-converged optima; obj improvement
+            # catches the case where DE finds different parameter combos with
+            # identical objective values (multiple optima / flat plateau).
+            param_converged = max_delta < tol
+            obj_converged = (
+                prev_total_obj is not None
+                and (prev_total_obj - total_obj) < obj_tol
+            )
+            if param_converged or obj_converged:
                 converged_pass = pass_idx + 1
+                reason = "param delta" if param_converged else "no obj improvement"
                 if console:
-                    print(f"\n  Converged at pass {converged_pass}")
+                    print(f"\n  Converged at pass {converged_pass} ({reason})")
                 break
+            prev_total_obj = total_obj
         if converged_pass is None and console:
             print(f"\n  Hit max_passes={max_passes}")
 
@@ -1226,8 +1241,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         state: _ScheduleState,
         i_exp: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Run the inner DE for one experiment; return (new_static, new_trajectory).
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Run the inner DE for one experiment; return (new_static, new_trajectory, best_obj).
 
         Variable layout in the DE vector:
           [0 .. D_static)                   continuous static (drift trust region)
@@ -1266,7 +1281,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
         best_x = opt.best_x if opt.best_x is not None else init
         self.last_baseline_nfev += opt.nfev
-        return self._decode_schedule_per_exp_x(state, best_x, i_exp)
+        new_static, new_sched = self._decode_schedule_per_exp_x(state, best_x, i_exp)
+        # opt.score = -result.fun (DE minimises), so best_obj = result.fun = -score.
+        best_obj = -opt.score
+        return new_static, new_sched, best_obj
 
     def _build_schedule_background(
         self,
