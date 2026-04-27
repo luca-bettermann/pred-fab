@@ -1021,14 +1021,22 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape)) if shape else 1
-        # Keep dimension sizes in param_base so every prediction row carries the
-        # actual experiment topology (e.g. n_layers=5, not the iteration index).
-        param_base = dict(params)
 
-        # Precompute iterator-derived features matching this model's domain
-        # axes. At row-build time they evaluate to idx[axis_pos] / (size - 1).
+        # Honour the per-model input contract: X_batch carries only columns
+        # this model declares via input_parameters / input_features. The X_batch
+        # produced from this dim_info is consumed only by this model (callers
+        # pass model=model through the predict chain), so narrowing here cannot
+        # strand inputs needed by other models.
+        declared_params = set(model.input_parameters)
+        declared_features = set(model.input_features)
+        param_base = {k: v for k, v in params.items() if k in declared_params}
+
+        # Iterator-derived features: only those declared by this model. At
+        # row-build time they evaluate to idx[axis_pos] / (size - 1).
         iterator_feats: list[tuple[str, int, int]] = []
         for feat_code, feat_obj in self.schema.features.data_objects.items():
+            if feat_code not in declared_features:
+                continue
             axis_code = getattr(feat_obj, "iterator_axis_code", None)
             if axis_code is None:
                 continue
