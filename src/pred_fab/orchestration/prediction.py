@@ -999,7 +999,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         dim_sizes: list[int] = []
         dim_iterators: list[str] = []
         dim_codes_ordered: list[str] = []
-        dim_codes: set = set()
 
         if domain_code is not None and depth > 0:
             if not self.schema.domains.has(domain_code):
@@ -1019,17 +1018,31 @@ class PredictionSystem(BaseOrchestrationSystem):
                 dim_sizes.append(int(params[ax.code]))
                 dim_iterators.append(ax.iterator_code)
                 dim_codes_ordered.append(ax.code)
-                dim_codes.add(ax.code)
 
         shape = tuple(dim_sizes)
         total_positions = int(np.prod(shape)) if shape else 1
-        param_base = {k: v for k, v in params.items() if k not in dim_codes}
+        # Keep dimension sizes in param_base so every prediction row carries the
+        # actual experiment topology (e.g. n_layers=5, not the iteration index).
+        param_base = dict(params)
+
+        # Precompute iterator-derived features matching this model's domain
+        # axes. At row-build time they evaluate to idx[axis_pos] / (size - 1).
+        iterator_feats: list[tuple[str, int, int]] = []
+        for feat_code, feat_obj in self.schema.features.data_objects.items():
+            axis_code = getattr(feat_obj, "iterator_axis_code", None)
+            if axis_code is None:
+                continue
+            for axis_pos, iter_code in enumerate(dim_iterators):
+                if iter_code == axis_code:
+                    iterator_feats.append((feat_code, axis_pos, dim_sizes[axis_pos]))
+                    break
 
         return {
             'shape': shape,
             'dim_iterators': dim_iterators,
             'dim_codes_ordered': dim_codes_ordered,
             'param_base': param_base,
+            'iterator_feats': iterator_feats,
             'total_positions': total_positions,
         }
 
@@ -1135,32 +1148,30 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_end: int,
         dim_info: dict[str, Any]
     ) -> tuple[pd.DataFrame, list[tuple[int, ...]]]:
-        """Build feature matrix X with params + dimensional indices for batch positions.
+        """Build feature matrix X with static params + iterator-derived features.
 
-        Uses dimension size-parameter codes (e.g. "dim_1") as column keys to match
-        the column structure produced by Dataset.export_to_dataframe() during training.
+        Mirrors Dataset.export_to_dataframe at training time: dimension-size
+        columns (e.g. n_layers) carry the experiment's actual size, and
+        Feature.iterator(...) values are computed per-row from the iteration
+        tuple as idx[axis_pos] / (size - 1).
         """
         shape = dim_info['shape']
         param_base = dim_info['param_base']
-        dim_codes_ordered = dim_info['dim_codes_ordered']
+        iterator_feats = dim_info['iterator_feats']
 
         X_batch_rows = []
         batch_indices = []
 
         for pos in range(batch_start, batch_end):
-            # Convert linear position to multi-dimensional index
             idx = np.unravel_index(pos, shape)
             batch_indices.append(idx)
 
-            # Create feature row: non-dimensional params + dimensional indices.
-            # Keys are size-parameter codes ("dim_1", "dim_2") to match training columns,
-            # while values are the iterator indices (0, 1, ...) matching export_to_dataframe.
             row = param_base.copy()
-            for i, dim_code in enumerate(dim_codes_ordered):
-                row[dim_code] = idx[i]
-            
+            for feat_code, axis_pos, size in iterator_feats:
+                row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
+
             X_batch_rows.append(row)
-        
+
         X_batch = pd.DataFrame(X_batch_rows)
         return X_batch, batch_indices
     

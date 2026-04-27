@@ -947,16 +947,15 @@ class Dataset:
                 iterator_features.append((feat_code, axis_code, size))
 
             for row_idx, idx_tuple in enumerate(dim_combinations):
-                # Build X row (Static + Iterators)
+                # Build X row: static parameters only. Dimension-size columns
+                # (e.g. n_layers, n_segments) keep their experiment values from
+                # get_effective_parameters_for_row — they are NOT overwritten
+                # with the iteration index. Models that need row-position
+                # awareness must declare an explicit Feature.iterator(...).
                 row_dict = exp_data.get_effective_parameters_for_row(row_idx)
-                iterator_ctx: dict[str, Any] = {}
-                for i, dim_name in enumerate(dim_names):
-                    # Keep model-facing columns on schema parameter codes.
-                    row_dict[dim_name] = idx_tuple[i]
-                    # Also include the iterator code (e.g. layer_idx, segment_idx)
-                    # so prediction models can use positional information.
-                    iterator_ctx[dim_iterators[i]] = idx_tuple[i]
-                    row_dict[dim_iterators[i]] = idx_tuple[i]
+                iterator_ctx: dict[str, Any] = {
+                    dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
+                }
 
                 X_rows.append(row_dict)
 

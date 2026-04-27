@@ -23,11 +23,15 @@ def test_export_to_dataframe_handles_mixed_feature_dimensionality(tmp_path):
     assert set(["param_1", "dim_1", "dim_2"]).issubset(set(X_df.columns))
     assert set(["feature_grid", "feature_d1", "feature_scalar"]).issubset(set(y_df.columns))
 
+    # dim_* columns now hold the experiment's actual sizes (constant per row),
+    # not the iteration index. Position info is reconstructed from row order.
     for i in range(len(X_df)):
-        d1_val = int(X_df.iloc[i]["dim_1"])
-        d2_val = int(X_df.iloc[i]["dim_2"])
+        d1_val = i // 3
+        d2_val = i % 3
 
         assert float(X_df.iloc[i]["param_1"]) == 2.5
+        assert int(X_df.iloc[i]["dim_1"]) == 2
+        assert int(X_df.iloc[i]["dim_2"]) == 3
         assert float(y_df.iloc[i]["feature_grid"]) == d1_val * 10 + d2_val
         assert float(y_df.iloc[i]["feature_d1"]) == 100 + d1_val
         assert float(y_df.iloc[i]["feature_scalar"]) == 7.0

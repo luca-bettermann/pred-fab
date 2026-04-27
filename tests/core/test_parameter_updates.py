@@ -16,7 +16,6 @@ def test_export_to_dataframe_applies_recorded_parameter_updates_by_step(tmp_path
     assert len(X_df) == 6
     assert len(y_df) == 6
     assert "dim_1" in X_df.columns and "dim_2" in X_df.columns
-    assert "d1" in X_df.columns and "d2" in X_df.columns
 
     before = X_df.iloc[:3]["param_1"].to_numpy()
     after = X_df.iloc[3:]["param_1"].to_numpy()
