@@ -189,6 +189,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.engine.de_tol = value
 
     @property
+    def de_no_improve_window(self) -> int:
+        return self.engine.de_no_improve_window
+
+    @de_no_improve_window.setter
+    def de_no_improve_window(self, value: int) -> None:
+        self.engine.de_no_improve_window = value
+
+    @property
+    def de_improvement_eps(self) -> float:
+        return self.engine.de_improvement_eps
+
+    @de_improvement_eps.setter
+    def de_improvement_eps(self, value: float) -> None:
+        self.engine.de_improvement_eps = value
+
+    @property
     def lbfgsb_maxfun(self) -> int | None:
         return self.engine.lbfgsb_maxfun
 

@@ -43,9 +43,16 @@ class OptimizationEngine:
         self.rng = np.random.RandomState(random_seed)
 
         # DE optimizer parameters (global, population-based + L-BFGS-B polish)
+        # Convergence is governed by "no improvement in K generations" via the
+        # callback rather than scipy's std-vs-mean criterion, which misfires
+        # on low-D / integer landscapes by declaring victory after one gen
+        # with a clustered population. Setting scipy's tol to 0 disables that
+        # fragile check; the callback is the authoritative exit signal.
         self.de_maxiter: int = 1000
         self.de_popsize: int = 15
-        self.de_tol: float = 0.0001
+        self.de_tol: float = 0.0  # passed to scipy; 0 effectively disables std/mean exit
+        self.de_no_improve_window: int = 20  # generations without improvement → halt
+        self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
 
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
         self.lbfgsb_maxfun: int | None = None
@@ -195,7 +202,11 @@ class OptimizationEngine:
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
         iter_count = [0]
         best_so_far = [np.inf]
+        best_at_last_check = [np.inf]
+        gens_no_improve = [0]
         history: list[float] = []
+        improvement_eps = self.de_improvement_eps
+        no_improve_window = self.de_no_improve_window
 
         def _tracked_objective(x: np.ndarray) -> float:
             val = objective(x)
@@ -203,11 +214,19 @@ class OptimizationEngine:
                 best_so_far[0] = val
             return val
 
-        def _progress(xk: Any, convergence: Any) -> None:
+        def _progress(xk: Any, convergence: Any) -> bool:
             iter_count[0] += 1
             history.append(best_so_far[0])
             if bar:
                 bar.step()
+            # Improvement-window check: halt if best_so_far hasn't moved by at
+            # least improvement_eps in no_improve_window consecutive generations.
+            if best_so_far[0] < best_at_last_check[0] - improvement_eps:
+                best_at_last_check[0] = best_so_far[0]
+                gens_no_improve[0] = 0
+            else:
+                gens_no_improve[0] += 1
+            return gens_no_improve[0] >= no_improve_window
 
         de_kwargs: dict[str, Any] = dict(
             func=_tracked_objective,
@@ -217,6 +236,12 @@ class OptimizationEngine:
             mutation=(0.5, 1.0),
             recombination=0.7,
             tol=self.de_tol,
+            # scipy declares convergence when std(energies) <= atol + tol*|mean|.
+            # On low-D / integer landscapes the population can collapse to
+            # identical energies after gen 1 (std=0) — atol=0 then trips even
+            # if the global optimum hasn't been found. Negative atol disables
+            # that exit; the callback's no-improvement-window is authoritative.
+            atol=-1.0,
             polish=not has_int,
             callback=_progress,
         )

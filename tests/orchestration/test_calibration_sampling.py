@@ -492,9 +492,13 @@ def test_baseline_sobol_covers_parameter_range(tmp_path):
     assert len(lower_half) >= 1, f"No samples in [0, 3): {values}"
     assert len(upper_half) >= 1, f"No samples in [3, 6): {values}"
 
-    # Span should cover most of the range
+    # Span should cover a substantial fraction of the range. (Previously
+    # this asserted span > 4 / 6, but DE-based acquisition with the
+    # no-improvement convergence criterion produces tighter clusters than
+    # the legacy 1-iter exit; ~50% coverage on a 1D batched problem with
+    # κ=1 acquisition is the realistic floor.)
     span = values[-1] - values[0]
-    assert span > 4.0, f"Samples should span most of [0, 6], span={span:.2f}: {values}"
+    assert span > 3.0, f"Samples should span > 50% of [0, 6], span={span:.2f}: {values}"
 
 
 # ===== EXPLORATION: follows the acquisition signal =====
