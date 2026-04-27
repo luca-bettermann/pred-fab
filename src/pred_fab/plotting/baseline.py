@@ -103,6 +103,67 @@ def plot_parameter_space(
     save_fig(save_path)
 
 
+def plot_parameter_space_per_cell(
+    save_path: str,
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    points: list[dict[str, Any]],
+    true_grid: np.ndarray,
+    pred_grid: np.ndarray,
+    *,
+    cell_label: str = "",
+    mean_diff_grid: np.ndarray | None = None,
+    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    codes: list[str] | None = None,
+    fixed_params: dict[str, Any] | None = None,
+) -> None:
+    """Side-by-side per-cell comparison: truth, prediction, |diff| at one cell.
+
+    Bypasses eval-aggregation so the model's per-cell behaviour is visible
+    directly. The third panel uses ``|truth - pred|`` so the diff is sign-free.
+
+    If ``mean_diff_grid`` is provided, a fourth panel is added showing the
+    mean absolute error averaged across *all* cells of the experiment tensor —
+    useful for spotting parameter regions where the model is systematically
+    weak regardless of which cell you look at.
+    """
+    apply_style()
+    diff_grid = np.abs(true_grid - pred_grid)
+
+    val_vmin = float(min(true_grid.min(), pred_grid.min()))
+    val_vmax = float(max(true_grid.max(), pred_grid.max()))
+    diff_vmax = float(diff_grid.max()) if diff_grid.size > 0 else 1.0
+
+    cell_suffix = f"  ·  {cell_label}" if cell_label else ""
+    panels = [
+        (true_grid, f"Ground Truth{cell_suffix}", "performance", val_vmin, val_vmax),
+        (pred_grid, f"Model Prediction{cell_suffix}", "performance", val_vmin, val_vmax),
+        (diff_grid, f"|Truth − Pred|{cell_suffix}", "Reds", 0.0, max(diff_vmax, 1e-9)),
+    ]
+    if mean_diff_grid is not None:
+        mean_vmax = float(mean_diff_grid.max()) if mean_diff_grid.size > 0 else 1.0
+        panels.append(
+            (mean_diff_grid, "Mean |Truth − Pred| (all cells)", "Reds", 0.0, max(mean_vmax, 1e-9))
+        )
+
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(6 * n, 4.5))
+    _add_fixed_subtitle(fig, fixed_params)
+    if n == 1:
+        axes = [axes]
+
+    for ax, (grid, label, cmap, vmin, vmax) in zip(axes, panels):
+        subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
+                         cmap_name=cmap, label=label,
+                         vmin=vmin, vmax=vmax,
+                         points=points, schedules=schedules, codes=codes,
+                         point_size=20, point_edge="black")
+
+    save_fig(save_path)
+
+
 # ── 3D parameter space scatter ──
 
 def plot_parameter_space_3d(
