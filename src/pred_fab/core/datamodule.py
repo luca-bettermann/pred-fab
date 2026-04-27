@@ -56,6 +56,12 @@ class DataModule:
             SplitType.TEST: [],
         }
 
+        # Scheduled-sampling state — set by PredictionSystem before TRAIN
+        # batches are read; affects only get_batches(SplitType.TRAIN).
+        self._ss_predictions_by_exp: dict[str, dict[str, np.ndarray]] | None = None
+        self._ss_p_student: float = 0.0
+        self._ss_rng: np.random.RandomState | None = None
+
     @property
     def context_feature_codes(self) -> list[str]:
         """Schema codes of context features (observable but uncontrollable)."""
@@ -274,17 +280,116 @@ class DataModule:
         self._feature_stats = {}
         self._is_fitted = True
     
+    def set_scheduled_sampling_state(
+        self,
+        predictions_by_exp: dict[str, dict[str, np.ndarray]] | None,
+        p_student: float = 0.0,
+        rng: np.random.RandomState | None = None,
+    ) -> None:
+        """Configure scheduled-sampling perturbation for subsequent TRAIN batches.
+
+        With ``p_student > 0`` and ``predictions_by_exp`` populated, recursive-
+        feature columns in ``get_batches(SplitType.TRAIN)`` are stochastically
+        replaced with the model's own predictions at the prior cell — matching
+        inference-time semantics so the model learns to handle its own outputs.
+        ``p_student=0`` (default) disables perturbation. VAL / TEST batches are
+        never perturbed regardless of state.
+
+        ``predictions_by_exp[exp_code][feature_code]`` is a tensor whose shape
+        matches the schema's domain for that feature.
+        """
+        self._ss_predictions_by_exp = predictions_by_exp
+        self._ss_p_student = float(p_student)
+        self._ss_rng = rng
+
+    def _perturb_recursive_features(
+        self,
+        X_df: pd.DataFrame,
+        codes: list[str],
+    ) -> pd.DataFrame:
+        """Replace recursive-feature column values with model predictions at
+        the prior cell, per row, with probability ``self._ss_p_student``.
+        Boundary cells (out-of-bounds prior) get NaN — matches training.
+        """
+        if X_df.empty or self._ss_rng is None:
+            return X_df
+
+        schema = self.dataset.schema
+        recursive_features: list[tuple[str, str, str, int]] = []
+        for feat_code, feat_obj in schema.features.data_objects.items():
+            if not getattr(feat_obj, "is_recursive", False):
+                continue
+            if feat_code not in X_df.columns:
+                continue
+            source_code = feat_obj.recursive_source
+            if source_code is None:
+                continue
+            depth = feat_obj.recursive_depth or 1
+            for iter_code in (feat_obj.recursive_dimensions or ()):
+                recursive_features.append((feat_code, source_code, iter_code, depth))
+        if not recursive_features:
+            return X_df
+
+        X_df = X_df.copy()
+        rng = self._ss_rng
+        p = self._ss_p_student
+        preds_by_exp = self._ss_predictions_by_exp or {}
+        col_locs = {fc: X_df.columns.get_loc(fc) for fc, *_ in recursive_features}
+        row_offset = 0
+
+        for exp_code in codes:
+            exp = self.dataset.get_experiment(exp_code)
+            dim_names = exp.parameters.get_dim_names()
+            if not dim_names:
+                row_offset += 1
+                continue
+            dim_iterators = exp.parameters.get_dim_iterator_codes(codes=dim_names)
+            dim_sizes = [int(exp.parameters.get_value(dn)) for dn in dim_names]
+            n_rows_exp = int(np.prod(dim_sizes))
+            preds = preds_by_exp.get(exp_code, {})
+
+            for j in range(n_rows_exp):
+                cell = np.unravel_index(j, dim_sizes)
+                for feat_code, source_code, iter_code, depth in recursive_features:
+                    if rng.random() >= p:
+                        continue
+                    axis_idx = next(
+                        (i for i, ic in enumerate(dim_iterators) if ic == iter_code),
+                        None,
+                    )
+                    if axis_idx is None:
+                        continue
+                    prior = list(cell)
+                    prior[axis_idx] -= depth
+                    if prior[axis_idx] < 0:
+                        new_val = float("nan")
+                    else:
+                        src = preds.get(source_code)
+                        if src is None:
+                            continue
+                        new_val = float(src[tuple(prior)])
+                    X_df.iat[row_offset + j, col_locs[feat_code]] = new_val
+
+            row_offset += n_rows_exp
+
+        return X_df
+
     def get_batches(self, split: SplitType = SplitType.TRAIN) -> list[tuple[np.ndarray, np.ndarray]]:
         """Return list of normalized (X, y) batch tuples for the given split."""
         codes = self._split_codes.get(split, [])
         if not codes:
             return []
-            
+
         X_df, y_df = self.dataset.export_to_dataframe(codes)
         if X_df.empty:
             return []
 
         X_df = self._inject_context_features(X_df, y_df)
+        # Scheduled-sampling perturbation: TRAIN-only, opt-in via state.
+        if (split == SplitType.TRAIN
+            and self._ss_p_student > 0
+            and self._ss_predictions_by_exp is not None):
+            X_df = self._perturb_recursive_features(X_df, codes)
         X = self._one_hot_encode(X_df)
         # Restrict to output_columns to keep index-based normalization and model-filtering aligned.
         y = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
