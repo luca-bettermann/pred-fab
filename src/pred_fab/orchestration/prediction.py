@@ -1110,6 +1110,38 @@ class PredictionSystem(BaseOrchestrationSystem):
     #             exp_data.predicted_features.add(feature_name, arr)
     #         exp_data.predicted_features.set_value(feature_name, pred_array)
     
+    def _get_recursive_input_specs(
+        self,
+        model: IPredictionModel,
+        dim_info: dict[str, Any],
+    ) -> list[tuple[str, str, int, int]]:
+        """For each recursive input feature on this model, return
+        (input_code, source_feature_code, axis_idx, depth).
+
+        ``axis_idx`` is the position of the recursive shift dimension within
+        this model's domain axes — used to decrement the per-cell index when
+        looking up the prior value during autoregressive prediction.
+        """
+        specs: list[tuple[str, str, int, int]] = []
+        iter_codes = dim_info.get('dim_iterators', [])
+        for feat_code in model.input_features:
+            if feat_code not in self.schema.features.data_objects:
+                continue
+            feat_obj = self.schema.features.get(feat_code)
+            if not getattr(feat_obj, "is_recursive", False):
+                continue
+            source = feat_obj.recursive_source
+            depth = feat_obj.recursive_depth or 1
+            rec_dims = feat_obj.recursive_dimensions or ()
+            if source is None:
+                continue
+            for iter_code in rec_dims:
+                for axis_idx, ic in enumerate(iter_codes):
+                    if ic == iter_code:
+                        specs.append((feat_code, source, axis_idx, depth))
+                        break
+        return specs
+
     def _execute_batched_predictions_to_dict(
         self,
         predictions: dict[str, np.ndarray],
@@ -1121,6 +1153,18 @@ class PredictionSystem(BaseOrchestrationSystem):
         model: IPredictionModel | None = None,
     ) -> None:
         """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap."""
+        # Models with recursive input features must be predicted cell-by-cell
+        # so each cell sees the (just-computed) source value for the prior
+        # cell along the recursive axis. Drift compounds along the chain;
+        # we accept that for now (see PFAB - Inference notes).
+        if model is not None:
+            recursive_specs = self._get_recursive_input_specs(model, dim_info)
+            if recursive_specs:
+                self._predict_autoregressive(
+                    predictions, dim_info, predict_from, predict_to, model, recursive_specs
+                )
+                return
+
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")
         if overlap < 0:
             raise ValueError("overlap must be >= 0")
@@ -1185,7 +1229,57 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         X_batch = pd.DataFrame(X_batch_rows)
         return X_batch, batch_indices
-    
+
+    def _predict_autoregressive(
+        self,
+        predictions: dict[str, np.ndarray],
+        dim_info: dict[str, Any],
+        predict_from: int,
+        predict_to: int,
+        model: IPredictionModel,
+        recursive_specs: list[tuple[str, str, int, int]],
+    ) -> None:
+        """Cell-by-cell prediction in C-order. Each cell's row carries the
+        previously predicted source value at (idx[axis] - depth) for each
+        recursive input. Boundary cells (out-of-bounds prior) get NaN, which
+        ``_one_hot_encode`` converts to 0 — matching training-time semantics
+        for the first cell along each recursive axis.
+        """
+        shape = dim_info['shape']
+        param_base = dim_info['param_base']
+        iterator_feats = dim_info['iterator_feats']
+        dm = self._assert_trained()
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+
+        for pos in range(predict_from, predict_to):
+            idx = np.unravel_index(pos, shape)
+
+            row = param_base.copy()
+            for feat_code, axis_pos, size in iterator_feats:
+                row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
+            for input_code, source_code, axis_idx, depth in recursive_specs:
+                prior = list(idx)
+                prior[axis_idx] -= depth
+                if prior[axis_idx] < 0 or source_code not in predictions:
+                    row[input_code] = float('nan')  # boundary semantics
+                else:
+                    val = predictions[source_code][tuple(prior)]
+                    row[input_code] = float('nan') if np.isnan(val) else float(val)
+
+            X_batch = pd.DataFrame([row])
+            X_norm = dm.prepare_input(X_batch)
+            X_model = X_norm[:, input_indices]
+            y_pred_norm = model.forward_pass(X_model)
+            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+
+            for i, feature_name in enumerate(model.outputs):
+                if feature_name not in predictions:
+                    continue
+                value = y_pred[0, i] if y_pred.ndim == 2 else y_pred[i]
+                feat_depth = len(predictions[feature_name].shape)
+                feat_idx = idx[:feat_depth]
+                predictions[feature_name][feat_idx] = float(value)
+
     def _predict_and_store_batch_to_dict(
         self,
         predictions: dict[str, np.ndarray],
