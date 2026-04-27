@@ -38,7 +38,8 @@ def test_iterator_factory_marks_feature_as_context(tmp_path):
     schema = _build_schema_with_iterator(tmp_path)
     feat = schema.features.get("layer_idx_pos")
     assert feat.context is True
-    assert getattr(feat, "iterator_axis_code") == "layer_idx"
+    assert feat.is_iterator is True
+    assert feat.iterator_axis_code == "layer_idx"
 
 
 def test_iterator_rejects_dim_outside_domain(tmp_path):

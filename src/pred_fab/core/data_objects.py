@@ -376,6 +376,11 @@ class DataArray(DataObject):
         return self.recursive_source is not None
 
     @property
+    def is_iterator(self) -> bool:
+        """Whether this feature is auto-derived from a Domain axis row index."""
+        return self.iterator_axis_code is not None
+
+    @property
     def normalize_strategy(self) -> NormMethod:
         return NormMethod.DEFAULT
 

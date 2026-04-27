@@ -249,13 +249,14 @@ class PfabAgent:
         self._check_sets_against_keys(set(output_features), schema.features.keys())
         self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
-        # Recursive features are derived by the FeatureSystem (tensor shifting),
-        # not by any registered feature model — treat them as computed.
-        recursive_codes = {
+        # Recursive features (derived by tensor shifting) and iterator features
+        # (auto-populated from row index) are produced without a feature model —
+        # treat them as computed for validation purposes.
+        derived_codes = {
             code for code, obj in schema.features.items()
-            if isinstance(obj, DataArray) and obj.is_recursive
+            if isinstance(obj, DataArray) and (obj.is_recursive or obj.is_iterator)
         }
-        output_features_set = set(output_features) | recursive_codes
+        output_features_set = set(output_features) | derived_codes
 
         # Validate that all input features are represented as outputs features
         uncomputed_inputs = set(input_features) - output_features_set
