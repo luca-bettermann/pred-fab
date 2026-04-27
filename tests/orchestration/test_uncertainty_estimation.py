@@ -571,14 +571,15 @@ def test_schedule_experiment_contributes_multiple_evidence_points(tmp_path):
 # Integrated-objective evidence math
 # ===========================================================================
 
-def test_normalized_gaussian_integrates_to_one(tmp_path):
-    """Verify ∫_{ℝ^D} ρ_j(z) dz = 1 for the normalized Gaussian kernel."""
+def test_peak1_gaussian_integral_matches_analytic(tmp_path):
+    """Verify ∫_{ℝ^D} ρ_j(z) dz = (σ·√(2π))^D for the peak-1 Gaussian kernel.
+
+    The kernel is ``exp(-d²/(2σ²))`` (peak 1 at the centre), so its integral
+    is the standard Gaussian normalisation factor raised to D — not 1.
+    """
     from pred_fab.orchestration.prediction import PredictionSystem as PS
-    # Direct static-method test, independent of a fitted system.
     for D in (1, 2, 3):
         sigma = 0.15 * np.sqrt(D)
-        # Sample on a wide box centered at origin, evaluate density, integrate via trapezoid.
-        # Trapezoid over 10σ in each dim with 51 points should capture essentially all mass.
         half = 5.0 * sigma
         n = 51
         axes = [np.linspace(-half, half, n) for _ in range(D)]
@@ -588,7 +589,8 @@ def test_normalized_gaussian_integrates_to_one(tmp_path):
         mass = np.trapezoid(vals, axes[0], axis=0)
         for ax in range(1, D):
             mass = np.trapezoid(mass, axes[ax], axis=0)
-        assert float(mass) == pytest.approx(1.0, abs=1e-2)
+        expected = (sigma * np.sqrt(2.0 * np.pi)) ** D
+        assert float(mass) == pytest.approx(expected, rel=1e-2)
 
 
 def _make_estimator_and_index_helper():

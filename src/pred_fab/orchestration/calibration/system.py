@@ -1194,7 +1194,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # scipy DE requires population > 4, so floor at 5.
         popsize = min(max(10, 4 * n_vars), max(self.de_popsize, 5))
         init_pop = np.tile(init, (popsize, 1))
-        jitter = self.engine.rng.normal(0, 0.02, size=init_pop.shape)
+        # Per-dim jitter scales to bound width — wide bounds (static drift,
+        # step-0) get wide jitter, tight bounds (offsets) stay tight. Without
+        # this, all dims share σ=0.02 and wide-bound dims never explore.
+        bound_widths = np.array([hi_b - lo_b for lo_b, hi_b in bounds])
+        sigmas = 0.30 * bound_widths
+        jitter = self.engine.rng.normal(0, 1.0, size=init_pop.shape) * sigmas
         init_pop = init_pop + jitter
         for v_idx, (lo_b, hi_b) in enumerate(bounds):
             init_pop[:, v_idx] = np.clip(init_pop[:, v_idx], lo_b, hi_b)
