@@ -27,7 +27,7 @@ from _style import (
     apply_style, clean_spines, clean_3d_panes, subplot_label,
     cmap, cube_wireframe, square_wireframe, style_colorbar,
     add_kernel_radii_2d, add_kernel_radii_3d,
-    ZINC_300, ZINC_500, ZINC_600, RED,
+    ZINC_300, ZINC_500, ZINC_600, ZINC_700, RED,
 )
 from _config import SIGMA  # single source of truth across all concept figures
 
@@ -200,15 +200,19 @@ def figure_2d(sigma: float = SIGMA, seed: int = 0) -> Path:
 # ---------- 3-D figure ----------
 
 def _tinted_3d_panes(ax, color: str = "#F4F4F5", alpha: float = 0.55) -> None:
-    """Light-grey back panes — gives small floating points a contrast surface."""
+    """Light-grey back panes — gives small floating points a contrast surface.
+
+    Axis lines and labels are darker than the pane edges so the z-axis stays
+    legible against the tinted background.
+    """
     for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
         pane.set_facecolor(color)
         pane.set_alpha(alpha)
         pane.set_edgecolor(ZINC_300)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        axis.set_tick_params(colors=ZINC_500, labelsize=7, pad=1)
-        axis.label.set_color(ZINC_600)
-        axis.line.set_color(ZINC_300)
+        axis.set_tick_params(colors=ZINC_600, labelsize=7, pad=1)
+        axis.label.set_color(ZINC_700)
+        axis.line.set_color(ZINC_500)
     ax.grid(False)
 
 

@@ -82,10 +82,7 @@ def figure_importance_weights(
     ax.set_xlabel("combined score  s")
     ax.set_ylabel("weight  w(s)")
     ax.legend(loc="lower right", fontsize=9, frameon=False, labelcolor=ZINC_600)
-    subplot_label(
-        ax,
-        f"w(s) = floor + (1 − floor) · σ(k · (s − s̄))   ·   k = steepness / σ_s",
-    )
+    subplot_label(ax, "Importance Weight  ·  w(s)  ·  bounded in [floor, 1]")
     ax.grid(True, alpha=0.2, color=ZINC_300)
     clean_spines(ax)
 

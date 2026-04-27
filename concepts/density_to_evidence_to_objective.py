@@ -156,7 +156,7 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
     ax.contour(u, u, D_old, levels=8, colors=[ZINC_300], linewidths=0.4, alpha=0.5)
     _draw_existing(ax, sigma)
     _draw_z_new_atom(ax, sigma)
-    subplot_label(ax, "Raw density  |  D(z)  |  unbounded")
+    subplot_label(ax, "Raw density  ·  D(z)  ·  unbounded")
 
     # ---------- Panel 2: E_old(z) — saturated evidence (bounded, Blues) ----------
     ax = axes[1]
@@ -165,7 +165,7 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
                colors=[ZINC_300], linewidths=0.5, alpha=0.55)
     _draw_existing(ax, sigma)
     _draw_z_new_atom(ax, sigma)
-    subplot_label(ax, "Evidence  |  E(z)  |  bounded in [0, 1]")
+    subplot_label(ax, "Evidence  ·  E(z)  ·  bounded in [0, 1]")
 
     # ---------- Panel 3: ΔI(z_new) — acquisition surface (auto-scaled, Purples) ----------
     ax = axes[2]
@@ -182,7 +182,7 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
                 fontsize=8, color=RED)
     ax.text(0.98, 0.98, "z_new = argmax ΔI", transform=ax.transAxes,
             ha="right", va="top", fontsize=8, color=ZINC_600, style="italic")
-    subplot_label(ax, "Evidence Gain  |  ΔI(z_new)  |  bounded in [0, 1]")
+    subplot_label(ax, "Evidence Gain  ·  ΔI(z_new)  ·  bounded in [0, 1]")
 
     for ax in axes:
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
