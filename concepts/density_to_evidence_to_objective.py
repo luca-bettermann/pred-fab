@@ -31,7 +31,7 @@ from matplotlib.colors import Normalize
 from _style import (
     apply_style, clean_spines, subplot_label, cmap, style_colorbar,
     add_kernel_radii_2d,
-    ACCENT_YELLOW, ZINC_300, ZINC_400, ZINC_500, ZINC_600, RED,
+    ZINC_300, ZINC_400, ZINC_500, ZINC_600, RED,
 )
 from _config import SIGMA, EXISTING_POINTS, Z_NEW, gaussian_density
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
@@ -174,11 +174,14 @@ def figure(sigma: float = SIGMA, res: int = 301) -> Path:
                levels=np.linspace(0.0, dI_max, 6)[1:-1] if dI_max > 0 else [],
                colors=[ZINC_300], linewidths=0.5, alpha=0.55)
     _draw_existing(ax, sigma)
-    # Mark argmax — where the optimiser would actually place the kernel
-    ax.plot(z_argmax[0], z_argmax[1], "*", color=ACCENT_YELLOW, ms=18,
-            markeredgecolor=ZINC_600, markeredgewidth=0.8, zorder=10,
-            label="argmax ΔI")
-    ax.legend(loc="upper right", fontsize=8, frameon=False, labelcolor=ZINC_600)
+    # Mark argmax — same red dot + z_new label as the left panels.
+    ax.scatter([z_argmax[0]], [z_argmax[1]], c=RED, s=34,
+               edgecolors="none", zorder=10)
+    ax.annotate("z_new", xy=(z_argmax[0], z_argmax[1]),
+                xytext=(8, 6), textcoords="offset points",
+                fontsize=8, color=RED)
+    ax.text(0.98, 0.98, "z_new = argmax ΔI", transform=ax.transAxes,
+            ha="right", va="top", fontsize=8, color=ZINC_600, style="italic")
     subplot_label(ax,
                   f"ΔI(z_new)  ·  ∫(E_after − E_before) dz  ·  peak ≈ {dI_max:.3f}")
 
