@@ -232,7 +232,7 @@ class OptimizationEngine:
         result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
 
         if bar:
-            bar.finish(nfev=result.nfev, suffix=f"{iter_count[0]}/{maxiter} iter")
+            bar.finish(suffix=f"{iter_count[0]}/{maxiter} iter  obj={result.fun:.4f}")
 
         return _OptResult(
             best_x=result.x,
@@ -283,7 +283,8 @@ class OptimizationEngine:
                 self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
 
         if bar:
-            bar.finish(nfev=total_nfev)
+            obj_str = f"obj={best_val:.4f}" if best_val < np.inf else "no solution"
+            bar.finish(suffix=obj_str)
 
         return _OptResult(
             best_x=best_x,
