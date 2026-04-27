@@ -480,10 +480,15 @@ def _plot_schedule_ranges(
     alpha: float = 0.5,
     linewidth: float = 1.2,
     cap_size: float = 3.0,
+    step_dot_cmap: str = "Blues",
+    step_dot_size: float = 14,
 ) -> None:
-    """Draw T-ended range lines for scheduled parameters on a 2D scatter."""
+    """Draw T-ended range lines + per-step dots for scheduled parameters."""
     if not schedules or not codes:
         return
+
+    import matplotlib.pyplot as plt
+    cmap = plt.get_cmap(step_dot_cmap)
 
     for i, code in enumerate(codes):
         if code not in schedules or len(schedules[code]) <= 1:
@@ -515,6 +520,18 @@ def _plot_schedule_ranges(
             for x_end in [min(x_vals), max(x_vals)]:
                 ax.plot([x_end, x_end], [y_center - cap, y_center + cap],
                         color=color, alpha=alpha, linewidth=linewidth, zorder=1)
+
+        # Per-step dots, light → dark across the step index so first/last
+        # layer ordering is visible at a glance.
+        n = len(steps)
+        for k, (xv, yv) in enumerate(zip(x_vals, y_vals)):
+            t = k / max(n - 1, 1)
+            # Stay above the band where Blues is too pale to be visible
+            # against light backgrounds; map step index into [0.35, 0.95].
+            ax.scatter([xv], [yv], s=step_dot_size,
+                       color=cmap(0.35 + 0.6 * t),
+                       edgecolors="white", linewidths=0.4,
+                       zorder=3)
 
 
 def _apply_axes(
