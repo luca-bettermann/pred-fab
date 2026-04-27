@@ -1362,8 +1362,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Cell-by-cell prediction in C-order. Each cell's row carries the
         previously predicted source value at (idx[axis] - depth) for each
         recursive input. Boundary cells (out-of-bounds prior) get NaN, which
-        ``_one_hot_encode`` converts to 0 — matching training-time semantics
-        for the first cell along each recursive axis.
+        is treated as 0 in raw space — matching training-time boundary
+        semantics from ``_one_hot_encode``'s ``nan_to_num``.
+
+        Performance: the static columns and iterator features are batch-built
+        and normalized once up front; the per-cell loop only computes the
+        normalized recursive-feature values and runs one forward_pass per
+        cell. Avoids per-cell ``pd.DataFrame`` and full ``prepare_input``
+        overhead, which dominates the cost on small tensors.
         """
         shape = dim_info['shape']
         param_base = dim_info['param_base']
@@ -1371,24 +1377,54 @@ class PredictionSystem(BaseOrchestrationSystem):
         dm = self._assert_trained()
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
 
+        n_cells = predict_to - predict_from
+
+        # Pre-build the full input batch with everything except recursive
+        # features (those need to be filled inline as predictions become
+        # available). One DataFrame / one prepare_input call total.
+        rows = []
+        cell_indices: list[tuple[int, ...]] = []
         for pos in range(predict_from, predict_to):
             idx = np.unravel_index(pos, shape)
-
+            cell_indices.append(idx)
             row = param_base.copy()
             for feat_code, axis_pos, size in iterator_feats:
                 row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
-            for input_code, source_code, axis_idx, depth in recursive_specs:
+            rows.append(row)
+        X_df = pd.DataFrame(rows)
+        X_norm = dm.prepare_input(X_df)
+
+        # Pre-resolve per-recursive-feature column indices and normalization
+        # stats so the inner loop is just numpy arithmetic + forward_pass.
+        recursive_plan: list[tuple[str, str, int, int, int, dict | None]] = []
+        for input_code, source_code, axis_idx, depth in recursive_specs:
+            if input_code not in dm.input_columns:
+                continue
+            col_idx = dm.input_columns.index(input_code)
+            stats = dm._parameter_stats.get(input_code)
+            recursive_plan.append((input_code, source_code, axis_idx, depth, col_idx, stats))
+
+        def _normalize_one(raw_val: float, stats: dict | None) -> float:
+            if stats is None:
+                return raw_val
+            arr = np.array([raw_val], dtype=np.float32)
+            return float(dm._apply_normalization(arr, stats)[0])
+
+        for cell_row in range(n_cells):
+            idx = cell_indices[cell_row]
+
+            # Fill recursive features for this cell (in normalized space)
+            for input_code, source_code, axis_idx, depth, col_idx, stats in recursive_plan:
                 prior = list(idx)
                 prior[axis_idx] -= depth
                 if prior[axis_idx] < 0 or source_code not in predictions:
-                    row[input_code] = float('nan')  # boundary semantics
+                    raw_val = 0.0  # boundary
                 else:
                     val = predictions[source_code][tuple(prior)]
-                    row[input_code] = float('nan') if np.isnan(val) else float(val)
+                    raw_val = 0.0 if np.isnan(val) else float(val)
+                X_norm[cell_row, col_idx] = _normalize_one(raw_val, stats)
 
-            X_batch = pd.DataFrame([row])
-            X_norm = dm.prepare_input(X_batch)
-            X_model = X_norm[:, input_indices]
+            X_model = X_norm[cell_row:cell_row + 1, input_indices]
             y_pred_norm = model.forward_pass(X_model)
             y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
 
