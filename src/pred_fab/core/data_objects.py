@@ -334,7 +334,8 @@ class DataArray(DataObject):
                  context: bool = False,
                  recursive_source: str | None = None,
                  recursive_dimensions: tuple[str, ...] | None = None,
-                 recursive_depth: int | None = None):
+                 recursive_depth: int | None = None,
+                 iterator_axis_code: str | None = None):
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: list[str] = []
@@ -344,6 +345,9 @@ class DataArray(DataObject):
         self.recursive_source: str | None = recursive_source
         self.recursive_dimensions: tuple[str, ...] | None = recursive_dimensions
         self.recursive_depth: int | None = recursive_depth
+        # Iterator-derived feature: value at row k = k / (L-1) along this axis,
+        # where L is the experiment's value of the iterator's parent Dimension.
+        self.iterator_axis_code: str | None = iterator_axis_code
 
         constraints: dict[str, Any] = {
             "dtype": resolved_dtype.name,
@@ -361,6 +365,8 @@ class DataArray(DataObject):
             constraints["recursive_dimensions"] = list(recursive_dimensions)
         if recursive_depth is not None:
             constraints["recursive_depth"] = recursive_depth
+        if iterator_axis_code is not None:
+            constraints["iterator_axis_code"] = iterator_axis_code
 
         super().__init__(code, np.ndarray, role, constraints)
 
@@ -410,6 +416,7 @@ class DataArray(DataObject):
             recursive_source=constraints.get("recursive_source"),
             recursive_dimensions=tuple(rec_dims) if rec_dims is not None else None,
             recursive_depth=constraints.get("recursive_depth"),
+            iterator_axis_code=constraints.get("iterator_axis_code"),
         )
         obj.round_digits = round_digits
         if "columns" in constraints:
@@ -468,6 +475,32 @@ class Feature:
         return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
                          domain_code=domain.code if domain is not None else None,
                          feature_depth=depth, context=True)
+
+    @staticmethod
+    def iterator(domain: Domain, dim: 'Dimension', code: str | None = None) -> DataArray:
+        """Create an iterator-derived feature: value at row k = k / (L-1) for axis ``dim``.
+
+        Auto-populated from row position; never read from stored experiment data.
+        Marked ``context=True`` (input-only, not in trust regions / not optimised) and
+        — being a Feature, not a Parameter — automatically excluded from the KDE
+        active mask. So it's available as a prediction-model input without adding
+        evidence/coverage dimensionality.
+
+        ``code`` defaults to ``f"{dim.iterator_code}_pos"`` (e.g., ``layer_idx_pos``).
+        """
+        if dim not in domain.axes:
+            raise ValueError(
+                f"Dimension '{dim.code}' is not part of Domain '{domain.code}'."
+            )
+        feat_code = code if code is not None else f"{dim.iterator_code}_pos"
+        return DataArray(
+            code=feat_code,
+            role=Roles.FEATURE,
+            domain_code=domain.code,
+            feature_depth=None,
+            context=True,
+            iterator_axis_code=dim.iterator_code,
+        )
 
     @overload
     @staticmethod

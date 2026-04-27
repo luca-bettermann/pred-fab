@@ -917,7 +917,25 @@ class Dataset:
             # Get all index combinations
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
             dim_iterators = exp_data.parameters.get_dim_iterator_codes(codes=dim_names)
-            
+
+            # Iterator-derived features: precompute (feat_code, axis_iter_code, dim_size).
+            # Value at row k along this axis is k / (size - 1) — features without a
+            # stored tensor; populated directly into y rows for context injection.
+            iterator_features: list[tuple[str, str, int]] = []
+            for feat_code, feat_obj in self.schema.features.data_objects.items():
+                axis_code = getattr(feat_obj, "iterator_axis_code", None)
+                if axis_code is None:
+                    continue
+                # Find the dim parameter whose iterator_code matches.
+                size = None
+                for i, dim_name in enumerate(dim_names):
+                    if dim_iterators[i] == axis_code:
+                        size = int(exp_data.parameters.get_value(dim_name))
+                        break
+                if size is None:
+                    continue
+                iterator_features.append((feat_code, axis_code, size))
+
             for row_idx, idx_tuple in enumerate(dim_combinations):
                 # Build X row (Static + Iterators)
                 row_dict = exp_data.get_effective_parameters_for_row(row_idx)
@@ -931,7 +949,7 @@ class Dataset:
                     row_dict[dim_iterators[i]] = idx_tuple[i]
 
                 X_rows.append(row_dict)
-                
+
                 # Build y row (Features at index)
                 y_dict = {}
                 # Read feature values consistently from canonical tensor storage.
@@ -939,7 +957,15 @@ class Dataset:
                     val = exp_data.features.value_at(feature_name, exp_data.parameters, iterator_ctx)
                     if val is not None and not np.isnan(val):
                         y_dict[feature_name] = val
-                
+
+                # Iterator-derived features: compute from the iteration tuple.
+                for feat_code, axis_code, size in iterator_features:
+                    raw_idx = iterator_ctx.get(axis_code)
+                    if raw_idx is None:
+                        continue
+                    norm = float(raw_idx) / max(size - 1, 1)
+                    y_dict[feat_code] = norm
+
                 y_rows.append(y_dict)
         
         if not X_rows:
