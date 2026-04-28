@@ -65,6 +65,37 @@ class OptimizationEngine:
         # Schedule smoothing: penalizes speed changes between adjacent layers
         self.schedule_smoothing: float = 0.05
 
+    def run_acquisition_vectorized(
+        self,
+        objective_vectorized: Callable[[np.ndarray], np.ndarray],
+        bounds: list[tuple[float, float]],
+        *,
+        x0: np.ndarray | None = None,
+        n_restarts: int = 0,
+        label: str = "Optimizing",
+        show_progress: bool = False,
+    ) -> _OptResult:
+        """Vectorised DE for single-point acquisition (N=1, L=1).
+
+        ``objective_vectorized`` takes ``(D, S)`` and returns ``(S,)`` — one negated
+        score per candidate. scipy DE then evaluates the entire population in a
+        single call, amortising forward_pass overhead across ``S = popsize × D``.
+
+        L-BFGS-B path fallback for the optimizer enum is unsupported here — the
+        vectorisation gain is DE-specific. Callers wanting L-BFGS-B should use
+        the scalar ``run`` method.
+        """
+        D = len(bounds)
+        smart_maxiter = min(max(40, 15 * D), self.de_maxiter)
+        return self._run_de(
+            objective_vectorized,
+            bounds,
+            label=label,
+            show_progress=show_progress,
+            maxiter=smart_maxiter,
+            vectorized=True,
+        )
+
     def run(
         self,
         per_step_fn: Callable[[np.ndarray], float],
@@ -203,8 +234,16 @@ class OptimizationEngine:
         show_progress: bool = False,
         maxiter: int | None = None,
         popsize: int | None = None,
+        vectorized: bool = False,
     ) -> _OptResult:
-        """Unified differential evolution wrapper."""
+        """Unified differential evolution wrapper.
+
+        ``vectorized=True`` passes ``vectorized=True`` to scipy: ``objective``
+        is then called with an ``(D, S)`` array and must return shape ``(S,)``.
+        Performance gain comes from amortising forward_pass overhead across the
+        population batch dim — only meaningful when the objective is itself
+        batchable (e.g. CalibrationSystem._acquisition_objective_vectorized).
+        """
         if maxiter is None:
             maxiter = self.de_maxiter
         if popsize is None:
@@ -219,11 +258,19 @@ class OptimizationEngine:
         improvement_eps = self.de_improvement_eps
         no_improve_window = self.de_no_improve_window
 
-        def _tracked_objective(x: np.ndarray) -> float:
-            val = objective(x)
-            if val < best_so_far[0]:
-                best_so_far[0] = val
-            return val
+        if vectorized:
+            def _tracked_objective(X: np.ndarray) -> np.ndarray:
+                vals = objective(X)
+                vals_min = float(np.min(vals))
+                if vals_min < best_so_far[0]:
+                    best_so_far[0] = vals_min
+                return vals
+        else:
+            def _tracked_objective(x: np.ndarray) -> float:
+                val = objective(x)
+                if val < best_so_far[0]:
+                    best_so_far[0] = val
+                return val
 
         def _progress(xk: Any, convergence: Any) -> bool:
             iter_count[0] += 1
@@ -255,6 +302,7 @@ class OptimizationEngine:
             atol=-1.0,
             polish=not has_int,
             callback=_progress,
+            vectorized=vectorized,
         )
         if init_pop is not None:
             de_kwargs["init"] = init_pop

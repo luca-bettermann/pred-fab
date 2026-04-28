@@ -74,10 +74,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         pop_virtual_points_fn: Callable[[], None] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
+        perf_fn_batched: Callable[[list[dict[str, Any]]], list[dict[str, float | None]]] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn = perf_fn
+        self.perf_fn_batched = perf_fn_batched
         self.uncertainty_fn = uncertainty_fn
         self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
         self.push_virtual_points_fn = push_virtual_points_fn
@@ -348,8 +350,68 @@ class CalibrationSystem(BaseOrchestrationSystem):
             perf_dict = self.perf_fn(params_dict)
         except Exception:
             return 0.0
+        return self._normalize_perf_dict(perf_dict, perf_range)
+
+    def _per_candidate_perf_batched(
+        self,
+        X_SD: np.ndarray,
+        perf_range: tuple[float, float] | None,
+    ) -> np.ndarray:
+        """Weighted performance for S normalised parameter vectors (one per row).
+
+        Calls ``perf_fn_batched`` once if available — the batched perf path runs
+        S autoregressive trajectories in parallel inside ``predict_for_calibration_batched``,
+        amortising forward_pass overhead across the candidate batch dim.
+        Falls back to a Python loop over ``_per_candidate_perf`` if no batched
+        perf_fn was registered.
+        """
+        S = X_SD.shape[0]
+        if S == 0:
+            return np.empty((0,), dtype=np.float64)
+
+        dm = self._active_datamodule
+        if dm is None:
+            return np.zeros(S, dtype=np.float64)
+
+        if self.perf_fn_batched is None:
+            return np.array(
+                [self._per_candidate_perf(X_SD[i], perf_range) for i in range(S)],
+                dtype=np.float64,
+            )
+
+        # Decode S parameter dicts. Decode failures → 0 perf for that candidate.
+        params_list: list[dict[str, Any] | None] = []
+        for i in range(S):
+            try:
+                params_list.append(dm.array_to_params(X_SD[i].reshape(-1)))
+            except (ValueError, KeyError):
+                params_list.append(None)
+
+        valid_idx = [i for i, p in enumerate(params_list) if p is not None]
+        if not valid_idx:
+            return np.zeros(S, dtype=np.float64)
+
+        try:
+            perf_dicts = self.perf_fn_batched([params_list[i] for i in valid_idx])  # type: ignore[arg-type]
+        except Exception:
+            return np.array(
+                [self._per_candidate_perf(X_SD[i], perf_range) for i in range(S)],
+                dtype=np.float64,
+            )
+
+        out = np.zeros(S, dtype=np.float64)
+        for k, i in enumerate(valid_idx):
+            out[i] = self._normalize_perf_dict(perf_dicts[k], perf_range)
+        return out
+
+    def _normalize_perf_dict(
+        self,
+        perf_dict: dict[str, float | None],
+        perf_range: tuple[float, float] | None,
+    ) -> float:
+        """Combine per-feature perf into a system score, then normalise into [0, 1]."""
         perf_values = [
-            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
+            float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore[arg-type]
             for name in self.perf_names_order
             if name in perf_dict
         ]
@@ -395,6 +457,36 @@ class CalibrationSystem(BaseOrchestrationSystem):
         x_flat: 1-D normalized parameter vector. Inference and exploration use this path.
         """
         return -self._acquisition(x_flat.reshape(1, -1), kappa, perf_range)
+
+    def _acquisition_objective_vectorized(
+        self,
+        X_DS: np.ndarray,
+        kappa: float,
+        perf_range: tuple[float, float] | None = None,
+    ) -> np.ndarray:
+        """Vectorised (negated) acquisition for scipy DE ``vectorized=True``.
+
+        scipy passes ``X_DS`` of shape ``(D, S)`` — one column per candidate. Returns
+        a length-S array of negated scores. The performance side runs through
+        ``_per_candidate_perf_batched`` so all S candidates' autoregressive
+        trajectories evaluate in one batched forward pass per cell-step.
+        """
+        X_SD = np.ascontiguousarray(X_DS.T)  # (S, D)
+        S = X_SD.shape[0]
+
+        scores = np.zeros(S, dtype=np.float64)
+
+        if kappa < 1.0:
+            perfs = self._per_candidate_perf_batched(X_SD, perf_range)
+            scores += (1.0 - kappa) * perfs
+
+        if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
+            # Evidence is computed per single-point candidate (L=1 each); the KDE
+            # eval is cheap relative to forward_pass and isn't the bottleneck here.
+            for i in range(S):
+                scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
+
+        return -scores
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -1870,20 +1962,51 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n_rounds = n_optimization_rounds
 
             opt_for_step = self.online_optimizer if is_online else None
+            chosen_opt = opt_for_step or self.optimizer
 
-            def acq_single(pts: np.ndarray) -> float:
-                """Evaluate acquisition/inference at a single point."""
-                return objective(pts[0])
-
-            opt, static_out, _sched_out = self.engine.run(
-                acq_single, N=1, D_static=n_input, D_sched=0, L=1,
-                static_bounds=bounds.tolist(), sched_bounds=[], sched_deltas=np.array([]),
-                optimizer=opt_for_step,
-                default_optimizer=self.optimizer,
-                x0=datamodule.params_to_array(working_params) if working_params else None,
-                n_restarts=n_rounds,
-                label="Optimizing", show_progress=console,
+            # Vectorised DE path: pass S candidates through the autoreg loop in one
+            # go via _acquisition_objective_vectorized, amortising forward_pass
+            # overhead. Only available for DE (not L-BFGS-B), and only when MPC
+            # lookahead isn't wrapping the objective (MPC builds a sequential
+            # rollout per candidate, so it stays scalar).
+            mpc_active = (
+                is_online and mpc_lookahead is not None and mpc_lookahead > 0
             )
+            use_vectorized = (
+                chosen_opt == Optimizer.DE
+                and not mpc_active
+                and self.perf_fn_batched is not None
+            )
+
+            if use_vectorized:
+                _eff_kappa = 0.0 if mode == Mode.INFERENCE else kappa
+                _perf_range, _ = self._get_acquisition_ranges()
+                _vec_obj = functools.partial(
+                    self._acquisition_objective_vectorized,
+                    kappa=_eff_kappa,
+                    perf_range=_perf_range,
+                )
+                opt = self.engine.run_acquisition_vectorized(
+                    _vec_obj,
+                    bounds.tolist(),
+                    label="Optimizing",
+                    show_progress=console,
+                )
+                static_out = opt.best_x.reshape(1, -1) if opt.best_x is not None else np.full((1, n_input), 0.5)
+            else:
+                def acq_single(pts: np.ndarray) -> float:
+                    """Evaluate acquisition/inference at a single point."""
+                    return objective(pts[0])
+
+                opt, static_out, _sched_out = self.engine.run(
+                    acq_single, N=1, D_static=n_input, D_sched=0, L=1,
+                    static_bounds=bounds.tolist(), sched_bounds=[], sched_deltas=np.array([]),
+                    optimizer=opt_for_step,
+                    default_optimizer=self.optimizer,
+                    x0=datamodule.params_to_array(working_params) if working_params else None,
+                    n_restarts=n_rounds,
+                    label="Optimizing", show_progress=console,
+                )
 
             self.last_opt_nfev = opt.nfev
             if console:

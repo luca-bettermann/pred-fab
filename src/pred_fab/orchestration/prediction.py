@@ -786,9 +786,36 @@ class PredictionSystem(BaseOrchestrationSystem):
         self._assert_trained()
 
         predictions = self._predict_from_params(params=params, batch_size=1000)
+        return self._postprocess_predictions_for_calibration(predictions, params)
 
-        # Convert per-feature N-D tensors to tabular arrays: [dim_iter_vals..., feature_val].
-        # Vectorized via np.indices instead of a Python loop over flat positions.
+    def predict_for_calibration_batched(
+        self,
+        params_list: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, np.ndarray], Any]]:
+        """Predict for S candidate parameter sets in parallel.
+
+        S separate ``predict_for_calibration`` outputs, returned as a list. The
+        batched autoreg loop runs the S trajectories simultaneously, amortising
+        forward_pass overhead across the candidate batch dim. Result format
+        matches the single-candidate API: one ``(feature_arrays, params_block)``
+        tuple per input.
+        """
+        self._assert_trained()
+        if not params_list:
+            return []
+
+        predictions_list = self._predict_from_params_batched(params_list, batch_size=1000)
+        return [
+            self._postprocess_predictions_for_calibration(preds, p)
+            for preds, p in zip(predictions_list, params_list)
+        ]
+
+    def _postprocess_predictions_for_calibration(
+        self,
+        predictions: dict[str, np.ndarray],
+        params: dict[str, Any],
+    ) -> tuple[dict[str, np.ndarray], Any]:
+        """Tensor → tabular [dim_iter..., feat_val] conversion + params_block build."""
         feature_arrays: dict[str, np.ndarray] = {}
         for feat_name, tensor in predictions.items():
             feat_shape = tensor.shape
@@ -799,7 +826,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             else:
                 feature_arrays[feat_name] = flat
 
-        # Build Parameters block with values from params
         params_block = copy.deepcopy(self.schema.parameters)
         for code, val in params.items():
             if code in params_block.data_objects:
@@ -1180,6 +1206,249 @@ class PredictionSystem(BaseOrchestrationSystem):
             'iterator_feats': iterator_feats,
             'total_positions': total_positions,
         }
+
+    def _predict_from_params_batched(
+        self,
+        params_list: list[dict[str, Any]],
+        predict_from: int = 0,
+        predict_to: int | None = None,
+        batch_size: int = 1000,
+        overlap: int = 0,
+    ) -> list[dict[str, np.ndarray]]:
+        """Predict for S candidate parameter sets in parallel.
+
+        For each model, we group candidates by their structural shape (typically
+        all S share the same shape during a single acquisition call). Within each
+        shape group, recursive models go through a batched autoreg loop that runs
+        S trajectories in parallel (one forward_pass(S, n_cols) per cell-step
+        instead of S × forward_pass(1, n_cols)). Non-recursive models go through
+        the existing batched path with one big concatenated batch.
+
+        Result: list of S predictions dicts, identical to S separate
+        ``_predict_from_params`` calls but ~4–5× cheaper on the forward_pass side
+        at typical S = popsize × D ≈ 16.
+        """
+        self._assert_trained()
+        S = len(params_list)
+        if S == 0:
+            return []
+        if S == 1:
+            return [self._predict_from_params(
+                params_list[0], predict_from, predict_to, batch_size, overlap,
+            )]
+
+        # Per-candidate dim_info per model (precompute) and per-candidate predictions dict.
+        per_model_dim_info: list[list[dict[str, Any]]] = []  # [model][candidate]
+        for model in self.models:
+            per_model_dim_info.append(
+                [self._get_model_dim_info(model, p) for p in params_list]
+            )
+
+        predictions_list: list[dict[str, np.ndarray]] = [{} for _ in range(S)]
+
+        for m_idx, model in enumerate(self.models):
+            dim_infos = per_model_dim_info[m_idx]
+
+            # Allocate per-candidate prediction arrays
+            for s, dim_info in enumerate(dim_infos):
+                for feat in model.outputs:
+                    if feat not in predictions_list[s]:
+                        feat_shape = self._get_feature_shape(feat, params_list[s])
+                        predictions_list[s][feat] = np.full(feat_shape, np.nan)
+
+            # Group candidates by shape for batched evaluation. Common case:
+            # all S candidates share the same shape (n_layers / n_segments are
+            # not in the DE search vector), so this becomes one big group.
+            shape_groups: dict[tuple, list[int]] = {}
+            for s, dim_info in enumerate(dim_infos):
+                shape_groups.setdefault(dim_info['shape'], []).append(s)
+
+            recursive_specs_per_candidate = [
+                self._get_recursive_input_specs(model, di) for di in dim_infos
+            ]
+
+            for shape_key, group_indices in shape_groups.items():
+                # Within a group, all candidates share shape + iterator structure;
+                # only param_base differs.
+                group_dim_infos = [dim_infos[i] for i in group_indices]
+                group_recursive_specs = recursive_specs_per_candidate[group_indices[0]]
+                total_positions = group_dim_infos[0]['total_positions']
+
+                p_from = max(0, predict_from)
+                p_to = min(predict_to if predict_to is not None else total_positions, total_positions)
+                if p_from > total_positions:
+                    continue
+
+                if group_recursive_specs:
+                    self._predict_autoregressive_batched(
+                        [predictions_list[i] for i in group_indices],
+                        group_dim_infos,
+                        p_from, p_to,
+                        model,
+                        group_recursive_specs,
+                    )
+                else:
+                    # Non-recursive: stack candidates' rows into one big batch.
+                    self._predict_non_recursive_batched(
+                        [predictions_list[i] for i in group_indices],
+                        group_dim_infos,
+                        p_from, p_to,
+                        model,
+                    )
+
+        return predictions_list
+
+    def _predict_non_recursive_batched(
+        self,
+        predictions_list: list[dict[str, np.ndarray]],
+        dim_info_list: list[dict[str, Any]],
+        predict_from: int,
+        predict_to: int,
+        model: IPredictionModel,
+    ) -> None:
+        """Non-recursive batched: build (S × n_cells, n_cols) batch, one forward_pass."""
+        S = len(predictions_list)
+        n_cells = predict_to - predict_from
+        shape = dim_info_list[0]['shape']
+        iterator_feats = dim_info_list[0]['iterator_feats']
+
+        cell_indices: list[tuple[int, ...]] = [
+            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
+        ]
+
+        # One DataFrame per candidate, then concatenate. prepare_input uses the
+        # categorical mappings learned at fit time, so different candidates can
+        # have different category values without issue.
+        all_rows = []
+        for s in range(S):
+            param_base = dim_info_list[s]['param_base']
+            for idx in cell_indices:
+                row = param_base.copy()
+                for feat_code, axis_pos, size in iterator_feats:
+                    row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
+                all_rows.append(row)
+        X_df = pd.DataFrame(all_rows)
+        dm = self._assert_trained()
+        X_norm = dm.prepare_input(X_df)  # (S × n_cells, n_input_cols), tensor
+
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        X_model = X_norm.index_select(1, input_indices_t)
+        y_pred_norm = model.forward_pass(X_model)
+        y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+        y_np = y_pred.detach().cpu().numpy()
+
+        for s in range(S):
+            offset = s * n_cells
+            for i, feat_name in enumerate(model.outputs):
+                if feat_name not in predictions_list[s]:
+                    continue
+                feat_depth = len(predictions_list[s][feat_name].shape)
+                for j, idx in enumerate(cell_indices):
+                    feat_idx = idx[:feat_depth]
+                    predictions_list[s][feat_name][feat_idx] = float(y_np[offset + j, i])
+
+    def _predict_autoregressive_batched(
+        self,
+        predictions_list: list[dict[str, np.ndarray]],
+        dim_info_list: list[dict[str, Any]],
+        predict_from: int,
+        predict_to: int,
+        model: IPredictionModel,
+        recursive_specs: list[tuple[str, str, int, int]],
+    ) -> None:
+        """S-parallel autoregressive prediction.
+
+        Builds an X_stack of shape ``(S, n_cells, n_input_cols)`` once at setup,
+        then for each cell-step:
+          1. Substitute recursive feature values (in normalised space) per
+             candidate from the just-predicted source feature.
+          2. Run ONE ``forward_pass`` on ``(S, n_cols_filtered)`` — the win.
+          3. Scatter predictions back to per-candidate prediction arrays.
+
+        All S candidates share ``shape``, ``iterator_feats``, and ``dim_iterators``
+        (grouped by caller). Only ``param_base`` differs per candidate.
+        """
+        S = len(predictions_list)
+        n_cells = predict_to - predict_from
+        shape = dim_info_list[0]['shape']
+        iterator_feats = dim_info_list[0]['iterator_feats']
+        dm = self._assert_trained()
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+
+        # Cell index lookup (shared across S — same shape).
+        cell_indices: list[tuple[int, ...]] = [
+            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
+        ]
+
+        # Build (S × n_cells, n_input_cols) tensor in one prepare_input call,
+        # then reshape to (S, n_cells, n_input_cols).
+        all_rows = []
+        for s in range(S):
+            param_base = dim_info_list[s]['param_base']
+            for idx in cell_indices:
+                row = param_base.copy()
+                for feat_code, axis_pos, size in iterator_feats:
+                    row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
+                all_rows.append(row)
+        X_df = pd.DataFrame(all_rows)
+        X_norm_flat = dm.prepare_input(X_df)              # (S × n_cells, n_input_cols)
+        n_input_cols = X_norm_flat.shape[1]
+        X_stack = X_norm_flat.view(S, n_cells, n_input_cols).clone()
+
+        # Pre-resolve recursive feature plan (column index + normalisation stats).
+        recursive_plan: list[tuple[str, int, int, int, dict | None]] = []
+        for input_code, source_code, axis_idx, depth in recursive_specs:
+            if input_code not in dm.input_columns:
+                continue
+            col_idx = dm.input_columns.index(input_code)
+            stats = dm._parameter_stats.get(input_code)
+            recursive_plan.append((source_code, axis_idx, depth, col_idx, stats))
+
+        def _normalize_values(raw_vals: np.ndarray, stats: dict | None) -> np.ndarray:
+            """Apply normalization to a 1-D batch of raw values; numpy boundary."""
+            if stats is None:
+                return raw_vals
+            return dm._apply_normalization(raw_vals.astype(np.float32), stats)
+
+        for cell_row in range(n_cells):
+            idx = cell_indices[cell_row]
+
+            # Recursive feature substitution: gather the source-feature value at
+            # the prior cell for each of the S candidates, normalise as a batch,
+            # write into X_stack[:, cell_row, col_idx].
+            for source_code, axis_idx, depth, col_idx, stats in recursive_plan:
+                prior = list(idx)
+                prior[axis_idx] -= depth
+                if prior[axis_idx] < 0:
+                    raw_vals = np.zeros(S, dtype=np.float32)
+                else:
+                    raw_vals = np.zeros(S, dtype=np.float32)
+                    for s in range(S):
+                        if source_code in predictions_list[s]:
+                            v = predictions_list[s][source_code][tuple(prior)]
+                            raw_vals[s] = 0.0 if np.isnan(v) else float(v)
+                norm_vals = _normalize_values(raw_vals, stats)
+                X_stack[:, cell_row, col_idx] = torch.from_numpy(norm_vals.astype(np.float32))
+
+            X_model = X_stack[:, cell_row, :].index_select(1, input_indices_t)  # (S, n_cols_filtered)
+            y_pred_norm = model.forward_pass(X_model)  # (S, n_outputs) — ONE call for all S
+            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+            y_np = y_pred.detach().cpu().numpy()
+
+            # Scatter predictions: y_np[s, i] → predictions_list[s][feat_name][feat_idx]
+            for i, feature_name in enumerate(model.outputs):
+                feat_depth_cache: dict[int, int] = {}
+                for s in range(S):
+                    if feature_name not in predictions_list[s]:
+                        continue
+                    fd = feat_depth_cache.get(s)
+                    if fd is None:
+                        fd = len(predictions_list[s][feature_name].shape)
+                        feat_depth_cache[s] = fd
+                    feat_idx = idx[:fd]
+                    predictions_list[s][feature_name][feat_idx] = float(y_np[s, i])
 
     def _predict_from_params(
         self,

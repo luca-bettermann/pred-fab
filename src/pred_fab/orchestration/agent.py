@@ -171,10 +171,30 @@ class PfabAgent:
             except Exception:
                 return {}
 
+        def _perf_fn_batched(params_dicts: list[dict[str, Any]]) -> list[dict[str, float | None]]:
+            """Batched perf evaluation: one autoreg pass for S candidates, S eval calls."""
+            if not params_dicts:
+                return []
+            try:
+                merged_list = []
+                for pd_ in params_dicts:
+                    m = dict(pd_)
+                    if _ctx:
+                        m.update(_ctx)
+                    merged_list.append(m)
+                results_list = _pred.predict_for_calibration_batched(merged_list)
+                return [
+                    _eval._evaluate_feature_dict(feat_arrs, params_block)
+                    for feat_arrs, params_block in results_list
+                ]
+            except Exception:
+                return [{} for _ in params_dicts]
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
             logger=self.logger,
             perf_fn=_perf_fn,
+            perf_fn_batched=_perf_fn_batched,
             uncertainty_fn=_pred.uncertainty,
             delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
             push_virtual_points_fn=_pred.push_virtual_points,
