@@ -32,7 +32,6 @@ from typing import Literal
 import numpy as np
 import torch
 from scipy.spatial import cKDTree  # type: ignore[import-untyped]
-from scipy.stats import qmc
 
 _logger = logging.getLogger(__name__)
 
@@ -853,9 +852,13 @@ class SobolLocalEstimator(EvidenceEstimator):
         volume = box_side ** D
         n = self._resolve_n_samples(D)
 
+        # Torch-native QMC (Strategy D commit 12). draw() returns (n, D)
+        # in the unit cube; SobolEngine wants log2(n) for power-of-2 lengths
+        # but accepts arbitrary n via .draw(n). Scrambled for sample diversity.
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            unit = qmc.Sobol(d=D, scramble=True, rng=self.seed).random(n=n)
+            engine = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=self.seed)
+            unit = engine.draw(n).numpy().astype(np.float64)
         samples = center + box_side * (unit - 0.5)
 
         # ρⱼ(z; center) — peak-1 Gaussian, no weight (caller scales by w_j)
