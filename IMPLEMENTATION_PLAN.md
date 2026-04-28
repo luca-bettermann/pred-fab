@@ -217,8 +217,22 @@ Becomes natural with autograd-traversable substitution. Substitution gradient fl
 - 7b. Normalisation as `nn.Module` (`StandardScalerModule`, `MinMaxModule`, `RobustScalerModule`).
 - 7c. Tensor-native `prepare_input` + `dataset.export_to_dataframe` → tensor dict.
 
+### Commit 7 — End-to-end gradient validation (committed) + data layer deferred
+**Shipped now:** End-to-end validation script `pred-fab-mock/dev/_smoke_gradient.py` runs the same `baseline_step(n=3)` twice on the mock — once with DE, once with GRADIENT — and prints wall time + proposed params.
+
+**Empirical findings on the mock (D=2 Process phase, n_active~10 KDE kernels):**
+- Both paths converge to similar acquisition scores (DE obj=-0.069, GRADIENT obj=-0.061; GRADIENT slightly better here).
+- **DE is faster at this small D**: ~3.4s vs ~4.7s wall, primarily because the GRADIENT path runs 4 starts × 40 iters = 160 forward evaluations through the full encoder + tensor KDE per call, while DE's 25 iter × popsize 4 = 100 evals on a smaller scalar acquisition closure are amortised.
+- **Implication for default flip**: at the mock's D=2, flipping to GRADIENT would slow down the most common path. The DE → GRADIENT crossover should empirically land somewhere around D ≥ 5-10 with smoother KDE landscapes; needs validation on a larger problem before flipping.
+
+**Deferred (commits 7a-7c, multi-day):** The data-layer migrations (one-hot → categorical-index + nn.Embedding, nn.Module normalisers, tensor-native prepare_input + tensor-dict export). These touch deeply across DataModule, prediction pipelines, and many test fixtures; needs careful sub-commit planning.
+
 ### Commit 8 — Flip default optimiser, validate end-to-end (~0.5 day)
-Default optimiser becomes `Optimizer.GRADIENT`. DE remains via `agent.configure_optimizer(backend=Optimizer.DE)`. Smoke + schedule iteration profile to confirm targets met.
+Default optimiser becomes `Optimizer.GRADIENT` **only after empirical validation** that GRADIENT beats DE at the user's typical D / σ regime. Commit 7's smoke shows DE wins at D=2 on the mock — flipping prematurely would regress small-D users. The flip should be gated on:
+- Schedule iteration profile (where Strategy D's biggest gain is expected: 1s → 50-200ms target).
+- Domain-realistic baseline at D ≥ 5 to confirm GRADIENT crossover.
+
+DE remains via `agent.configure_optimizer(backend=Optimizer.DE)` once flipped.
 
 ### Total estimate
 
