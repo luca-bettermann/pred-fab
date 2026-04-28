@@ -947,6 +947,260 @@ class PredictionSystem(BaseOrchestrationSystem):
                 ]
         return out
 
+    def predict_for_calibration_tensor(
+        self,
+        params_list: list[dict[str, Any]],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Tensor-typed mirror of ``predict_for_calibration_batched``.
+
+        Returns predictions as ``torch.Tensor`` per feature (no numpy
+        round-trip at the API boundary). Per-candidate output is a
+        ``dict[feature_code, torch.Tensor]`` where each tensor has shape
+        ``(*feat_shape,)`` matching the per-candidate iterator-domain
+        topology.
+
+        Gradient flow: continuous values in each ``params`` dict can be
+        ``torch.Tensor`` with ``requires_grad=True`` — gradients flow
+        through ``params_to_tensor`` (affine normalisation) and the autoreg
+        loop's ``forward_pass(gradient_pass=True)`` calls back into the
+        input tensors. Used by Strategy D's gradient-based acquisition
+        optimiser.
+
+        Parameters that determine prediction *shape* (``n_layers``,
+        ``n_segments``, etc.) must be plain Python ints in the params dict;
+        they're used at the dim_info-resolution stage which isn't
+        differentiable by construction (integer choices).
+        """
+        self._assert_trained()
+        if not params_list:
+            return []
+
+        with profiler.section("predict.predict_for_calibration_tensor"):
+            return self._predict_from_params_tensor(params_list)
+
+    def _predict_from_params_tensor(
+        self,
+        params_list: list[dict[str, Any]],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Tensor-output predict-from-params: gradient-traversable autoreg.
+
+        Mirrors ``_predict_from_params_batched`` (shape-grouped dispatch,
+        per-model autoreg) but operates in tensor land throughout.
+        """
+        self._assert_trained()
+        S = len(params_list)
+        if S == 0:
+            return []
+
+        dm = self.datamodule
+        assert dm is not None  # _assert_trained guarantees
+
+        # Pre-encode candidates: (S, n_input). Gradient flows through
+        # params_to_tensor for any tensor-valued continuous params.
+        x_norm_S = torch.stack([dm.params_to_tensor(p) for p in params_list])
+
+        # Per-candidate dim_info per model.
+        per_model_dim_info: list[list[dict[str, Any]]] = []
+        for model in self.models:
+            per_model_dim_info.append(
+                [self._get_model_dim_info(model, p) for p in params_list]
+            )
+
+        predictions_per_s: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
+
+        for m_idx, model in enumerate(self.models):
+            dim_infos = per_model_dim_info[m_idx]
+
+            # Group candidates by shape (same as numpy path)
+            shape_groups: dict[tuple, list[int]] = {}
+            for s, di in enumerate(dim_infos):
+                shape_groups.setdefault(di['shape'], []).append(s)
+
+            recursive_specs_per_candidate = [
+                self._get_recursive_input_specs(model, di) for di in dim_infos
+            ]
+
+            for shape_key, group_indices in shape_groups.items():
+                group_dim_infos = [dim_infos[i] for i in group_indices]
+                group_x_norm = x_norm_S[group_indices]
+                group_recursive_specs = recursive_specs_per_candidate[group_indices[0]]
+
+                # Per-feature shape for allocations: same within a shape group
+                # because feat_shape only depends on iterator-axis params.
+                feat_shapes: dict[str, tuple[int, ...]] = {}
+                for feat in model.outputs:
+                    feat_shapes[feat] = self._get_feature_shape(
+                        feat, params_list[group_indices[0]],
+                    )
+
+                preds_group = self._predict_autoregressive_batched_tensor(
+                    group_x_norm, group_dim_infos, model,
+                    group_recursive_specs, feat_shapes,
+                )
+                # preds_group: dict[feat, tensor (S_g, *feat_shape)]
+                for k, s in enumerate(group_indices):
+                    for feat, t_S_g in preds_group.items():
+                        predictions_per_s[s][feat] = t_S_g[k]
+
+        return predictions_per_s
+
+    def _predict_autoregressive_batched_tensor(
+        self,
+        x_norm_S: torch.Tensor,
+        dim_info_list: list[dict[str, Any]],
+        model: IPredictionModel,
+        recursive_specs: list[tuple[str, str, int, int]],
+        feat_shapes: dict[str, tuple[int, ...]],
+    ) -> dict[str, torch.Tensor]:
+        """Tensor-typed autoreg returning predictions per output feature.
+
+        Mirrors ``_predict_autoregressive_batched`` but autograd-friendly:
+          - **No long-lived in-place mutations.** Each cell builds its X via
+            ``x_norm_S.clone()`` + column overrides on the fresh clone — the
+            clone is independent of x_norm_S, so per-column writes don't
+            invalidate the autograd graph.
+          - **Per-cell predictions stored in a dict-of-dicts**
+            (``feat → {cell_flat → (S,) tensor}``). The output ``(S, *feat_shape)``
+            tensor is assembled via ``torch.stack`` at the end (out-of-place).
+          - Calls ``forward_pass(gradient_pass=True)`` so autograd flows
+            through the network.
+
+        Returns ``dict[feat, torch.Tensor (S, *feat_shape)]`` — no numpy
+        conversion at the API boundary. Within a shape group all candidates
+        share the same feat_shape (caller's contract).
+        """
+        S, n_input = x_norm_S.shape
+        shape = dim_info_list[0]['shape']
+        iterator_feats = dim_info_list[0]['iterator_feats']
+        dm = self._assert_trained()
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        code_to_idx = {c: i for i, c in enumerate(dm.input_columns)}
+
+        n_cells = int(np.prod(shape)) if shape else 1
+        if shape:
+            cell_indices_arr = np.empty((n_cells, len(shape)), dtype=np.int64)
+            for cell_row, pos in enumerate(range(n_cells)):
+                cell_indices_arr[cell_row] = np.unravel_index(pos, shape)
+        else:
+            cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
+
+        # Pre-compute per-cell iterator-feature normalised values (constants;
+        # no autograd implications). Layout: list[cell_row] of list[(col_idx, val)].
+        iter_overrides: list[list[tuple[int, float]]] = []
+        for cell_row in range(n_cells):
+            overrides: list[tuple[int, float]] = []
+            for feat_code, axis_pos, size in iterator_feats:
+                if feat_code not in code_to_idx:
+                    continue
+                col_idx = code_to_idx[feat_code]
+                stats = dm._parameter_stats.get(feat_code)
+                raw_val = float(cell_indices_arr[cell_row, axis_pos]) / max(size - 1, 1)
+                if stats is not None:
+                    normed = float(dm._apply_normalization_tensor(
+                        torch.tensor(raw_val, dtype=x_norm_S.dtype), stats,
+                    ).item())
+                else:
+                    normed = raw_val
+                overrides.append((col_idx, normed))
+            iter_overrides.append(overrides)
+
+        # Per-feat per-cell prediction storage. Tensors retain grad_fn from
+        # their forward_pass output; assembling the final (S, *feat_shape)
+        # tensor via torch.stack at the end keeps the autograd graph intact.
+        predictions_per_feat_per_cell: dict[str, dict[int, torch.Tensor]] = {
+            feat: {} for feat in model.outputs
+        }
+
+        # Per-feat per-cell flat index (in feat's own ravel space).
+        feat_flat_per_cell: dict[str, np.ndarray] = {}
+        for feat in model.outputs:
+            feat_shape = feat_shapes.get(feat, ())
+            feat_depth = len(feat_shape)
+            if feat_depth == 0:
+                feat_flat_per_cell[feat] = np.zeros(n_cells, dtype=np.int64)
+            else:
+                sub_idx = cell_indices_arr[:, :feat_depth]
+                feat_flat_per_cell[feat] = np.ravel_multi_index(
+                    sub_idx.T, feat_shape,
+                ).astype(np.int64)
+
+        # Recursive plan: per-spec prior-cell flat index + validity mask + col + stats.
+        recursive_plan: list[tuple[str, np.ndarray, np.ndarray, int, dict | None]] = []
+        for input_code, source_code, axis_idx, depth in recursive_specs:
+            if input_code not in code_to_idx:
+                continue
+            if source_code not in predictions_per_feat_per_cell:
+                continue
+            col_idx = code_to_idx[input_code]
+            stats = dm._parameter_stats.get(input_code)
+            source_shape = feat_shapes.get(source_code, ())
+            source_depth = len(source_shape)
+
+            prior_idx_arr = cell_indices_arr.copy()
+            if axis_idx < prior_idx_arr.shape[1]:
+                prior_idx_arr[:, axis_idx] -= depth
+                valid = prior_idx_arr[:, axis_idx] >= 0
+            else:
+                valid = np.ones(n_cells, dtype=bool)
+
+            if source_depth:
+                prior_sub = prior_idx_arr[:, :source_depth].copy()
+                prior_sub[~valid] = 0
+                flat_np = np.ravel_multi_index(prior_sub.T, source_shape).astype(np.int64)
+            else:
+                flat_np = np.zeros(n_cells, dtype=np.int64)
+            recursive_plan.append((source_code, flat_np, valid, col_idx, stats))
+
+        # Cell loop: per-cell clone of x_norm_S, override columns, forward, store.
+        for cell_row in range(n_cells):
+            x_cell = x_norm_S.clone()  # (S, n_input) — fresh tensor, in-place writes safe
+
+            # Iterator-feature overrides (constant per cell, no autograd impact).
+            for col_idx, normed_val in iter_overrides[cell_row]:
+                x_cell[:, col_idx] = normed_val
+
+            # Recursive feature substitution (gradient-traversable via the prediction dict).
+            for source_code, prior_flat_arr, valid_arr, col_idx, stats in recursive_plan:
+                prior_cell_flat = int(prior_flat_arr[cell_row])
+                is_valid = bool(valid_arr[cell_row])
+                source_dict = predictions_per_feat_per_cell.get(source_code, {})
+                if not is_valid or prior_cell_flat not in source_dict:
+                    raw_S = torch.zeros(S, dtype=x_cell.dtype)
+                else:
+                    raw_S = source_dict[prior_cell_flat]
+                norm_S = (
+                    dm._apply_normalization_tensor(raw_S, stats)
+                    if stats is not None else raw_S
+                )
+                x_cell[:, col_idx] = norm_S.to(x_cell.dtype)
+
+            X_model = x_cell.index_select(1, input_indices_t)
+            y_pred_norm = model.forward_pass(X_model, gradient_pass=True)
+            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+
+            for i, feat in enumerate(model.outputs):
+                feat_flat_idx = int(feat_flat_per_cell[feat][cell_row])
+                predictions_per_feat_per_cell[feat][feat_flat_idx] = y_pred[:, i]
+
+        # Assemble output tensors via torch.stack (out-of-place, autograd-clean).
+        predictions_stack: dict[str, torch.Tensor] = {}
+        for feat in model.outputs:
+            feat_shape = feat_shapes.get(feat, ())
+            n_total = int(np.prod(feat_shape)) if feat_shape else 1
+            zero_S = torch.zeros(S, dtype=x_norm_S.dtype)
+            slots: list[torch.Tensor] = [
+                predictions_per_feat_per_cell[feat].get(idx, zero_S)
+                for idx in range(n_total)
+            ]
+            if feat_shape:
+                out_flat = torch.stack(slots, dim=1)  # (S, n_total)
+                predictions_stack[feat] = out_flat.view(S, *feat_shape)
+            else:
+                predictions_stack[feat] = slots[0]
+
+        return predictions_stack
+
     def _postprocess_predictions_for_calibration(
         self,
         predictions: dict[str, np.ndarray],

@@ -103,12 +103,19 @@ class IPredictionModel(BaseInterface):
     # - outputs
 
     @abstractmethod
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         """Run model inference on normalized X (batch, n_inputs) → normalized y (batch, n_outputs).
 
         Tensor-native contract. The framework guarantees X arrives as a CPU
         float32 tensor in normalized input space; implementations should return
         a CPU float32 tensor in normalized output space.
+
+        ``gradient_pass=False`` (default): inference under ``torch.no_grad()``.
+        Used by the existing DE acquisition path.
+
+        ``gradient_pass=True``: gradients flow through the network to its
+        inputs. Used by Strategy D's gradient-based acquisition. Implementations
+        should skip any ``torch.no_grad()`` context they otherwise apply.
         """
         pass
 
@@ -214,13 +221,19 @@ class IDeterministicModel(IPredictionModel):
     # === PRE-DEFINED PIPELINE ===
 
     @final
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         """Denormalize inputs → formula → renormalize outputs.
 
         Internal numpy boundary: ``formula(X_raw)`` operates on numpy arrays
         in physical units; the tensor↔numpy round-trip is a once-per-call
         boundary cost (cheap relative to the formula itself).
+
+        ``gradient_pass`` is accepted for IPredictionModel API conformance
+        but **has no effect** — the deterministic numpy formula path is
+        intrinsically not gradient-traversable. Callers needing autograd
+        should use a learnable ``IPredictionModel`` subclass.
         """
+        del gradient_pass  # unused by design
         if not self._norm_context_set:
             raise RuntimeError(
                 f"{self.__class__.__name__}.forward_pass() called before "

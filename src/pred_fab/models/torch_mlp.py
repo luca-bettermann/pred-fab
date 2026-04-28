@@ -131,10 +131,26 @@ class TorchMLPModel(IPredictionModel):
                 self._compiled_forward = None
         self._is_trained = True
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
+        """Inference forward.
+
+        ``gradient_pass=False`` (default): wraps in ``torch.no_grad()`` —
+        autograd tape not built. Used by the existing batched DE path which
+        is gradient-free.
+
+        ``gradient_pass=True``: skips the no_grad context so gradients flow
+        through the network to its inputs. Used by Strategy D's gradient-based
+        acquisition where the optimiser drives params from a leaf tensor and
+        needs ``∂predictions/∂params``. Note: ``self._compiled_forward`` is
+        bypassed in gradient mode — torch.compile's traced graph doesn't
+        compose cleanly with autograd today; eager forward is correct +
+        efficient enough at our model sizes.
+        """
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
             return torch.zeros((X.shape[0], n_outputs), dtype=X.dtype)
+        if gradient_pass:
+            return self._model(X).reshape(-1, n_outputs)
         net = self._compiled_forward if self._compiled_forward is not None else self._model
         with torch.no_grad():
             return net(X).reshape(-1, n_outputs)

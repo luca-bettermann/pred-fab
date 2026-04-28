@@ -41,7 +41,7 @@ class ShapeCheckingPredictionModel(IPredictionModel):
     def outputs(self):
         return self._outputs
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         self.seen_widths.append(X.shape[1])
         self.seen_batch_sizes.append(X.shape[0])
         return torch.zeros((X.shape[0], len(self._outputs)), dtype=X.dtype)
@@ -178,7 +178,7 @@ class MixedPredictionModelGrid(IPredictionModel):
     def outputs(self):
         return ["feature_grid"]
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         n_in = X.shape[1]
         w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
         return X @ w
@@ -218,7 +218,7 @@ class MixedPredictionModelD1(IPredictionModel):
     def outputs(self):
         return ["feature_d1"]
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         n_in = X.shape[1]
         w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
         return X @ w
@@ -258,7 +258,7 @@ class MixedPredictionModelScalar(IPredictionModel):
     def outputs(self):
         return ["feature_scalar"]
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         n_in = X.shape[1]
         w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
         return X @ w
@@ -387,7 +387,7 @@ class WorkflowPredictionModel(IPredictionModel):
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         w = torch.from_numpy(self.weights).to(dtype=X.dtype)
         if X.shape[1] != w.shape[0]:
             return X[:, : w.shape[0]] @ w
@@ -500,7 +500,7 @@ class ContractPredictionModelDefaults(IPredictionModel):
     def outputs(self):
         return ["feature_scalar"]
 
-    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         return torch.zeros((X.shape[0], 1), dtype=X.dtype)
 
     def train(self, train_batches, val_batches, **kwargs) -> None:
