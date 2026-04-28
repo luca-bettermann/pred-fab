@@ -155,12 +155,17 @@ class TorchMLPModel(IPredictionModel):
         with torch.no_grad():
             return net(X).reshape(-1, n_outputs)
 
-    def encode(self, X: torch.Tensor) -> torch.Tensor:
+    def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         if self._model is None or not self._is_trained:
             return X
+        layers = list(self._model.children())
+        if gradient_pass:
+            h = X
+            for layer in layers[:-1]:
+                h = layer(h)
+            return h
         with torch.no_grad():
             h = X
-            layers = list(self._model.children())
             for layer in layers[:-1]:
                 h = layer(h)
             return h

@@ -74,7 +74,7 @@ def test_encode_custom_override_called_by_prediction_system(tmp_path):
         """Doubles input columns as latent representation (column count varies with schema)."""
         encode_called = False
 
-        def encode(self, X: np.ndarray) -> np.ndarray:
+        def encode(self, X: np.ndarray, **kwargs) -> np.ndarray:
             EncoderModel.encode_called = True
             return X * 2.0
 

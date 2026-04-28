@@ -4,6 +4,7 @@ from typing import Any, Callable
 import warnings
 
 import numpy as np
+import torch
 from scipy.optimize import minimize, differential_evolution
 
 from ...core import DataModule
@@ -12,8 +13,9 @@ from ...utils import PfabLogger, ProgressBar, profiler
 
 class Optimizer(Enum):
     """Optimization backend for the calibration acquisition function."""
-    LBFGSB = "lbfgsb"  # gradient-based multi-start (fast, local)
-    DE     = "de"       # differential evolution (global, slower)
+    LBFGSB   = "lbfgsb"    # gradient-based multi-start, scipy numpy (fast, local)
+    DE       = "de"         # differential evolution, scipy numpy (global, slower)
+    GRADIENT = "gradient"   # autograd multi-start, torch.optim (Strategy D commit 5)
 
 
 @dataclass
@@ -61,6 +63,12 @@ class OptimizationEngine:
         # L-BFGS-B optimizer parameters (gradient-based, multi-start)
         self.lbfgsb_maxfun: int | None = None
         self.lbfgsb_eps: float = 1e-3
+
+        # GRADIENT optimizer parameters (autograd multi-start with sigmoid bound reparam)
+        self.gradient_n_starts: int = 4
+        self.gradient_n_iters: int = 60
+        self.gradient_lr: float = 0.05
+        self.gradient_method: str = "adam"  # "adam" | "lbfgs"
 
         # Schedule smoothing: penalizes speed changes between adjacent layers
         self.schedule_smoothing: float = 0.05
@@ -225,6 +233,136 @@ class OptimizationEngine:
                     sched_out[u, k] = sched_out[u, k - 1] + units[u, off_start:off_start + D_sched]
 
         return opt, static_out, sched_out
+
+    def run_acquisition_gradient(
+        self,
+        objective_tensor: Callable[[torch.Tensor], torch.Tensor],
+        bounds: list[tuple[float, float]],
+        *,
+        n_starts: int | None = None,
+        n_iters: int | None = None,
+        lr: float | None = None,
+        method: str | None = None,
+        x0: np.ndarray | None = None,
+        label: str = "Optimizing",
+        show_progress: bool = False,
+    ) -> _OptResult:
+        """Multi-start gradient optimisation with sigmoid bound reparameterisation.
+
+        ``objective_tensor`` takes ``(S, D)`` and returns ``(S,)`` — one scalar
+        per starting point. The optimiser stacks ``n_starts`` initial points
+        in z-space, runs ``n_iters`` Adam (or L-BFGS) steps with all starts in
+        parallel (one autograd graph per call), then picks the best.
+
+        Bounds are enforced via ``x = sigmoid(z) · (hi - lo) + lo``: smooth
+        gradient + strict ``x ∈ [lo, hi]``. No clipping, no penalty tuning.
+
+        Convention matches DE: ``objective_tensor`` returns the **negated**
+        score (lower is better). Score in the result is ``−min(objective)``.
+        """
+        n_starts = n_starts if n_starts is not None else self.gradient_n_starts
+        n_iters = n_iters if n_iters is not None else self.gradient_n_iters
+        lr = lr if lr is not None else self.gradient_lr
+        method = (method or self.gradient_method).lower()
+        if method not in ("adam", "lbfgs"):
+            raise ValueError(f"unknown gradient method: {method!r}")
+
+        D = len(bounds)
+        if D == 0:
+            return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
+
+        bounds_arr = np.asarray(bounds, dtype=np.float64)
+        lo_t = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)
+        hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
+        span_t = hi_t - lo_t  # (D,)
+
+        # Initial z-space samples: spread across the cube. Use a fixed-seed
+        # rng so multi-start is deterministic for a given engine seed.
+        x_inits: list[np.ndarray] = []
+        if x0 is not None:
+            x_inits.append(np.clip(x0, bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
+        for _ in range(max(n_starts - len(x_inits), 0)):
+            x_inits.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
+        x_inits_arr = np.stack(x_inits, axis=0)  # (n_starts, D)
+
+        # Map x → z via inverse sigmoid: z = logit((x - lo) / span). Clamp the
+        # interior so logit(0) / logit(1) don't blow up at the cube boundary.
+        u = (x_inits_arr - bounds_arr[:, 0]) / np.where(
+            bounds_arr[:, 1] - bounds_arr[:, 0] > 0,
+            bounds_arr[:, 1] - bounds_arr[:, 0],
+            1.0,
+        )
+        u = np.clip(u, 1e-4, 1.0 - 1e-4)
+        z_init = np.log(u / (1.0 - u))  # (n_starts, D)
+        z = torch.tensor(z_init, dtype=torch.float64, requires_grad=True)
+
+        history: list[float] = []
+        nfev = [0]
+        bar = ProgressBar(label, max_iter=n_iters) if show_progress else None
+
+        def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
+            return torch.sigmoid(z_tensor) * span_t + lo_t
+
+        def _eval_obj(z_tensor: torch.Tensor) -> torch.Tensor:
+            x = _decode_x(z_tensor)
+            vals = objective_tensor(x)
+            nfev[0] += int(z_tensor.shape[0])
+            return vals
+
+        with profiler.section("engine.run_acquisition_gradient"):
+            if method == "adam":
+                optimizer = torch.optim.Adam([z], lr=lr)
+                for _it in range(n_iters):
+                    optimizer.zero_grad()
+                    vals = _eval_obj(z)
+                    loss = vals.sum()
+                    loss.backward()
+                    optimizer.step()
+                    best_now = float(vals.detach().min().item())
+                    history.append(best_now)
+                    if bar:
+                        bar.step(obj=best_now)
+            else:  # lbfgs
+                optimizer = torch.optim.LBFGS(
+                    [z], lr=lr, max_iter=n_iters, line_search_fn="strong_wolfe",
+                )
+                last_vals: list[torch.Tensor] = []
+
+                def _closure() -> torch.Tensor:
+                    optimizer.zero_grad()
+                    vals = _eval_obj(z)
+                    last_vals.clear()
+                    last_vals.append(vals.detach())
+                    loss = vals.sum()
+                    loss.backward()
+                    history.append(float(vals.detach().min().item()))
+                    if bar:
+                        bar.step(obj=history[-1])
+                    return loss
+
+                optimizer.step(_closure)
+                if not history and last_vals:
+                    history.append(float(last_vals[0].min().item()))
+
+        with torch.no_grad():
+            x_final = _decode_x(z).cpu().numpy()  # (n_starts, D)
+            vals_final = objective_tensor(_decode_x(z)).cpu().numpy()
+            nfev[0] += int(z.shape[0])
+
+        best_idx = int(np.argmin(vals_final))
+        best_val = float(vals_final[best_idx])
+        best_x = x_final[best_idx]
+
+        if bar:
+            bar.finish(suffix=f"obj={best_val:.3f}")
+
+        return _OptResult(
+            best_x=best_x,
+            nfev=nfev[0],
+            n_starts=n_starts,
+            score=float(-best_val),
+            convergence_history=history,
+        )
 
     def _run_de(
         self,

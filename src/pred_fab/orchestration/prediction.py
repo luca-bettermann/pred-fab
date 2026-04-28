@@ -775,6 +775,141 @@ class PredictionSystem(BaseOrchestrationSystem):
         z_t = model.encode(torch.from_numpy(X_model))
         return z_t.detach().cpu().numpy()[:, active_mask]
 
+    def _encode_batch_from_norm_for_model_tensor(
+        self, model: IPredictionModel, X_norm_batch: torch.Tensor, active_mask: np.ndarray,
+    ) -> torch.Tensor:
+        """Tensor mirror of :meth:`_encode_batch_from_norm_for_model`.
+
+        Keeps grad through ``model.encode`` so that downstream Δ∫E backprops
+        all the way to ``X_norm_batch``. Strategy D commit 5.
+        """
+        active_idx = torch.from_numpy(np.flatnonzero(active_mask)).long()
+        if self.datamodule is None:
+            return X_norm_batch.index_select(-1, active_idx)
+        input_cols = model.input_parameters + model.input_features
+        input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
+        if not input_indices:
+            return X_norm_batch.index_select(-1, active_idx)
+        input_idx_t = torch.tensor(input_indices, dtype=torch.long)
+        X_model = X_norm_batch.index_select(-1, input_idx_t).to(dtype=torch.float32)
+        if self._bypass_encoder:
+            return X_model.index_select(-1, active_idx)
+        z_t = model.encode(X_model, gradient_pass=True)
+        return z_t.index_select(-1, active_idx)
+
+    def delta_integrated_evidence_batched_tensor(
+        self,
+        new_norm_batch_S: torch.Tensor,
+        new_weights_S: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Tensor mirror of :meth:`delta_integrated_evidence_batched`.
+
+        Returns ``(S,)`` torch tensor; gradient flows from each Δ∫E[s] back
+        through the encoder into ``new_norm_batch_S``. Strategy D commit 5.
+
+        Routes through ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint_torch``
+        with ``L=1`` (each candidate is a single added kernel). Other
+        estimator types fall back to the numpy path with a detach — gradient
+        is then unavailable for that estimator.
+        """
+        from .evidence import KernelFieldEstimator
+        S = int(new_norm_batch_S.shape[0])
+        dtype = new_norm_batch_S.dtype
+        if not self._model_kdes or S == 0:
+            return torch.zeros(S, dtype=dtype)
+
+        weights_S = (
+            torch.ones(S, dtype=dtype)
+            if new_weights_S is None
+            else new_weights_S.to(dtype=dtype)
+        )
+
+        out = torch.zeros(S, dtype=dtype)
+        total_w = 0.0
+        for kde in self._model_kdes.values():
+            new_centers_z_active = self._encode_batch_from_norm_for_model_tensor(
+                kde.model, new_norm_batch_S, kde.active_mask,
+            ).to(dtype=dtype)  # (S, n_active)
+
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            E_old = self._estimator.integrated_evidence(index_old)
+
+            if isinstance(self._estimator, KernelFieldEstimator):
+                E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                    index_old,
+                    new_centers_z_active.unsqueeze(1),  # (S, 1, n_active)
+                    weights_S.unsqueeze(1),             # (S, 1)
+                )
+            else:
+                # Fall back to numpy — gradient lost for non-KernelField estimators.
+                E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched(
+                    index_old,
+                    new_centers_z_active.detach().cpu().numpy(),
+                    weights_S.detach().cpu().numpy(),
+                )
+                E_new_per_s = torch.from_numpy(E_new_per_s_np).to(dtype=dtype)
+
+            out = out + float(kde.weight) * (E_new_per_s - float(E_old))
+            total_w += float(kde.weight)
+
+        return out / total_w if total_w > 0 else out
+
+    def delta_integrated_evidence_joint_batched_tensor(
+        self,
+        new_norm_batch_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Tensor mirror of :meth:`delta_integrated_evidence_joint_batched`.
+
+        Returns ``(S,)`` torch tensor; each candidate adds L kernels jointly.
+        Gradient flows from each Δ∫E[s] back through the encoder into the
+        per-candidate ``new_norm_batch_SL[s]`` tensors.
+        """
+        from .evidence import KernelFieldEstimator
+        S = int(new_norm_batch_SL.shape[0])
+        if S == 0 or new_norm_batch_SL.numel() == 0:
+            return torch.zeros(S, dtype=new_norm_batch_SL.dtype)
+        L = int(new_norm_batch_SL.shape[1])
+        dtype = new_norm_batch_SL.dtype
+        if not self._model_kdes:
+            return torch.zeros(S, dtype=dtype)
+
+        weights_SL = (
+            torch.ones((S, L), dtype=dtype)
+            if new_weights_SL is None
+            else new_weights_SL.to(dtype=dtype)
+        )
+
+        flat_batch = new_norm_batch_SL.reshape(S * L, -1)
+
+        out = torch.zeros(S, dtype=dtype)
+        total_w = 0.0
+        for kde in self._model_kdes.values():
+            new_centers_flat = self._encode_batch_from_norm_for_model_tensor(
+                kde.model, flat_batch, kde.active_mask,
+            ).to(dtype=dtype)  # (S*L, n_active)
+            new_centers_SL = new_centers_flat.reshape(S, L, -1)
+
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            E_old = self._estimator.integrated_evidence(index_old)
+
+            if isinstance(self._estimator, KernelFieldEstimator):
+                E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                    index_old, new_centers_SL, weights_SL,
+                )
+            else:
+                E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched_joint(
+                    index_old,
+                    new_centers_SL.detach().cpu().numpy(),
+                    weights_SL.detach().cpu().numpy(),
+                )
+                E_new_per_s = torch.from_numpy(E_new_per_s_np).to(dtype=dtype)
+
+            out = out + float(kde.weight) * (E_new_per_s - float(E_old))
+            total_w += float(kde.weight)
+
+        return out / total_w if total_w > 0 else out
+
     # --- Stacking / virtual evidence for sequential-phase schedule mode ---
 
     def push_virtual_points(

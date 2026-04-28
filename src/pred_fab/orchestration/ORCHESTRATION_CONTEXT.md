@@ -15,7 +15,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `KernelIndex` | `evidence.py` | cKDTree over kernel centres for O(M·log K) density lookup; cutoff at `cutoff_sigmas · σ` |
 | `_choose_kde_regime` | `evidence.py` | σ/D-aware regime dispatcher (dense/knn/cluster) selecting on `n_active = N · V(5σ-ball)`. Commit 4 ships dense; knn/cluster log INFO and fall back. |
 | `CalibrationSystem` | `calibration/system.py` | Orchestrator composing OptimizationEngine + BoundsManager + SolutionSpace |
-| `OptimizationEngine` | `calibration/engine.py` | DE, L-BFGS-B — pure numerical optimization |
+| `OptimizationEngine` | `calibration/engine.py` | DE, L-BFGS-B, GRADIENT (torch.optim multi-start with sigmoid bound reparam) |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds, trust regions, schedule configs |
 | `SolutionSpace` | `calibration/space.py` | Decision vector layout, bounds, decode/encode, smoothing tie-breaker |
 | `BaseOrchestrationSystem` | `base_system.py` | Shared base: logger, models, random_seed/rng |

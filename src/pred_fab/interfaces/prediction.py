@@ -131,8 +131,14 @@ class IPredictionModel(BaseInterface):
 
     # === LATENT ENCODING ===
 
-    def encode(self, X: torch.Tensor) -> torch.Tensor:
-        """Map normalized parameters to latent space; default is identity. Override for custom latent encoding."""
+    def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
+        """Map normalized parameters to latent space; default is identity.
+
+        ``gradient_pass=True`` instructs the implementation to keep autograd
+        graph live through the encoder (skip ``torch.no_grad()``). Used by
+        Strategy D's gradient acquisition path.
+        """
+        del gradient_pass  # base impl is identity, gradient flows naturally
         return X
 
     # === ONLINE LEARNING ===
@@ -256,8 +262,9 @@ class IDeterministicModel(IPredictionModel):
         """No-op — deterministic models have no learned parameters."""
         pass
 
-    def encode(self, X: torch.Tensor) -> torch.Tensor:
+    def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         """Identity — no learned latent space for analytical models."""
+        del gradient_pass
         return X
 
     # === INTERNAL NORMALIZATION HELPERS ===

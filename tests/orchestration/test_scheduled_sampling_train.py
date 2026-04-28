@@ -39,7 +39,7 @@ class _SourceModel(IPredictionModel):
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         return np.zeros((X.shape[0], 1), dtype=np.float32)
 
-    def encode(self, X: np.ndarray) -> np.ndarray:
+    def encode(self, X: np.ndarray, **kwargs) -> np.ndarray:
         return X
 
 
@@ -64,7 +64,7 @@ class _RecursiveModel(IPredictionModel):
     def forward_pass(self, X: np.ndarray) -> np.ndarray:
         return np.zeros((X.shape[0], 1), dtype=np.float32)
 
-    def encode(self, X: np.ndarray) -> np.ndarray:
+    def encode(self, X: np.ndarray, **kwargs) -> np.ndarray:
         return X
 
 
@@ -77,7 +77,7 @@ class _CycleModelA(IPredictionModel):
     def outputs(self) -> list[str]: return ["a"]
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-    def encode(self, X): return X
+    def encode(self, X, **kwargs): return X
 
 
 class _CycleModelB(IPredictionModel):
@@ -89,7 +89,7 @@ class _CycleModelB(IPredictionModel):
     def outputs(self) -> list[str]: return ["b"]
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-    def encode(self, X): return X
+    def encode(self, X, **kwargs): return X
 
 
 def _build_schema(tmp_path) -> DatasetSchema:

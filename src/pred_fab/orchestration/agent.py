@@ -1,7 +1,10 @@
 """PfabAgent — main orchestration class for the PFAB framework."""
 
+import copy
 from typing import Any
+
 import numpy as np
+import torch
 
 from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
@@ -196,15 +199,55 @@ class PfabAgent:
             except Exception:
                 return [{} for _ in params_dicts]
 
+        def _perf_fn_tensor(
+            params_dicts: list[dict[str, Any]],
+        ) -> dict[str, torch.Tensor]:
+            """Tensor mirror of ``_perf_fn_batched``: returns ``dict[perf_code, (S,) tensor]``.
+
+            Gradient flows from each perf score back through
+            ``predict_for_calibration_tensor`` into any tensor-valued continuous
+            parameters in ``params_dicts``. Strategy D commit 5.
+            """
+            if not params_dicts:
+                return {}
+            merged_list: list[dict[str, Any]] = []
+            for pd_ in params_dicts:
+                m = dict(pd_)
+                if _ctx:
+                    m.update(_ctx)
+                merged_list.append(m)
+            feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
+
+            # Build params_blocks for eval target/scaling (numeric values only —
+            # tensor-valued params get .item()'d since target/scaling is computed
+            # via user-defined non-differentiable Python formulas).
+            params_blocks: list[Any] = []
+            for pd_ in merged_list:
+                block = copy.deepcopy(schema.parameters)
+                for code, val in pd_.items():
+                    if code not in block.data_objects:
+                        continue
+                    v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
+                    try:
+                        block.set_value(code, v)
+                    except Exception:
+                        pass
+                params_blocks.append(block)
+
+            return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
             logger=self.logger,
             perf_fn=_perf_fn,
             perf_fn_batched=_perf_fn_batched,
+            perf_fn_tensor=_perf_fn_tensor,
             uncertainty_fn=_pred.uncertainty,
             delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
             delta_integrated_evidence_batched_fn=_pred.delta_integrated_evidence_batched,
             delta_integrated_evidence_joint_batched_fn=_pred.delta_integrated_evidence_joint_batched,
+            delta_integrated_evidence_batched_tensor_fn=_pred.delta_integrated_evidence_batched_tensor,
+            delta_integrated_evidence_joint_batched_tensor_fn=_pred.delta_integrated_evidence_joint_batched_tensor,
             push_virtual_points_fn=_pred.push_virtual_points,
             pop_virtual_points_fn=_pred.pop_virtual_points,
             n_exp_fn=lambda: _pred._n_exp,
@@ -596,6 +639,10 @@ class PfabAgent:
         de_tol: float | None = None,
         lbfgsb_maxfun: int | None = None,
         lbfgsb_eps: float | None = None,
+        gradient_n_starts: int | None = None,
+        gradient_n_iters: int | None = None,
+        gradient_lr: float | None = None,
+        gradient_method: str | None = None,
     ) -> None:
         """Set optimizer backend and tuning parameters."""
         self._assert_initialized()
@@ -614,6 +661,14 @@ class PfabAgent:
             cal.lbfgsb_maxfun = lbfgsb_maxfun
         if lbfgsb_eps is not None:
             cal.lbfgsb_eps = lbfgsb_eps
+        if gradient_n_starts is not None:
+            cal.engine.gradient_n_starts = gradient_n_starts
+        if gradient_n_iters is not None:
+            cal.engine.gradient_n_iters = gradient_n_iters
+        if gradient_lr is not None:
+            cal.engine.gradient_lr = gradient_lr
+        if gradient_method is not None:
+            cal.engine.gradient_method = gradient_method
 
     def configure_scheduled_sampling(
         self,

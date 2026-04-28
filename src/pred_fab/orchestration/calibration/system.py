@@ -3,6 +3,7 @@ from typing import Any, Callable
 import functools
 
 import numpy as np
+import torch
 
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
@@ -72,20 +73,26 @@ class CalibrationSystem(BaseOrchestrationSystem):
         delta_integrated_evidence_fn: Callable[[np.ndarray], float] | None = None,
         delta_integrated_evidence_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
         delta_integrated_evidence_joint_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+        delta_integrated_evidence_batched_tensor_fn: Callable[..., torch.Tensor] | None = None,
+        delta_integrated_evidence_joint_batched_tensor_fn: Callable[..., torch.Tensor] | None = None,
         push_virtual_points_fn: Callable[[list[dict[str, Any]], list[float], DataModule | None], None] | None = None,
         pop_virtual_points_fn: Callable[[], None] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
         perf_fn_batched: Callable[[list[dict[str, Any]]], list[dict[str, float | None]]] | None = None,
+        perf_fn_tensor: Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn = perf_fn
         self.perf_fn_batched = perf_fn_batched
+        self.perf_fn_tensor = perf_fn_tensor
         self.uncertainty_fn = uncertainty_fn
         self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
         self.delta_integrated_evidence_batched_fn = delta_integrated_evidence_batched_fn
         self.delta_integrated_evidence_joint_batched_fn = delta_integrated_evidence_joint_batched_fn
+        self.delta_integrated_evidence_batched_tensor_fn = delta_integrated_evidence_batched_tensor_fn
+        self.delta_integrated_evidence_joint_batched_tensor_fn = delta_integrated_evidence_joint_batched_tensor_fn
         self.push_virtual_points_fn = push_virtual_points_fn
         self.pop_virtual_points_fn = pop_virtual_points_fn
         self._n_exp_fn = n_exp_fn
@@ -500,6 +507,151 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
                         for i in range(S):
                             scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
+
+            return -scores
+
+    def _per_candidate_perf_tensor(
+        self,
+        X_SD: torch.Tensor,
+        perf_range: tuple[float, float] | None,
+    ) -> torch.Tensor:
+        """Tensor mirror of ``_per_candidate_perf_batched``: returns ``(S,)``.
+
+        Routes through ``perf_fn_tensor`` (autograd-traversable). When the
+        tensor closure is unavailable, falls back to numpy scalar perf
+        (gradient lost). Strategy D commit 5.
+        """
+        S = int(X_SD.shape[0])
+        if S == 0:
+            return torch.zeros(0, dtype=X_SD.dtype)
+        dm = self._active_datamodule
+        if dm is None:
+            return torch.zeros(S, dtype=X_SD.dtype)
+        if self.perf_fn_tensor is None:
+            # Detach + numpy fallback (no gradient).
+            X_np = X_SD.detach().cpu().numpy()
+            out_np = self._per_candidate_perf_batched(X_np, perf_range)
+            return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
+
+        # Build per-candidate params dicts. Continuous values stay as 0-D
+        # tensors for autograd; categorical / int / domain values resolve
+        # to concrete Python types at decode time (no grad through them).
+        params_list: list[dict[str, Any]] = []
+        for s in range(S):
+            try:
+                # array_to_params is numpy-typed — but we want tensor values
+                # for continuous params. Strategy: build dict from numpy
+                # decode for concrete int / cat resolution, then overwrite
+                # continuous numerics with the differentiable tensor entries.
+                p_np = dm.array_to_params(X_SD[s].detach().cpu().numpy().reshape(-1))
+                p_with_grad = self._reattach_tensor_continuous(p_np, X_SD[s], dm)
+                params_list.append(p_with_grad)
+            except (ValueError, KeyError):
+                params_list.append(None)  # type: ignore[arg-type]
+
+        valid_idx = [i for i, p in enumerate(params_list) if p is not None]
+        if not valid_idx:
+            return torch.zeros(S, dtype=X_SD.dtype)
+
+        try:
+            perf_dict_S = self.perf_fn_tensor(
+                [params_list[i] for i in valid_idx]  # type: ignore[index]
+            )
+        except Exception:
+            X_np = X_SD.detach().cpu().numpy()
+            out_np = self._per_candidate_perf_batched(X_np, perf_range)
+            return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
+
+        # System-perf aggregation: weighted sum across perf codes, normalised
+        # by perf_range. Mirrors ``_normalize_perf_dict``.
+        out_valid = torch.zeros(len(valid_idx), dtype=X_SD.dtype)
+        weight_sum = sum(self.performance_weights.get(name, 1.0) for name in self.perf_names_order)
+        for name in self.perf_names_order:
+            if name not in perf_dict_S:
+                continue
+            w = float(self.performance_weights.get(name, 1.0))
+            vals = perf_dict_S[name].to(dtype=X_SD.dtype)
+            # NaN entries → 0 contribution (matches numpy nanmean handling).
+            vals = torch.where(torch.isnan(vals), torch.zeros_like(vals), vals)
+            out_valid = out_valid + (w / weight_sum) * vals
+        if perf_range is not None:
+            pmin, pmax = perf_range
+            span = pmax - pmin
+            if span > 1e-10:
+                out_valid = (out_valid - float(pmin)) / float(span)
+            else:
+                out_valid = torch.full_like(out_valid, 0.5)
+
+        out_full = torch.zeros(S, dtype=X_SD.dtype)
+        for k, i in enumerate(valid_idx):
+            out_full[i] = out_valid[k]
+        return out_full
+
+    def _reattach_tensor_continuous(
+        self,
+        params_np: dict[str, Any],
+        x_norm: torch.Tensor,
+        dm: DataModule,
+    ) -> dict[str, Any]:
+        """Replace continuous numeric values in ``params_np`` with their
+        gradient-bearing counterparts decoded from ``x_norm``.
+
+        ``array_to_params`` returns Python floats / ints — the gradient on
+        ``x_norm`` is lost during that decode. For autograd, we preserve the
+        tensor entries for continuous params by reading them off ``x_norm``
+        directly via the schema's denormalisation map. Categorical / integer /
+        domain params stay as Python (no gradient through discrete choices).
+        """
+        # Walk DataModule input columns; for each continuous one, replace the
+        # decoded float with the gradient-traversable tensor value.
+        out = dict(params_np)
+        for j, col_name in enumerate(dm.input_columns):
+            if col_name not in out:
+                continue
+            stats = getattr(dm, "_parameter_stats", {}).get(col_name)
+            if stats is None:
+                continue
+            # Only continuous numeric stats define a min/max for affine reverse.
+            lo = stats.get("min") if isinstance(stats, dict) else getattr(stats, "min", None)
+            hi = stats.get("max") if isinstance(stats, dict) else getattr(stats, "max", None)
+            if lo is None or hi is None:
+                continue
+            span = float(hi) - float(lo)
+            if span <= 0:
+                continue
+            out[col_name] = x_norm[j] * span + float(lo)
+        return out
+
+    def _acquisition_objective_tensor(
+        self,
+        X_SD: torch.Tensor,
+        kappa: float,
+        perf_range: tuple[float, float] | None = None,
+    ) -> torch.Tensor:
+        """Vectorised (negated) acquisition for the gradient optimiser.
+
+        Takes ``(S, D)`` torch tensor — one row per candidate — and returns
+        ``(S,)`` of negated scores (lower = better). Mirrors
+        ``_acquisition_objective_vectorized`` but routes through the tensor
+        APIs added in Strategy D commits 2-4 so gradient flows from each
+        candidate's score back through the per-candidate parameters.
+        """
+        with profiler.section("acq._acquisition_objective_tensor"):
+            S = int(X_SD.shape[0])
+            scores = torch.zeros(S, dtype=X_SD.dtype)
+
+            if kappa < 1.0:
+                perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
+                scores = scores + (1.0 - kappa) * perfs
+
+            if kappa > 0.0:
+                if self.delta_integrated_evidence_batched_tensor_fn is not None:
+                    de = self.delta_integrated_evidence_batched_tensor_fn(X_SD)
+                    scores = scores + kappa * de.to(dtype=X_SD.dtype)
+                elif self.delta_integrated_evidence_batched_fn is not None:
+                    # Fallback: numpy. Gradient lost.
+                    de_np = self.delta_integrated_evidence_batched_fn(X_SD.detach().cpu().numpy())
+                    scores = scores + kappa * torch.from_numpy(de_np).to(dtype=X_SD.dtype)
 
             return -scores
 
@@ -1119,11 +1271,49 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"D_sched=0, total_vars={space.total_vars}, maxiter={smart_maxiter}"
         )
 
-        opt = self.engine._run_de(
-            _acquisition_batch_objective, space.bounds, init_pop=init_pop,
-            integrality=space.integrality, label=label, show_progress=console,
-            maxiter=smart_maxiter,
+        # Strategy D commit 5: gradient path when configured + tensor APIs wired
+        # + no integer params (rounded variables aren't differentiable; DE
+        # remains the right tool for them).
+        use_gradient = (
+            self.optimizer == Optimizer.GRADIENT
+            and self.delta_integrated_evidence_joint_batched_tensor_fn is not None
+            and not (space.integrality is not None and any(space.integrality))
         )
+
+        if use_gradient:
+            d_phase = len(all_phase_params)
+            prior_fill_t = torch.from_numpy(prior_fill).to(dtype=torch.float64)
+            phase_cols_t = torch.tensor(
+                [c for _, c in phase_col_map], dtype=torch.long,
+            ) if phase_col_map else None
+            phase_si_t = torch.tensor(
+                [s for s, _ in phase_col_map], dtype=torch.long,
+            ) if phase_col_map else None
+
+            def _acquisition_batch_objective_tensor(x_flat_S: torch.Tensor) -> torch.Tensor:
+                S = int(x_flat_S.shape[0])
+                pts_S = x_flat_S.reshape(S, n, d_phase)  # (S, n, d_phase)
+                X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone()
+                if phase_cols_t is not None and phase_si_t is not None:
+                    # Scatter-place each phase column's value into the dm-shape X_batch.
+                    # X_batch_S[:, :, phase_cols_t] = pts_S[:, :, phase_si_t]
+                    src = pts_S.index_select(-1, phase_si_t)  # (S, n, |phase|)
+                    X_batch_S[:, :, phase_cols_t] = src
+                de = self.delta_integrated_evidence_joint_batched_tensor_fn(X_batch_S)  # type: ignore[misc]
+                return -de.to(dtype=x_flat_S.dtype)
+
+            opt = self.engine.run_acquisition_gradient(
+                _acquisition_batch_objective_tensor,
+                space.bounds,
+                label=label,
+                show_progress=console,
+            )
+        else:
+            opt = self.engine._run_de(
+                _acquisition_batch_objective, space.bounds, init_pop=init_pop,
+                integrality=space.integrality, label=label, show_progress=console,
+                maxiter=smart_maxiter,
+            )
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
         else:
