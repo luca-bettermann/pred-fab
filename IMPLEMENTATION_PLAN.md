@@ -2,6 +2,19 @@
 
 **Living document.** Updated 2026-04-28. Single source of truth for the open work after the perf-optimisation + architectural-refactor sprint. Per-topic detail inlined below; standalone topic plans (`OPTION_A_*.md`, `PHASE_C_PLAN.md`) merged in and deleted.
 
+## Chosen path (2026-04-28)
+
+**Strategy A immediately, Strategy D as the long-term destination.** Get the perf win from topic 1 (KDE vectorisation in numpy) first to address the 20s/schedule pain. Re-profile to validate. Then proceed through the architectural cleanups (topics 2, 3) and ultimately the full torch migration (Strategy D — including replacing scipy DE with `torch.optim`, dropping pandas everywhere, and the `nn.Module` normalisers / `nn.Embedding` categoricals).
+
+Topic 1's numpy vectorisation is *not thrown away* by the eventual torch migration — the algorithmic structure (batched dense distance matrix, broadcast density, no `cKDTree`) is the same numpy↔torch. The torch port (Option A commit 4) will be a mechanical rewrite of `np.exp` → `torch.exp` etc.
+
+Sequencing committed:
+1. **Topic 1: KDE vectorisation (numpy)** — next.
+2. Re-profile, validate schedule iteration tractability.
+3. **Topics 2 + 3** — calibration unification + Domain phase commit 1.5.
+4. **Merge `feat/integrated-evidence` → `main`.** Strategy A complete.
+5. **Branch off `main` (`feat/full-torch` or similar).** Strategy D execution begins on the new branch — Option A commits 1-5 + remaining torch-native data layer + scipy.qmc → torch.quasirandom + plotting boundary tightening.
+
 ---
 
 ## Status snapshot
