@@ -1097,10 +1097,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         init_pop = space.build_init_population(self.engine.rng, merged_init)
 
-        # Smart per-phase maxiter, capped by the global ceiling. Scales with
-        # total decision-variable count so small problems show a meaningful
-        # X/cap ratio in the progress bar instead of X/1000.
-        smart_maxiter = min(max(40, 15 * space.total_vars), self.de_maxiter)
+        smart_maxiter = self.engine.smart_maxiter(space.total_vars)
 
         self.logger.info(
             f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
@@ -1347,9 +1344,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         objective = self._make_schedule_objective(state, i_exp, background)
         n_vars = len(init)
 
-        # Inner DE sizing — respect user de_maxiter/de_popsize as upper bounds
-        # so test runs (e.g. de-maxiter=10) actually throttle the inner loop.
-        # scipy DE requires population > 4, so floor at 5.
+        # Inner DE sizing — population is the literal row count of init_pop
+        # (passed via init=, which overrides scipy's popsize multiplier). Keep
+        # ≥10 rows for diversity, capped by de_popsize, floored at 5 for scipy.
         popsize = min(max(10, 4 * n_vars), max(self.de_popsize, 5))
         init_pop = np.tile(init, (popsize, 1))
         # Per-dim jitter scales to bound width — wide bounds (static drift,
@@ -1363,7 +1360,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             init_pop[:, v_idx] = np.clip(init_pop[:, v_idx], lo_b, hi_b)
         init_pop[0] = init  # keep one centre exact
 
-        inner_maxiter = min(max(40, 15 * n_vars), max(self.de_maxiter, 5))
+        inner_maxiter = self.engine.smart_maxiter(n_vars)
         opt = self.engine._run_de(
             objective, bounds, init_pop=init_pop,
             label=f"Schedule {i_exp + 1}/{state.n}",

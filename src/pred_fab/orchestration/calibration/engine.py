@@ -65,6 +65,17 @@ class OptimizationEngine:
         # Schedule smoothing: penalizes speed changes between adjacent layers
         self.schedule_smoothing: float = 0.05
 
+    def smart_maxiter(self, D: int) -> int:
+        """Per-call DE maxiter scaled with decision-variable count, capped by
+        the configured global ceiling and floored at 5 (scipy DE requirement).
+
+        Same rule across baseline / exploration / inference / per-exp schedule
+        — single source of truth so the X/cap ratio in DE progress bars is
+        consistent across all phases. Override behaviour by setting
+        ``self.de_maxiter`` (capping ceiling) at agent-config time.
+        """
+        return min(max(40, 15 * max(D, 1)), max(self.de_maxiter, 5))
+
     def run_acquisition_vectorized(
         self,
         objective_vectorized: Callable[[np.ndarray], np.ndarray],
@@ -85,14 +96,12 @@ class OptimizationEngine:
         vectorisation gain is DE-specific. Callers wanting L-BFGS-B should use
         the scalar ``run`` method.
         """
-        D = len(bounds)
-        smart_maxiter = min(max(40, 15 * D), self.de_maxiter)
         return self._run_de(
             objective_vectorized,
             bounds,
             label=label,
             show_progress=show_progress,
-            maxiter=smart_maxiter,
+            maxiter=self.smart_maxiter(len(bounds)),
             vectorized=True,
         )
 
@@ -171,12 +180,6 @@ class OptimizationEngine:
             return step_sum / L
 
         # --- 3. Run optimizer ---
-        # Smart per-call maxiter: scale with problem dimensionality, capped by
-        # the global ceiling. Same rule as _run_acquisition_phase /
-        # _optimise_schedule_for_experiment so the X/cap ratio in the progress
-        # bar is consistent across all DE phases.
-        smart_maxiter = min(max(40, 15 * n_vars), self.de_maxiter)
-
         if active_optimizer == Optimizer.DE:
             opt = self._run_de(
                 _objective,
@@ -185,7 +188,7 @@ class OptimizationEngine:
                 integrality=integrality,
                 label=label,
                 show_progress=show_progress,
-                maxiter=smart_maxiter,
+                maxiter=self.smart_maxiter(n_vars),
             )
         else:
             x0_list: list[np.ndarray] = []

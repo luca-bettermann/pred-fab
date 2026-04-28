@@ -35,19 +35,55 @@ class TorchMLPModel(IPredictionModel):
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
 
-    # If True, the trained net is wrapped with torch.compile after training so
-    # ``forward_pass`` calls go through a JIT-traced graph. Falls back to eager
-    # silently if compilation raises. Only the inference path is compiled —
-    # training runs eager. ``dynamic=True`` so variable batch dims (S=1 for
-    # single-candidate, S=popsize for vectorised DE) share one compiled graph
-    # instead of triggering recompilation per shape.
-    COMPILE: bool = False
+    # If True (default), the trained net is wrapped with torch.compile after
+    # training so ``forward_pass`` calls go through a JIT-traced graph. Falls
+    # back to eager silently if compilation raises (e.g. no C++ compiler in
+    # the runtime environment). Only the inference path is compiled — training
+    # runs eager. ``dynamic=True`` so variable batch dims (S=1 single-candidate,
+    # S=popsize vectorised DE) share one compiled graph instead of triggering
+    # recompilation per shape. Subclasses can set ``COMPILE = False`` to opt
+    # out (e.g. for environments where the first-call overhead exceeds the
+    # inference savings, like short-lived test runs).
+    COMPILE: bool = True
+
+    # Class-level cache of whether torch.compile can succeed in this runtime.
+    # ``None`` = unchecked, ``True`` = available, ``False`` = unavailable
+    # (compiler missing, inductor unsupported, etc.). Set on first model
+    # train via a one-shot probe; subsequent models skip the probe and
+    # honour the cached result.
+    _compile_available: bool | None = None
 
     def __init__(self, logger: PfabLogger) -> None:
         super().__init__(logger)
         self._model: nn.Module | None = None
         self._compiled_forward: Any = None
         self._is_trained: bool = False
+
+    @classmethod
+    def _probe_compile_available(cls, logger: PfabLogger | None = None) -> bool:
+        """One-shot env probe: can torch.compile produce a working graph here?
+
+        Compiles a tiny stub net and runs one forward; caches the result on
+        the class so the cost is paid once per process. Real models then
+        compile/probe individually only if the env probe succeeded.
+        """
+        if cls._compile_available is not None:
+            return cls._compile_available
+        try:
+            stub = nn.Linear(2, 2)
+            stub_compiled = torch.compile(stub, dynamic=True)
+            with torch.no_grad():
+                _ = stub_compiled(torch.zeros(1, 2))
+            cls._compile_available = True
+        except Exception as e:
+            cls._compile_available = False
+            if logger is not None:
+                logger.warning(
+                    f"torch.compile unavailable in this runtime; falling back "
+                    f"to eager forward for all TorchMLPModel subclasses. "
+                    f"Reason: {e!r}"
+                )
+        return cls._compile_available
 
     def train(
         self,
@@ -78,9 +114,15 @@ class TorchMLPModel(IPredictionModel):
         net.eval()
 
         self._model = net
-        if self.COMPILE:
+        if self.COMPILE and self._probe_compile_available(self.logger):
             try:
-                self._compiled_forward = torch.compile(net, dynamic=True)
+                compiled = torch.compile(net, dynamic=True)
+                # Eager probe: torch.compile is lazy; force compilation now
+                # so any failure surfaces here (with fallback) rather than
+                # mid-acquisition where it would crash inference.
+                with torch.no_grad():
+                    _ = compiled(torch.zeros(1, X.shape[1], dtype=X.dtype))
+                self._compiled_forward = compiled
             except Exception as e:
                 self.logger.warning(
                     f"torch.compile failed for {self.__class__.__name__}, "
