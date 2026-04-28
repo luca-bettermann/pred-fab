@@ -122,20 +122,55 @@ Returns tensors at the API boundary (no numpy round-trip). The autoreg loop is a
 ### Commit 4 — Tensor-native KDE (~250 LOC, 2 days) — *the hardest*
 Rewrite `KernelField` + `KernelIndex` in torch. Sum of Gaussian probes evaluated at QMC points.
 
-**Scale-aware kernel handling.** PFAB is a general framework; KDE cost scales with `n_kernels × n_probes × S`. Strategy D commit 4 should ship with three regimes:
+**Scale-aware regime dispatch.** KDE cost depends not just on `n_kernels` but on the **effective number of contributing kernels** — which is a function of `(n_kernels, σ, D)`:
 
-| n_kernels | KDE strategy |
-|---|---|
-| **< 100** | Dense distance matrix, no truncation (matches today's `truncation_threshold = 10` behaviour). |
-| **100-1,000** | Dense distance + 5σ mask via `torch.where` — replaces today's `cKDTree`. |
-| **1,000-10,000** | **Sparse KNN gather**: `torch.topk` on per-probe distances → take only the K=20-50 closest kernels, mask the rest. Memory + compute scale linearly in `n_probes × K` instead of `n_probes × n_kernels`. |
-| **> 10,000** | **Kernel pruning via clustering**: replace `n_kernels` with `c ≪ n_kernels` representative centers (e.g. mini-batch K-means or Gaussian mixture summarisation). Mathematically a Gaussian mixture summarises the data better than 10K individual kernels at this scale anyway. |
+```
+n_active ≈ n_kernels × V(5σ-ball)         # within unit cube
+        = n_kernels × π^(D/2) × (5σ)^D / Γ(D/2 + 1)
+```
 
-The 1K-10K and >10K paths can ship as a **follow-up commit (4b)** if needed; commit 4 baseline targets the <1K regime which covers most use cases.
+**Examples:**
+| `D` | `σ` | `n_kernels` | `n_active` | Optimal regime |
+|---|---|---|---|---|
+| 4 | 0.075 | 100 | ~10 | dense |
+| 4 | 0.075 | 10,000 | ~1,000 | KNN K=20-50 saves 200× |
+| 10 | 0.075 | 10,000 | **~1.4** | KNN K=10 saves ~1000× *(curse of dimensionality helps)* |
+| 1 | 0.3 | 100 | ~100 | dense (kernels overlap heavily) |
+| 2 | 0.05 | 1,000 | ~24 | KNN K=30 fine |
+
+In high D with typical σ, most kernels contribute negligibly even at large `n_kernels`. Conversely in low D with broad σ, all kernels matter regardless of count.
+
+**Three structurally distinct algorithms** (not parameter knobs):
+
+1. **Dense — exact, no summary.** Sum over all N kernels. Correct at any scale; optimal when `n_active ≈ n_kernels`. **Critical for baseline space-filling**: small contributions from far kernels matter for finding good gaps in the parameter space. Single tensor op `(M, N, D) → (M, N) → (M,)`.
+
+2. **Sparse KNN — near-exact, top-K filtering.** `torch.topk` selects the K=20-50 closest kernels per probe; sum only those. The dropped kernels' contributions are below float-32 noise (5σ tail). Same big-O as dense but ~constant memory (`(M, K)` instead of `(M, N)`). Optimal when `n_active ≪ n_kernels`.
+
+3. **Cluster-summarised — approximate.** Replace N kernels with `c ≪ N` cluster centres (mini-batch K-means / GMM). Lossy but bounded; appropriate when even KNN's full distance matrix is wasteful. Mathematically: a c-component mixture summarises the spatial density better than a noisy N-kernel cloud at very high N anyway.
+
+**Selection rule** (σ/D-aware, not n_kernels-only):
+```python
+def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
+    v_5sigma = (pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1)
+    n_active = n_kernels * min(v_5sigma, 1.0)
+    if n_kernels < 100:                  return "dense"        # tiny: overhead dominates KNN
+    if n_active < 50:                    return "knn"          # most kernels contribute ~0
+    if n_active < n_kernels * 0.5:       return "knn"          # >50% of kernels zero-contribution
+    return "dense"                                              # most kernels matter
+# Cluster regime triggers separately at n_active > 10K or n_kernels > 100K.
+```
+
+**Shipping plan:**
+
+- **Commit 4 (now):** Implement dense regime + the dispatcher pattern. KNN/cluster regimes are scaffolded but stubbed — calling them raises `NotImplementedError("upgrade to commit 4b")`. The dispatcher logs at INFO when a non-dense regime would be selected (gives empirical data on when 4b becomes necessary in real workloads).
+
+- **Commit 4b (later, when 4-dispatcher logs show non-trivial KNN-eligible calls):** Implement KNN regime. Same dispatcher, just one more arm.
+
+- **Commit 4c (conditional, only if real workloads hit cluster regime):** Implement cluster regime.
 
 `scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine` (built-in to torch). ~10 LOC change, gives QMC sequences in tensor land.
 
-Side benefit: subsumes Topic 1 (numpy KDE vectorisation) — same algorithmic structure, just torch ops. The numpy version was a stepping stone, not thrown-away work.
+Side benefit: subsumes Topic 1 (numpy KDE vectorisation) — same algorithmic structure as the dense regime, just torch ops. The numpy version was a stepping stone, not thrown-away work.
 
 ### Commit 5 — Gradient optimiser + multi-start (~300 LOC, 1.5 days)
 `OptimizationEngine.run_acquisition_gradient(objective_tensor, bounds, n_starts=4)` — multi-start `torch.optim.LBFGS` or Adam. ~50 epochs Adam or ~10-20 line searches L-BFGS per start.
