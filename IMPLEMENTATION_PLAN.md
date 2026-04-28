@@ -4,7 +4,9 @@
 
 ## Status
 
-### Strategy D — commits 1-7 shipped, 8+ in progress
+### Strategy D — Phase 1 complete (zero scipy in `pred_fab/`); Phase 2-5 planned
+
+**Foundations (commits 1-8) shipped:**
 
 | Commit | What | Tests | Status |
 |---|---|---|---|
@@ -15,7 +17,30 @@
 | 5 | `Optimizer.GRADIENT` + `run_acquisition_gradient` (sigmoid bound reparam) + tensor acquisition objective wired into `_run_acquisition_phase` | 12 | shipped |
 | 6 | `DataLoader(TensorDataset)` scale-aware in `TorchMLPModel.train` | 3 | shipped |
 | 7 | End-to-end GRADIENT-vs-DE validation smoke + empirical findings recorded | (smoke) | shipped |
-| 8 | Flip default optimiser | — | gated on empirical validation at D≥5-10 |
+| 8 | Status block + roadmap in plan | — | shipped |
+
+**Phase 1 (scipy removal, foundations) shipped:**
+
+| Commit | What | LOC | Status |
+|---|---|---|---|
+| 9 step A | Torch-native vectorised DE replaces `scipy.optimize.differential_evolution` (rand/1/bin mutation, F~U[0.5, 1.0], CR=0.7, integer rounding, no-improvement-window callback) | +151 / −74 | shipped |
+| 9 step B | `torch.optim.LBFGS` replaces `scipy.optimize.minimize`; MPC inner loop migrated from scipy.minimize to torch DE; full `scipy.optimize` removal | +97 / −22 | shipped |
+| 9b | Smart initial conditions (BoTorch `gen_batch_initial_conditions` pattern: Sobol raw_samples + Boltzmann selection with temperature `eta`) | +46 | shipped |
+| 10 | `scipy.spatial.cKDTree` → `torch.cdist + torch.where` 5σ mask in `KernelIndex.density_at`; full `scipy.spatial` removal | +26 / −19 | shipped |
+| 11 | `scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine` (had shipped earlier as commit 12 in old numbering) | +5 / −2 | shipped |
+
+**End of Phase 1 status: zero `scipy` imports anywhere in `pred_fab/`.** 654 tests pass. Acquisition optimisation, QMC, and spatial neighbour lookup are all torch-native.
+
+**Phase 2-5 planned, not yet shipped:**
+
+| Phase | Commits | Net LOC | Gist |
+|---|---|---|---|
+| 2 | 12 | −80 net | Schedule path gradient migration + delete offset encoding + soft bound penalty + smoothing |
+| 3 | 13-16 | −640 net | nn.Module normalisers, categorical-index, Phase C SS absorption, tensor-native prepare_input |
+| 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it |
+| 5 | 18-20 | −90 net | API simplification, `run_baseline`/`run_calibration` unification, GPU + `torch.compile` over full graph |
+
+These are sized correctly in the roadmap below but are not safe for autonomous overnight execution — each touches multiple foundational modules and would risk extensive test breakage without careful per-commit review. Schedule and data layer migrations are the natural next focus.
 
 **End-to-end works**: `agent.configure_optimizer(backend=Optimizer.GRADIENT)` followed by `agent.baseline_step(n)` runs the gradient path through the Process phase (continuous params; integer / domain phase still DE). 654 tests pass.
 
