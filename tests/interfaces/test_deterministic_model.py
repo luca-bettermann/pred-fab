@@ -8,6 +8,7 @@ Tests for IDeterministicModel contract:
 """
 import pytest
 import numpy as np
+import torch
 
 from pred_fab.interfaces import IDeterministicModel
 from tests.utils.builders import build_test_logger
@@ -81,7 +82,7 @@ class TestForwardPass:
             categorical_mappings={},
         )
         # Normalized input: (raw - mean) / std = (5.0 - 5.0) / 2.0 = 0.0
-        X_norm = np.array([[0.0]])
+        X_norm = torch.tensor([[0.0]])
         result = model.forward_pass(X_norm)
         assert result.shape == (1, 1)
 
@@ -97,14 +98,14 @@ class TestForwardPass:
         # raw_param = 5.0 + 0.0 * 2.0 = 5.0
         # formula(5.0) = 5.0 * 2 = 10.0
         # renorm: (10.0 - 10.0) / 4.0 = 0.0
-        X_norm = np.array([[0.0]])
+        X_norm = torch.tensor([[0.0]])
         result = model.forward_pass(X_norm)
         assert abs(float(result[0, 0]) - 0.0) < 1e-6
 
         # raw_param = 5.0 + 1.0 * 2.0 = 7.0
         # formula(7.0) = 7.0 * 2 = 14.0
         # renorm: (14.0 - 10.0) / 4.0 = 1.0
-        X_norm = np.array([[1.0]])
+        X_norm = torch.tensor([[1.0]])
         result = model.forward_pass(X_norm)
         assert abs(float(result[0, 0]) - 1.0) < 1e-6
 
@@ -116,6 +117,6 @@ class TestForwardPass:
             feature_stats={"feature_scalar": {"mean": 10.0, "std": 4.0, "method": "standard"}},
             categorical_mappings={},
         )
-        X_norm = np.array([[0.0], [1.0], [-1.0]])
+        X_norm = torch.tensor([[0.0], [1.0], [-1.0]])
         result = model.forward_pass(X_norm)
         assert result.shape == (3, 1)

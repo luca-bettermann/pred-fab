@@ -6,6 +6,7 @@ and get_split_codes.
 """
 import pytest
 import numpy as np
+import torch
 
 from pred_fab.core import DataModule
 from pred_fab.utils.enum import NormMethod, SplitType
@@ -102,9 +103,9 @@ def test_denormalize_values_returns_unchanged_when_not_fitted(tmp_path):
     dm = DataModule(dataset)
     dm.initialize(input_parameters=["param_1"], input_features=[], output_columns=["feature_grid"])
 
-    values = np.array([[0.5, 0.5, 0.5]])
+    values = torch.tensor([[0.5, 0.5, 0.5]])
     result = dm.denormalize_values(values, ["feature_grid"])
-    np.testing.assert_array_equal(result, values)
+    torch.testing.assert_close(result, values)
 
 
 def test_denormalize_values_1d_input(tmp_path):
@@ -113,10 +114,8 @@ def test_denormalize_values_1d_input(tmp_path):
     evaluate_loaded_workflow_experiments(agent, dataset)
     dm = build_prepared_workflow_datamodule(agent, dataset)
 
-    # Normalize a known value then reverse it
-    y_1d = np.array([0.0, 0.0])  # normalized zeros
+    y_1d = torch.tensor([0.0, 0.0])  # normalized zeros
     result = dm.denormalize_values(y_1d, ["feature_1", "feature_2"])
-    # Result should be a valid array (not crash), same length
     assert result.shape == (2,)
 
 
@@ -125,10 +124,10 @@ def test_denormalize_output_delegates_to_denormalize_values(tmp_path):
     evaluate_loaded_workflow_experiments(agent, dataset)
     dm = build_prepared_workflow_datamodule(agent, dataset)
 
-    arr = np.zeros((3, len(dm.output_columns)), dtype=np.float32)
+    arr = torch.zeros((3, len(dm.output_columns)), dtype=torch.float32)
     r1 = dm.denormalize_output(arr)
     r2 = dm.denormalize_values(arr, dm.output_columns)
-    np.testing.assert_array_equal(r1, r2)
+    torch.testing.assert_close(r1, r2)
 
 
 # ===== Normalization overrides =====

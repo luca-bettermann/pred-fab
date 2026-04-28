@@ -9,6 +9,7 @@ optionally evaluate performance.
 from typing import Any
 import pandas as pd
 import numpy as np
+import torch
 import pickle
 import copy
 
@@ -88,25 +89,18 @@ class InferenceBundle:
     
     def predict(self, X: pd.DataFrame) -> pd.DataFrame:
         """Predict features with validation and denormalization."""
-        # Validate inputs against schema
         self._validate_inputs(X)
-        
-        # Prepare input (one-hot + normalize)
-        X_norm = self._prepare_input(X)
-        
-        # Collect predictions from all models
+
+        X_norm_np = self._prepare_input(X)
+        X_norm_t = torch.from_numpy(X_norm_np)
+
         predictions: dict[str, Any] = {}
         for model in self.prediction_models:
-            # Predict (normalized)
-            y_pred_norm = model.forward_pass(X_norm)
-            
-            # Denormalize
-            y_pred = self._denormalize_values(y_pred_norm, model.outputs)
-            
-            # Add to results
+            y_pred_norm_t = model.forward_pass(X_norm_t)
+            y_pred_np = self._denormalize_values(y_pred_norm_t.detach().cpu().numpy(), model.outputs)
             for i, col in enumerate(model.outputs):
-                predictions[col] = y_pred[:, i].tolist()
-        
+                predictions[col] = y_pred_np[:, i].tolist()
+
         return pd.DataFrame(predictions)
     
     def _prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:

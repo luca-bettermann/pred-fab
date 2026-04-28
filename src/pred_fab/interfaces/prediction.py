@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, final
 import copy
 import numpy as np
+import torch
 
 from .base_interface import BaseInterface
 from ..utils.logger import PfabLogger
@@ -102,24 +103,34 @@ class IPredictionModel(BaseInterface):
     # - outputs
 
     @abstractmethod
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        """Run model inference on normalized X (batch, n_params) → normalized y (batch, n_features)."""
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        """Run model inference on normalized X (batch, n_inputs) → normalized y (batch, n_outputs).
+
+        Tensor-native contract. The framework guarantees X arrives as a CPU
+        float32 tensor in normalized input space; implementations should return
+        a CPU float32 tensor in normalized output space.
+        """
         pass
 
     @abstractmethod
-    def train(self, train_batches: list[tuple[np.ndarray, np.ndarray]], val_batches: list[tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
-        """Train the model on (X, y) batch tuples."""
+    def train(
+        self,
+        train_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        val_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        **kwargs,
+    ) -> None:
+        """Train the model on (X, y) tensor batch tuples."""
         pass
 
     # === LATENT ENCODING ===
 
-    def encode(self, X: np.ndarray) -> np.ndarray:
+    def encode(self, X: torch.Tensor) -> torch.Tensor:
         """Map normalized parameters to latent space; default is identity. Override for custom latent encoding."""
         return X
 
     # === ONLINE LEARNING ===
 
-    def tuning(self, tune_batches: list[tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+    def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:
         """Fine-tune with new measurements during fabrication; override to enable online learning."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support tuning. "
@@ -203,30 +214,36 @@ class IDeterministicModel(IPredictionModel):
     # === PRE-DEFINED PIPELINE ===
 
     @final
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        """Denormalize inputs → formula → renormalize outputs."""
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        """Denormalize inputs → formula → renormalize outputs.
+
+        Internal numpy boundary: ``formula(X_raw)`` operates on numpy arrays
+        in physical units; the tensor↔numpy round-trip is a once-per-call
+        boundary cost (cheap relative to the formula itself).
+        """
         if not self._norm_context_set:
             raise RuntimeError(
                 f"{self.__class__.__name__}.forward_pass() called before "
                 f"set_normalization_context(). This is set automatically by "
                 f"PredictionSystem during training."
             )
-        X_raw = self._denormalize_inputs(X)
+        X_np = X.detach().cpu().numpy()
+        X_raw = self._denormalize_inputs(X_np)
         y_raw = self.formula(X_raw)
         y_norm = self._normalize_outputs(y_raw)
-        return y_norm
+        return torch.from_numpy(y_norm.astype(np.float32))
 
     @final
     def train(
         self,
-        train_batches: list[tuple[np.ndarray, np.ndarray]],
-        val_batches: list[tuple[np.ndarray, np.ndarray]],
+        train_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        val_batches: list[tuple[torch.Tensor, torch.Tensor]],
         **kwargs: Any,
     ) -> None:
         """No-op — deterministic models have no learned parameters."""
         pass
 
-    def encode(self, X: np.ndarray) -> np.ndarray:
+    def encode(self, X: torch.Tensor) -> torch.Tensor:
         """Identity — no learned latent space for analytical models."""
         return X
 

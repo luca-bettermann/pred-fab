@@ -100,7 +100,8 @@ def test_p_zero_returns_unperturbed_batches(tmp_path):
     # measured grid value for interior cells), normalised. Prediction values
     # would land at very different normalised magnitudes; verify none of them
     # leaked through by checking the column doesn't contain the stub base (999).
-    raw_back = X[:, prev_idx] * dm._parameter_stats["prev_grid_1"]["std"] + dm._parameter_stats["prev_grid_1"]["mean"]
+    X_np = X.detach().cpu().numpy()
+    raw_back = X_np[:, prev_idx] * dm._parameter_stats["prev_grid_1"]["std"] + dm._parameter_stats["prev_grid_1"]["mean"]
     assert np.all(raw_back < 500), "p=0 should never inject stub predictions"
 
 
@@ -148,7 +149,8 @@ def test_val_batches_never_perturbed(tmp_path):
 
     [(X, _)] = dm.get_batches(SplitType.VAL)
     prev_idx = dm.input_columns.index("prev_grid_1")
-    raw_back = X[:, prev_idx] * dm._parameter_stats["prev_grid_1"]["std"] + dm._parameter_stats["prev_grid_1"]["mean"]
+    X_np = X.detach().cpu().numpy()
+    raw_back = X_np[:, prev_idx] * dm._parameter_stats["prev_grid_1"]["std"] + dm._parameter_stats["prev_grid_1"]["mean"]
     assert np.all(raw_back < 500), "VAL batches must never carry SS perturbations"
 
 

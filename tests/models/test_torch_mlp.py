@@ -6,6 +6,7 @@ Subclasses define HIDDEN + the three abstract properties.
 
 import numpy as np
 import pytest
+import torch
 
 from pred_fab.models import TorchMLPModel
 from tests.utils.builders import build_test_logger
@@ -48,12 +49,13 @@ class _MultiOutMLP(TorchMLPModel):
 
 
 def _make_xy(n: int, n_inputs: int, n_outputs: int = 1, seed: int = 0):
+    """Synthetic (X, y) tensors. y depends on X[:, 0]² - X[:, -1] + small noise for multi-output."""
     rng = np.random.default_rng(seed)
     X = rng.standard_normal((n, n_inputs)).astype(np.float32)
     y = (X[:, :1] ** 2 - X[:, -1:]).astype(np.float32)
     if n_outputs > 1:
         y = np.repeat(y, n_outputs, axis=1) + rng.standard_normal((n, n_outputs)).astype(np.float32) * 0.01
-    return X, y
+    return torch.from_numpy(X), torch.from_numpy(y)
 
 
 # ─── Contract tests ───────────────────────────────────────────────────────
@@ -63,22 +65,22 @@ class TestUntrainedBehaviour:
 
     def test_forward_pass_returns_zeros(self, tmp_path):
         m = _SingleOutMLP(build_test_logger(tmp_path))
-        X = np.random.randn(7, 2).astype(np.float32)
+        X = torch.from_numpy(np.random.randn(7, 2).astype(np.float32))
         out = m.forward_pass(X)
         assert out.shape == (7, 1)
-        np.testing.assert_array_equal(out, np.zeros((7, 1)))
+        torch.testing.assert_close(out, torch.zeros((7, 1)))
 
     def test_forward_pass_zeros_shape_matches_n_outputs(self, tmp_path):
         m = _MultiOutMLP(build_test_logger(tmp_path))
-        X = np.random.randn(4, 1).astype(np.float32)
+        X = torch.from_numpy(np.random.randn(4, 1).astype(np.float32))
         out = m.forward_pass(X)
         assert out.shape == (4, 3)
 
     def test_encode_returns_identity_when_untrained(self, tmp_path):
         m = _SingleOutMLP(build_test_logger(tmp_path))
-        X = np.random.randn(3, 2).astype(np.float32)
+        X = torch.from_numpy(np.random.randn(3, 2).astype(np.float32))
         out = m.encode(X)
-        np.testing.assert_array_equal(out, X)
+        torch.testing.assert_close(out, X)
 
 
 class TestTraining:
@@ -101,8 +103,8 @@ class TestTraining:
         X, y = _make_xy(200, 2)
         m.train([(X, y)], [])
         pred = m.forward_pass(X)
-        residual_std = float(np.std(pred.ravel() - y.ravel()))
-        target_std = float(np.std(y))
+        residual_std = float((pred.flatten() - y.flatten()).std())
+        target_std = float(y.std())
         # Trained MLP should explain meaningful variance vs predict-mean baseline
         assert residual_std < 0.5 * target_std
 
@@ -159,7 +161,7 @@ class TestReproducibility:
         m2.train([(X, y)], [])
         out2 = m2.forward_pass(X[:5])
 
-        np.testing.assert_allclose(out1, out2, atol=1e-6)
+        torch.testing.assert_close(out1, out2, atol=1e-6, rtol=1e-6)
 
 
 class TestBatchTraining:
@@ -177,4 +179,4 @@ class TestBatchTraining:
         m2.train([(X1, y1), (X2, y2)], [])
 
         # Same SEED + same final concatenated data → same network
-        np.testing.assert_allclose(m1.forward_pass(X[:5]), m2.forward_pass(X[:5]), atol=1e-6)
+        torch.testing.assert_close(m1.forward_pass(X[:5]), m2.forward_pass(X[:5]), atol=1e-6, rtol=1e-6)

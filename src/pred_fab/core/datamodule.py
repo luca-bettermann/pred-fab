@@ -3,6 +3,7 @@
 from typing import Any, cast
 import pandas as pd
 import numpy as np
+import torch
 import copy
 from sklearn.model_selection import train_test_split
 
@@ -374,8 +375,8 @@ class DataModule:
 
         return X_df
 
-    def get_batches(self, split: SplitType = SplitType.TRAIN) -> list[tuple[np.ndarray, np.ndarray]]:
-        """Return list of normalized (X, y) batch tuples for the given split."""
+    def get_batches(self, split: SplitType = SplitType.TRAIN) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Return list of normalized (X, y) tensor batch tuples for the given split."""
         codes = self._split_codes.get(split, [])
         if not codes:
             return []
@@ -393,53 +394,58 @@ class DataModule:
         X = self._one_hot_encode(X_df)
         # Restrict to output_columns to keep index-based normalization and model-filtering aligned.
         y = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
-        
+
         # Normalize
         if self._is_fitted:
             self._normalize_batch(X, self.input_columns, self._parameter_stats)
             self._normalize_batch(y, self.output_columns, self._feature_stats)
-        
+
+        X_t = torch.from_numpy(X)
+        y_t = torch.from_numpy(y)
+
         # Batch
         if self.batch_size is None:
-            return [(X, y)]
-            
-        batches = []
-        for i in range(0, len(X), self.batch_size):
-            batches.append((X[i:i+self.batch_size], y[i:i+self.batch_size]))
-            
+            return [(X_t, y_t)]
+
+        batches: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for i in range(0, X_t.shape[0], self.batch_size):
+            batches.append((X_t[i:i+self.batch_size], y_t[i:i+self.batch_size]))
+
         return batches
-    
-    def prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Prepare input DataFrame for inference (one-hot + normalize)."""
+
+    def prepare_input(self, X_df: pd.DataFrame) -> torch.Tensor:
+        """Prepare input DataFrame for inference (one-hot + normalize), returning a tensor."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
-            
+
         X_arr = self._one_hot_encode(X_df)
-        
+
         # Normalize
         self._normalize_batch(X_arr, self.input_columns, self._parameter_stats)
-                
-        return X_arr
 
-    def denormalize_output(self, y_norm: np.ndarray) -> np.ndarray:
+        return torch.from_numpy(X_arr)
+
+    def denormalize_output(self, y_norm: torch.Tensor) -> torch.Tensor:
         """Reverse normalization for target features (y)."""
         return self.denormalize_values(y_norm, self.output_columns)
 
-    def denormalize_values(self, values: np.ndarray, feature_names: list[str]) -> np.ndarray:
-        """Reverse normalization for specific features."""
+    def denormalize_values(self, values: torch.Tensor, feature_names: list[str]) -> torch.Tensor:
+        """Reverse normalization for specific features. Tensor in / tensor out."""
         if not self._is_fitted:
-            return values.copy()
-            
-        y = values.copy()
-        if y.ndim == 1:
+            return values.clone()
+
+        # Internal numpy boundary: stats are Python floats, so reverse_normalization
+        # is fastest as numpy elementwise; one tensor↔numpy roundtrip per call.
+        y_np = values.detach().cpu().numpy().copy()
+        if y_np.ndim == 1:
             for i, name in enumerate(feature_names):
                 if name in self._feature_stats:
-                    y[i] = self._reverse_normalization(y[i], self._feature_stats[name])
+                    y_np[i] = self._reverse_normalization(y_np[i], self._feature_stats[name])
         else:
             for i, name in enumerate(feature_names):
                 if name in self._feature_stats:
-                    y[:, i] = self._reverse_normalization(y[:, i], self._feature_stats[name])
-        return y
+                    y_np[:, i] = self._reverse_normalization(y_np[:, i], self._feature_stats[name])
+        return torch.from_numpy(y_np)
 
 
     # === NORMALIZATION STATE ===
@@ -665,13 +671,13 @@ class DataModule:
     # === CALIBRATION HELPERS ===
 
     def params_to_array(self, params: dict[str, Any]) -> np.ndarray:
-        """Convert a parameter dict to a normalized 1D input array."""
+        """Convert a parameter dict to a normalized 1D input array (numpy, calibration-side use)."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
-            
+
         df = pd.DataFrame([params])
-        arr = self.prepare_input(df)
-        return arr[0]
+        arr_t = self.prepare_input(df)
+        return arr_t.detach().cpu().numpy()[0]
 
     def array_to_params(self, array: np.ndarray) -> dict[str, Any]:
         """Reverse-normalize and decode a 1D input array back to a parameter dict."""

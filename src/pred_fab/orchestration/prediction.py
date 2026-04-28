@@ -11,6 +11,7 @@ from typing import Any
 import copy
 import pandas as pd
 import numpy as np
+import torch
 import pickle
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
@@ -456,8 +457,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             input_cols = model.input_parameters + model.input_features
             input_indices = datamodule.get_input_indices(input_cols, skip_missing=True)
             n_input = len(input_indices) if input_indices else len(datamodule.input_columns)
-            dummy_X = np.zeros((1, n_input))
-            z = dummy_X[0] if self._bypass_encoder else model.encode(dummy_X)[0]
+            dummy_X = np.zeros((1, n_input), dtype=np.float32)
+            if self._bypass_encoder:
+                z = dummy_X[0]
+            else:
+                z_t = model.encode(torch.from_numpy(dummy_X))
+                z = z_t.detach().cpu().numpy()[0]
             n_dims = len(z)
 
             # Active mask from schema bounds: only dims with non-trivial range
@@ -553,10 +558,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
         if not input_indices:
             return X_norm
-        X_model = X_norm[input_indices].reshape(1, -1)
+        X_model = X_norm[input_indices].reshape(1, -1).astype(np.float32)
         if self._bypass_encoder:
             return X_model[0]
-        return model.encode(X_model)[0]
+        z_t = model.encode(torch.from_numpy(X_model))
+        return z_t.detach().cpu().numpy()[0]
 
     # --- Integrated evidence math (pure numpy, per-model subspace) ---
 
@@ -715,8 +721,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     def encode(self, X: np.ndarray) -> np.ndarray:
         """Encode a batch of normalized parameter arrays to latent space.
 
-        Uses the highest-weight non-deterministic model's encode(). Falls back to
-        identity if no models are registered or the system is not yet trained.
+        Public API stays numpy-typed (used by callers that don't yet speak tensor);
+        the tensor↔numpy boundary is internal to this method.
         """
         model = self._primary_encode_model()
         if model is None or self.datamodule is None:
@@ -726,9 +732,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not input_indices:
             return X
         X_model = X[:, input_indices] if X.ndim > 1 else X[input_indices].reshape(1, -1)
+        X_model = X_model.astype(np.float32)
         if self._bypass_encoder:
             return X_model
-        return model.encode(X_model)
+        z_t = model.encode(torch.from_numpy(X_model))
+        return z_t.detach().cpu().numpy()
 
     # --- Aggregated public API ---
 
@@ -861,28 +869,22 @@ class PredictionSystem(BaseOrchestrationSystem):
         y_df: pd.DataFrame = y_df_all.iloc[start:end_index].copy() # type: ignore
 
         # Prepare tune arrays with training-fitted normalization.
-        X_tune = temp_datamodule.prepare_input(X_df)
+        X_tune = temp_datamodule.prepare_input(X_df)  # tensor
         y_tune = y_df[temp_datamodule.output_columns].values.astype(np.float32)
         temp_datamodule._normalize_batch(y_tune, temp_datamodule.output_columns, temp_datamodule._feature_stats)
-        
+
         # Initialize base predictions array
         y_pred_base = np.zeros_like(y_tune)
-        
+
         # Get predictions from all base models
         self.logger.info("Generating base predictions for residual learning...")
         for model in self.models:
-            # Get indices for this model's outputs
             output_indices = [dm.output_columns.index(f) for f in model.outputs]
-
-            # Get model inputs (filter X columns)
             input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-            X_model = X_tune[:, input_indices]
-            
-            # Predict (normalized)
+            input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+            X_model = X_tune.index_select(1, input_indices_t)
             y_pred_model = model.forward_pass(X_model)
-            
-            # Place in aggregate array
-            y_pred_base[:, output_indices] = y_pred_model
+            y_pred_base[:, output_indices] = y_pred_model.detach().cpu().numpy()
 
         # TODO: Store predicted features in exp_data.predicted_features. do we need another array?
             
@@ -989,12 +991,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
 
-        # Concatenate batches
+        # Concatenate batches (tensors)
         X_list, y_list = zip(*batches)
-        X_split = np.concatenate(X_list, axis=0)
-        y_split = np.concatenate(y_list, axis=0)
+        X_split = torch.cat(X_list, dim=0)
+        y_split = torch.cat(y_list, dim=0)
 
-        self.logger.info(f"Evaluating {len(self.models)} models on {len(X_split)} samples...")
+        self.logger.info(f"Evaluating {len(self.models)} models on {X_split.shape[0]} samples...")
 
         # Build per-row importance for R²_adj: experiments near the performance
         # optimum are weighted higher, so R²_adj measures prediction accuracy
@@ -1004,17 +1006,18 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
         for model in self.models:
-            # Get indices for this model
             input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+            input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
             indices = [dm.output_columns.index(f) for f in model.outputs]
+            indices_t = torch.as_tensor(indices, dtype=torch.long)
 
-            # Get ground truth (denormalized)
-            y_true_norm = y_split[:, indices]
-            y_true = dm.denormalize_values(y_true_norm, model.outputs)
+            # Ground truth (denormalised) — tensor in, tensor out → numpy for metrics.
+            y_true_norm = y_split.index_select(1, indices_t)
+            y_true = dm.denormalize_values(y_true_norm, model.outputs).detach().cpu().numpy()
 
-            # Predict from the model-specific input slice.
-            y_pred_norm = model.forward_pass(X_split[:, input_indices])
-            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+            # Prediction.
+            y_pred_norm = model.forward_pass(X_split.index_select(1, input_indices_t))
+            y_pred = dm.denormalize_values(y_pred_norm, model.outputs).detach().cpu().numpy()
 
             for i, feature_name in enumerate(model.outputs):
                 y_true_feat = y_true[:, i]
@@ -1362,50 +1365,47 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Cell-by-cell prediction in C-order. Each cell's row carries the
         previously predicted source value at (idx[axis] - depth) for each
-        recursive input. Boundary cells (out-of-bounds prior) get NaN, which
-        is treated as 0 in raw space — matching training-time boundary
-        semantics from ``_one_hot_encode``'s ``nan_to_num``.
+        recursive input. Boundary cells (out-of-bounds prior) get raw 0,
+        matching training-time boundary semantics from ``_one_hot_encode``'s
+        ``nan_to_num``.
 
-        Performance: the static columns and iterator features are batch-built
-        and normalized once up front; the per-cell loop only computes the
-        normalized recursive-feature values and runs one forward_pass per
-        cell. Avoids per-cell ``pd.DataFrame`` and full ``prepare_input``
-        overhead, which dominates the cost on small tensors.
+        Tensor-native: the X buffer lives as a single torch.Tensor across the
+        whole loop; recursive-feature substitution is in-place on the tensor;
+        per-cell forward_pass receives a tensor view directly with no
+        per-cell numpy↔tensor conversion.
         """
         shape = dim_info['shape']
-        param_base = dim_info['param_base']
         iterator_feats = dim_info['iterator_feats']
         dm = self._assert_trained()
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
 
         n_cells = predict_to - predict_from
 
-        # Pre-build the full input batch with everything except recursive
-        # features (those need to be filled inline as predictions become
-        # available). One DataFrame / one prepare_input call total.
+        # Pre-build the static + iterator-feature batch (one prepare_input call).
         rows = []
         cell_indices: list[tuple[int, ...]] = []
         for pos in range(predict_from, predict_to):
             idx = np.unravel_index(pos, shape)
             cell_indices.append(idx)
-            row = param_base.copy()
+            row = dim_info['param_base'].copy()
             for feat_code, axis_pos, size in iterator_feats:
                 row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
             rows.append(row)
         X_df = pd.DataFrame(rows)
-        X_norm = dm.prepare_input(X_df)
+        X_norm = dm.prepare_input(X_df)  # (n_cells, n_input_cols), tensor
 
-        # Pre-resolve per-recursive-feature column indices and normalization
-        # stats so the inner loop is just numpy arithmetic + forward_pass.
-        recursive_plan: list[tuple[str, str, int, int, int, dict | None]] = []
+        # Pre-resolve per-recursive-feature column indices and normalisation
+        # stats so the inner loop is just tensor writes + forward_pass.
+        recursive_plan: list[tuple[str, int, int, int, dict | None]] = []
         for input_code, source_code, axis_idx, depth in recursive_specs:
             if input_code not in dm.input_columns:
                 continue
             col_idx = dm.input_columns.index(input_code)
             stats = dm._parameter_stats.get(input_code)
-            recursive_plan.append((input_code, source_code, axis_idx, depth, col_idx, stats))
+            recursive_plan.append((source_code, axis_idx, depth, col_idx, stats))
 
-        def _normalize_one(raw_val: float, stats: dict | None) -> float:
+        def _normalize_scalar(raw_val: float, stats: dict | None) -> float:
             if stats is None:
                 return raw_val
             arr = np.array([raw_val], dtype=np.float32)
@@ -1414,28 +1414,27 @@ class PredictionSystem(BaseOrchestrationSystem):
         for cell_row in range(n_cells):
             idx = cell_indices[cell_row]
 
-            # Fill recursive features for this cell (in normalized space)
-            for input_code, source_code, axis_idx, depth, col_idx, stats in recursive_plan:
+            for source_code, axis_idx, depth, col_idx, stats in recursive_plan:
                 prior = list(idx)
                 prior[axis_idx] -= depth
                 if prior[axis_idx] < 0 or source_code not in predictions:
-                    raw_val = 0.0  # boundary
+                    raw_val = 0.0
                 else:
                     val = predictions[source_code][tuple(prior)]
                     raw_val = 0.0 if np.isnan(val) else float(val)
-                X_norm[cell_row, col_idx] = _normalize_one(raw_val, stats)
+                X_norm[cell_row, col_idx] = _normalize_scalar(raw_val, stats)
 
-            X_model = X_norm[cell_row:cell_row + 1, input_indices]
+            X_model = X_norm[cell_row:cell_row + 1].index_select(1, input_indices_t)
             y_pred_norm = model.forward_pass(X_model)
             y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
 
             for i, feature_name in enumerate(model.outputs):
                 if feature_name not in predictions:
                     continue
-                value = y_pred[0, i] if y_pred.ndim == 2 else y_pred[i]
+                value = float(y_pred[0, i])
                 feat_depth = len(predictions[feature_name].shape)
                 feat_idx = idx[:feat_depth]
-                predictions[feature_name][feat_idx] = float(value)
+                predictions[feature_name][feat_idx] = value
 
     def _predict_and_store_batch_to_dict(
         self,
@@ -1447,31 +1446,26 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Run model prediction on X_batch and store results with per-feature index truncation."""
         dm = self._assert_trained()
 
-        # Prepare input (one-hot + normalize)
+        # Prepare input (one-hot + normalize) — returns a tensor.
         X_norm = dm.prepare_input(X_batch)
 
         models_to_run = [model] if model is not None else self.models
         for m in models_to_run:
-            # Filter to the columns this model was trained on (same as _filter_batches_for_model).
             input_indices = dm.get_input_indices(m.input_parameters + m.input_features)
-            X_model = X_norm[:, input_indices]
-            # Predict in normalized space
+            input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+            X_model = X_norm.index_select(1, input_indices_t)
             y_pred_norm = m.forward_pass(X_model)
-
-            # Denormalize to original scale
             y_pred = dm.denormalize_values(y_pred_norm, m.outputs)
 
-            # Store predictions in arrays with per-feature index truncation
+            # y_pred: (batch, n_outputs) tensor
+            y_np = y_pred.detach().cpu().numpy()
             for i, feature_name in enumerate(m.outputs):
                 if feature_name not in predictions:
                     continue
-
-                # y_pred is (batch, n_outputs)
-                values = y_pred[:, i]
+                values = y_np[:, i]
                 feat_depth = len(predictions[feature_name].shape)
-
                 for j, idx in enumerate(batch_indices):
-                    feat_idx = idx[:feat_depth]  # truncate to this feature's depth
+                    feat_idx = idx[:feat_depth]
                     predictions[feature_name][feat_idx] = float(values[j])
     
     # === EXPORT FOR PRODUCTION INFERENCE ===
