@@ -179,8 +179,10 @@ Bounds via sigmoid reparameterisation: `x = sigmoid(z) · (hi - lo) + lo`. Smoot
 
 `Optimizer.GRADIENT` enum value alongside `LBFGSB`, `DE`. Routed through `_run_phase` when `chosen_opt == GRADIENT` and tensor APIs available.
 
-### Commit 6 — Phase C (per-minibatch SS) + scale-aware training loop (~200 LOC, 1.5 days)
-Per-minibatch SS hook inside `TorchMLPModel.train()`. Deletes K-refit, `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`. Net ~−120 LOC of stateful machinery from DataModule + PredictionSystem.
+### Commit 6 — Scale-aware training loop (~50 LOC) + Phase C deferred (~200 LOC future)
+**Shipped now (commit 6):** `DataLoader(TensorDataset, shuffle=True)` scale-aware path inside `TorchMLPModel.train()`. Threshold = `MINIBATCH_THRESHOLD` (1000 rows by default, class-level so subclasses can override). Below threshold: single full-batch GD (mock-scale path). Above: shuffled minibatches per epoch.
+
+**Deferred (commit 6b, when ready):** Per-minibatch SS hook inside `TorchMLPModel.train()` to delete K-refit, `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`. The legacy machinery has detailed semantics (per-cell prior lookup, NaN-on-boundary, prediction caching across rounds) covered by 14 tests; absorbing it cleanly into a per-minibatch hook needs a careful redesign of how source-feature predictions are produced inside the training loop. Going alongside one of the data-layer migrations in commit 7 makes most sense — the categorical-index migration (7a) already touches batch construction.
 
 **Scale-aware training loop**: at `N_train > 1000`, switch to `DataLoader(TensorDataset, batch_size=...)` for shuffled minibatching. The per-minibatch SS substitution maps onto each minibatch (whether it's the whole dataset for small N or one of many for large N). At `N_train < 1000`, single-batch path stays — no DataLoader overhead.
 

@@ -14,12 +14,19 @@ and return ``torch.Tensor`` directly; no numpy↔tensor conversion happens here.
 
 Other model shapes (transformer, GNN, LSTM) should subclass ``TorchMLPModel``
 and override ``_build_network`` to return a different ``nn.Module``.
+
+**Scale-aware training (Strategy D commit 6):** at ``n_rows > MINIBATCH_THRESHOLD``
+the train loop uses ``DataLoader(TensorDataset, batch_size=...)`` for shuffled
+minibatches. Below that, single-batch full-GD stays — DataLoader overhead
+isn't justified at mock-scale (~50-200 rows). Threshold is class-level so
+subclasses can override.
 """
 
 from typing import Any
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
 from ..interfaces import IPredictionModel
 from ..utils import PfabLogger
@@ -34,6 +41,14 @@ class TorchMLPModel(IPredictionModel):
     LR: float = 5e-3
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
+
+    # Scale-aware minibatching threshold (Strategy D commit 6). At or below
+    # this many training rows, the train loop uses single full-batch GD —
+    # DataLoader/shuffle overhead doesn't pay at mock scale. Above, a
+    # ``DataLoader`` runs ``MINIBATCH_SIZE`` shuffled minibatches per epoch.
+    # ``EPOCHS`` is reinterpreted as "passes over the dataset" in either case.
+    MINIBATCH_THRESHOLD: int = 1000
+    MINIBATCH_SIZE: int = 256
 
     # If True (default), the trained net is wrapped with torch.compile after
     # training so ``forward_pass`` calls go through a JIT-traced graph. Falls
@@ -99,6 +114,7 @@ class TorchMLPModel(IPredictionModel):
         y = torch.cat([b[1] for b in train_batches], dim=0)
         if y.ndim == 1:
             y = y.reshape(-1, 1)
+        n_rows = int(X.shape[0])
 
         torch.manual_seed(self.SEED)
         net = self._build_network(X.shape[1], n_outputs)
@@ -106,11 +122,26 @@ class TorchMLPModel(IPredictionModel):
         optimizer = torch.optim.Adam(net.parameters(), lr=self.LR, weight_decay=self.WEIGHT_DECAY)
         loss_fn = nn.MSELoss()
         net.train()
-        for _ in range(self.EPOCHS):
-            optimizer.zero_grad()
-            loss = loss_fn(net(X), y)
-            loss.backward()
-            optimizer.step()
+
+        # Scale-aware loop: above the threshold, shuffle into minibatches per
+        # epoch via DataLoader; otherwise full-batch GD (mock-scale path).
+        if n_rows > self.MINIBATCH_THRESHOLD:
+            batch_size = min(self.MINIBATCH_SIZE, max(n_rows // 4, 1))
+            loader = DataLoader(
+                TensorDataset(X, y), batch_size=batch_size, shuffle=True,
+            )
+            for _ in range(self.EPOCHS):
+                for X_b, y_b in loader:
+                    optimizer.zero_grad()
+                    loss = loss_fn(net(X_b), y_b)
+                    loss.backward()
+                    optimizer.step()
+        else:
+            for _ in range(self.EPOCHS):
+                optimizer.zero_grad()
+                loss = loss_fn(net(X), y)
+                loss.backward()
+                optimizer.step()
         net.eval()
 
         self._model = net
