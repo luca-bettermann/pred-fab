@@ -162,7 +162,7 @@ def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 
 **Shipping plan:**
 
-- **Commit 4 (now):** Implement dense regime + the dispatcher pattern. KNN/cluster regimes are scaffolded but stubbed — calling them raises `NotImplementedError("upgrade to commit 4b")`. The dispatcher logs at INFO when a non-dense regime would be selected (gives empirical data on when 4b becomes necessary in real workloads).
+- **Commit 4 (now):** Implement dense regime + the dispatcher pattern. KNN/cluster regimes are scaffolded but stubbed — when selected, the dispatcher logs at INFO and falls back to dense (correct math, slower at scale). This gives empirical signal on when 4b/4c become necessary without hard-failing real workloads that happen to land in a non-dense regime.
 
 - **Commit 4b (later, when 4-dispatcher logs show non-trivial KNN-eligible calls):** Implement KNN regime. Same dispatcher, just one more arm.
 

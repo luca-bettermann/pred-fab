@@ -22,6 +22,7 @@ within `cutoff_sigmas · σ` (default 5σ; exp(−12.5) ≈ 4×10⁻⁶) for cos
 """
 from __future__ import annotations
 
+import logging
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -29,13 +30,50 @@ from math import gamma, pi
 from typing import Literal
 
 import numpy as np
+import torch
 from scipy.spatial import cKDTree  # type: ignore[import-untyped]
 from scipy.stats import qmc
+
+_logger = logging.getLogger(__name__)
 
 
 # Module-level KernelField defaults — change here, propagates everywhere.
 DEFAULT_RADII: tuple[float, ...] = (0.5, 1.0, 2.0)
 DEFAULT_ANGULAR_GAP_DEG: float = 45.0
+
+
+# ---------------------------------------------------------------------------
+# Scale-aware regime dispatcher (Strategy D commit 4)
+# ---------------------------------------------------------------------------
+
+def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
+    """Select KDE evaluation regime based on `(n_kernels, sigma, D)`.
+
+    The right metric is **expected number of kernels contributing to a
+    typical probe's density** — not n_kernels alone. Computed as
+    ``n_kernels × V(5σ-ball in D dims) / V_unit_cube``. When ``n_active ≪
+    n_kernels``, most kernels contribute negligibly and a sparse top-K
+    gather wins. When ``n_active ≈ n_kernels``, dense is correct.
+
+    Returns:
+      ``"dense"``   — sum over all N kernels (regimes 1+2 from plan).
+      ``"knn"``     — sparse top-K gather (regime 3, stubbed in commit 4).
+      ``"cluster"`` — c-component summarisation (regime 4, stubbed in commit 4).
+
+    See ``IMPLEMENTATION_PLAN.md`` for the full table of `(D, σ, n)` cases.
+    """
+    # 5σ ball volume in D dims, capped to unit cube domain.
+    v_5sigma = (pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1)
+    v_5sigma = min(v_5sigma, 1.0)
+    n_active = n_kernels * v_5sigma
+
+    if n_kernels < 100:
+        return "dense"  # too small for KNN overhead to pay
+    if n_active > 10000 or n_kernels > 100000:
+        return "cluster"
+    if n_active < 50 or n_active < n_kernels * 0.5:
+        return "knn"
+    return "dense"
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +242,11 @@ def kernel_field_probe_count(
 
 def _in_unit_cube(points: np.ndarray) -> np.ndarray:
     return np.all((points >= 0.0) & (points <= 1.0), axis=-1)
+
+
+def _in_unit_cube_torch(points: torch.Tensor) -> torch.Tensor:
+    """Tensor mirror of ``_in_unit_cube`` — boolean mask over the last dim."""
+    return ((points >= 0.0) & (points <= 1.0)).all(dim=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +640,183 @@ class KernelFieldEstimator(EvidenceEstimator):
         e_new = (
             (old_weights[:, None] * integral_old_per_s).sum(axis=0)
             + (new_weights_SL * integral_new_SL).sum(axis=-1)
+        )
+        return e_new
+
+    def integrated_evidence_perturbed_batched_joint_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """Tensor-typed mirror of ``integrated_evidence_perturbed_batched_joint``.
+
+        Returns ``(S,)`` torch tensor with autograd flowing from each
+        candidate's ``E_new[s]`` back through ``new_centers_SL`` (and
+        ``new_weights_SL`` if ``requires_grad=True``). Used by Strategy D's
+        gradient-based acquisition optimiser (commit 5).
+
+        ``index_old.centers`` / ``.weights`` arrive as numpy from the (still
+        numpy-typed) ``KernelIndex``; converted to torch at call entry. Old
+        kernels don't typically need gradients (they're frozen training-data
+        encodings). New candidates may need grad — caller's choice.
+
+        **Regime dispatch** (σ/D-aware): ``_choose_kde_regime(n_kernels, σ, D)``
+        selects between dense / knn / cluster algorithms. Commit 4 ships the
+        dense regime only; knn / cluster raise ``NotImplementedError`` with
+        a pointer to the follow-up commits. Logged at INFO when a non-dense
+        regime would be selected — gives empirical signal on when to ship
+        commit 4b.
+
+        Math is identical to the numpy variant
+        ``integrated_evidence_perturbed_batched_joint``; the difference is
+        op set (``torch.exp`` / ``torch.where`` / etc.) and the autograd
+        graph it produces.
+        """
+        S = int(new_centers_SL.shape[0])
+        if S == 0:
+            return torch.zeros(0, dtype=new_centers_SL.dtype)
+        L = int(new_centers_SL.shape[1])
+        D = int(new_centers_SL.shape[2])
+        sigma = index_old.sigma
+        n_old = len(index_old.centers) if not index_old.is_empty else 0
+
+        regime = _choose_kde_regime(n_old, sigma, D)
+        if regime == "knn":
+            _logger.info(
+                "KDE regime 'knn' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
+                "implemented; ship commit 4b. Falling back to dense.",
+                n_old, sigma, D,
+            )
+            regime = "dense"
+        elif regime == "cluster":
+            _logger.info(
+                "KDE regime 'cluster' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
+                "implemented; ship commit 4c. Falling back to dense.",
+                n_old, sigma, D,
+            )
+            regime = "dense"
+
+        return self._integrated_evidence_joint_dense_torch(
+            index_old, new_centers_SL, new_weights_SL,
+        )
+
+    def _integrated_evidence_joint_dense_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """Dense-regime implementation: sum over all old kernels per probe.
+
+        Mirrors the numpy ``integrated_evidence_perturbed_batched_joint``
+        body in torch ops. No truncation mask in commit 4 baseline — the
+        existing numpy path already used 5σ truncation only when n_kernels
+        >= truncation_threshold (10 by default), and the dense regime here
+        targets the regime where most kernels actively contribute. A 5σ
+        truncation will land alongside the KNN regime in commit 4b.
+        """
+        S = int(new_centers_SL.shape[0])
+        L = int(new_centers_SL.shape[1])
+        D = int(new_centers_SL.shape[2])
+        dtype = new_centers_SL.dtype
+        sigma = index_old.sigma
+        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
+
+        # Probes / quad weights / per-probe self-density (numpy cache → torch).
+        offsets_np, quad_weights_np, self_density_np = self._probes_weights_self(D, sigma)
+        offsets = torch.from_numpy(offsets_np).to(dtype=dtype)
+        quad_weights = torch.from_numpy(quad_weights_np).to(dtype=dtype)
+        self_density = torch.from_numpy(self_density_np).to(dtype=dtype)
+        M = offsets.shape[0]
+
+        n_old = len(index_old.centers) if not index_old.is_empty else 0
+
+        # Probes around each new candidate's L kernels: (S, L, M, D).
+        probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
+        in_domain_new_SL = _in_unit_cube_torch(probes_new_SL.reshape(-1, D)).reshape(
+            S, L, M
+        ).to(dtype=dtype)
+
+        # Cross-influence: density at probes_s_l from OTHER (L-1) kernels of same candidate.
+        diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]
+        d2_self = (diff_self * diff_self).sum(dim=-1)  # (S, L, M, L)
+        kernels_self = torch.exp(-d2_self * inv_2sig2)
+        eye_LL = torch.eye(L, dtype=dtype)
+        keep_LL = 1.0 - eye_LL
+        weighted_self = kernels_self * new_weights_SL[:, None, None, :]
+        rho_other_self_SL = (weighted_self * keep_LL[None, :, None, :]).sum(dim=-1)  # (S, L, M)
+
+        # === Branch 1: no old kernels ===
+        if n_old == 0:
+            self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]
+            total_density_new = self_contribution_new + rho_other_self_SL
+            integrand_new = 1.0 / (1.0 + total_density_new)
+            integral_new_SL = (
+                quad_weights[None, None, :] * integrand_new * in_domain_new_SL
+            ).sum(dim=-1)
+            return (new_weights_SL * integral_new_SL).sum(dim=-1)
+
+        # === Branch 2: old kernels exist ===
+        old_centers = torch.from_numpy(index_old.centers).to(dtype=dtype)
+        old_weights = torch.from_numpy(index_old.weights).to(dtype=dtype)
+
+        # Per-old precompute (independent of S — could be cached across acquisition
+        # generations in a future optimisation; for now recompute per call).
+        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]  # (n_old, M, D)
+        in_domain_per_old = _in_unit_cube_torch(probes_per_old.reshape(-1, D)).reshape(
+            n_old, M
+        ).to(dtype=dtype)
+
+        diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
+        d2_old = (diff_old * diff_old).sum(dim=-1)  # (n_old, M, n_old)
+        kernels_old = torch.exp(-d2_old * inv_2sig2)
+        weighted_old = kernels_old * old_weights[None, None, :]
+        eye_jk = torch.eye(n_old, dtype=dtype)
+        keep_jk = 1.0 - eye_jk
+        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(dim=-1)  # (n_old, M)
+        self_contribution_per_old = self_density[None, :] * old_weights[:, None]
+
+        # Old kernels' self-integrals when L new kernels added.
+        diff_new_to_old = (
+            probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
+        )
+        d2_new_to_old = (diff_new_to_old * diff_new_to_old).sum(dim=-1)  # (n_old, M, S, L)
+        kernels_new_to_old = torch.exp(-d2_new_to_old * inv_2sig2)
+        delta_density = (
+            kernels_new_to_old * new_weights_SL[None, None, :, :]
+        ).sum(dim=-1)  # (n_old, M, S)
+
+        total_density_old = (
+            (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
+        )
+        integrand_old = 1.0 / (1.0 + total_density_old)
+        integral_old_per_s = (
+            integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
+        ).sum(dim=1)  # (n_old, S)
+
+        # New kernels' own self-integrals.
+        diff_old_to_new = (
+            probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
+        )
+        d2_old_to_new = (diff_old_to_new * diff_old_to_new).sum(dim=-1)  # (S, L, M, n_old)
+        kernels_old_to_new = torch.exp(-d2_old_to_new * inv_2sig2)
+        rho_old_at_new_probes = (
+            kernels_old_to_new * old_weights[None, None, None, :]
+        ).sum(dim=-1)  # (S, L, M)
+
+        self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]
+        total_density_new = (
+            self_contribution_new + rho_old_at_new_probes + rho_other_self_SL
+        )
+        integrand_new = 1.0 / (1.0 + total_density_new)
+        integral_new_SL = (
+            quad_weights[None, None, :] * integrand_new * in_domain_new_SL
+        ).sum(dim=-1)  # (S, L)
+
+        e_new = (
+            (old_weights[:, None] * integral_old_per_s).sum(dim=0)
+            + (new_weights_SL * integral_new_SL).sum(dim=-1)
         )
         return e_new
 

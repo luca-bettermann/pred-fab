@@ -11,8 +11,9 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Runs evaluation models; writes performance into ExperimentData |
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models; owns per-model evidence state and drives Δ∫E via an `EvidenceEstimator` |
-| `EvidenceEstimator` | `evidence.py` | Pluggable estimator for ∫D/(1+D) dz: `KernelFieldEstimator` (deterministic shells) or `SobolLocalEstimator` (QMC cube) |
+| `EvidenceEstimator` | `evidence.py` | Pluggable estimator for ∫D/(1+D) dz: `KernelFieldEstimator` (deterministic shells) or `SobolLocalEstimator` (QMC cube). KernelField also exposes `*_joint_torch` for gradient-traversable acquisition (Strategy D). |
 | `KernelIndex` | `evidence.py` | cKDTree over kernel centres for O(M·log K) density lookup; cutoff at `cutoff_sigmas · σ` |
+| `_choose_kde_regime` | `evidence.py` | σ/D-aware regime dispatcher (dense/knn/cluster) selecting on `n_active = N · V(5σ-ball)`. Commit 4 ships dense; knn/cluster log INFO and fall back. |
 | `CalibrationSystem` | `calibration/system.py` | Orchestrator composing OptimizationEngine + BoundsManager + SolutionSpace |
 | `OptimizationEngine` | `calibration/engine.py` | DE, L-BFGS-B — pure numerical optimization |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds, trust regions, schedule configs |
