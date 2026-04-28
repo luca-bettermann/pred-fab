@@ -1,7 +1,7 @@
 from typing import Any
 import numpy as np
 
-from ..utils import PfabLogger
+from ..utils import PfabLogger, profiler
 from ..core import Dataset, ExperimentData, DataReal, Parameters
 from ..interfaces import IEvaluationModel
 from .base_system import BaseOrchestrationSystem
@@ -108,21 +108,23 @@ class EvaluationSystem(BaseOrchestrationSystem):
         if S == 0:
             return result
 
-        for eval_model in self.models:
-            feat_code = eval_model.input_feature
-            feature_arrays: list[np.ndarray] = []
-            valid_indices: list[int] = []
-            for s, feat_dict in enumerate(features_dicts_S):
-                if feat_code in feat_dict:
-                    feature_arrays.append(feat_dict[feat_code])
-                    valid_indices.append(s)
-            if not feature_arrays:
-                continue
+        with profiler.section("eval._evaluate_feature_dict_batched"):
+            for eval_model in self.models:
+                feat_code = eval_model.input_feature
+                feature_arrays: list[np.ndarray] = []
+                valid_indices: list[int] = []
+                for s, feat_dict in enumerate(features_dicts_S):
+                    if feat_code in feat_dict:
+                        feature_arrays.append(feat_dict[feat_code])
+                        valid_indices.append(s)
+                if not feature_arrays:
+                    continue
 
-            valid_params = [parameters_list[s] for s in valid_indices]
-            avgs = eval_model.compute_performance_batched(feature_arrays, valid_params)
-            for k, s in enumerate(valid_indices):
-                result[s][eval_model.output_performance] = avgs[k]
+                valid_params = [parameters_list[s] for s in valid_indices]
+                with profiler.section(f"eval.compute_performance_batched [{eval_model.output_performance}]"):
+                    avgs = eval_model.compute_performance_batched(feature_arrays, valid_params)
+                for k, s in enumerate(valid_indices):
+                    result[s][eval_model.output_performance] = avgs[k]
 
         return result
 

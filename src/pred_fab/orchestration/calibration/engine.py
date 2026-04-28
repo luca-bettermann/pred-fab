@@ -7,7 +7,7 @@ import numpy as np
 from scipy.optimize import minimize, differential_evolution
 
 from ...core import DataModule
-from ...utils import PfabLogger, ProgressBar
+from ...utils import PfabLogger, ProgressBar, profiler
 
 
 class Optimizer(Enum):
@@ -316,7 +316,8 @@ class OptimizationEngine:
         if self._random_seed is not None:
             de_kwargs["seed"] = int(self.rng.randint(0, 2**31 - 1))
 
-        result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
+        with profiler.section("engine._run_de [scipy.differential_evolution]"):
+            result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
 
         if bar:
             bar.finish(suffix=f"{iter_count[0]}/{maxiter} iter  obj={result.fun:.3f}")

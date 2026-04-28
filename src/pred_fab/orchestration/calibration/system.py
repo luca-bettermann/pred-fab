@@ -7,7 +7,7 @@ import numpy as np
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ParameterSchedule, ExperimentSpec
-from ...utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score
+from ...utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ..base_system import BaseOrchestrationSystem
 from .engine import OptimizationEngine, Optimizer, _OptResult
 from .bounds import BoundsManager
@@ -380,19 +380,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
 
         # Decode S parameter dicts. Decode failures → 0 perf for that candidate.
-        params_list: list[dict[str, Any] | None] = []
-        for i in range(S):
-            try:
-                params_list.append(dm.array_to_params(X_SD[i].reshape(-1)))
-            except (ValueError, KeyError):
-                params_list.append(None)
+        with profiler.section("calibration.array_to_params [decode S]"):
+            params_list: list[dict[str, Any] | None] = []
+            for i in range(S):
+                try:
+                    params_list.append(dm.array_to_params(X_SD[i].reshape(-1)))
+                except (ValueError, KeyError):
+                    params_list.append(None)
 
         valid_idx = [i for i, p in enumerate(params_list) if p is not None]
         if not valid_idx:
             return np.zeros(S, dtype=np.float64)
 
         try:
-            perf_dicts = self.perf_fn_batched([params_list[i] for i in valid_idx])  # type: ignore[arg-type]
+            with profiler.section("calibration.perf_fn_batched [predict + eval]"):
+                perf_dicts = self.perf_fn_batched([params_list[i] for i in valid_idx])  # type: ignore[arg-type]
         except Exception:
             return np.array(
                 [self._per_candidate_perf(X_SD[i], perf_range) for i in range(S)],
@@ -400,8 +402,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
 
         out = np.zeros(S, dtype=np.float64)
-        for k, i in enumerate(valid_idx):
-            out[i] = self._normalize_perf_dict(perf_dicts[k], perf_range)
+        with profiler.section("calibration.normalize_perf_dict [aggregate S]"):
+            for k, i in enumerate(valid_idx):
+                out[i] = self._normalize_perf_dict(perf_dicts[k], perf_range)
         return out
 
     def _normalize_perf_dict(
@@ -471,22 +474,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
         ``_per_candidate_perf_batched`` so all S candidates' autoregressive
         trajectories evaluate in one batched forward pass per cell-step.
         """
-        X_SD = np.ascontiguousarray(X_DS.T)  # (S, D)
-        S = X_SD.shape[0]
+        with profiler.section("acq._acquisition_objective_vectorized [per gen]"):
+            X_SD = np.ascontiguousarray(X_DS.T)  # (S, D)
+            S = X_SD.shape[0]
 
-        scores = np.zeros(S, dtype=np.float64)
+            scores = np.zeros(S, dtype=np.float64)
 
-        if kappa < 1.0:
-            perfs = self._per_candidate_perf_batched(X_SD, perf_range)
-            scores += (1.0 - kappa) * perfs
+            if kappa < 1.0:
+                perfs = self._per_candidate_perf_batched(X_SD, perf_range)
+                scores += (1.0 - kappa) * perfs
 
-        if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
-            # Evidence is computed per single-point candidate (L=1 each); the KDE
-            # eval is cheap relative to forward_pass and isn't the bottleneck here.
-            for i in range(S):
-                scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
+            if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
+                # Evidence is computed per single-point candidate (L=1 each); the KDE
+                # eval is cheap relative to forward_pass and isn't the bottleneck here.
+                with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
+                    for i in range(S):
+                        scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
 
-        return -scores
+            return -scores
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""

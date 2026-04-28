@@ -18,7 +18,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, IDeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score
+from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score, profiler
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 from .evidence import (
@@ -804,11 +804,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not params_list:
             return []
 
-        predictions_list = self._predict_from_params_batched(params_list, batch_size=1000)
-        return [
-            self._postprocess_predictions_for_calibration(preds, p)
-            for preds, p in zip(predictions_list, params_list)
-        ]
+        with profiler.section("predict.predict_for_calibration_batched"):
+            with profiler.section("predict._predict_from_params_batched"):
+                predictions_list = self._predict_from_params_batched(params_list, batch_size=1000)
+            with profiler.section("predict._postprocess_predictions [tabular convert]"):
+                out = [
+                    self._postprocess_predictions_for_calibration(preds, p)
+                    for preds, p in zip(predictions_list, params_list)
+                ]
+        return out
 
     def _postprocess_predictions_for_calibration(
         self,
@@ -1390,17 +1394,19 @@ class PredictionSystem(BaseOrchestrationSystem):
             cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
 
         # Build (S × n_cells, n_input_cols) tensor in one prepare_input call.
-        all_rows = []
-        for s in range(S):
-            param_base = dim_info_list[s]['param_base']
-            for cell_row in range(n_cells):
-                row = param_base.copy()
-                idx_arr = cell_indices_arr[cell_row]
-                for feat_code, axis_pos, size in iterator_feats:
-                    row[feat_code] = float(idx_arr[axis_pos]) / max(size - 1, 1)
-                all_rows.append(row)
-        X_df = pd.DataFrame(all_rows)
-        X_norm_flat = dm.prepare_input(X_df)              # (S × n_cells, n_input_cols)
+        with profiler.section("autoreg.build_X_df [pandas + iter_feats]"):
+            all_rows = []
+            for s in range(S):
+                param_base = dim_info_list[s]['param_base']
+                for cell_row in range(n_cells):
+                    row = param_base.copy()
+                    idx_arr = cell_indices_arr[cell_row]
+                    for feat_code, axis_pos, size in iterator_feats:
+                        row[feat_code] = float(idx_arr[axis_pos]) / max(size - 1, 1)
+                    all_rows.append(row)
+            X_df = pd.DataFrame(all_rows)
+        with profiler.section("autoreg.prepare_input [one-hot + normalize]"):
+            X_norm_flat = dm.prepare_input(X_df)              # (S × n_cells, n_input_cols)
         n_input_cols = X_norm_flat.shape[1]
         X_stack = X_norm_flat.view(S, n_cells, n_input_cols).clone()
 
@@ -1476,35 +1482,41 @@ class PredictionSystem(BaseOrchestrationSystem):
             ))
 
         for cell_row in range(n_cells):
-            for source_code, prior_flat_t, prior_valid_t, col_idx, stats in recursive_plan:
-                src_flat = predictions_stack[source_code].view(S, -1)  # (S, source_n_flat)
-                raw_S = src_flat[:, int(prior_flat_t[cell_row].item())]  # (S,)
-                # NaN means "not yet predicted"; treat as 0 (matches scalar path).
-                raw_S = torch.where(torch.isnan(raw_S), torch.zeros_like(raw_S), raw_S)
-                if not bool(prior_valid_t[cell_row].item()):
-                    raw_S = torch.zeros_like(raw_S)
-                norm_S = dm._apply_normalization_tensor(raw_S, stats) if stats is not None else raw_S
-                X_stack[:, cell_row, col_idx] = norm_S.to(X_stack.dtype)
+            with profiler.section("autoreg.recursive_substitute [per cell]"):
+                for source_code, prior_flat_t, prior_valid_t, col_idx, stats in recursive_plan:
+                    src_flat = predictions_stack[source_code].view(S, -1)  # (S, source_n_flat)
+                    raw_S = src_flat[:, int(prior_flat_t[cell_row].item())]  # (S,)
+                    # NaN means "not yet predicted"; treat as 0 (matches scalar path).
+                    raw_S = torch.where(torch.isnan(raw_S), torch.zeros_like(raw_S), raw_S)
+                    if not bool(prior_valid_t[cell_row].item()):
+                        raw_S = torch.zeros_like(raw_S)
+                    norm_S = dm._apply_normalization_tensor(raw_S, stats) if stats is not None else raw_S
+                    X_stack[:, cell_row, col_idx] = norm_S.to(X_stack.dtype)
 
-            X_model = X_stack[:, cell_row, :].index_select(1, input_indices_t)  # (S, n_cols_filtered)
-            y_pred_norm = model.forward_pass(X_model)                            # (S, n_outputs)
-            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)           # tensor
+            with profiler.section("autoreg.forward_pass [per cell]"):
+                X_model = X_stack[:, cell_row, :].index_select(1, input_indices_t)  # (S, n_cols_filtered)
+                y_pred_norm = model.forward_pass(X_model)                            # (S, n_outputs)
 
-            for i, feature_name in enumerate(model.outputs):
-                if feature_name in predictions_stack:
-                    stack_flat = predictions_stack[feature_name].view(S, -1)
-                    stack_flat[:, int(feat_flat_per_cell[feature_name][cell_row].item())] = y_pred[:, i].to(stack_flat.dtype)
+            with profiler.section("autoreg.denormalize [per cell]"):
+                y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
+
+            with profiler.section("autoreg.predictions_scatter [per cell]"):
+                for i, feature_name in enumerate(model.outputs):
+                    if feature_name in predictions_stack:
+                        stack_flat = predictions_stack[feature_name].view(S, -1)
+                        stack_flat[:, int(feat_flat_per_cell[feature_name][cell_row].item())] = y_pred[:, i].to(stack_flat.dtype)
 
         # API boundary: copy tensor stack into per-candidate numpy arrays.
-        for feat, stack in predictions_stack.items():
-            stack_np = stack.detach().cpu().numpy()
-            for s in range(S):
-                target = predictions_list[s].get(feat)
-                if target is None:
-                    continue
-                target_dtype = target.dtype
-                # Preserve target's dtype (typically float64 from np.full(_, nan)).
-                predictions_list[s][feat] = stack_np[s].astype(target_dtype, copy=False)
+        with profiler.section("autoreg.copy_to_numpy [API boundary]"):
+            for feat, stack in predictions_stack.items():
+                stack_np = stack.detach().cpu().numpy()
+                for s in range(S):
+                    target = predictions_list[s].get(feat)
+                    if target is None:
+                        continue
+                    target_dtype = target.dtype
+                    # Preserve target's dtype (typically float64 from np.full(_, nan)).
+                    predictions_list[s][feat] = stack_np[s].astype(target_dtype, copy=False)
 
     def _predict_from_params(
         self,
