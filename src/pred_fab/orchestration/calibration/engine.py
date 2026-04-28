@@ -5,7 +5,8 @@ import warnings
 
 import numpy as np
 import torch
-from scipy.optimize import minimize  # commit 11 will drop this for torch.optim.LBFGS
+# Strategy D commit 9: scipy.optimize fully replaced — torch DE for global,
+# torch.optim.LBFGS for local. Module is scipy-free.
 
 from ...core import DataModule
 from ...utils import PfabLogger, ProgressBar, profiler
@@ -554,15 +555,52 @@ class OptimizationEngine:
         label: str = "Optimizing",
         show_progress: bool = False,
     ) -> _OptResult:
-        """Multi-start L-BFGS-B optimization."""
-        bounds_arr = np.array(bounds)
+        """Multi-start L-BFGS optimisation via torch.optim (Strategy D commit 9 step B).
+
+        Replaces ``scipy.optimize.minimize(method='L-BFGS-B')`` with
+        ``torch.optim.LBFGS`` driven by finite-difference gradients on the
+        numpy scalar objective. Bounds enforced via sigmoid reparameterisation
+        (same trick as ``run_acquisition_gradient``); each start runs a
+        single LBFGS solve with strong-Wolfe line search.
+
+        This path will be deleted entirely in Phase 5 commit 18 — the
+        ``Optimizer`` enum collapses to a single ``run_acquisition`` method
+        — but it's functional and scipy-free in the interim.
+        """
+        bounds_arr = np.array(bounds, dtype=np.float64)
         if x0_list is None or not x0_list:
             x0_list = [self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1])]
 
         n_dims = len(bounds)
+        if n_dims == 0:
+            return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
+
         max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
         eps = self.lbfgsb_eps
         total_starts = len(x0_list)
+
+        lo_t = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)
+        hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
+        span_t = hi_t - lo_t
+
+        def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
+            return torch.sigmoid(z_tensor) * span_t + lo_t
+
+        def _eval_fd(x_np: np.ndarray) -> tuple[float, np.ndarray]:
+            """Numpy scalar objective + central finite-difference gradient."""
+            f0 = float(objective(x_np))
+            grad = np.zeros(n_dims, dtype=np.float64)
+            for d in range(n_dims):
+                x_plus = x_np.copy()
+                x_plus[d] += eps
+                x_plus[d] = min(x_plus[d], bounds_arr[d, 1])
+                x_minus = x_np.copy()
+                x_minus[d] -= eps
+                x_minus[d] = max(x_minus[d], bounds_arr[d, 0])
+                f_plus = float(objective(x_plus))
+                f_minus = float(objective(x_minus))
+                grad[d] = (f_plus - f_minus) / (2.0 * eps)
+            return f0, grad
 
         best_x, best_val = None, np.inf
         total_nfev = 0
@@ -571,19 +609,45 @@ class OptimizationEngine:
             if bar:
                 bar.step()
             try:
-                res = minimize(
-                    fun=objective, x0=x0_i, bounds=bounds_arr, method='L-BFGS-B',
-                    options={'eps': eps, 'maxfun': max_fun},
+                # Map x0 → z via inverse sigmoid (clamped interior to avoid logit blowup).
+                u0 = (np.clip(x0_i, bounds_arr[:, 0], bounds_arr[:, 1]) - bounds_arr[:, 0]) / np.where(
+                    bounds_arr[:, 1] - bounds_arr[:, 0] > 0, bounds_arr[:, 1] - bounds_arr[:, 0], 1.0,
                 )
-                total_nfev += res.nfev
-                if res.fun < best_val:
-                    best_val = res.fun
-                    best_x = res.x
+                u0 = np.clip(u0, 1e-4, 1.0 - 1e-4)
+                z0 = np.log(u0 / (1.0 - u0))
+                z = torch.tensor(z0, dtype=torch.float64, requires_grad=True)
+                opt = torch.optim.LBFGS(
+                    [z], max_iter=max(int(max_fun // (n_dims * 2 + 1)), 1),
+                    line_search_fn="strong_wolfe",
+                )
+                eval_count = [0]
+
+                def _closure(_z: torch.Tensor = z) -> torch.Tensor:
+                    opt.zero_grad()
+                    x_np = _decode_x(_z).detach().cpu().numpy()
+                    f_val, grad_np = _eval_fd(x_np)
+                    eval_count[0] += 2 * n_dims + 1
+                    # Chain rule through sigmoid: dx/dz = sigmoid * (1 - sigmoid) * span.
+                    sig = torch.sigmoid(_z)
+                    dx_dz = sig * (1.0 - sig) * span_t
+                    grad_t = torch.tensor(grad_np, dtype=torch.float64) * dx_dz
+                    _z.grad = grad_t
+                    return torch.tensor(f_val, dtype=torch.float64)
+
+                opt.step(_closure)
+                with torch.no_grad():
+                    x_final = _decode_x(z).cpu().numpy()
+                    f_final = float(objective(x_final))
+                eval_count[0] += 1
+                total_nfev += eval_count[0]
+                if f_final < best_val:
+                    best_val = f_final
+                    best_x = x_final
                 self.logger.debug(
-                    f"  start {i + 1}/{total_starts}: val={res.fun:.6f}, nfev={res.nfev}, converged={res.success}"
+                    f"  start {i + 1}/{total_starts}: val={f_final:.6f}, nfev={eval_count[0]}"
                 )
             except Exception as e:
-                self.logger.warning(f"L-BFGS-B round {i + 1} failed: {e}")
+                self.logger.warning(f"L-BFGS round {i + 1} failed: {e}")
 
         if bar:
             obj_str = f"obj={best_val:.3f}" if best_val < np.inf else "no solution"
@@ -625,11 +689,18 @@ class OptimizationEngine:
     ) -> Callable:
         """Wrap base_objective with MPC lookahead for online adaptation.
 
-        At each candidate X, simulates `depth` future steps via inner L-BFGS-B
-        solves within trust-region bounds. Returns discounted sum of scores.
+        At each candidate X, simulates ``depth`` future steps via short
+        torch-native DE inner solves (5 generations × popsize 4 = ~20 evals
+        budget per step) within trust-region bounds. Returns discounted sum
+        of scores.
+
+        Strategy D commit 9 step B: replaced ``scipy.optimize.minimize`` with
+        the torch-native DE inside this engine. Same per-step eval budget.
         """
         if depth <= 0:
             return base_objective
+
+        engine = self  # capture for closure
 
         class _MpcObjective:
             """Callable MPC wrapper that tracks total inner evaluations."""
@@ -646,16 +717,20 @@ class OptimizationEngine:
                 for j in range(depth):
                     try:
                         params_cur = datamodule.array_to_params(X_cur)
-                        bounds_ahead = bounds_fn(datamodule, params_cur)
-                        res = minimize(
-                            fun=base_objective,
-                            x0=X_cur,
-                            bounds=bounds_ahead,
-                            method='L-BFGS-B',
-                            options={'maxfun': 20},
+                        bounds_ahead_arr = bounds_fn(datamodule, params_cur)
+                        bounds_ahead = [(float(lo), float(hi)) for lo, hi in bounds_ahead_arr]
+                        # Torch-native short-DE step: 5 generations × popsize 4.
+                        # Same ~20-eval budget as the prior scipy L-BFGS-B path,
+                        # but no scipy dependency.
+                        res = engine._run_de(
+                            base_objective, bounds_ahead,
+                            maxiter=5, popsize=4,
+                            init_pop=X_cur.reshape(1, -1),  # seed near current X
+                            label="mpc",
                         )
                         self._eval_counter[0] += res.nfev
-                        X_cur = res.x
+                        if res.best_x is not None:
+                            X_cur = res.best_x
                         step_score = base_objective(X_cur)
                         self._eval_counter[0] += 1
                         total += discount ** (j + 1) * step_score
