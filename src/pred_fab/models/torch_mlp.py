@@ -35,9 +35,18 @@ class TorchMLPModel(IPredictionModel):
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
 
+    # If True, the trained net is wrapped with torch.compile after training so
+    # ``forward_pass`` calls go through a JIT-traced graph. Falls back to eager
+    # silently if compilation raises. Only the inference path is compiled —
+    # training runs eager. ``dynamic=True`` so variable batch dims (S=1 for
+    # single-candidate, S=popsize for vectorised DE) share one compiled graph
+    # instead of triggering recompilation per shape.
+    COMPILE: bool = False
+
     def __init__(self, logger: PfabLogger) -> None:
         super().__init__(logger)
         self._model: nn.Module | None = None
+        self._compiled_forward: Any = None
         self._is_trained: bool = False
 
     def train(
@@ -69,14 +78,24 @@ class TorchMLPModel(IPredictionModel):
         net.eval()
 
         self._model = net
+        if self.COMPILE:
+            try:
+                self._compiled_forward = torch.compile(net, dynamic=True)
+            except Exception as e:
+                self.logger.warning(
+                    f"torch.compile failed for {self.__class__.__name__}, "
+                    f"falling back to eager forward: {e!r}"
+                )
+                self._compiled_forward = None
         self._is_trained = True
 
     def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
             return torch.zeros((X.shape[0], n_outputs), dtype=X.dtype)
+        net = self._compiled_forward if self._compiled_forward is not None else self._model
         with torch.no_grad():
-            return self._model(X).reshape(-1, n_outputs)
+            return net(X).reshape(-1, n_outputs)
 
     def encode(self, X: torch.Tensor) -> torch.Tensor:
         if self._model is None or not self._is_trained:
