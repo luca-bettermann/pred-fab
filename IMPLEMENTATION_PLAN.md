@@ -31,22 +31,35 @@ Sequencing committed:
 | `c57703d` | pred-fab | Profiler + hot-path instrumentation (`PFAB_PROFILE=1`) |
 | `a1eaeb4` | pred-fab | KDE batched: `delta_integrated_evidence_batched` (cached `E_old` + batched encoder) — **1.7×** on KDE |
 | `424388c` | pred-fab | `_run_phase` helper + Domain → Process split for single-point acq (commit 1 of unification) |
+| `db7ae75` | pred-fab | True KDE vectorisation (`integrated_evidence_perturbed_batched` broadcast tensor) — **2×** on KDE smoke |
+| `5fb6fca` | pred-fab | Joint-batched KDE estimator (`_perturbed_batched_joint`) wired through PredictionSystem + CalibrationSystem (Stage 1a) |
+| `cbc6051` | pred-fab | Generalised `_run_phase` for N≥1, L≥1 + `_acquisition_joint_batched_objective` (Stage 1b) |
+| `6adf19b` | pred-fab | Schedule mode through vectorised DE path (Stage 2 — Phase 2 via `_run_phase`, Phase 3 via `_run_de(vectorized=True)` with new wrapper) |
 | `39d3c86`, `11adc4e` | pred-fab-mock | Shrink DevMLP `(48,24,12) → (24,12)`; mock evaluators opt into `TARGETS_CONSTANT` |
 
-### Latest profile (smoke test, post Domain split)
+### Latest profile (smoke test, post Stage 2)
 
 ```
-exploration step (κ=0.5):  0.07s   (down from 0.13s baseline — ~50% cumulative)
+exploration step (κ=0.5):  0.025s   (down from 0.131s baseline — 5.2× cumulative)
 
-engine._run_de                                        68.54ms   100%
-acq._acquisition_objective_vectorized                 66.63ms    97%
-  acq.delta_integrated_evidence_batched [KDE batch S] 65.63ms    96%   ← still dominant
-  calibration.array_to_params [decode S]               0.76ms     1%
-  calibration.perf_fn_batched [predict + eval]         0.11ms     0.2%
-    predict.predict_for_calibration_batched            0.07ms     0.1%
+engine._run_de                                          25.08ms   100%
+acq._acquisition_joint_batched_objective                23.16ms    92%
+  acq.delta_evidence_joint [KDE batch S, joint NL]      22.06ms    88%   ← dominant
+  acq.perf_batched [N×L per S]                           0.96ms     4%
+calibration.array_to_params [decode S]                   0.77ms     3%
+predict.predict_for_calibration_batched                  0.07ms     0.3%
 ```
 
-**Bottom line:** prediction + eval is now ~0.2ms/gen (negligible). KDE is **95.7%** of acquisition wall time. The Domain split of commit 1 didn't engage in exploration because `DataModule.input_columns` doesn't include domain axes (they're not declared as `IPredictionModel.input_parameters`).
+**Cumulative speedup timeline (smoke):**
+- Pre-A.2 baseline: 130.93ms (1.0×)
+- + KDE batching (cache only): 77.30ms (1.7×)
+- + Domain split landed (didn't engage): 68.54ms (1.9×)
+- + KDE vectorisation (Topic 1): 35.29ms (3.7×)
+- + Joint estimator + generalised `_run_phase` + schedule-through-vectorised: 25.08ms (**5.2×**)
+
+**Bottom line:** prediction + eval is now ~0.2ms/gen (negligible). KDE remains the dominant cost at 88% — further gains require either (a) deeper KDE optimisation (e.g., cache per-old-kernels work across DE generations), or (b) the full torch migration unlocks `torch.compile` over the whole acquisition graph.
+
+The user's actual workload (schedule iteration, previously 20s) goes through the same vectorised path now via Stage 2 (`6adf19b`). Expected win on schedule: 5-10× since per-call costs (which scale with `n_kernels × n_probes × L`) dominate at higher D / more kernels.
 
 ---
 
