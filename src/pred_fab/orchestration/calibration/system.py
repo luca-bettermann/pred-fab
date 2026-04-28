@@ -2050,7 +2050,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     trajectory; the expensive joint Δ∫E + per-row perf evaluation is
                     vectorised across S via ``_acquisition_joint_batched_objective``.
 
-                    Smoothing penalty is computed per candidate (cheap scalar arithmetic).
+                    Soft bound penalty: the offset-encoded trajectory step_k =
+                    step_0 + Σ offset_i can drift outside [0, 1] even though DE
+                    bounds the inputs. A quadratic out-of-cube penalty gives the
+                    optimiser a smooth gradient back in (no hard clipping —
+                    preserves DE convergence dynamics). λ chosen so the penalty
+                    dominates the score gradient when the trajectory leaves the
+                    unit cube but is exactly zero in-cube.
+
+                    Smoothing penalty (step-to-step regularisation) and bound
+                    penalty (out-of-cube projection) are both per-candidate and
+                    compose with the κ-acquisition score.
                     """
                     S = X_DS.shape[1]
                     full_S_NL = np.zeros((S, 1, L, n_input))
@@ -2063,6 +2073,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     scores_neg = self._acquisition_joint_batched_objective(
                         full_S_NL, kappa, sched_perf_range,
                     )
+                    # Soft out-of-cube penalty (gradient-friendly; zero in-cube).
+                    BOUND_LAMBDA = 10.0
+                    out_lo = np.maximum(0.0, -full_S_NL)
+                    out_hi = np.maximum(0.0, full_S_NL - 1.0)
+                    bound_penalty_S = ((out_lo ** 2) + (out_hi ** 2)).sum(axis=(1, 2, 3))
+                    scores_neg += BOUND_LAMBDA * bound_penalty_S
                     # Smoothing penalty per candidate (loop is fine — pure scalar arithmetic).
                     for s in range(S):
                         scores_neg[s] += sched_space.smoothing_penalty(X_DS[:, s], scores_neg[s])
