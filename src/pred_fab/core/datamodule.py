@@ -721,21 +721,21 @@ class DataModule:
         """Reverse-normalize and decode a 1D input array back to a parameter dict."""
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
-            
+
         if array.shape != (len(self.input_columns),):
             raise ValueError(f"Array shape {array.shape} does not match input columns {len(self.input_columns)}")
-            
+
         # Denormalize
         denorm_array = array.copy()
         for i, col in enumerate(self.input_columns):
             if col in self._parameter_stats:
                 denorm_array[i] = self._reverse_normalization(np.array([array[i]]), self._parameter_stats[col])[0]
-        
+
         consumed_cols = set()
-        
+
         # 1. Handle Categorical (Reverse One-Hot)
         params = self._decode_one_hot(denorm_array, consumed_cols)
-        
+
         # 2. Handle Continuous (skip context features — they are not controllable)
         ctx = set(self._context_feature_codes)
         for i, col in enumerate(self.input_columns):
@@ -747,6 +747,110 @@ class DataModule:
             params,
             ignore_unknown=True
         )
+
+    def params_to_tensor(
+        self,
+        params: dict[str, Any],
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        """Tensor-typed mirror of ``params_to_array``. Returns ``(len(input_columns),)``.
+
+        Direct tensor construction without the pandas DataFrame round-trip
+        used by ``params_to_array``. Two consequences:
+
+        - **Gradient flow**: if any value in ``params`` is a ``torch.Tensor``
+          with ``requires_grad=True``, the gradient flows through normalisation
+          (which is affine for all NormMethod variants) into the output tensor.
+          Used by Strategy D's gradient-based acquisition where the optimiser
+          drives params from a leaf tensor.
+        - **No DataFrame**: avoids the per-call ``pd.DataFrame([params])``
+          construction. Cheap directly; matters at acquisition-loop frequency.
+
+        Categoricals stay one-hot internally (matching ``params_to_array``);
+        the embedding migration (Strategy D commit 7a) replaces this with an
+        integer-index path additively.
+
+        Equivalent semantics to ``params_to_array(params)`` to ~1e-6
+        relative — the tensor path uses the same normalisation stats and
+        one-hot extraction plan.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+
+        zero = torch.zeros((), dtype=dtype)
+        out: list[torch.Tensor] = []
+        for j, (src_col, cat_val) in enumerate(self._col_extraction):
+            col_name = self.input_columns[j]
+            raw = params.get(src_col, 0.0) if cat_val is None else params.get(src_col, None)
+
+            if cat_val is not None:
+                # Categorical one-hot column: 1.0 if raw matches cat_val, else 0.0
+                # (string equality, not gradient-traversable — categoricals are
+                # discrete by definition; the embedding path handles learnable
+                # representations.)
+                t = (
+                    torch.tensor(1.0, dtype=dtype)
+                    if raw is not None and raw == cat_val
+                    else zero
+                )
+            else:
+                # Continuous: preserve grad if raw is a tensor; else lift to tensor.
+                if isinstance(raw, torch.Tensor):
+                    t = raw.to(dtype=dtype) if raw.dtype != dtype else raw
+                else:
+                    raw_f = 0.0 if raw is None else float(raw)
+                    # NaN guard matches _one_hot_encode's nan_to_num for boundary padding.
+                    if raw_f != raw_f:  # NaN
+                        raw_f = 0.0
+                    t = torch.tensor(raw_f, dtype=dtype)
+
+            stats = self._parameter_stats.get(col_name)
+            if stats is not None:
+                t = self._apply_normalization_tensor(t, stats)
+            out.append(t)
+
+        return torch.stack(out)
+
+    def tensor_to_params(self, tensor: torch.Tensor) -> dict[str, Any]:
+        """Tensor-typed inverse of ``array_to_params``. Returns a dict of Python scalars.
+
+        Denormalisation runs in tensor land via
+        ``_reverse_normalization_tensor`` (composes with
+        ``_apply_normalization_tensor`` to the identity within float-precision
+        tolerance). One-hot decoding + ``schema.sanitize_values`` happen at
+        the dict boundary in numpy/Python — those are categorical decisions
+        and parameter type coercion, not differentiable operations.
+
+        For acquisition-output decoding (the main use case), gradient flow
+        on the output dict isn't needed — the optimiser is done by then.
+        Callers that need gradients on the decoded scalars should consume
+        the tensor directly before this conversion.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+        if tensor.shape != (len(self.input_columns),):
+            raise ValueError(
+                f"Tensor shape {tuple(tensor.shape)} does not match "
+                f"input columns {len(self.input_columns)}"
+            )
+
+        # Denormalise per-column in tensor land.
+        denorm_t = tensor.clone()
+        for i, col in enumerate(self.input_columns):
+            stats = self._parameter_stats.get(col)
+            if stats is not None:
+                denorm_t[i] = self._reverse_normalization_tensor(tensor[i], stats)
+
+        # Numpy boundary for categorical decode + schema sanitise.
+        denorm_array = denorm_t.detach().cpu().numpy()
+        consumed_cols: set[str] = set()
+        params = self._decode_one_hot(denorm_array, consumed_cols)
+        ctx = set(self._context_feature_codes)
+        for i, col in enumerate(self.input_columns):
+            if col not in consumed_cols and col not in ctx:
+                params[col] = float(denorm_array[i])
+
+        return self.dataset.schema.parameters.sanitize_values(params, ignore_unknown=True)
 
     def build_calibration_training_arrays(
         self,
