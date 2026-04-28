@@ -239,31 +239,88 @@ def train(self, train_batches, val_batches, ss_config=None, **kwargs):
 
 Becomes natural with autograd-traversable substitution. Substitution gradient flows through the *current* network state (not a cached prediction from K rounds ago).
 
-### Commit 7 — Data layer simplifications (~5 days, multi-commit)
-- 7a. One-hot → categorical-index tensors + `nn.Embedding` opt-in for models that want learnable cats.
-- 7b. Normalisation as `nn.Module` (`StandardScalerModule`, `MinMaxModule`, `RobustScalerModule`).
-- 7c. Tensor-native `prepare_input` + `dataset.export_to_dataframe` → tensor dict.
+### Commit 7 — End-to-end gradient validation (committed)
+End-to-end validation script `pred-fab-mock/dev/_smoke_gradient.py` runs the same `baseline_step(n=3)` twice on the mock — DE then GRADIENT — and prints wall time + obj. Findings recorded above in the status block.
 
-### Commit 7 — End-to-end gradient validation (committed) + data layer deferred
-**Shipped now:** End-to-end validation script `pred-fab-mock/dev/_smoke_gradient.py` runs the same `baseline_step(n=3)` twice on the mock — once with DE, once with GRADIENT — and prints wall time + proposed params.
+### Commit 8 — Status block in plan (committed)
+Top-of-plan status table summarising shipped/deferred so the next session has a clean picture.
 
-**Empirical findings on the mock (D=2 Process phase, n_active~10 KDE kernels):**
-- Both paths converge to similar acquisition scores (DE obj=-0.069, GRADIENT obj=-0.061; GRADIENT slightly better here).
-- **DE is faster at this small D**: ~3.4s vs ~4.7s wall, primarily because the GRADIENT path runs 4 starts × 40 iters = 160 forward evaluations through the full encoder + tensor KDE per call, while DE's 25 iter × popsize 4 = 100 evals on a smaller scalar acquisition closure are amortised.
-- **Implication for default flip**: at the mock's D=2, flipping to GRADIENT would slow down the most common path. The DE → GRADIENT crossover should empirically land somewhere around D ≥ 5-10 with smoother KDE landscapes; needs validation on a larger problem before flipping.
+---
 
-**Deferred (commits 7a-7c, multi-day):** The data-layer migrations (one-hot → categorical-index + nn.Embedding, nn.Module normalisers, tensor-native prepare_input + tensor-dict export). These touch deeply across DataModule, prediction pipelines, and many test fixtures; needs careful sub-commit planning.
+## Outstanding work — full commit roadmap
 
-### Commit 8 — Flip default optimiser, validate end-to-end (~0.5 day)
-Default optimiser becomes `Optimizer.GRADIENT` **only after empirical validation** that GRADIENT beats DE at the user's typical D / σ regime. Commit 7's smoke shows DE wins at D=2 on the mock — flipping prematurely would regress small-D users. The flip should be gated on:
-- Schedule iteration profile (where Strategy D's biggest gain is expected: 1s → 50-200ms target).
-- Domain-realistic baseline at D ≥ 5 to confirm GRADIENT crossover.
+User direction: **fully commit to torch-native infrastructure; remove anything that isn't torch / tensor first**. The plan below replaces the original commit 7-8 spec with a sequenced cleanup roadmap.
 
-DE remains via `agent.configure_optimizer(backend=Optimizer.DE)` once flipped.
+Order: small / low-risk first, then large architectural changes. Each row is independently committable; dependencies noted in the **deps** column.
 
-### Total estimate
+### Phase 1 — Torch-native foundations (small / low-risk)
 
-**~13-14 days** including thorough behavioural equivalence tests on `run_baseline(N=5)` at every commit that touches it. Each commit independently revertable.
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **9** | **Flip default optimiser + integer enumeration** | ~80 LOC | — | `cal.optimizer = Optimizer.GRADIENT` default. For mixed integer/continuous phases, enumerate low-cardinality integer combos × gradient on continuous (BoTorch's `optimize_acqf_mixed` pattern). Cap on enumeration size with fallback to torch-native DE when too large (commit 10). |
+| **10** | **Torch-native vectorised DE** | ~150 LOC + ~−50 scipy DE | 9 | Drop-in replacement for `scipy.optimize.differential_evolution` written as torch tensor ops on the population. Same `_run_de` interface; population update is one batched step. Removes `from scipy.optimize import differential_evolution`. |
+| **11** | **Torch-native L-BFGS-B** | ~−40 LOC | 10 | Use `torch.optim.LBFGS` instead of `scipy.optimize.minimize`. Removes `from scipy.optimize import minimize`. (Already used inside `run_acquisition_gradient`; this generalises.) |
+| **12** | **`scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine`** | ~10 LOC | — | Trivial swap inside `SobolLocalEstimator`. Removes `from scipy.stats import qmc`. |
+| **13** | **`scipy.spatial.cKDTree` → torch KNN** | ~30 LOC | 14 (KDE 4b lands KNN regime) | When KNN regime ships (commit 14), replace cKDTree with `torch.cdist + topk`. Removes `from scipy.spatial import cKDTree`. |
+
+**Phase 1 net:** −110 LOC scipy code, full scipy removal from `pred_fab/orchestration` after 13. PFAB no longer imports scipy at runtime.
+
+### Phase 2 — Schedule path gradient migration
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **14** | **Schedule acquisition objective in tensors** | ~+150 LOC | 5 (commit done) | Tensor-typed `_make_schedule_objective_tensor` returning `(S,)`-shape negated scores. Routes through `delta_integrated_evidence_joint_batched_tensor_fn` (commit 5 done) for joint-L addition. Wires gradient path into `_phase3_schedule`. |
+| **15** | **Drop offset encoding + soft bound penalty** | ~−80 LOC | 14 | Sigmoid reparam in z-space → strict `x ∈ [0, 1]` for absolute-value step encoding. Delete `_schedule_acquisition_objective_vectorized`'s soft penalty, the offset encoding inside `SolutionSpace`, the per-step trust-region delta bookkeeping. **Win #2 fully realised.** |
+
+**Phase 2 net:** +150 / −80 = +70 LOC; schedule iteration target 1s → 50-200ms.
+
+### Phase 3 — Data layer (the big numpy / pandas removal)
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **16** | **`nn.Module` normalisers** | ~−120 LOC | — | `StandardScalerModule`, `MinMaxModule`, `RobustScalerModule`. Delete `_apply_normalization` / `_reverse_normalization` / `_compute_normalization_stats` / `get/set_normalization_state`. Stats live in `state_dict()`; serialise via `torch.save` for free. |
+| **17** | **One-hot → categorical-index tensors** | ~−80 LOC | 16 | Drop internal one-hot; categoricals stay as long-tensor indices. Models that want one-hot use `F.one_hot` themselves; learnable cats via `nn.Embedding`. Touches `_col_extraction`, `_decode_one_hot`, calibration array math. |
+| **18** | **Phase C — per-minibatch SS absorption** | ~−330 LOC | 17 | Per-minibatch SS hook inside `TorchMLPModel.train()` using categorical-index batches from commit 17. Delete `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`, `_autoreg_predict_training_data`, K-refit loop. **Win #3 fully realised.** Touches 14 SS-specific tests — most rewritten to test the new path, the rest deleted as obsolete. |
+| **19** | **Tensor-native `prepare_input` + `export_to_tensor_dict`** | ~−80 LOC | 17, 18 | Drop `pd.DataFrame(all_rows)` round-trip from autoreg loop. `prepare_input` becomes tensor stack + normalisation apply. `dataset.export_to_dataframe` → tensor dict. Removes pandas from the framework hot path entirely. |
+
+**Phase 3 net:** −610 LOC. End state: pandas only at user-facing dataset I/O; framework interior is tensor-only.
+
+### Phase 4 — KDE regime depth
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **20** (= 4b) | **KDE KNN regime** | ~+80 LOC | — | Sparse top-K gather via `torch.cdist + topk`. Activates from commit 4 dispatcher when `n_active < 50` or `n_active < n_kernels * 0.5`. |
+| **21** (= 4c) | **KDE cluster regime** | ~+120 LOC | 20 | Mini-batch K-means / GMM summarisation for `n_active > 10K` or `n_kernels > 100K`. Conditional on real workloads triggering it. |
+
+**Phase 4 net:** +200 LOC, but unlocks scaling to 100K+ kernel workloads.
+
+### Phase 5 — Architecture cleanup
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **22** | **`run_baseline` / `run_calibration` unification** | medium | 14, 15 | Single entry point with N≥1, L≥1; falls out naturally now that schedule path is gradient-typed. Stage 3 of original Strategy A plan. |
+| **23** | **GPU support + `torch.compile` over the full acquisition graph** | medium | 19 | `agent.to('cuda')` works end-to-end. `torch.compile` JIT-traces the whole acquisition (params → predict → eval → KDE → score). Expected 2-5× on top of everything else. |
+
+### Estimated effort
+
+| Phase | Days |
+|---|---|
+| 1 (foundations) | 1.5 |
+| 2 (schedule) | 1.5 |
+| 3 (data layer) | 4 |
+| 4 (KDE depth) | 2 |
+| 5 (architecture) | 2 |
+| **Total** | **~11 days** |
+
+Each phase independently revertable. Phase 1 unblocks Phases 2 + 4. Phase 3 is the big-ticket cleanup; commit 16 (normalisers) and 17 (categorical) are the prerequisites for 18 (Phase C) and 19 (prepare_input).
+
+---
+
+## Total estimate (commits 9-23)
+
+**~11 days** of focused work to fully complete the torch-native migration. Net LOC delta: **~−470 LOC, end-state simpler**.
+
+After commit 19 ships: zero scipy / pandas / numpy-as-primary-type inside `pred_fab/`. Numpy stays only at user-facing JSON / matplotlib edges.
 
 ---
 
