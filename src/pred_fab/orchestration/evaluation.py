@@ -1,5 +1,6 @@
 from typing import Any
 import numpy as np
+import torch
 
 from ..utils import PfabLogger, profiler
 from ..core import Dataset, ExperimentData, DataReal, Parameters
@@ -125,6 +126,76 @@ class EvaluationSystem(BaseOrchestrationSystem):
                     avgs = eval_model.compute_performance_batched(feature_arrays, valid_params)
                 for k, s in enumerate(valid_indices):
                     result[s][eval_model.output_performance] = avgs[k]
+
+        return result
+
+    def _evaluate_feature_dict_tensor(
+        self,
+        features_dicts_S: list[dict[str, torch.Tensor]],
+        parameters_list: list[Parameters],
+    ) -> dict[str, torch.Tensor]:
+        """Tensor-typed batched eval. Returns ``{perf_code: torch.Tensor (S,)}``.
+
+        Mirrors ``_evaluate_feature_dict_batched`` but routes per eval_model
+        through ``compute_performance_tensor`` (gradient-traversable) instead
+        of ``compute_performance_batched`` (numpy). Returns a flat dict
+        keyed by performance code (not a per-candidate list of dicts), since
+        gradient acquisition treats the per-candidate axis as the batch dim
+        and reduces over it via mean/sum elsewhere.
+
+        Each ``features_dicts_S[s][feat_code]`` is the per-candidate
+        per-cell prediction tensor of shape ``(*feat_shape,)``. Internally
+        flattened to ``(S, n_rows)`` for the eval model. Gradient flows
+        from the output back through the per-feat tensor inputs to whatever
+        leaf produced them (typically a params tensor in Strategy D commit 5).
+
+        Candidates missing a required feature are excluded from that
+        eval_model's batch — their entry in the output is filled with NaN
+        (the gradient-aware equivalent of "no perf score").
+        """
+        S = len(features_dicts_S)
+        result: dict[str, torch.Tensor] = {}
+        if S == 0:
+            return result
+
+        with profiler.section("eval._evaluate_feature_dict_tensor"):
+            for eval_model in self.models:
+                feat_code = eval_model.input_feature
+                feature_values_list: list[torch.Tensor] = []
+                valid_indices: list[int] = []
+                for s, feat_dict in enumerate(features_dicts_S):
+                    if feat_code in feat_dict:
+                        # Flatten any (*feat_shape,) tensor to (n_rows,) for the eval.
+                        feature_values_list.append(feat_dict[feat_code].reshape(-1))
+                        valid_indices.append(s)
+                if not feature_values_list:
+                    continue
+
+                # Stack into (S_valid, n_rows). Within an acquisition call all
+                # candidates share feat_shape (shape group invariant from
+                # _predict_from_params_tensor); n_rows is consistent.
+                try:
+                    feature_values_S = torch.stack(feature_values_list, dim=0)
+                except RuntimeError:
+                    # Heterogeneous shapes: fall back to per-candidate loop.
+                    avgs_list = []
+                    for fv, idx_s in zip(feature_values_list, valid_indices):
+                        avgs_list.append(eval_model.compute_performance_tensor(
+                            fv.unsqueeze(0), [parameters_list[idx_s]],
+                        )[0])
+                    avgs = torch.stack(avgs_list)
+                else:
+                    valid_params = [parameters_list[s] for s in valid_indices]
+                    with profiler.section(f"eval.compute_performance_tensor [{eval_model.output_performance}]"):
+                        avgs = eval_model.compute_performance_tensor(
+                            feature_values_S, valid_params,
+                        )
+
+                # Place into result tensor of shape (S,); pad invalid candidates with NaN.
+                full = torch.full((S,), float('nan'), dtype=avgs.dtype)
+                for k, s in enumerate(valid_indices):
+                    full[s] = avgs[k]
+                result[eval_model.output_performance] = full
 
         return result
 

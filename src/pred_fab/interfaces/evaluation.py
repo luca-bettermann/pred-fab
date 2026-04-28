@@ -192,6 +192,72 @@ class IEvaluationModel(BaseInterface):
         return [None if np.isnan(a) else float(a) for a in avgs]
 
     @final
+    def compute_performance_tensor(
+        self,
+        feature_values_S: "torch.Tensor",
+        parameters_list: list[Parameters],
+    ) -> "torch.Tensor":
+        """Tensor-typed mirror of ``compute_performance_batched``. Returns ``(S,)``.
+
+        ``feature_values_S`` is a 2-D tensor of shape ``(S, n_rows)`` — the
+        value column only (no iterator indices), one row per cell, one set
+        per candidate. Output is a ``(S,)`` tensor of mean performances,
+        gradient-traversable when ``feature_values_S`` has ``requires_grad=True``.
+
+        Math matches ``compute_performance_batched`` (the TARGETS_CONSTANT
+        formulation):
+            perf[s, i] = clamp(1 − |feat[s, i] − target[s]| / denom[s], 0, 1)
+            avg[s]    = mean_i (perf[s, i])  ignoring NaN feature values
+        Targets and scalings are computed in numpy (using user-defined
+        ``_compute_target_value`` / ``_compute_scaling_factor`` which take
+        Python dicts) — they're per-candidate constants, no gradient flows
+        through them. Gradient flows from ``avg[s]`` back through
+        ``feature_values_S[s, i]`` via the affine ``(feat - target) /
+        denom`` and the ``torch.clamp`` (zero gradient outside [0, 1] —
+        correct behaviour for saturated scores).
+
+        Used by Strategy D's gradient-based acquisition where the
+        prediction tensor flows from a leaf params tensor and we need
+        ``∂avg/∂feat`` to backprop further.
+        """
+        import torch  # local import — keep numpy-only consumers torch-free
+        S = int(feature_values_S.shape[0])
+        if S == 0:
+            return torch.zeros(0, dtype=feature_values_S.dtype)
+
+        # Per-candidate target + denom (numpy/Python — non-differentiable).
+        targets = torch.empty(S, dtype=feature_values_S.dtype)
+        denoms = torch.empty(S, dtype=feature_values_S.dtype)
+        for s, params_obj in enumerate(parameters_list):
+            params = params_obj.get_values_dict()
+            t = float(self._compute_target_value(params))
+            sc = self._compute_scaling_factor(params)
+            targets[s] = t
+            if sc is not None and sc > 0:
+                denoms[s] = float(sc)
+            elif t > 0:
+                denoms[s] = t
+            else:
+                denoms[s] = float('nan')  # neither valid → NaN propagates to perf
+
+        # Broadcast (S, 1) against (S, n_rows). NaN feature values propagate;
+        # nanmean ignores them. Clamp to [0, 1] matches scalar path.
+        diffs = (feature_values_S - targets[:, None]).abs()
+        perfs = 1.0 - diffs / denoms[:, None]
+        perfs = torch.clamp(perfs, 0.0, 1.0)
+
+        # NaN-aware mean: zero-out NaN entries, count valid, divide.
+        nan_mask = torch.isnan(feature_values_S)
+        perfs_safe = torch.where(nan_mask, torch.zeros_like(perfs), perfs)
+        valid_count = (~nan_mask).sum(dim=1).to(perfs.dtype)
+        sum_perfs = perfs_safe.sum(dim=1)
+        # Avoid divide-by-zero: candidates with all-NaN features yield NaN avg.
+        safe_count = torch.where(valid_count > 0, valid_count, torch.ones_like(valid_count))
+        avgs = sum_perfs / safe_count
+        avgs = torch.where(valid_count > 0, avgs, torch.full_like(avgs, float('nan')))
+        return avgs
+
+    @final
     def _compute_performance_value(
         self, feature_value: float, target_value: float, scaling_factor: float | None
     ) -> float | None:
