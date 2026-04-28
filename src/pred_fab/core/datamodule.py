@@ -434,18 +434,16 @@ class DataModule:
         if not self._is_fitted:
             return values.clone()
 
-        # Internal numpy boundary: stats are Python floats, so reverse_normalization
-        # is fastest as numpy elementwise; one tensor↔numpy roundtrip per call.
-        y_np = values.detach().cpu().numpy().copy()
-        if y_np.ndim == 1:
+        out = values.clone()
+        if out.ndim == 1:
             for i, name in enumerate(feature_names):
                 if name in self._feature_stats:
-                    y_np[i] = self._reverse_normalization(y_np[i], self._feature_stats[name])
+                    out[i] = self._reverse_normalization_tensor(out[i], self._feature_stats[name])
         else:
             for i, name in enumerate(feature_names):
                 if name in self._feature_stats:
-                    y_np[:, i] = self._reverse_normalization(y_np[:, i], self._feature_stats[name])
-        return torch.from_numpy(y_np)
+                    out[:, i] = self._reverse_normalization_tensor(out[:, i], self._feature_stats[name])
+        return out
 
 
     # === NORMALIZATION STATE ===
@@ -566,7 +564,7 @@ class DataModule:
     def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Apply normalization to data array using pre-computed stats."""
         method = stats['method']
-        
+
         if method == NormMethod.NONE:
             return data
         elif method == NormMethod.STANDARD:
@@ -577,6 +575,28 @@ class DataModule:
                 # Degenerate range: keep normalized value at 0 to avoid exploding magnitudes.
                 return np.zeros_like(data, dtype=np.float64)
             return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
+        elif method == NormMethod.ROBUST:
+            iqr = stats['q3'] - stats['q1']
+            return (data - stats['median']) / (iqr + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
+
+    def _apply_normalization_tensor(self, data: torch.Tensor, stats: dict[str, Any]) -> torch.Tensor:
+        """Tensor-native equivalent of _apply_normalization for the autoreg hot path.
+
+        Stats values stay as Python floats — they broadcast cleanly against torch
+        tensors without an explicit pre-tensorisation step.
+        """
+        method = stats['method']
+        if method == NormMethod.NONE:
+            return data
+        elif method == NormMethod.STANDARD:
+            return (data - stats['mean']) / (stats['std'] + 1e-8)
+        elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return torch.zeros_like(data)
+            return (data - stats['min']) / (denom + 1e-8)
         elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
             return (data - stats['median']) / (iqr + 1e-8)
@@ -595,7 +615,7 @@ class DataModule:
     def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
         """Reverse normalization for data array."""
         method = stats['method']
-        
+
         if method == NormMethod.NONE:
             return data_norm
         elif method == NormMethod.STANDARD:
@@ -606,6 +626,24 @@ class DataModule:
                 # Degenerate range: value is fixed at min/max in original space.
                 return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
             return data_norm * (stats['max'] - stats['min']) + stats['min']
+        elif method == NormMethod.ROBUST:
+            iqr = stats['q3'] - stats['q1']
+            return data_norm * iqr + stats['median']
+        else:
+            raise ValueError(f"Unknown normalization method: {method}")
+
+    def _reverse_normalization_tensor(self, data_norm: torch.Tensor, stats: dict[str, Any]) -> torch.Tensor:
+        """Tensor-native equivalent of _reverse_normalization."""
+        method = stats['method']
+        if method == NormMethod.NONE:
+            return data_norm
+        elif method == NormMethod.STANDARD:
+            return data_norm * stats['std'] + stats['mean']
+        elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return torch.full_like(data_norm, fill_value=float(stats['min']))
+            return data_norm * denom + stats['min']
         elif method == NormMethod.ROBUST:
             iqr = stats['q3'] - stats['q1']
             return data_norm * iqr + stats['median']
