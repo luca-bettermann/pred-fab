@@ -1624,6 +1624,123 @@ class CalibrationSystem(BaseOrchestrationSystem):
         np.fill_diagonal(dist_sq, np.inf)
         return float(np.sqrt(np.min(dist_sq)))
 
+    def _classify_phase_codes(
+        self,
+        datamodule: DataModule,
+        fixed_values: dict[str, Any] | None = None,
+        bounds: np.ndarray | None = None,
+        bound_eps: float = 1e-12,
+    ) -> dict[str, list[str]]:
+        """Group ``datamodule.input_columns`` into phase buckets, free codes only.
+
+        Returns ``{"domain": [...], "process": [...]}`` — codes of *free*
+        domain-axis params and *free* non-domain params respectively.
+
+        A code is excluded from both buckets if any of:
+          - it appears in ``self.fixed_params`` (always-pinned by design intent);
+          - it appears in ``fixed_values`` (pinned by a prior phase or caller);
+          - ``bounds`` is provided and the code's interval ``[lo, hi]`` is
+            degenerate (``hi - lo <= bound_eps``) — covers trust-region pinning
+            for online adaptation as well as schema-level constant params.
+
+        One-hot expanded categorical columns (e.g. 'mat_clay') stay in 'process'
+        — they don't have a ``DataObject`` entry under their column name, but
+        they are free for the optimiser to choose unless their bounds are
+        degenerate.
+        """
+        fixed_set = set(self.fixed_params.keys())
+        if fixed_values:
+            fixed_set.update(fixed_values.keys())
+
+        domain_codes: list[str] = []
+        process_codes: list[str] = []
+        for col_idx, col in enumerate(datamodule.input_columns):
+            if col in fixed_set:
+                continue
+            if bounds is not None and col_idx < bounds.shape[0]:
+                lo = float(bounds[col_idx, 0])
+                hi = float(bounds[col_idx, 1])
+                if hi - lo <= bound_eps:
+                    continue
+            obj = self.data_objects.get(col)
+            if obj is not None and isinstance(obj, DataDomainAxis):
+                domain_codes.append(col)
+            else:
+                process_codes.append(col)
+        return {"domain": domain_codes, "process": process_codes}
+
+    def _run_phase(
+        self,
+        phase_param_codes: list[str],
+        fixed_values: dict[str, float],
+        *,
+        datamodule: DataModule,
+        full_bounds: np.ndarray,
+        kappa: float,
+        perf_range: tuple[float, float] | None,
+        label: str,
+        show_progress: bool,
+    ) -> tuple[dict[str, float], _OptResult]:
+        """Single-point κ-acquisition DE on a *subset* of input_columns.
+
+        ``phase_param_codes`` selects the dimensions the optimiser sees; the
+        remaining columns of the full ``X`` vector are filled from
+        ``fixed_values`` (codes → normalised values, e.g. results from a prior
+        phase) or 0.5 default. The acquisition objective sees the full-D vector
+        with phase values injected at the right positions, so ``perf`` and
+        ``evidence`` are computed on a complete parameter set.
+
+        Returns ``(optimised_codes_dict, opt_result)`` — the DE result wrapping
+        contains ``best_x`` of length ``len(phase_param_codes)``, ``nfev``,
+        ``score``, etc. Used by ``run_calibration`` to compose Domain → Process
+        for single-point exploration / inference, and (in a follow-on commit)
+        by ``run_baseline`` for joint-batch baseline phases.
+        """
+        n_input = len(datamodule.input_columns)
+        code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
+
+        phase_bounds: list[tuple[float, float]] = []
+        phase_idxs: list[int] = []
+        for code in phase_param_codes:
+            if code not in code_to_idx:
+                continue
+            idx = code_to_idx[code]
+            phase_idxs.append(idx)
+            phase_bounds.append((float(full_bounds[idx, 0]), float(full_bounds[idx, 1])))
+
+        if not phase_bounds:
+            # Nothing to optimise — return empty + a no-op result.
+            return ({}, _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0))
+
+        prefill = np.full(n_input, 0.5, dtype=np.float64)
+        for code, val in fixed_values.items():
+            if code in code_to_idx:
+                prefill[code_to_idx[code]] = float(val)
+        phase_idxs_arr = np.asarray(phase_idxs, dtype=np.int64)
+
+        def _vec_obj_phase(X_DS_phase: np.ndarray) -> np.ndarray:
+            """Pad phase-local (D_phase, S) to full (D, S), dispatch to vectorised acq."""
+            S = X_DS_phase.shape[1]
+            X_full_DS = np.broadcast_to(prefill[:, None], (n_input, S)).copy()
+            X_full_DS[phase_idxs_arr, :] = X_DS_phase
+            return self._acquisition_objective_vectorized(X_full_DS, kappa, perf_range)
+
+        opt = self.engine.run_acquisition_vectorized(
+            _vec_obj_phase,
+            phase_bounds,
+            label=label,
+            show_progress=show_progress,
+        )
+
+        if opt.best_x is None:
+            result_x = np.array([0.5 * (lo + hi) for (lo, hi) in phase_bounds])
+        else:
+            result_x = opt.best_x
+        return (
+            {phase_param_codes[i]: float(result_x[i]) for i in range(len(phase_bounds))},
+            opt,
+        )
+
     def run_calibration(
         self,
         datamodule: DataModule,
@@ -1991,18 +2108,97 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if use_vectorized:
                 _eff_kappa = 0.0 if mode == Mode.INFERENCE else kappa
                 _perf_range, _ = self._get_acquisition_ranges()
-                _vec_obj = functools.partial(
-                    self._acquisition_objective_vectorized,
-                    kappa=_eff_kappa,
-                    perf_range=_perf_range,
+
+                # Phase-decomposed acquisition (Domain → Process), mirroring
+                # baseline's structure. Reduces per-call DE budget by O(D²) →
+                # O(D_domain²) + O(D_process²) under smart_maxiter, and keeps
+                # the per-evidence-call cost lower at smaller D.
+                #
+                # General-cased: codes whose active bounds are degenerate
+                # (lo == hi — trust-region pinning, fixed_params, schema
+                # constants) drop out of both buckets via the bounds-aware
+                # classifier. Either bucket may be empty (pure-Domain,
+                # pure-Process, or all-fixed) and the path collapses
+                # gracefully — no fallback needed.
+                phase_codes = self._classify_phase_codes(
+                    datamodule, fixed_for_step, bounds=bounds,
                 )
-                opt = self.engine.run_acquisition_vectorized(
-                    _vec_obj,
-                    bounds.tolist(),
-                    label="Optimizing",
-                    show_progress=console,
+
+                fixed_for_next: dict[str, float] = {}
+                domain_opt: _OptResult | None = None
+                process_opt: _OptResult | None = None
+
+                # Phase 1: Domain (only when split is enabled and the bucket
+                # has free codes). When split is disabled, both buckets fold
+                # into Phase 2 below — the legacy single-shot behaviour.
+                if self.split_domain_phase and phase_codes["domain"]:
+                    domain_result, domain_opt = self._run_phase(
+                        phase_codes["domain"],
+                        fixed_for_next,
+                        datamodule=datamodule,
+                        full_bounds=bounds,
+                        kappa=_eff_kappa,
+                        perf_range=_perf_range,
+                        label=f"Domain (D={len(phase_codes['domain'])})",
+                        show_progress=console,
+                    )
+                    fixed_for_next.update(domain_result)
+
+                # Phase 2: Process (split=on) or merged Domain+Process (split=off).
+                p2_codes = (
+                    phase_codes["process"]
+                    if self.split_domain_phase
+                    else phase_codes["domain"] + phase_codes["process"]
                 )
-                static_out = opt.best_x.reshape(1, -1) if opt.best_x is not None else np.full((1, n_input), 0.5)
+                if p2_codes:
+                    p2_label = (
+                        f"Process (D={len(p2_codes)})"
+                        if self.split_domain_phase and phase_codes["domain"]
+                        else "Optimizing"
+                    )
+                    process_result, process_opt = self._run_phase(
+                        p2_codes,
+                        fixed_for_next,
+                        datamodule=datamodule,
+                        full_bounds=bounds,
+                        kappa=_eff_kappa,
+                        perf_range=_perf_range,
+                        label=p2_label,
+                        show_progress=console,
+                    )
+                    fixed_for_next.update(process_result)
+
+                # Build full-D static_out from per-phase results. Codes still
+                # absent from fixed_for_next (e.g. all-fixed-params case) keep
+                # the 0.5 default; the downstream ``proposed_params.update(
+                # fixed_for_step)`` overlay then pins them to their actual
+                # design-intent values, completing the result.
+                static_out = np.full((1, n_input), 0.5)
+                code_to_idx_full = {c: i for i, c in enumerate(datamodule.input_columns)}
+                for code, val in fixed_for_next.items():
+                    if code in code_to_idx_full:
+                        static_out[0, code_to_idx_full[code]] = val
+
+                # Synthesise a single canonical _OptResult — always non-None
+                # best_x so downstream "optimization failed" branches are not
+                # triggered for the degenerate (no-free-codes) case.
+                last_opt = process_opt if process_opt is not None else domain_opt
+                total_nfev = (
+                    (domain_opt.nfev if domain_opt is not None else 0)
+                    + (process_opt.nfev if process_opt is not None else 0)
+                )
+                history: list[float] = []
+                if domain_opt is not None:
+                    history.extend(domain_opt.convergence_history)
+                if process_opt is not None:
+                    history.extend(process_opt.convergence_history)
+                opt = _OptResult(
+                    best_x=static_out[0].copy(),
+                    nfev=total_nfev,
+                    n_starts=last_opt.n_starts if last_opt is not None else 1,
+                    score=last_opt.score if last_opt is not None else 0.0,
+                    convergence_history=history,
+                )
             else:
                 def acq_single(pts: np.ndarray) -> float:
                     """Evaluate acquisition/inference at a single point."""
