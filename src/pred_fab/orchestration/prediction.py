@@ -642,6 +642,87 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return weighted_de / total_w if total_w > 0 else 0.0
 
+    def delta_integrated_evidence_batched(
+        self,
+        new_norm_batch_S: np.ndarray,
+        new_weights_S: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Per-candidate Δ∫E for S candidates, each treated as the *single* added
+        kernel (i.e. ``E(old ∪ {s}) − E(old)`` independently per s).
+
+        Shape: ``new_norm_batch_S`` is ``(S, D_global)``. Returns ``(S,)`` of
+        per-candidate Δ∫E. Used by the vectorised acquisition objective so a
+        single call replaces an S-times Python loop over the scalar API.
+
+        Optimisations vs S × delta_integrated_evidence_aggregated(L=1):
+          - Encoder forward runs as ONE batched ``model.encode((S, n_inputs))``
+            per KDE instead of S separate calls.
+          - ``index_old`` and ``E_old`` are computed once per KDE and reused
+            across all S candidates (independent of the new candidate).
+          - The inner loop only computes ``E_new`` per candidate, which is the
+            only part that genuinely differs.
+
+        Equivalent semantics: each output element ``out[s]`` matches what the
+        scalar API would return for ``new_norm_batch=new_norm_batch_S[s:s+1]``
+        within floating-point reduction noise.
+        """
+        S = int(new_norm_batch_S.shape[0])
+        if not self._model_kdes or S == 0 or new_norm_batch_S.size == 0:
+            return np.zeros(S, dtype=np.float64)
+
+        weights_S = (
+            np.ones(S, dtype=np.float64)
+            if new_weights_S is None
+            else np.asarray(new_weights_S, dtype=float)
+        )
+
+        out = np.zeros(S, dtype=np.float64)
+        total_w = 0.0
+        for kde in self._model_kdes.values():
+            new_centers_z_active = self._encode_batch_from_norm_for_model(
+                kde.model, new_norm_batch_S, kde.active_mask
+            )  # (S, n_active)
+
+            # E_old and index_old don't depend on the new candidate — compute once.
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            E_old = self._estimator.integrated_evidence(index_old)
+
+            for s in range(S):
+                new_center = new_centers_z_active[s:s+1, :]  # (1, n_active)
+                if len(kde.latent_points) > 0:
+                    all_centers = np.vstack([kde.latent_points, new_center])
+                    all_weights = np.concatenate([kde.point_weights, weights_S[s:s+1]])
+                else:
+                    all_centers = new_center
+                    all_weights = weights_S[s:s+1]
+                index_new = self._kernel_index(all_centers, all_weights, kde.sigma)
+                E_new = self._estimator.integrated_evidence(index_new)
+                out[s] += kde.weight * (E_new - E_old)
+            total_w += kde.weight
+
+        return out / total_w if total_w > 0 else out
+
+    def _encode_batch_from_norm_for_model(
+        self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Encode a (S, D_global) batch through one model's penultimate layer in one forward.
+
+        Returns ``(S, n_active)`` — the active-mask-filtered latent activations,
+        matching the per-row output of ``_encode_from_norm_array_for_model`` but
+        amortising the model.encode() call across the S candidate batch dim.
+        """
+        if self.datamodule is None:
+            return X_norm_batch[:, active_mask] if X_norm_batch.ndim > 1 else X_norm_batch[active_mask].reshape(1, -1)
+        input_cols = model.input_parameters + model.input_features
+        input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
+        if not input_indices:
+            return X_norm_batch[:, active_mask] if X_norm_batch.ndim > 1 else X_norm_batch[active_mask].reshape(1, -1)
+        X_model = X_norm_batch[:, input_indices].astype(np.float32)
+        if self._bypass_encoder:
+            return X_model[:, active_mask]
+        z_t = model.encode(torch.from_numpy(X_model))
+        return z_t.detach().cpu().numpy()[:, active_mask]
+
     # --- Stacking / virtual evidence for sequential-phase schedule mode ---
 
     def push_virtual_points(

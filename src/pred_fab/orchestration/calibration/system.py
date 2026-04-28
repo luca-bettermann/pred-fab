@@ -70,6 +70,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
         delta_integrated_evidence_fn: Callable[[np.ndarray], float] | None = None,
+        delta_integrated_evidence_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
         push_virtual_points_fn: Callable[[list[dict[str, Any]], list[float], DataModule | None], None] | None = None,
         pop_virtual_points_fn: Callable[[], None] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
@@ -82,6 +83,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.perf_fn_batched = perf_fn_batched
         self.uncertainty_fn = uncertainty_fn
         self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
+        self.delta_integrated_evidence_batched_fn = delta_integrated_evidence_batched_fn
         self.push_virtual_points_fn = push_virtual_points_fn
         self.pop_virtual_points_fn = pop_virtual_points_fn
         self._n_exp_fn = n_exp_fn
@@ -484,12 +486,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs = self._per_candidate_perf_batched(X_SD, perf_range)
                 scores += (1.0 - kappa) * perfs
 
-            if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
-                # Evidence is computed per single-point candidate (L=1 each); the KDE
-                # eval is cheap relative to forward_pass and isn't the bottleneck here.
-                with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
-                    for i in range(S):
-                        scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
+            if kappa > 0.0:
+                # Evidence per candidate (each treated as single added kernel).
+                # Prefer the batched API: caches old-state work + batched encoder
+                # forward across S. Falls back to S × scalar API if unavailable.
+                if self.delta_integrated_evidence_batched_fn is not None:
+                    with profiler.section("acq.delta_integrated_evidence_batched [KDE batch S]"):
+                        evidences_S = self.delta_integrated_evidence_batched_fn(X_SD)
+                    scores += kappa * np.asarray(evidences_S, dtype=np.float64)
+                elif self.delta_integrated_evidence_fn is not None:
+                    with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
+                        for i in range(S):
+                            scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
 
             return -scores
 
