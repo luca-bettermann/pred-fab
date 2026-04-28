@@ -120,7 +120,18 @@ Returns tensors at the API boundary (no numpy round-trip). The autoreg loop is a
 `IEvaluationModel.compute_performance_tensor` returning `(S,)`. Mock overrides for the 3 evaluators (~10 LOC each using `torch.clamp` — differentiable except at clamp saturation; soft sigmoid fallback if pathologies appear). `EvaluationSystem._evaluate_feature_dict_tensor` parallel to the existing batched dispatch.
 
 ### Commit 4 — Tensor-native KDE (~250 LOC, 2 days) — *the hardest*
-Rewrite `KernelField` + `KernelIndex` in torch. Sum of Gaussian probes evaluated at QMC points. `cKDTree` truncation replaced by dense distance broadcast `(M, K)` masked at 5σ — at our typical N≤50, the dense computation is faster than tree-build anyway.
+Rewrite `KernelField` + `KernelIndex` in torch. Sum of Gaussian probes evaluated at QMC points.
+
+**Scale-aware kernel handling.** PFAB is a general framework; KDE cost scales with `n_kernels × n_probes × S`. Strategy D commit 4 should ship with three regimes:
+
+| n_kernels | KDE strategy |
+|---|---|
+| **< 100** | Dense distance matrix, no truncation (matches today's `truncation_threshold = 10` behaviour). |
+| **100-1,000** | Dense distance + 5σ mask via `torch.where` — replaces today's `cKDTree`. |
+| **1,000-10,000** | **Sparse KNN gather**: `torch.topk` on per-probe distances → take only the K=20-50 closest kernels, mask the rest. Memory + compute scale linearly in `n_probes × K` instead of `n_probes × n_kernels`. |
+| **> 10,000** | **Kernel pruning via clustering**: replace `n_kernels` with `c ≪ n_kernels` representative centers (e.g. mini-batch K-means or Gaussian mixture summarisation). Mathematically a Gaussian mixture summarises the data better than 10K individual kernels at this scale anyway. |
+
+The 1K-10K and >10K paths can ship as a **follow-up commit (4b)** if needed; commit 4 baseline targets the <1K regime which covers most use cases.
 
 `scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine` (built-in to torch). ~10 LOC change, gives QMC sequences in tensor land.
 
@@ -133,8 +144,36 @@ Bounds via sigmoid reparameterisation: `x = sigmoid(z) · (hi - lo) + lo`. Smoot
 
 `Optimizer.GRADIENT` enum value alongside `LBFGSB`, `DE`. Routed through `_run_phase` when `chosen_opt == GRADIENT` and tensor APIs available.
 
-### Commit 6 — Phase C (per-minibatch SS) absorbed (~150 LOC, 1 day)
-Per-epoch SS hook inside `TorchMLPModel.train()`. Deletes K-refit, `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`. Net ~−120 LOC. Becomes natural with autograd-traversable substitution.
+### Commit 6 — Phase C (per-minibatch SS) + scale-aware training loop (~200 LOC, 1.5 days)
+Per-minibatch SS hook inside `TorchMLPModel.train()`. Deletes K-refit, `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`. Net ~−120 LOC of stateful machinery from DataModule + PredictionSystem.
+
+**Scale-aware training loop**: at `N_train > 1000`, switch to `DataLoader(TensorDataset, batch_size=...)` for shuffled minibatching. The per-minibatch SS substitution maps onto each minibatch (whether it's the whole dataset for small N or one of many for large N). At `N_train < 1000`, single-batch path stays — no DataLoader overhead.
+
+```python
+def train(self, train_batches, val_batches, ss_config=None, **kwargs):
+    X = torch.cat([b[0] for b in train_batches], dim=0)
+    y = torch.cat([b[1] for b in train_batches], dim=0)
+    n_rows = X.shape[0]
+    if n_rows > 1000:
+        loader = DataLoader(
+            TensorDataset(X, y),
+            batch_size=min(256, n_rows // 4),
+            shuffle=True,
+        )
+    else:
+        loader = [(X, y)]  # single-batch fallback for mock-scale
+    for epoch in range(EPOCHS):
+        p_student = self._ss_p_for_epoch(epoch, ss_config)
+        for X_batch, y_batch in loader:
+            X_used = self._apply_ss_substitution(X_batch, p_student, ss_config) \
+                     if ss_config else X_batch
+            optimizer.zero_grad()
+            loss = loss_fn(net(X_used), y_batch)
+            loss.backward()
+            optimizer.step()
+```
+
+Becomes natural with autograd-traversable substitution. Substitution gradient flows through the *current* network state (not a cached prediction from K rounds ago).
 
 ### Commit 7 — Data layer simplifications (~5 days, multi-commit)
 - 7a. One-hot → categorical-index tensors + `nn.Embedding` opt-in for models that want learnable cats.
@@ -170,21 +209,51 @@ Lightning's value props (Trainer, LightningModule, callbacks, distributed strate
 
 **Verdict:** still skip. Re-evaluate if PFAB ever scales to multi-GPU or large hyperparameter sweeps.
 
-### `torch.utils.data.DataLoader` — still no near-term value
+### `torch.utils.data.DataLoader` — scale-dependent
 
-Considered three sub-topics:
+Three sub-topics, three different verdicts depending on scale.
 
-**A. Replace `Dataset` with `torch.utils.data.Dataset`** — reject. Different abstraction levels:
+**A. Replace `Dataset` with `torch.utils.data.Dataset`** — reject at any scale. Different abstraction levels:
 - PFAB `Dataset`: experiment-run container with schema validation, 3-tier persistence (memory↔local↔external), `create_experiment` / `save_experiment` / `load_experiment` lifecycle.
 - `torch.utils.data.Dataset`: sample-level indexable iterable with `__getitem__(idx) → (X, y)` and `__len__`.
 
 There's no overlap. Subclassing the latter would obscure the schema contract.
 
-**B. Wrap `DataModule.get_batches` output in `DataLoader`** — reject for now. `DataLoader`'s value is workers + prefetching for I/O parallelism. We have ~100 rows in memory; no I/O bottleneck. After Strategy D's data-layer migration (commit 7), `get_batches` returns tensor dicts directly — even simpler than today.
+**B. Use `DataLoader` for minibatched training** — **conditionally yes, depending on training-set size**. PFAB is a general framework, not just the mock. At larger scales DataLoader is the right primitive:
 
-**C. Use `LightningDataModule` interface** — reject. PFAB `DataModule` already exposes `get_batches(SplitType.TRAIN/VAL/TEST)`. Renaming to `train_dataloader()` / `val_dataloader()` / `test_dataloader()` is a cosmetic change without functional benefit.
+| Training rows | DataLoader usage |
+|---|---|
+| **<1,000** (mock-scale) | Skip. Full-batch GD is simpler and faster — no batch overhead. Current behaviour. |
+| **1,000-100,000** | **Use it.** `DataLoader(TensorDataset(X, y), batch_size=256, shuffle=True)` for training. Standard SGD/Adam pattern at this scale. |
+| **>100,000** | Use + `num_workers > 0` + `pin_memory=True`. I/O parallelism starts paying. |
 
-**Verdict:** still skip. Revisit if PFAB ever has 100K+ training rows or per-cell features that benefit from prefetched I/O (e.g. images instead of scalar deviation values).
+**Encapsulation:** the choice lives inside `TorchMLPModel.train()` based on `N_train`; callers don't think about it. Strategy D commit 6 (per-minibatch SS) maps naturally onto the minibatch loop — SS substitution happens per minibatch whether the minibatch is the whole dataset (small) or one of many (large):
+
+```python
+def train(self, train_batches, val_batches, ss_config=None, **kwargs):
+    X = torch.cat([b[0] for b in train_batches], dim=0)
+    y = torch.cat([b[1] for b in train_batches], dim=0)
+    n_rows = X.shape[0]
+    if n_rows > 1000:
+        loader = DataLoader(
+            TensorDataset(X, y), batch_size=min(256, n_rows // 4), shuffle=True,
+        )
+    else:
+        loader = [(X, y)]  # single full-batch "loader"
+    for epoch in range(EPOCHS):
+        for X_batch, y_batch in loader:
+            X_used = self._apply_ss(X_batch, ss_config, epoch) if ss_config else X_batch
+            optimizer.zero_grad()
+            loss = loss_fn(net(X_used), y_batch)
+            loss.backward()
+            optimizer.step()
+```
+
+**Where in Strategy D:** part of commit 6 (Phase C absorbed). The per-minibatch SS plumbing already needs to handle multiple minibatches per epoch — DataLoader is the natural way to produce them at scale.
+
+**C. Use `LightningDataModule` interface** — reject. PFAB `DataModule` already exposes `get_batches(SplitType.TRAIN/VAL/TEST)`. Renaming to `train_dataloader()` / `val_dataloader()` / `test_dataloader()` is a cosmetic change without functional benefit. The `DataLoader` itself is the useful primitive; the wrapping abstraction isn't.
+
+**Updated verdict:** scale-aware adoption of `DataLoader` for training; `Dataset` and `LightningDataModule` still skip.
 
 ---
 
