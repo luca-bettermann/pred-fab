@@ -654,17 +654,19 @@ class PredictionSystem(BaseOrchestrationSystem):
         per-candidate Δ∫E. Used by the vectorised acquisition objective so a
         single call replaces an S-times Python loop over the scalar API.
 
-        Optimisations vs S × delta_integrated_evidence_aggregated(L=1):
-          - Encoder forward runs as ONE batched ``model.encode((S, n_inputs))``
-            per KDE instead of S separate calls.
-          - ``index_old`` and ``E_old`` are computed once per KDE and reused
-            across all S candidates (independent of the new candidate).
-          - The inner loop only computes ``E_new`` per candidate, which is the
-            only part that genuinely differs.
+        Vectorisation layers (cumulative):
+          1. **Cache** ``E_old`` per KDE (independent of new candidate).
+          2. **Batch the encoder** forward per KDE — one
+             ``model.encode((S, n_inputs))`` instead of S separate calls.
+          3. **Vectorise the inner integration** — defers to
+             ``EvidenceEstimator.integrated_evidence_perturbed_batched`` which
+             returns ``(S,)`` E_new values from a single broadcast density
+             tensor, replacing the S-times index-rebuild + scalar
+             ``integrated_evidence`` loop.
 
         Equivalent semantics: each output element ``out[s]`` matches what the
         scalar API would return for ``new_norm_batch=new_norm_batch_S[s:s+1]``
-        within floating-point reduction noise.
+        within floating-point reduction noise (~1e-5 relative).
         """
         S = int(new_norm_batch_S.shape[0])
         if not self._model_kdes or S == 0 or new_norm_batch_S.size == 0:
@@ -683,21 +685,14 @@ class PredictionSystem(BaseOrchestrationSystem):
                 kde.model, new_norm_batch_S, kde.active_mask
             )  # (S, n_active)
 
-            # E_old and index_old don't depend on the new candidate — compute once.
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
             E_old = self._estimator.integrated_evidence(index_old)
 
-            for s in range(S):
-                new_center = new_centers_z_active[s:s+1, :]  # (1, n_active)
-                if len(kde.latent_points) > 0:
-                    all_centers = np.vstack([kde.latent_points, new_center])
-                    all_weights = np.concatenate([kde.point_weights, weights_S[s:s+1]])
-                else:
-                    all_centers = new_center
-                    all_weights = weights_S[s:s+1]
-                index_new = self._kernel_index(all_centers, all_weights, kde.sigma)
-                E_new = self._estimator.integrated_evidence(index_new)
-                out[s] += kde.weight * (E_new - E_old)
+            # Vectorised: returns (S,) E_new[s] in one broadcast computation.
+            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched(
+                index_old, new_centers_z_active, weights_S,
+            )
+            out += kde.weight * (E_new_per_s - E_old)
             total_w += kde.weight
 
         return out / total_w if total_w > 0 else out

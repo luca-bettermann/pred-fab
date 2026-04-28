@@ -236,6 +236,37 @@ class EvidenceEstimator(ABC):
             )
         return total
 
+    def integrated_evidence_perturbed_batched(
+        self,
+        index_old: KernelIndex,
+        new_centers_S: np.ndarray,
+        new_weights_S: np.ndarray,
+    ) -> np.ndarray:
+        """E(old ∪ {(new_centers_S[s], new_weights_S[s])}) for each s. Returns ``(S,)``.
+
+        Default implementation loops ``integrated_evidence`` per candidate,
+        rebuilding ``index_new[s]`` each time. Subclasses override for
+        vectorised perf — see :meth:`KernelFieldEstimator.integrated_evidence_perturbed_batched`.
+        """
+        S = int(new_centers_S.shape[0])
+        if S == 0:
+            return np.zeros(0, dtype=np.float64)
+        out = np.zeros(S, dtype=np.float64)
+        for s in range(S):
+            if index_old.is_empty:
+                all_centers = new_centers_S[s:s + 1]
+                all_weights = new_weights_S[s:s + 1]
+            else:
+                all_centers = np.vstack([index_old.centers, new_centers_S[s:s + 1]])
+                all_weights = np.concatenate([index_old.weights, new_weights_S[s:s + 1]])
+            index_new = KernelIndex(
+                all_centers, all_weights, index_old.sigma,
+                cutoff_sigmas=index_old.cutoff_sigmas,
+                truncation_threshold=index_old.truncation_threshold,
+            )
+            out[s] = self.integrated_evidence(index_new)
+        return out
+
 
 # ---------------------------------------------------------------------------
 # KernelField — radial shell quadrature
@@ -305,6 +336,128 @@ class KernelFieldEstimator(EvidenceEstimator):
             rho = index.density_at(probes)
         integrand = 1.0 / (1.0 + rho)
         return float(np.sum(weights * integrand * in_domain))
+
+    def integrated_evidence_perturbed_batched(
+        self,
+        index_old: KernelIndex,
+        new_centers_S: np.ndarray,
+        new_weights_S: np.ndarray,
+    ) -> np.ndarray:
+        """Vectorised E(old ∪ {(new[s], w[s])}) per s. Returns ``(S,)``.
+
+        Replaces the S-times-rebuild-`index_new` + S-times-`integrated_evidence`
+        loop with a single broadcast computation:
+
+          - One ``(n_old, M, S)`` distance tensor for "new candidates → probes
+            around each old kernel" — the perturbation each candidate s adds
+            to each old self-integral.
+          - One ``(S, M, n_old)`` distance tensor for "old kernels → probes
+            around each new candidate" — needed for each new kernel's own
+            self-integral.
+          - All quadrature reductions vectorised across the candidate batch.
+
+        Truncation: when ``index_old`` has ≥ ``truncation_threshold`` kernels,
+        a 5σ mask is applied to both distance tensors; matches scalar
+        ``KernelIndex.density_at`` semantics within numerical tolerance.
+
+        Equivalence: matches the scalar
+        ``EvidenceEstimator.integrated_evidence(index_new[s])`` to ~1e-5,
+        with the loose tolerance reflecting different summation orders
+        between the per-candidate scalar reduction and the broadcast tensor.
+        """
+        S = int(new_centers_S.shape[0])
+        if S == 0:
+            return np.zeros(0, dtype=np.float64)
+        sigma = index_old.sigma
+        D = int(new_centers_S.shape[1])
+        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
+        offsets, quad_weights, self_density = self._probes_weights_self(D, sigma)
+        M = offsets.shape[0]
+
+        # Truncation mask threshold (squared distance for cheap comparison).
+        n_old = len(index_old.centers) if not index_old.is_empty else 0
+        do_truncate = n_old >= index_old.truncation_threshold
+        cutoff_d2 = (index_old.cutoff_sigmas * sigma) ** 2
+
+        # === Probes around each new candidate: (S, M, D) ===
+        probes_new = offsets[None, :, :] + new_centers_S[:, None, :]
+        in_domain_new = _in_unit_cube(probes_new.reshape(-1, D)).reshape(S, M).astype(np.float64)
+
+        # === Branch 1: no old kernels — only the new kernel contributes ===
+        if n_old == 0:
+            # Density at probes_new comes only from the new kernel itself.
+            # rho_new[s, m] = self_density[m] * w_new[s]
+            rho_new = self_density[None, :] * new_weights_S[:, None]
+            integrand_new = 1.0 / (1.0 + rho_new)
+            integral_new_per_s = (
+                quad_weights[None, :] * integrand_new * in_domain_new
+            ).sum(axis=-1)
+            return new_weights_S * integral_new_per_s
+
+        # === Branch 2: old kernels exist ===
+        old_centers = index_old.centers
+        old_weights = index_old.weights
+
+        # ---- Per-old precompute (independent of s) ----
+        # Probes around each old kernel: (n_old, M, D)
+        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]
+        in_domain_per_old = (
+            _in_unit_cube(probes_per_old.reshape(-1, D)).reshape(n_old, M).astype(np.float64)
+        )
+
+        # rho_other_per_old[j, m] = sum over k != j of w_k * exp(-||probes_per_old[j,m] - old_k||²/2σ²)
+        # diff_old: (n_old, M, n_old, D) — broadcast probes_per_old vs old_centers
+        diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
+        d2_old = np.sum(diff_old * diff_old, axis=-1)  # (n_old, M, n_old)
+        kernels_old = np.exp(-d2_old * inv_2sig2)  # (n_old, M, n_old)
+        if do_truncate:
+            kernels_old = np.where(d2_old <= cutoff_d2, kernels_old, 0.0)
+        weighted_old = kernels_old * old_weights[None, None, :]  # (n_old, M, n_old)
+        # Mask out k == j (last dim equals first): rho_other excludes j
+        eye_jk = np.eye(n_old, dtype=np.float64)  # (n_old, n_old)
+        keep_jk = (1.0 - eye_jk)  # (n_old, n_old)
+        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(axis=-1)  # (n_old, M)
+        self_contribution_per_old = self_density[None, :] * old_weights[:, None]  # (n_old, M)
+
+        # ---- Per-(s, j) perturbation: density at probes_per_old[j, m] from new kernel s ----
+        # diff_new_to_old_probes: (n_old, M, S, D)
+        diff_new_to_old = probes_per_old[:, :, None, :] - new_centers_S[None, None, :, :]
+        d2_new_to_old = np.sum(diff_new_to_old * diff_new_to_old, axis=-1)  # (n_old, M, S)
+        kernels_new_to_old = np.exp(-d2_new_to_old * inv_2sig2)
+        if do_truncate:
+            kernels_new_to_old = np.where(d2_new_to_old <= cutoff_d2, kernels_new_to_old, 0.0)
+        delta_density = kernels_new_to_old * new_weights_S[None, None, :]  # (n_old, M, S)
+
+        # ---- Old kernels' self-integrals when new kernel is added ----
+        # total[j, m, s] = self_contribution_per_old[j, m] + rho_other_per_old[j, m] + delta_density[j, m, s]
+        total_density_old = (
+            (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
+        )  # (n_old, M, S)
+        integrand_old = 1.0 / (1.0 + total_density_old)  # (n_old, M, S)
+        # weighted by quadrature × in_domain, sum over m → (n_old, S)
+        integral_old_per_s = (
+            integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
+        ).sum(axis=1)
+
+        # ---- New kernel's own self-integral ----
+        # density at probes_new from all old kernels: (S, M, n_old) → sum over n_old → (S, M)
+        diff_old_to_new = probes_new[:, :, None, :] - old_centers[None, None, :, :]
+        d2_old_to_new = np.sum(diff_old_to_new * diff_old_to_new, axis=-1)  # (S, M, n_old)
+        kernels_old_to_new = np.exp(-d2_old_to_new * inv_2sig2)
+        if do_truncate:
+            kernels_old_to_new = np.where(d2_old_to_new <= cutoff_d2, kernels_old_to_new, 0.0)
+        rho_old_at_new_probes = (
+            kernels_old_to_new * old_weights[None, None, :]
+        ).sum(axis=-1)  # (S, M)
+        self_contribution_new = self_density[None, :] * new_weights_S[:, None]  # (S, M)
+        total_density_new = self_contribution_new + rho_old_at_new_probes  # (S, M)
+        integrand_new = 1.0 / (1.0 + total_density_new)  # (S, M)
+        integral_new_per_s = (quad_weights[None, :] * integrand_new * in_domain_new).sum(axis=-1)  # (S,)
+
+        # ---- Combine ----
+        # E_new[s] = sum_j w_j_old * integral_old_per_s[j, s] + w_new[s] * integral_new_per_s[s]
+        e_new = (old_weights[:, None] * integral_old_per_s).sum(axis=0) + new_weights_S * integral_new_per_s
+        return e_new
 
 
 # ---------------------------------------------------------------------------
