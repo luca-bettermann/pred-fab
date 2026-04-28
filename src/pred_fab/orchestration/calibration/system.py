@@ -1953,47 +1953,53 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 p2_bounds = all_global_bounds
 
-            # Build p2 bounds for the merged flat vector
-            p2_static_bounds: list[tuple[float, float]] = []
-            for code in all_p2_codes:
-                idx = code_to_idx[code]
-                p2_static_bounds.append((float(p2_bounds[idx, 0]), float(p2_bounds[idx, 1])))
+            # Phase 2 (Process): vectorised single-point κ-acquisition over
+            # all_p2_codes. Routes through _run_phase which uses
+            # _acquisition_joint_batched_objective (perf + KDE batched across
+            # the DE candidate dim). Eliminates the scalar per-candidate path
+            # that was the main slowdown in schedule iteration.
+            _eff_kappa_p2 = 0.0 if mode == Mode.INFERENCE else kappa
+            _perf_range_p2, _ = self._get_acquisition_ranges()
 
-            def _process_acquisition_objective(pts: np.ndarray) -> float:
-                """Exploration/inference Process DE objective: single-point UCB."""
-                x = np.zeros(n_input)
-                for i_s, c in enumerate(all_p2_codes):
-                    x[code_to_idx[c]] = pts[0, i_s]
-                return objective(x)
-
-            opt_for_p2 = self.online_optimizer if is_online else None
-            n_rounds_p2 = 0 if is_online else n_optimization_rounds
-
-            x0_p2: np.ndarray | None = None
+            # Inject working_params into the per-proposal fixed values so the
+            # full-D acquisition vector reflects the current state for codes
+            # outside the trust region. Trust-region-pinned codes naturally
+            # drop out of phase_param_codes via the bounds-aware logic below.
+            fixed_for_p2: dict[str, float] = {}
             if working_params:
                 full_arr = datamodule.params_to_array(working_params)
-                x0_p2 = np.array([full_arr[code_to_idx[c]] for c in all_p2_codes])
+                for code in datamodule.input_columns:
+                    if code in code_to_idx and code not in all_p2_codes:
+                        fixed_for_p2[code] = float(full_arr[code_to_idx[code]])
 
-            opt_p2, static_out_p2, _ = self.engine.run(
-                _process_acquisition_objective, N=1, D_static=D_p2, D_sched=0, L=1,
-                static_bounds=p2_static_bounds, sched_bounds=[], sched_deltas=np.array([]),
-                optimizer=opt_for_p2,
-                default_optimizer=self.optimizer,
-                x0=x0_p2,
-                n_restarts=n_rounds_p2,
-                label="Process", show_progress=console,
+            p2_results, opt_p2 = self._run_phase(
+                all_p2_codes,
+                [fixed_for_p2],
+                datamodule=datamodule,
+                full_bounds=p2_bounds,
+                kappa=_eff_kappa_p2,
+                perf_range=_perf_range_p2,
+                label="Process",
+                show_progress=console,
+                n_proposals=1,
+                n_schedule_steps=1,
             )
 
             self.last_opt_nfev = opt_p2.nfev
             self.last_opt_n_starts = opt_p2.n_starts
             self.last_opt_score = opt_p2.score
 
-            # Build flat params from Phase 2
+            # Build flat_x from Phase 2 result + fixed-for-p2 prefill (codes
+            # outside the p2 set, e.g. trust-region-pinned working_params).
             flat_x = np.zeros(n_input)
             if opt_p2.best_x is not None:
-                p2_vals = static_out_p2[0]
-                for i_s, c in enumerate(all_p2_codes):
-                    flat_x[code_to_idx[c]] = p2_vals[i_s]
+                p2_vals_dict = p2_results[0][0]
+                for c, v in fixed_for_p2.items():
+                    if c in code_to_idx:
+                        flat_x[code_to_idx[c]] = v
+                for c, v in p2_vals_dict.items():
+                    if c in code_to_idx:
+                        flat_x[code_to_idx[c]] = v
 
             # --- Phase 3 (Schedule): fix static, optimize offsets ---
             if D_sched > 0:
@@ -2036,17 +2042,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 sched_perf_range, _ = self._get_acquisition_ranges()
 
-                def _schedule_acquisition_objective(x_flat: np.ndarray) -> float:
-                    """Exploration/inference schedule objective: joint over L layers.
+                def _schedule_acquisition_objective_vectorized(X_DS: np.ndarray) -> np.ndarray:
+                    """Vectorised schedule objective for ``_run_de(vectorized=True)``.
 
-                    Adds a small step-to-step smoothness penalty as a tie-breaker
-                    under the integrated-evidence objective.
+                    scipy passes ``X_DS`` of shape ``(D_total, S)`` — one column per
+                    DE candidate. Each candidate decodes (scalar, fast) to an L-step
+                    trajectory; the expensive joint Δ∫E + per-row perf evaluation is
+                    vectorised across S via ``_acquisition_joint_batched_objective``.
+
+                    Smoothing penalty is computed per candidate (cheap scalar arithmetic).
                     """
-                    pts = sched_space.decode(x_flat)
-                    X_batch = np.stack([_pts_row_to_dm(pts[k]) for k in range(L)])
-                    neg_score = -self._acquisition(X_batch, kappa, perf_range=sched_perf_range)
-                    neg_score += sched_space.smoothing_penalty(x_flat, neg_score)
-                    return neg_score
+                    S = X_DS.shape[1]
+                    full_S_NL = np.zeros((S, 1, L, n_input))
+                    for s in range(S):
+                        x_flat = X_DS[:, s]
+                        pts = sched_space.decode(x_flat)
+                        for k in range(L):
+                            full_S_NL[s, 0, k] = _pts_row_to_dm(pts[k])
+                    # Vectorised acquisition over (S, 1, L, n_input) — returns (S,) negated scores.
+                    scores_neg = self._acquisition_joint_batched_objective(
+                        full_S_NL, kappa, sched_perf_range,
+                    )
+                    # Smoothing penalty per candidate (loop is fine — pure scalar arithmetic).
+                    for s in range(S):
+                        scores_neg[s] += sched_space.smoothing_penalty(X_DS[:, s], scores_neg[s])
+                    return scores_neg
 
                 self.logger.debug(
                     f"Phase 3 schedule optimization: L={L}, D_static=0, "
@@ -2054,7 +2074,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
 
                 opt = self.engine._run_de(
-                    _schedule_acquisition_objective, sched_space.bounds, label="Schedule", show_progress=console,
+                    _schedule_acquisition_objective_vectorized, sched_space.bounds,
+                    label="Schedule", show_progress=console, vectorized=True,
                 )
                 self.last_opt_nfev += opt.nfev
                 self.convergence_history["Schedule"] = opt.convergence_history
