@@ -1671,10 +1671,50 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 process_codes.append(col)
         return {"domain": domain_codes, "process": process_codes}
 
+    def _acquisition_joint_batched_objective(
+        self,
+        full_S_NL: np.ndarray,
+        kappa: float,
+        perf_range: tuple[float, float] | None,
+    ) -> np.ndarray:
+        """Vectorised κ-acquisition over S DE candidates, each adding N×L points jointly.
+
+        ``full_S_NL`` has shape ``(S, N, L, D_global)`` where:
+          - ``S`` = scipy DE candidate batch dim,
+          - ``N`` = proposals per candidate (joint-batch over N points; baseline),
+          - ``L`` = schedule steps per proposal (joint-trajectory),
+          - ``D_global`` = full datamodule input dim.
+
+        Returns ``(S,)`` of negated κ-weighted scores for DE minimisation.
+
+        The (N×L) points per candidate are evaluated jointly under Δ∫E
+        (information gain) and per-row averaged for performance. Reduces to
+        the single-point case when N=L=1.
+        """
+        with profiler.section("acq._acquisition_joint_batched_objective [per gen]"):
+            S, N, L, D = full_S_NL.shape
+            NL = N * L
+            scores = np.zeros(S, dtype=np.float64)
+
+            if kappa < 1.0:
+                flat_rows = full_S_NL.reshape(S * NL, D)
+                with profiler.section("acq.perf_batched [N×L per S]"):
+                    perfs_flat = self._per_candidate_perf_batched(flat_rows, perf_range)
+                perfs_S = perfs_flat.reshape(S, NL).mean(axis=-1)
+                scores += (1.0 - kappa) * perfs_S
+
+            if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_fn is not None:
+                flat_per_candidate = full_S_NL.reshape(S, NL, D)
+                with profiler.section("acq.delta_evidence_joint [KDE batch S, joint NL]"):
+                    evidence_S = self.delta_integrated_evidence_joint_batched_fn(flat_per_candidate)
+                scores += kappa * np.asarray(evidence_S, dtype=np.float64)
+
+            return -scores
+
     def _run_phase(
         self,
         phase_param_codes: list[str],
-        fixed_values: dict[str, float],
+        fixed_values_per_n: list[dict[str, float]] | None = None,
         *,
         datamodule: DataModule,
         full_bounds: np.ndarray,
@@ -1682,66 +1722,106 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_range: tuple[float, float] | None,
         label: str,
         show_progress: bool,
-    ) -> tuple[dict[str, float], _OptResult]:
-        """Single-point κ-acquisition DE on a *subset* of input_columns.
+        n_proposals: int = 1,
+        n_schedule_steps: int = 1,
+    ) -> tuple[list[list[dict[str, float]]], _OptResult]:
+        """Generalised phase-of-calibration DE: optimise N proposals × L steps over a code subset.
 
-        ``phase_param_codes`` selects the dimensions the optimiser sees; the
-        remaining columns of the full ``X`` vector are filled from
-        ``fixed_values`` (codes → normalised values, e.g. results from a prior
-        phase) or 0.5 default. The acquisition objective sees the full-D vector
-        with phase values injected at the right positions, so ``perf`` and
-        ``evidence`` are computed on a complete parameter set.
+        Single mechanism handles all four cases through the same vectorised DE path:
+          - ``(N=1, L=1)`` — single-point exploration / inference Process phase.
+          - ``(N>1, L=1)`` — joint-batch baseline Domain / Process phase.
+          - ``(N=1, L>1)`` — exploration / inference schedule phase.
+          - ``(N>1, L>1)`` — joint-batch baseline schedule.
 
-        Returns ``(optimised_codes_dict, opt_result)`` — the DE result wrapping
-        contains ``best_x`` of length ``len(phase_param_codes)``, ``nfev``,
-        ``score``, etc. Used by ``run_calibration`` to compose Domain → Process
-        for single-point exploration / inference, and (in a follow-on commit)
-        by ``run_baseline`` for joint-batch baseline phases.
+        ``phase_param_codes`` selects the dimensions the optimiser sees; the rest
+        of each ``(proposal, step)`` row is filled from ``fixed_values_per_n[n]``
+        (per-proposal codes → normalised values from prior phases) or 0.5 default.
+        The DE optimises ``D_phase × N × L`` flat dims; the joint κ-acquisition
+        objective evaluates Δ∫E + averaged perf over each candidate's (N × L)
+        points in one broadcast tensor reduction.
+
+        Returns ``(per_proposal_per_step_codes, opt)`` where the first element
+        is shape ``(N, L)`` — ``list[list[dict[code, normalised_value]]]``,
+        indexed as ``[proposal_i][step_k]``.
+
+        ``fixed_values_per_n`` length should match ``n_proposals`` (caller's
+        responsibility); shorter lists are padded with empty dicts.
         """
         n_input = len(datamodule.input_columns)
         code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
 
-        phase_bounds: list[tuple[float, float]] = []
+        # Filter phase codes to those actually in datamodule.input_columns
+        used_codes: list[str] = []
         phase_idxs: list[int] = []
+        phase_bounds_per_unit: list[tuple[float, float]] = []
         for code in phase_param_codes:
             if code not in code_to_idx:
                 continue
             idx = code_to_idx[code]
+            used_codes.append(code)
             phase_idxs.append(idx)
-            phase_bounds.append((float(full_bounds[idx, 0]), float(full_bounds[idx, 1])))
+            phase_bounds_per_unit.append(
+                (float(full_bounds[idx, 0]), float(full_bounds[idx, 1]))
+            )
 
-        if not phase_bounds:
-            # Nothing to optimise — return empty + a no-op result.
-            return ({}, _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0))
+        D_phase = len(phase_idxs)
+        if D_phase == 0:
+            empty_results: list[list[dict[str, float]]] = [
+                [{} for _ in range(n_schedule_steps)] for _ in range(n_proposals)
+            ]
+            return (empty_results, _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0))
 
-        prefill = np.full(n_input, 0.5, dtype=np.float64)
-        for code, val in fixed_values.items():
-            if code in code_to_idx:
-                prefill[code_to_idx[code]] = float(val)
         phase_idxs_arr = np.asarray(phase_idxs, dtype=np.int64)
 
-        def _vec_obj_phase(X_DS_phase: np.ndarray) -> np.ndarray:
-            """Pad phase-local (D_phase, S) to full (D, S), dispatch to vectorised acq."""
-            S = X_DS_phase.shape[1]
-            X_full_DS = np.broadcast_to(prefill[:, None], (n_input, S)).copy()
-            X_full_DS[phase_idxs_arr, :] = X_DS_phase
-            return self._acquisition_objective_vectorized(X_full_DS, kappa, perf_range)
+        # Per-proposal prefill: (N, n_input). Codes outside the phase get fixed
+        # values from prior phases (per-proposal) or 0.5 default.
+        prefill_per_n = np.full((n_proposals, n_input), 0.5, dtype=np.float64)
+        if fixed_values_per_n is not None:
+            for i in range(min(n_proposals, len(fixed_values_per_n))):
+                for code, val in fixed_values_per_n[i].items():
+                    if code in code_to_idx:
+                        prefill_per_n[i, code_to_idx[code]] = float(val)
+
+        # DE bounds: phase_bounds_per_unit replicated N×L times
+        # (flat layout: [unit_0, unit_1, ..., unit_{N*L-1}], each unit = D_phase dims)
+        de_bounds = phase_bounds_per_unit * (n_proposals * n_schedule_steps)
+
+        def _vec_obj(X_DS: np.ndarray) -> np.ndarray:
+            """X_DS: (D_phase × N × L, S) → (S,) via decode, inject, joint κ-acquisition."""
+            S = X_DS.shape[1]
+            # Reshape: (D_phase * N * L, S) → (S, N, L, D_phase)
+            candidates = X_DS.T.reshape(S, n_proposals, n_schedule_steps, D_phase)
+            # Build full (S, N, L, n_input) by injecting candidates into prefill_per_n
+            full_S_NL = np.broadcast_to(
+                prefill_per_n[None, :, None, :],
+                (S, n_proposals, n_schedule_steps, n_input),
+            ).copy()
+            full_S_NL[..., phase_idxs_arr] = candidates
+            return self._acquisition_joint_batched_objective(full_S_NL, kappa, perf_range)
 
         opt = self.engine.run_acquisition_vectorized(
-            _vec_obj_phase,
-            phase_bounds,
+            _vec_obj,
+            de_bounds,
             label=label,
             show_progress=show_progress,
         )
 
+        # Decode best_x → (N, L, D_phase) → list[list[dict]]
         if opt.best_x is None:
-            result_x = np.array([0.5 * (lo + hi) for (lo, hi) in phase_bounds])
+            result_x = np.array([0.5 * (lo + hi) for (lo, hi) in de_bounds])
         else:
             result_x = opt.best_x
-        return (
-            {phase_param_codes[i]: float(result_x[i]) for i in range(len(phase_bounds))},
-            opt,
-        )
+        decoded = result_x.reshape(n_proposals, n_schedule_steps, D_phase)
+
+        result: list[list[dict[str, float]]] = []
+        for n in range(n_proposals):
+            steps_for_n: list[dict[str, float]] = []
+            for k in range(n_schedule_steps):
+                step_dict = {used_codes[d]: float(decoded[n, k, d]) for d in range(D_phase)}
+                steps_for_n.append(step_dict)
+            result.append(steps_for_n)
+
+        return result, opt
 
     def run_calibration(
         self,
@@ -2134,17 +2214,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # has free codes). When split is disabled, both buckets fold
                 # into Phase 2 below — the legacy single-shot behaviour.
                 if self.split_domain_phase and phase_codes["domain"]:
-                    domain_result, domain_opt = self._run_phase(
+                    domain_results, domain_opt = self._run_phase(
                         phase_codes["domain"],
-                        fixed_for_next,
+                        [fixed_for_next],
                         datamodule=datamodule,
                         full_bounds=bounds,
                         kappa=_eff_kappa,
                         perf_range=_perf_range,
                         label=f"Domain (D={len(phase_codes['domain'])})",
                         show_progress=console,
+                        n_proposals=1,
+                        n_schedule_steps=1,
                     )
-                    fixed_for_next.update(domain_result)
+                    fixed_for_next.update(domain_results[0][0])
 
                 # Phase 2: Process (split=on) or merged Domain+Process (split=off).
                 p2_codes = (
@@ -2158,17 +2240,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         if self.split_domain_phase and phase_codes["domain"]
                         else "Optimizing"
                     )
-                    process_result, process_opt = self._run_phase(
+                    process_results, process_opt = self._run_phase(
                         p2_codes,
-                        fixed_for_next,
+                        [fixed_for_next],
                         datamodule=datamodule,
                         full_bounds=bounds,
                         kappa=_eff_kappa,
                         perf_range=_perf_range,
                         label=p2_label,
                         show_progress=console,
+                        n_proposals=1,
+                        n_schedule_steps=1,
                     )
-                    fixed_for_next.update(process_result)
+                    fixed_for_next.update(process_results[0][0])
 
                 # Build full-D static_out from per-phase results. Codes still
                 # absent from fixed_for_next (e.g. all-fixed-params case) keep
