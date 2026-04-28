@@ -4,6 +4,33 @@
 
 ## Status
 
+### Strategy D — commits 1-7 shipped, 8+ in progress
+
+| Commit | What | Tests | Status |
+|---|---|---|---|
+| 1 | `params_to_tensor` / `tensor_to_params` (gradient-traversable affine norm) | 9 | shipped |
+| 2 | `predict_for_calibration_tensor` (autoreg with `gradient_pass=True`) | 7 | shipped |
+| 3 | `IEvaluationModel.compute_performance_tensor` + `_evaluate_feature_dict_tensor` | 8 | shipped |
+| 4 | KDE in torch (dense regime + σ/D-aware regime dispatcher) | 14 | shipped |
+| 5 | `Optimizer.GRADIENT` + `run_acquisition_gradient` (sigmoid bound reparam) + tensor acquisition objective wired into `_run_acquisition_phase` | 12 | shipped |
+| 6 | `DataLoader(TensorDataset)` scale-aware in `TorchMLPModel.train` | 3 | shipped |
+| 7 | End-to-end GRADIENT-vs-DE validation smoke + empirical findings recorded | (smoke) | shipped |
+| 8 | Flip default optimiser | — | gated on empirical validation at D≥5-10 |
+
+**End-to-end works**: `agent.configure_optimizer(backend=Optimizer.GRADIENT)` followed by `agent.baseline_step(n)` runs the gradient path through the Process phase (continuous params; integer / domain phase still DE). 654 tests pass.
+
+**Findings from commit 7 mock smoke (D=2 Process phase, ~10 KDE kernels)**:
+- Both paths converge to similar acquisition scores (DE obj=−0.069, GRADIENT obj=−0.061; GRADIENT slightly better).
+- DE wins wall-clock at D=2 (3.4s vs 4.7s) — small-D regime favours DE's tight loop over GRADIENT's 4-start × 40-iter Adam over the full encoder + tensor KDE graph.
+- The DE → GRADIENT crossover should empirically land somewhere around D ≥ 5-10. Validation on a larger problem before flipping the default in commit 8.
+
+**Deferred** (each needs its own dedicated effort):
+- Phase C absorption (delete K-refit + DM SS state machinery) — touches 14 SS-specific tests with detailed per-cell semantics.
+- Data-layer migrations 7a/7b/7c (one-hot → categorical-index, nn.Module normalisers, tensor-native `prepare_input` + tensor-dict export).
+- KDE 4b (KNN regime) and 4c (cluster regime) — gated on dispatcher INFO logs from real workloads.
+
+---
+
 **Strategy A — done, merged.** ~5.2× cumulative on smoke (130ms → 25ms), ~20× on schedule iteration (20s → 1s). Architecturally:
 - Tensor-native `IPredictionModel` contract (A.1).
 - Batched autoregressive prediction + vectorised DE acquisition (A.2 + Layer 4).
