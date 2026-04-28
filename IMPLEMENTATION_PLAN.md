@@ -247,23 +247,51 @@ Top-of-plan status table summarising shipped/deferred so the next session has a 
 
 ---
 
-## Outstanding work — full commit roadmap
+## Outstanding work — full commit roadmap (user-approved 2026-04-29)
 
-User direction: **fully commit to torch-native infrastructure; remove anything that isn't torch / tensor first**. The plan below replaces the original commit 7-8 spec with a sequenced cleanup roadmap.
+User direction: **fully commit to torch-native infrastructure; no fallbacks, no parallel paths, no escape hatches**. Single optimiser, single normaliser implementation, single data path. Order: small / low-risk first, then large architectural changes. Each row independently committable; dependencies noted in **deps**.
 
-Order: small / low-risk first, then large architectural changes. Each row is independently committable; dependencies noted in the **deps** column.
+### Phase 1 — Acquisition: one optimiser, end of story
 
-### Phase 1 — Torch-native foundations (small / low-risk)
+**Delete at the end of Phase 1:** `Optimizer` enum entirely, `Optimizer.DE`, `Optimizer.LBFGSB`, `_run_de`, `_run_lbfgsb`, all `de_*` / `lbfgsb_*` config knobs, `online_optimizer`, `scipy.optimize` imports, `scipy.spatial.cKDTree`. After: zero scipy in `pred_fab/`.
+
+**Replace with:** one `engine.run_acquisition(objective_tensor, bounds, integer_mask)` method. Internally — pure-continuous → gradient + multi-restart; integer/categorical present → enumerate low-cardinality integer combos × gradient (BoTorch `optimize_acqf_mixed` pattern); for very-high-cardinality integers, vectorised torch-native DE — automatic dispatch by cardinality, no user choice.
 
 | # | Commit | Size | Deps | What lands |
 |---|---|---|---|---|
-| **9** | **Flip default optimiser + integer enumeration** | ~80 LOC | — | `cal.optimizer = Optimizer.GRADIENT` default. For mixed integer/continuous phases, enumerate low-cardinality integer combos × gradient on continuous (BoTorch's `optimize_acqf_mixed` pattern). Cap on enumeration size with fallback to torch-native DE when too large (commit 10). |
-| **10** | **Torch-native vectorised DE** | ~150 LOC + ~−50 scipy DE | 9 | Drop-in replacement for `scipy.optimize.differential_evolution` written as torch tensor ops on the population. Same `_run_de` interface; population update is one batched step. Removes `from scipy.optimize import differential_evolution`. |
-| **11** | **Torch-native L-BFGS-B** | ~−40 LOC | 10 | Use `torch.optim.LBFGS` instead of `scipy.optimize.minimize`. Removes `from scipy.optimize import minimize`. (Already used inside `run_acquisition_gradient`; this generalises.) |
-| **12** | **`scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine`** | ~10 LOC | — | Trivial swap inside `SobolLocalEstimator`. Removes `from scipy.stats import qmc`. |
-| **13** | **`scipy.spatial.cKDTree` → torch KNN** | ~30 LOC | 14 (KDE 4b lands KNN regime) | When KNN regime ships (commit 14), replace cKDTree with `torch.cdist + topk`. Removes `from scipy.spatial import cKDTree`. |
+| **11** ✅ | scipy.qmc.Sobol → torch.quasirandom.SobolEngine | −5 / +5 | — | shipped (`980c062`) |
+| **9** | Single `run_acquisition` + delete scipy.optimize + delete `Optimizer` enum + integer enumeration + simplify `configure_optimizer` to `(n_starts, n_iters)` only | −250 / +120 | — | torch-native vectorised DE for high-cardinality integer; integer enumeration for low-cardinality; default & only path. Removes `scipy.optimize.differential_evolution` and `scipy.optimize.minimize`. |
+| **9b** | **Smart initial conditions** in `run_acquisition` (BoTorch pattern): `raw_samples` Sobol → batched no-grad scoring → Boltzmann-select top-K with temperature `eta` → optional perturb-around-best | +50 | 9 | Replaces uniform-random multi-start. Better global coverage at same `n_starts` budget. |
+| **10** | cKDTree → torch KNN (`torch.cdist + topk`); also lands KDE 4b regime | −30 / +60 | — | Removes `from scipy.spatial import cKDTree`. **End of Phase 1: zero scipy in `pred_fab/`.** |
 
-**Phase 1 net:** −110 LOC scipy code, full scipy removal from `pred_fab/orchestration` after 13. PFAB no longer imports scipy at runtime.
+### Phase 2 — Schedule: sigmoid reparam, no offset encoding, no smoothing
+
+**Delete:** `SolutionSpace`'s offset encoding for sched params, `sched_deltas_norm`, `_sched_delta_arr`, `_sched_bounds_list` for relative offsets, `_schedule_acquisition_objective_vectorized`'s soft bound penalty, per-step trust-region delta bookkeeping, `_STATIC_DRIFT_FRAC`, `cal.schedule_smoothing` and `_schedule_smoothing_factor` (autograd-traversable schedule makes smoothness emerge naturally), `cal._schedule_joint_var_limit`.
+
+**Replace with:** absolute-value step encoding in `[0, 1]` z-space, sigmoid-reparameterised. Schedule trajectory = `L × D_sched` continuous variables, gradient-optimised jointly via tensor objective from commit 5.
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **12** | Schedule path gradient migration + sigmoid reparam + delete all schedule workarounds (smoothing, offset encoding, soft bound penalty, joint-var limit) | −80 / +150 | 9 | **Win #2 fully realised.** Schedule iteration target 1s → 50-200ms. |
+
+### Phase 3 — Data layer: nothing pandas-internal, nothing numpy-stat-dict
+
+**Delete:** `_apply_normalization`, `_reverse_normalization`, `_compute_normalization_stats`, `get_normalization_state`, `set_normalization_state`, numpy stat dicts. `_col_extraction`, `_decode_one_hot`, `_one_hot_encode`, internal one-hot representation. `pd.DataFrame(all_rows)` roundtrip in autoreg, `_inject_context_features`'s pandas path, `dataset.export_to_dataframe`, `prepare_input`'s pandas → numpy → tensor sequence. `set_scheduled_sampling_state`, `_perturb_recursive_features`, `_ss_predictions_by_exp`, `_ss_p_student`, `_ss_rng`, `_autoreg_predict_training_data`, K-refit loop, `agent.configure_scheduled_sampling`, `cal.n_ss_rounds`, `cal.ss_schedule_floor`. The 14 SS-specific tests that test legacy semantics — rewritten or deleted.
+
+**Replace with:** `nn.Module` normalisers (`StandardScalerModule`, `MinMaxModule`, `RobustScalerModule`). Categorical-index long tensors throughout (models use `F.one_hot` / `nn.Embedding` themselves). Tensor-dict export. Tensor-stack `prepare_input`. SS substitution via per-minibatch hook callable inside `TorchMLPModel.train()` using *current* network state.
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **13** | `nn.Module` normalisers; delete numpy stat-dict normalisers | −150 / +30 | — | Stats live in `state_dict()`; serialise via `torch.save`. |
+| **14** | One-hot → categorical-index tensors; delete `_col_extraction`, `_decode_one_hot`, `_one_hot_encode` | −80 / +20 | 13 | Models that want one-hot use `F.one_hot` themselves; learnable cats via `nn.Embedding`. |
+| **15** | Phase C SS absorption: per-minibatch SS hook in `train()`; delete K-refit + DM SS state machinery | −330 / +50 | 14 | **Win #3 fully realised.** Touches 14 SS tests — rewritten. |
+| **16** | Tensor-native `prepare_input` + `export_to_tensor_dict`; drop pandas roundtrip from autoreg | −80 / +30 | 14, 15 | **End of Phase 3: zero pandas inside `pred_fab/orchestration` and `datamodule.py`.** |
+
+### Phase 4 — KDE depth (cluster regime, conditional)
+
+| # | Commit | Size | Deps | What lands |
+|---|---|---|---|---|
+| **17** (= 4c) | KDE cluster regime via mini-batch K-means; only if real workloads with >100K kernels appear | +120 | 10 | Conditional — likely deferred until empirical signal from dispatcher logs. |
 
 ### Phase 2 — Schedule path gradient migration
 
@@ -294,33 +322,43 @@ Order: small / low-risk first, then large architectural changes. Each row is ind
 
 **Phase 4 net:** +200 LOC, but unlocks scaling to 100K+ kernel workloads.
 
-### Phase 5 — Architecture cleanup
+### Phase 5 — Architecture finalisation + API simplification
+
+**API simplification — drop 5 configure methods × ~25 knobs to 4 × ~10:**
+- `configure_performance(weights)` — keep as-is.
+- `configure_exploration(sigma)` — drop `estimator` knob (KernelField is the only path).
+- `configure_optimizer(n_starts, n_iters)` — drop `backend`, `online_backend`, `de_*`, `lbfgsb_*`, `gradient_lr`, `gradient_method`. Single optimiser, two real quality/speed knobs.
+- `configure_scheduled_sampling(...)` — **delete entirely** (Phase 3 commit 15 absorbs SS into `train()`).
+- `configure_schedule(parameter, dimension, *, delta, force)` — drop `smoothing` (autograd makes it redundant).
 
 | # | Commit | Size | Deps | What lands |
 |---|---|---|---|---|
-| **22** | **`run_baseline` / `run_calibration` unification** | medium | 14, 15 | Single entry point with N≥1, L≥1; falls out naturally now that schedule path is gradient-typed. Stage 3 of original Strategy A plan. |
-| **23** | **GPU support + `torch.compile` over the full acquisition graph** | medium | 19 | `agent.to('cuda')` works end-to-end. `torch.compile` JIT-traces the whole acquisition (params → predict → eval → KDE → score). Expected 2-5× on top of everything else. |
+| **18** | API simplification — collapse the surface; drop `Optimizer` enum imports from public API; delete `configure_scheduled_sampling`; drop `smoothing` from `configure_schedule`; drop `estimator` from `configure_exploration` | −80 | 9, 12, 15 | User-facing surface goes from 5×25 to 4×10. |
+| **19** | `run_baseline` / `run_calibration` unification | −40 | 12 | Single entry point N≥1, L≥1. Stage 3 of original Strategy A. |
+| **20** | GPU support + `torch.compile` over the full acquisition graph | +30 | 16 | `agent.to('cuda')` works end-to-end. JIT-traces params → predict → eval → KDE → score. Expected 2-5× on top of everything else. |
 
 ### Estimated effort
 
 | Phase | Days |
 |---|---|
-| 1 (foundations) | 1.5 |
+| 1 (foundations + scipy removal) | 1.5 |
 | 2 (schedule) | 1.5 |
 | 3 (data layer) | 4 |
-| 4 (KDE depth) | 2 |
-| 5 (architecture) | 2 |
+| 4 (KDE depth, conditional) | 2 |
+| 5 (architecture + API simplification) | 2 |
 | **Total** | **~11 days** |
 
-Each phase independently revertable. Phase 1 unblocks Phases 2 + 4. Phase 3 is the big-ticket cleanup; commit 16 (normalisers) and 17 (categorical) are the prerequisites for 18 (Phase C) and 19 (prepare_input).
+Each phase independently revertable. Phase 1 unblocks Phase 2. Phase 3 is the big-ticket cleanup; commits 13 + 14 are prerequisites for 15 (Phase C) and 16 (prepare_input).
 
 ---
 
-## Total estimate (commits 9-23)
+## Total estimate (commits 9-20)
 
-**~11 days** of focused work to fully complete the torch-native migration. Net LOC delta: **~−470 LOC, end-state simpler**.
+**~11 days** focused work for full torch-native migration. Net LOC delta: **~−870 LOC, end-state simpler**.
 
-After commit 19 ships: zero scipy / pandas / numpy-as-primary-type inside `pred_fab/`. Numpy stays only at user-facing JSON / matplotlib edges.
+After commit 16 ships: zero scipy / pandas / numpy-as-primary-type inside `pred_fab/`. Numpy stays only at user-facing JSON / matplotlib edges.
+
+After commit 18 ships: user-facing API simplified to 4 configure methods × ~10 knobs (down from 5 × 25).
 
 ---
 
