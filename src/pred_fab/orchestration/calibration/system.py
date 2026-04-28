@@ -71,6 +71,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         uncertainty_fn: Callable[[np.ndarray], float],
         delta_integrated_evidence_fn: Callable[[np.ndarray], float] | None = None,
         delta_integrated_evidence_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+        delta_integrated_evidence_joint_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
         push_virtual_points_fn: Callable[[list[dict[str, Any]], list[float], DataModule | None], None] | None = None,
         pop_virtual_points_fn: Callable[[], None] | None = None,
         n_exp_fn: Callable[[], int] | None = None,
@@ -84,6 +85,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.uncertainty_fn = uncertainty_fn
         self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
         self.delta_integrated_evidence_batched_fn = delta_integrated_evidence_batched_fn
+        self.delta_integrated_evidence_joint_batched_fn = delta_integrated_evidence_joint_batched_fn
         self.push_virtual_points_fn = push_virtual_points_fn
         self.pop_virtual_points_fn = pop_virtual_points_fn
         self._n_exp_fn = n_exp_fn

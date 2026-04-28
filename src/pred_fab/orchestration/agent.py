@@ -204,6 +204,7 @@ class PfabAgent:
             uncertainty_fn=_pred.uncertainty,
             delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
             delta_integrated_evidence_batched_fn=_pred.delta_integrated_evidence_batched,
+            delta_integrated_evidence_joint_batched_fn=_pred.delta_integrated_evidence_joint_batched,
             push_virtual_points_fn=_pred.push_virtual_points,
             pop_virtual_points_fn=_pred.pop_virtual_points,
             n_exp_fn=lambda: _pred._n_exp,

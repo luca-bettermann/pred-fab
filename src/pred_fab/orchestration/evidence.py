@@ -459,6 +459,147 @@ class KernelFieldEstimator(EvidenceEstimator):
         e_new = (old_weights[:, None] * integral_old_per_s).sum(axis=0) + new_weights_S * integral_new_per_s
         return e_new
 
+    def integrated_evidence_perturbed_batched_joint(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: np.ndarray,
+        new_weights_SL: np.ndarray,
+    ) -> np.ndarray:
+        """Joint-batched ``E(old ∪ {L kernels of candidate s})`` per s. Returns ``(S,)``.
+
+        Like :meth:`integrated_evidence_perturbed_batched` but each candidate
+        adds **L kernels jointly** (a schedule trajectory) instead of one. Used
+        by schedule-mode acquisition where each DE candidate decodes to an
+        L-step trajectory that's evaluated as a joint Δ∫E.
+
+        Shapes:
+          - ``new_centers_SL``: ``(S, L, D)`` — S candidates × L points each.
+          - ``new_weights_SL``: ``(S, L)`` — per-point weights.
+
+        Reduces to ``integrated_evidence_perturbed_batched`` when ``L == 1``
+        (verified by equivalence test). For L > 1 each candidate's L points
+        are added together; old kernels see all L additions; new kernels of
+        the same candidate also see each other's contributions (correct
+        joint-Δ∫E semantics).
+        """
+        S = int(new_centers_SL.shape[0])
+        if S == 0:
+            return np.zeros(0, dtype=np.float64)
+        L = int(new_centers_SL.shape[1])
+        D = int(new_centers_SL.shape[2])
+        sigma = index_old.sigma
+        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
+        offsets, quad_weights, self_density = self._probes_weights_self(D, sigma)
+        M = offsets.shape[0]
+
+        n_old = len(index_old.centers) if not index_old.is_empty else 0
+        do_truncate = n_old >= index_old.truncation_threshold
+        cutoff_d2 = (index_old.cutoff_sigmas * sigma) ** 2
+
+        # Probes around each new candidate's L kernels: (S, L, M, D)
+        probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
+        in_domain_new_SL = (
+            _in_unit_cube(probes_new_SL.reshape(-1, D)).reshape(S, L, M).astype(np.float64)
+        )
+
+        # Cross-influence between candidate-s's own L kernels at probes_s_l:
+        # density at probes_s_l from the OTHER (L-1) kernels of the same candidate.
+        # diff_self_l_to_lprime: (S, L, M, L, D) — probes around l vs centres at lprime
+        diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]  # (S, L, M, L, D)
+        d2_self = np.sum(diff_self * diff_self, axis=-1)  # (S, L, M, L)
+        kernels_self = np.exp(-d2_self * inv_2sig2)
+        if do_truncate:
+            kernels_self = np.where(d2_self <= cutoff_d2, kernels_self, 0.0)
+        # Mask out l == lprime (that's the kernel's own self-density, handled separately)
+        eye_LL = np.eye(L, dtype=np.float64)
+        keep_LL = (1.0 - eye_LL)  # (L, L)
+        weighted_self = kernels_self * new_weights_SL[:, None, None, :]  # broadcast over m
+        rho_other_self_at_probes_SL = (
+            weighted_self * keep_LL[None, :, None, :]
+        ).sum(axis=-1)  # (S, L, M) — density from OTHER L-1 kernels of same candidate
+
+        # === Branch 1: no old kernels ===
+        if n_old == 0:
+            # total density at probes_s_l: self_contribution + other-self-contribution
+            self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]  # (S, L, M)
+            total_density_new = self_contribution_new + rho_other_self_at_probes_SL
+            integrand_new = 1.0 / (1.0 + total_density_new)
+            integral_new_SL = (
+                quad_weights[None, None, :] * integrand_new * in_domain_new_SL
+            ).sum(axis=-1)  # (S, L)
+            # E_new[s] = sum_l w_new_SL[s, l] * integral_new[s, l]
+            return (new_weights_SL * integral_new_SL).sum(axis=-1)
+
+        # === Branch 2: old kernels exist ===
+        old_centers = index_old.centers
+        old_weights = index_old.weights
+
+        # ---- Per-old precompute (independent of s) ----
+        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]  # (n_old, M, D)
+        in_domain_per_old = (
+            _in_unit_cube(probes_per_old.reshape(-1, D)).reshape(n_old, M).astype(np.float64)
+        )
+        # rho_other_old_at_old_probes[j, m] = sum_{k!=j} w_k * exp(-||probes[j,m] - old_k||² / 2σ²)
+        diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]  # (n_old, M, n_old, D)
+        d2_old = np.sum(diff_old * diff_old, axis=-1)
+        kernels_old = np.exp(-d2_old * inv_2sig2)
+        if do_truncate:
+            kernels_old = np.where(d2_old <= cutoff_d2, kernels_old, 0.0)
+        weighted_old = kernels_old * old_weights[None, None, :]
+        eye_jk = np.eye(n_old, dtype=np.float64)
+        keep_jk = (1.0 - eye_jk)
+        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(axis=-1)  # (n_old, M)
+        self_contribution_per_old = self_density[None, :] * old_weights[:, None]  # (n_old, M)
+
+        # ---- Old kernels' self-integrals when L new kernels added ----
+        # delta_density[j, m, s, l] = density at probes_per_old[j, m] from new kernel (s, l)
+        # diff: (n_old, M, S, L, D)
+        diff_new_to_old = probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
+        d2_new_to_old = np.sum(diff_new_to_old * diff_new_to_old, axis=-1)  # (n_old, M, S, L)
+        kernels_new_to_old = np.exp(-d2_new_to_old * inv_2sig2)
+        if do_truncate:
+            kernels_new_to_old = np.where(d2_new_to_old <= cutoff_d2, kernels_new_to_old, 0.0)
+        delta_density = (
+            kernels_new_to_old * new_weights_SL[None, None, :, :]
+        ).sum(axis=-1)  # (n_old, M, S) — sum over L (joint addition)
+
+        total_density_old = (
+            (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
+        )  # (n_old, M, S)
+        integrand_old = 1.0 / (1.0 + total_density_old)
+        integral_old_per_s = (
+            integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
+        ).sum(axis=1)  # (n_old, S)
+
+        # ---- New kernels' own self-integrals (each (s, l)) ----
+        # density at probes_new_SL[s, l, m] from old kernels: (S, L, M, n_old) → sum n_old → (S, L, M)
+        diff_old_to_new = probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
+        d2_old_to_new = np.sum(diff_old_to_new * diff_old_to_new, axis=-1)  # (S, L, M, n_old)
+        kernels_old_to_new = np.exp(-d2_old_to_new * inv_2sig2)
+        if do_truncate:
+            kernels_old_to_new = np.where(d2_old_to_new <= cutoff_d2, kernels_old_to_new, 0.0)
+        rho_old_at_new_probes = (
+            kernels_old_to_new * old_weights[None, None, None, :]
+        ).sum(axis=-1)  # (S, L, M)
+
+        # Self-contribution for kernel (s, l) at its own probes
+        self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]  # (S, L, M)
+
+        total_density_new = (
+            self_contribution_new + rho_old_at_new_probes + rho_other_self_at_probes_SL
+        )  # (S, L, M)
+        integrand_new = 1.0 / (1.0 + total_density_new)
+        integral_new_SL = (
+            quad_weights[None, None, :] * integrand_new * in_domain_new_SL
+        ).sum(axis=-1)  # (S, L)
+
+        # ---- Combine ----
+        e_new = (
+            (old_weights[:, None] * integral_old_per_s).sum(axis=0)
+            + (new_weights_SL * integral_new_SL).sum(axis=-1)
+        )
+        return e_new
+
 
 # ---------------------------------------------------------------------------
 # Sobol-local — QMC cube around each kernel
