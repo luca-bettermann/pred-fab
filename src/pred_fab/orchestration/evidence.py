@@ -31,7 +31,6 @@ from typing import Literal
 
 import numpy as np
 import torch
-from scipy.spatial import cKDTree  # type: ignore[import-untyped]
 
 _logger = logging.getLogger(__name__)
 
@@ -80,7 +79,15 @@ def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 # ---------------------------------------------------------------------------
 
 class KernelIndex:
-    """Spatial index over Gaussian kernel centres for fast D(z) evaluation."""
+    """Spatial index over Gaussian kernel centres for fast D(z) evaluation.
+
+    Strategy D commit 10: replaced ``scipy.spatial.cKDTree`` neighbour
+    lookup with batched ``torch.cdist`` distance computation. For
+    n_kernels < ``truncation_threshold`` (default 10), full distance is
+    computed directly (correct + cheap). Above the threshold a 5σ-radius
+    mask is applied via ``torch.where`` — same semantics as the old
+    cKDTree query_ball_point cutoff, but without scipy.
+    """
 
     def __init__(
         self,
@@ -97,9 +104,6 @@ class KernelIndex:
         self.truncation_threshold = int(truncation_threshold)
         self._n = len(self.centers)
         self._D = int(self.centers.shape[1]) if self.centers.ndim == 2 and self._n else 0
-        # cKDTree only when we have enough kernels to justify truncation —
-        # below threshold we sum all kernels directly so density is never zero.
-        self._tree = cKDTree(self.centers) if self._n >= self.truncation_threshold else None
 
     @property
     def is_empty(self) -> bool:
@@ -129,7 +133,7 @@ class KernelIndex:
 
         inv_2sig2 = 1.0 / (2.0 * self.sigma ** 2)
 
-        if self._tree is None:
+        if self._n < self.truncation_threshold:
             # Direct sum — small N, full Gaussian tail kept.
             diff = points[:, None, :] - self.centers[None, :, :]
             d2 = np.sum(diff * diff, axis=-1)
@@ -139,19 +143,22 @@ class KernelIndex:
                 return (exp_term[:, mask] * self.weights[mask]).sum(axis=-1)
             return (exp_term * self.weights).sum(axis=-1)
 
-        neighbor_lists = self._tree.query_ball_point(points, r=self.cutoff)
-        out = np.zeros(M)
-        for i, idxs in enumerate(neighbor_lists):
-            if not idxs:
-                continue
-            idxs_arr = np.asarray(idxs, dtype=int)
-            if exclude_idx is not None:
-                idxs_arr = idxs_arr[idxs_arr != exclude_idx]
-                if len(idxs_arr) == 0:
-                    continue
-            d2 = np.sum((points[i] - self.centers[idxs_arr]) ** 2, axis=-1)
-            out[i] = np.sum(self.weights[idxs_arr] * np.exp(-d2 * inv_2sig2))
-        return out
+        # Truncated sum via torch.cdist (replaces scipy.spatial.cKDTree).
+        # Squared 5σ cutoff — kernels beyond contribute < exp(−12.5) ≈ 4e−6.
+        cutoff_d2 = (self.cutoff_sigmas * self.sigma) ** 2
+        pts_t = torch.from_numpy(points).double()
+        cnt_t = torch.from_numpy(self.centers).double()
+        # cdist returns euclidean distance; we want squared.
+        d2_t = torch.cdist(pts_t, cnt_t, p=2.0).pow(2)  # (M, n_kernels)
+        # Apply 5σ truncation: zero out distances above cutoff.
+        in_range = d2_t <= cutoff_d2
+        exp_term = torch.where(in_range, torch.exp(-d2_t * inv_2sig2), torch.zeros_like(d2_t))
+        weights_t = torch.from_numpy(self.weights).double()
+        if exclude_idx is not None:
+            keep = torch.ones(self._n, dtype=torch.bool)
+            keep[exclude_idx] = False
+            return (exp_term[:, keep] * weights_t[keep]).sum(dim=-1).cpu().numpy()
+        return (exp_term * weights_t).sum(dim=-1).cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
