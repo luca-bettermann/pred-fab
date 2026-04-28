@@ -71,6 +71,13 @@ class OptimizationEngine:
         self.gradient_lr: float = 0.05
         self.gradient_method: str = "adam"  # "adam" | "lbfgs"
 
+        # Smart-init parameters (Strategy D commit 9b — BoTorch gen_batch_initial_conditions
+        # pattern). raw_samples Sobol points are batch-evaluated, top-K selected via
+        # Boltzmann sampling with temperature `eta` to balance quality vs. diversity.
+        # 0 disables (uniform random multi-start fallback).
+        self.gradient_raw_samples: int = 256
+        self.gradient_init_eta: float = 1.0
+
         # Schedule smoothing: penalizes speed changes between adjacent layers
         self.schedule_smoothing: float = 0.05
 
@@ -277,13 +284,48 @@ class OptimizationEngine:
         hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
         span_t = hi_t - lo_t  # (D,)
 
-        # Initial z-space samples: spread across the cube. Use a fixed-seed
-        # rng so multi-start is deterministic for a given engine seed.
+        # Smart initial conditions (Strategy D commit 9b — BoTorch
+        # gen_batch_initial_conditions pattern):
+        #   1. Draw `raw_samples` Sobol points
+        #   2. Forward the objective on all of them in one batched no-grad call
+        #   3. Boltzmann-select top n_starts with temperature `eta` for diversity
+        # Falls back to uniform random when raw_samples ≤ n_starts (e.g. for tests
+        # that explicitly want simple multi-start).
         x_inits: list[np.ndarray] = []
         if x0 is not None:
             x_inits.append(np.clip(x0, bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
-        for _ in range(max(n_starts - len(x_inits), 0)):
-            x_inits.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
+
+        raw_samples = max(int(self.gradient_raw_samples), 0)
+        eta = float(self.gradient_init_eta)
+        n_more = max(n_starts - len(x_inits), 0)
+
+        if raw_samples > n_more and n_more > 0:
+            # Sobol cube samples in (raw_samples, D); evaluate without autograd.
+            sobol_seed = int(torch.randint(0, 2**31 - 1, (1,)).item()) if self._random_seed is None \
+                else int(self.rng.randint(0, 2**31 - 1))
+            sobol = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=sobol_seed)
+            cand = sobol.draw(raw_samples).double() * span_t + lo_t  # (raw_samples, D)
+            with torch.no_grad():
+                vals = objective_tensor(cand)  # (raw_samples,)
+            # Boltzmann selection: weight ∝ exp(−eta · z(value)) where z normalises to [0, 1].
+            v = vals.detach().cpu().double()
+            v_min, v_max = float(v.min().item()), float(v.max().item())
+            if v_max - v_min > 1e-12:
+                v_norm = (v - v_min) / (v_max - v_min)
+            else:
+                v_norm = torch.zeros_like(v)
+            # Lower obj = better (negated convention). Boltzmann favours low values.
+            logits = -eta * v_norm
+            probs = torch.softmax(logits, dim=0).cpu().numpy()
+            probs = probs / probs.sum()
+            chosen_idx = self.rng.choice(raw_samples, size=n_more, replace=False, p=probs)
+            for idx in chosen_idx:
+                x_inits.append(cand[int(idx)].cpu().numpy())
+        else:
+            # Uniform random fallback (used when raw_samples is disabled or tiny).
+            for _ in range(n_more):
+                x_inits.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
+
         x_inits_arr = np.stack(x_inits, axis=0)  # (n_starts, D)
 
         # Map x → z via inverse sigmoid: z = logit((x - lo) / span). Clamp the
