@@ -172,7 +172,14 @@ class PfabAgent:
                 return {}
 
         def _perf_fn_batched(params_dicts: list[dict[str, Any]]) -> list[dict[str, float | None]]:
-            """Batched perf evaluation: one autoreg pass for S candidates, S eval calls."""
+            """Batched perf evaluation: one autoreg pass + one batched eval call.
+
+            The eval side dispatches each registered ``IEvaluationModel`` once
+            with all S candidates' feature arrays. Models with
+            ``TARGETS_CONSTANT=True`` vectorise the per-row arithmetic across
+            ``(S, n_rows)`` in one numpy op; others fall back to a per-
+            candidate loop inside ``compute_performance_batched``.
+            """
             if not params_dicts:
                 return []
             try:
@@ -183,10 +190,9 @@ class PfabAgent:
                         m.update(_ctx)
                     merged_list.append(m)
                 results_list = _pred.predict_for_calibration_batched(merged_list)
-                return [
-                    _eval._evaluate_feature_dict(feat_arrs, params_block)
-                    for feat_arrs, params_block in results_list
-                ]
+                feat_dicts = [feat_arrs for feat_arrs, _ in results_list]
+                params_blocks = [pb for _, pb in results_list]
+                return _eval._evaluate_feature_dict_batched(feat_dicts, params_blocks)
             except Exception:
                 return [{} for _ in params_dicts]
 

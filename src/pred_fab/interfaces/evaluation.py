@@ -12,14 +12,24 @@ from ..utils import PfabLogger
 class IEvaluationModel(BaseInterface):
     """Abstract base for evaluation models that score features against target values."""
 
+    # Class flag: set True if ``_compute_target_value`` and ``_compute_scaling_factor``
+    # do not depend on the per-row dimension iterator values (i.e. target / scaling
+    # are functions of ``params`` only, constant across rows of a single
+    # ``compute_performance`` call). When True, ``compute_performance_batched``
+    # takes a vectorised fast path: target/scaling are evaluated once per
+    # candidate and the per-row arithmetic runs as numpy broadcasts across
+    # ``(S, n_rows)``. Default False for backwards compatibility (per-row
+    # variation supported via the scalar loop).
+    TARGETS_CONSTANT: bool = False
+
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
-    
+
     # === ABSTRACT METHODS ===
 
     # abstract methods from BaseInterface:
     # - input_parameters
-    
+
     @property
     @abstractmethod
     def input_feature(self) -> str:
@@ -36,7 +46,7 @@ class IEvaluationModel(BaseInterface):
     def _compute_target_value(self, params: dict, **dimensions) -> float:
         """Compute the target (ideal) value for scoring at the given parameter context."""
         ...
-    
+
     def _compute_scaling_factor(self, params: dict, **dimensions) -> float | None:
         """Optionally return a scaling factor for performance normalization; None uses target_value as denominator."""
         return None
@@ -112,6 +122,74 @@ class IEvaluationModel(BaseInterface):
         avg_performance = float(np.nanmean(performance_array)) if len(performance_array) > 0 else None
 
         return avg_performance, performance_list, std_list if feature_std is not None else None
+
+    @final
+    def compute_performance_batched(
+        self,
+        feature_arrays_S: list[NDArray],
+        parameters_list: list[Parameters],
+    ) -> list[float | None]:
+        """Vectorised ``compute_performance`` over S candidates.
+
+        Default path loops the scalar ``compute_performance`` per candidate.
+        Fast path (when ``TARGETS_CONSTANT=True``): target/scaling are computed
+        once per candidate (no dim_dict), then perf arithmetic vectorises
+        across all ``(S, n_rows)`` cells. Saves ``~S × n_rows`` Python calls
+        per acquisition objective evaluation.
+
+        Returns a list of ``avg_performance`` values, one per candidate. The
+        per-row + std outputs of the scalar API are not exposed here — they
+        aren't consumed by the calibration hot path.
+        """
+        S = len(feature_arrays_S)
+        if S == 0:
+            return []
+        if not self.TARGETS_CONSTANT:
+            return [
+                self.compute_performance(arr, params)[0]
+                for arr, params in zip(feature_arrays_S, parameters_list)
+            ]
+
+        # Fast path: vectorised. Stack feature arrays into (S, n_rows, n_cols).
+        # All arrays share shape — same experiment topology per acquisition call.
+        try:
+            F_S = np.stack(feature_arrays_S, axis=0)
+        except ValueError:
+            # Heterogeneous shapes: fall back to scalar loop.
+            return [
+                self.compute_performance(arr, params)[0]
+                for arr, params in zip(feature_arrays_S, parameters_list)
+            ]
+        feature_values = F_S[..., -1]  # (S, n_rows)
+
+        # Compute target / scaling once per candidate (TARGETS_CONSTANT contract).
+        S_actual = F_S.shape[0]
+        targets = np.empty(S_actual, dtype=np.float64)
+        denoms = np.empty(S_actual, dtype=np.float64)
+        for s, params_obj in enumerate(parameters_list):
+            params = params_obj.get_values_dict()
+            t = float(self._compute_target_value(params))
+            sc = self._compute_scaling_factor(params)
+            targets[s] = t
+            if sc is not None and sc > 0:
+                denoms[s] = float(sc)
+            elif t > 0:
+                denoms[s] = t
+            else:
+                denoms[s] = np.nan  # neither valid → unscaled, returns NaN below
+
+        # Broadcast (S, 1) against (S, n_rows). NaN feature values propagate;
+        # nanmean ignores them. Clamp to [0, 1] matches the scalar path.
+        diffs = np.abs(feature_values - targets[:, None])
+        perfs = 1.0 - diffs / denoms[:, None]
+        perfs = np.clip(perfs, 0.0, 1.0)
+        nan_feat = np.isnan(feature_values)
+        perfs = np.where(nan_feat, np.nan, perfs)
+
+        with np.errstate(invalid='ignore'):
+            avgs = np.nanmean(perfs, axis=1)
+
+        return [None if np.isnan(a) else float(a) for a in avgs]
 
     @final
     def _compute_performance_value(
