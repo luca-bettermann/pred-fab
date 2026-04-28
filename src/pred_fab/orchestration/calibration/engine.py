@@ -5,7 +5,7 @@ import warnings
 
 import numpy as np
 import torch
-from scipy.optimize import minimize, differential_evolution
+from scipy.optimize import minimize  # commit 11 will drop this for torch.optim.LBFGS
 
 from ...core import DataModule
 from ...utils import PfabLogger, ProgressBar, profiler
@@ -377,94 +377,171 @@ class OptimizationEngine:
         popsize: int | None = None,
         vectorized: bool = False,
     ) -> _OptResult:
-        """Unified differential evolution wrapper.
+        """Torch-native differential evolution (Strategy D commit 9).
 
-        ``vectorized=True`` passes ``vectorized=True`` to scipy: ``objective``
-        is then called with an ``(D, S)`` array and must return shape ``(S,)``.
-        Performance gain comes from amortising forward_pass overhead across the
-        population batch dim — only meaningful when the objective is itself
-        batchable (e.g. CalibrationSystem._acquisition_objective_vectorized).
+        Replaces ``scipy.optimize.differential_evolution`` with a pure-torch
+        implementation. Same `_run_de` signature; population update is one
+        vectorised tensor step per generation. ``vectorized=True`` means the
+        ``objective`` callable accepts ``(D, S)`` numpy arrays and returns
+        ``(S,)`` — the standard scipy convention. Scalar objective (one
+        ``(D,)`` input → float) is also supported and evaluated row-by-row.
+
+        Mutation: rand/1/bin (DE/rand/1) with F~U[0.5, 1.0] and CR=0.7.
+        Integer params (``integrality[d]=True``) are rounded after each
+        crossover. No polish step (gradient path is the polish).
+
+        Convergence: same callback heuristic as the prior scipy wrapper —
+        halt if ``best_so_far`` hasn't moved by ``improvement_eps`` for
+        ``no_improve_window`` generations.
         """
         if maxiter is None:
             maxiter = self.de_maxiter
         if popsize is None:
             popsize = self.de_popsize
-        has_int = integrality is not None and any(integrality)
+
+        D = len(bounds)
+        if D == 0:
+            return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
+
+        bounds_arr = np.asarray(bounds, dtype=np.float64)
+        lo = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)
+        hi = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
+        span = hi - lo
+
+        # Population size matches scipy convention: popsize × D total individuals.
+        N_pop = max(int(popsize) * D, 5)
+        # Torch RNG seeded off the same engine seed for determinism.
+        gen = torch.Generator()
+        if self._random_seed is not None:
+            gen.manual_seed(int(self.rng.randint(0, 2**31 - 1)))
+        else:
+            gen.manual_seed(int(np.random.randint(0, 2**31 - 1)))
+
+        # Initial population: provided init_pop, else Latin-hypercube via Sobol.
+        if init_pop is not None:
+            X = torch.from_numpy(np.asarray(init_pop, dtype=np.float64))
+            if X.shape[0] != N_pop:
+                # Pad / truncate to N_pop.
+                if X.shape[0] < N_pop:
+                    pad_count = N_pop - X.shape[0]
+                    sobol = torch.quasirandom.SobolEngine(
+                        dimension=D, scramble=True,
+                        seed=int(torch.randint(0, 2**31 - 1, (1,), generator=gen).item()),
+                    )
+                    pad = sobol.draw(pad_count).double() * span + lo
+                    X = torch.cat([X, pad], dim=0)
+                else:
+                    X = X[:N_pop]
+        else:
+            sobol = torch.quasirandom.SobolEngine(
+                dimension=D, scramble=True,
+                seed=int(torch.randint(0, 2**31 - 1, (1,), generator=gen).item()),
+            )
+            X = sobol.draw(N_pop).double() * span + lo
+
+        # Round integer dims after init.
+        if integrality is not None and any(integrality):
+            int_mask = torch.tensor(integrality, dtype=torch.bool)
+            X[:, int_mask] = X[:, int_mask].round()
+        X = torch.minimum(torch.maximum(X, lo), hi)
+
+        def _eval_pop(P: torch.Tensor) -> torch.Tensor:
+            """Evaluate objective at each row of P (N_pop, D). Returns (N_pop,)."""
+            P_np = P.cpu().numpy()
+            if vectorized:
+                vals = np.asarray(objective(P_np.T), dtype=np.float64)  # (S,)
+            else:
+                vals = np.array([float(objective(P_np[i])) for i in range(P_np.shape[0])], dtype=np.float64)
+            return torch.from_numpy(vals)
+
+        f = _eval_pop(X)
+        nfev = int(N_pop)
+
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
-        iter_count = [0]
-        best_so_far = [np.inf]
-        best_at_last_check = [np.inf]
-        gens_no_improve = [0]
         history: list[float] = []
+        best_so_far = float(f.min().item())
+        best_at_last_check = best_so_far
+        gens_no_improve = 0
         improvement_eps = self.de_improvement_eps
         no_improve_window = self.de_no_improve_window
+        recombination = 0.7
+        iter_count = 0
 
-        if vectorized:
-            def _tracked_objective(X: np.ndarray) -> np.ndarray:
-                vals = objective(X)
-                vals_min = float(np.min(vals))
-                if vals_min < best_so_far[0]:
-                    best_so_far[0] = vals_min
-                return vals
-        else:
-            def _tracked_objective(x: np.ndarray) -> float:
-                val = objective(x)
-                if val < best_so_far[0]:
-                    best_so_far[0] = val
-                return val
+        with profiler.section("engine._run_de [torch DE]"):
+            for gen_idx in range(maxiter):
+                iter_count += 1
+                # Mutation: pick 3 distinct other-than-self indices per individual.
+                # Sample with rejection: indices are uniform [0, N_pop), then we
+                # bump indices >= self by 1 to skip self for the first column,
+                # then re-sample distinct second / third in same way.
+                N = N_pop
+                rand_idx = torch.randint(0, N - 1, (N, 3), generator=gen)
+                self_idx = torch.arange(N).unsqueeze(-1)
+                rand_idx = rand_idx + (rand_idx >= self_idx).long()
+                # Ensure cols 1, 2 are distinct from col 0 and each other (rough — re-sample collisions).
+                for k in range(1, 3):
+                    collisions = (rand_idx[:, k:k + 1] == rand_idx[:, :k]).any(dim=-1)
+                    while bool(collisions.any().item()):
+                        new_vals = torch.randint(0, N - 1, (int(collisions.sum().item()),), generator=gen)
+                        new_vals = new_vals + (new_vals >= self_idx[collisions].squeeze(-1)).long()
+                        rand_idx[collisions, k] = new_vals
+                        collisions = (rand_idx[:, k:k + 1] == rand_idx[:, :k]).any(dim=-1)
 
-        def _progress(xk: Any, convergence: Any) -> bool:
-            iter_count[0] += 1
-            history.append(best_so_far[0])
-            if bar:
-                bar.step(obj=best_so_far[0])
-            # Improvement-window check: halt if best_so_far hasn't moved by at
-            # least improvement_eps in no_improve_window consecutive generations.
-            if best_so_far[0] < best_at_last_check[0] - improvement_eps:
-                best_at_last_check[0] = best_so_far[0]
-                gens_no_improve[0] = 0
-            else:
-                gens_no_improve[0] += 1
-            return gens_no_improve[0] >= no_improve_window
+                F_val = 0.5 + 0.5 * float(torch.rand(1, generator=gen).item())  # F ∈ [0.5, 1.0]
+                a = X[rand_idx[:, 0]]
+                b = X[rand_idx[:, 1]]
+                c = X[rand_idx[:, 2]]
+                mutant = a + F_val * (b - c)
+                # Reflect/clamp to bounds.
+                mutant = torch.minimum(torch.maximum(mutant, lo), hi)
 
-        de_kwargs: dict[str, Any] = dict(
-            func=_tracked_objective,
-            bounds=bounds,
-            maxiter=maxiter,
-            popsize=popsize,
-            mutation=(0.5, 1.0),
-            recombination=0.7,
-            tol=self.de_tol,
-            # scipy declares convergence when std(energies) <= atol + tol*|mean|.
-            # On low-D / integer landscapes the population can collapse to
-            # identical energies after gen 1 (std=0) — atol=0 then trips even
-            # if the global optimum hasn't been found. Negative atol disables
-            # that exit; the callback's no-improvement-window is authoritative.
-            atol=-1.0,
-            polish=not has_int,
-            callback=_progress,
-            vectorized=vectorized,
-        )
-        if init_pop is not None:
-            de_kwargs["init"] = init_pop
-        else:
-            de_kwargs["init"] = "latinhypercube"
-        if integrality is not None:
-            de_kwargs["integrality"] = integrality
-        if self._random_seed is not None:
-            de_kwargs["seed"] = int(self.rng.randint(0, 2**31 - 1))
+                # Binomial crossover with X.
+                cr_mask = torch.rand(N, D, generator=gen) < recombination
+                # Force at least one dim from mutant per individual.
+                forced = torch.randint(0, D, (N,), generator=gen)
+                cr_mask[torch.arange(N), forced] = True
+                trial = torch.where(cr_mask, mutant, X)
 
-        with profiler.section("engine._run_de [scipy.differential_evolution]"):
-            result = differential_evolution(**de_kwargs)  # type: ignore[call-overload]
+                # Round integer dims.
+                if integrality is not None and any(integrality):
+                    trial[:, int_mask] = trial[:, int_mask].round()  # type: ignore[has-type]
+
+                # Evaluate trial population.
+                f_trial = _eval_pop(trial)
+                nfev += int(N)
+
+                # Selection: keep trial if better.
+                better = f_trial < f
+                X = torch.where(better.unsqueeze(-1), trial, X)
+                f = torch.where(better, f_trial, f)
+
+                cur_best = float(f.min().item())
+                history.append(cur_best)
+                if cur_best < best_so_far:
+                    best_so_far = cur_best
+                if bar:
+                    bar.step(obj=best_so_far)
+
+                if best_so_far < best_at_last_check - improvement_eps:
+                    best_at_last_check = best_so_far
+                    gens_no_improve = 0
+                else:
+                    gens_no_improve += 1
+                if gens_no_improve >= no_improve_window:
+                    break
+
+        best_idx = int(torch.argmin(f).item())
+        best_x = X[best_idx].cpu().numpy()
+        best_val = float(f[best_idx].item())
 
         if bar:
-            bar.finish(suffix=f"{iter_count[0]}/{maxiter} iter  obj={result.fun:.3f}")
+            bar.finish(suffix=f"{iter_count}/{maxiter} iter  obj={best_val:.3f}")
 
         return _OptResult(
-            best_x=result.x,
-            nfev=result.nfev,
+            best_x=best_x,
+            nfev=nfev,
             n_starts=1,
-            score=float(-result.fun),
+            score=float(-best_val),
             convergence_history=history,
         )
 
