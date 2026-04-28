@@ -1,7 +1,7 @@
 """Residual model interface for online adaptation — corrects base model predictions during fabrication."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, List, Any, Literal
+from typing import Any, Literal
 import numpy as np
 from sklearn.neural_network import MLPRegressor
 
@@ -29,11 +29,11 @@ class MLPResidualModel(IResidualModel):
     def __init__(
         self,
         logger: PfabLogger,
-        hidden_layer_sizes: Tuple[int, ...] = (64, 32),
+        hidden_layer_sizes: tuple[int, ...] = (64, 32),
         activation: Literal['relu', 'identity', 'logistic', 'tanh'] = 'relu',
         learning_rate_init: float = 0.001,
         max_iter: int = 200,
-        random_state: Optional[int] = None
+        random_state: int | None = None
     ):
         super().__init__(logger)
         self.model = MLPRegressor(
@@ -48,17 +48,17 @@ class MLPResidualModel(IResidualModel):
         self._is_fitted = False
         
     @property
-    def input_parameters(self) -> List[str]:
+    def input_parameters(self) -> list[str]:
         """Residual model is dynamic, no fixed schema inputs."""
         return []
 
     @property
-    def input_features(self) -> List[str]:
+    def input_features(self) -> list[str]:
         """Residual model is dynamic, no fixed schema inputs."""
         return []
 
     @property
-    def outputs(self) -> List[str]:
+    def outputs(self) -> list[str]:
         """Residual model is dynamic, no fixed schema outputs."""
         return []
 

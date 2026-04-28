@@ -1,7 +1,9 @@
 """Shared base class for orchestration systems."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
+
+import numpy as np
 
 from pred_fab.core.data_objects import DataObject
 
@@ -13,15 +15,26 @@ from ..utils import PfabLogger
 class BaseOrchestrationSystem(ABC):
     """Base class providing shared model-registry and schema-validation helpers."""
 
-    def __init__(self, logger: PfabLogger):
+    def __init__(self, logger: PfabLogger, random_seed: int | None = None):
         self.logger: PfabLogger = logger
-        self.models: List[Any] = []
+        self.models: list[Any] = []
+        self._random_seed = random_seed
+        self.rng = np.random.RandomState(random_seed)
+
+    @property
+    def random_seed(self) -> int | None:
+        return self._random_seed
+
+    @random_seed.setter
+    def random_seed(self, value: int | None) -> None:
+        self._random_seed = value
+        self.rng = np.random.RandomState(value)
     
-    def get_models(self) -> List[Any]:
+    def get_models(self) -> list[Any]:
         """Return registered models."""
         return self.models
     
-    def get_model_specs(self) -> Dict[str, List[str]]:
+    def get_model_specs(self) -> dict[str, list[str]]:
         """Aggregate input/output specs across all registered models."""
         specs = {
             "input_parameters": [],

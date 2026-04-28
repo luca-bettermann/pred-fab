@@ -7,12 +7,14 @@ used to compose real orchestration systems in tests.
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import torch
 
 from pred_fab.interfaces import (
     IExternalData,
     IEvaluationModel,
     IFeatureModel,
     IPredictionModel,
+    IDeterministicModel,
     IResidualModel,
 )
 
@@ -39,10 +41,10 @@ class ShapeCheckingPredictionModel(IPredictionModel):
     def outputs(self):
         return self._outputs
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
         self.seen_widths.append(X.shape[1])
         self.seen_batch_sizes.append(X.shape[0])
-        return np.zeros((X.shape[0], len(self._outputs)), dtype=np.float64)
+        return torch.zeros((X.shape[0], len(self._outputs)), dtype=X.dtype)
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
@@ -176,10 +178,10 @@ class MixedPredictionModelGrid(IPredictionModel):
     def outputs(self):
         return ["feature_grid"]
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
         n_in = X.shape[1]
-        w = self.weights[:n_in, :]
-        return np.dot(X, w)
+        w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
+        return X @ w
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
@@ -216,10 +218,10 @@ class MixedPredictionModelD1(IPredictionModel):
     def outputs(self):
         return ["feature_d1"]
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
         n_in = X.shape[1]
-        w = self.weights[:n_in, :]
-        return np.dot(X, w)
+        w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
+        return X @ w
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
@@ -256,10 +258,10 @@ class MixedPredictionModelScalar(IPredictionModel):
     def outputs(self):
         return ["feature_scalar"]
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
         n_in = X.shape[1]
-        w = self.weights[:n_in, :]
-        return np.dot(X, w)
+        w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
+        return X @ w
 
     def train(self, train_batches, val_batches, **kwargs):
         return None
@@ -385,12 +387,13 @@ class WorkflowPredictionModel(IPredictionModel):
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        if X.shape[1] != self.weights.shape[0]:
-            return np.dot(X[:, : self.weights.shape[0]], self.weights)
-        return np.dot(X, self.weights)
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        w = torch.from_numpy(self.weights).to(dtype=X.dtype)
+        if X.shape[1] != w.shape[0]:
+            return X[:, : w.shape[0]] @ w
+        return X @ w
 
-    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+    def train(self, train_batches: List[Tuple[torch.Tensor, torch.Tensor]], val_batches: List[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:
         self.weights += 0.01
 
 
@@ -497,8 +500,27 @@ class ContractPredictionModelDefaults(IPredictionModel):
     def outputs(self):
         return ["feature_scalar"]
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        return np.zeros((X.shape[0], 1), dtype=np.float64)
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((X.shape[0], 1), dtype=X.dtype)
 
     def train(self, train_batches, val_batches, **kwargs) -> None:
         return None
+
+
+class ContractDeterministicModel(IDeterministicModel):
+    """Deterministic model for contract tests: formula = X[:, 0] * 2."""
+
+    @property
+    def input_parameters(self):
+        return ["param_1"]
+
+    @property
+    def input_features(self):
+        return []
+
+    @property
+    def outputs(self):
+        return ["feature_scalar"]
+
+    def formula(self, X: np.ndarray) -> np.ndarray:
+        return (X[:, 0] * 2.0).reshape(-1, 1)

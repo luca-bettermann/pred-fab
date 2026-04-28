@@ -1,12 +1,14 @@
 from .local_data import LocalData
 from .logger import PfabLogger
-from .metrics import Metrics
+from .metrics import Metrics, combined_score
+from .console import ConsoleReporter, ProgressBar
+from .profiler import profiler
 from .enum import (
     SystemName,
     Roles,
-    NormMethod, 
-    SplitType, 
-    BlockType, 
+    NormMethod,
+    SplitType,
+    BlockType,
     Domain,
     StepType,
     Mode,
@@ -20,6 +22,8 @@ __all__ = [
     "LocalData",
     "PfabLogger",
     "Metrics",
+    "combined_score",
+    "profiler",
 
     "SystemName",
     "Roles",
@@ -33,5 +37,6 @@ __all__ = [
     "FileFormat",
     "SamplingStrategy",
     "SourceStep",
+    "ConsoleReporter",
 ]
     

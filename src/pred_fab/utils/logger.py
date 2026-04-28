@@ -3,13 +3,10 @@ import os
 import re
 from datetime import datetime
 
-
-from typing import Optional
-
 class PfabLogger:
     """Singleton logger with dual file/console output, ANSI stripping, and structured console methods."""
     
-    _instance: Optional['PfabLogger'] = None
+    _instance: 'PfabLogger | None' = None
     
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -83,48 +80,48 @@ class PfabLogger:
     def console_success(self, message: str) -> None:
         """Print success message to console and log."""
         if self._console_output_enabled:
-            print(f"✅ {message}")
+            print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE SUCCESS: \n\n{message}\n")
-    
+
     def console_warning(self, message: str) -> None:
         """Print warning to console and log."""
-        print(f"⚠️  {message}")
+        print(f"\033[33m!\033[0m {message}")
         self._console_new_line = False
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
 
     def console_execute(self, message: str) -> None:
         """Print execute message to console and log."""
         if self._console_output_enabled:
-            print(f"⏳ {message}")
+            print(f"\033[36m>\033[0m {message}")
             self._console_new_line = False
         self.logger.warning(f"CONSOLE EXECUTE: \n\n{message}\n")
 
     def console_loaded(self, message: str) -> None:
         """Print loaded message to console and log."""
         if self._console_output_enabled:
-            print(f"⬆️  {message}")
+            print(f"\033[36m>\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE LOADED: \n\n{message}\n")
 
     def console_saved(self, message: str) -> None:
         """Print saved message to console and log."""
         if self._console_output_enabled:
-            print(f"⬇️  {message}")
+            print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE SAVED: \n\n{message}\n")
 
     def console_pushed(self, message: str) -> None:
         """Print pushed message to console and log."""
         if self._console_output_enabled:
-            print(f"↗️  {message}")
+            print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE PUSHED: \n\n{message}\n")
 
     def console_pulled(self, message: str) -> None:
         """Print pulled message to console and log."""
         if self._console_output_enabled:
-            print(f"↘️  {message}")
+            print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE PULLED: \n\n{message}\n")
 
@@ -140,8 +137,6 @@ class PfabLogger:
         if self._console_output_enabled and not self._console_new_line:
             print("")
             self._console_new_line = True
-
-
 
     # === PRIVATE METHODS ===
     def _setup_file_handler(self, log_file: str) -> None:

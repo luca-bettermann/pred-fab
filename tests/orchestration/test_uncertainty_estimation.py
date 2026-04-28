@@ -22,8 +22,9 @@ from tests.utils.builders import (
 )
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, SplitType
-from pred_fab.core import ExperimentSpec
+from pred_fab.core import ExperimentSpec, ParameterProposal
 from pred_fab.utils.enum import Mode
+from scipy.stats import qmc
 
 
 
@@ -128,7 +129,7 @@ def test_uncertainty_lower_for_training_config_than_ood(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     pred = agent.pred_system
-    if pred._kde_bandwidth is None:
+    if not pred._model_kdes:
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     first_exp = dataset.get_experiment(codes[0])
@@ -156,7 +157,7 @@ def test_uncertainty_returns_one_for_single_training_config(tmp_path):
     pred = agent.pred_system
 
     # KDE is skipped when n_latent_points < 2
-    if pred._kde_bandwidth is None:
+    if not pred._model_kdes:
         X = datamodule.params_to_array(exp.parameters.get_values_dict())
         assert pred.uncertainty(X) == pytest.approx(1.0)
     else:
@@ -165,51 +166,10 @@ def test_uncertainty_returns_one_for_single_training_config(tmp_path):
         assert 0.0 <= pred.uncertainty(X) <= 1.0
 
 
-# ===========================================================================
-# kernel_similarity()
-# ===========================================================================
-
-def test_kernel_similarity_returns_zero_before_training(tmp_path):
-    """Without a fitted KDE (no bandwidth), kernel_similarity returns 0.0."""
-    dataset = build_dataset_with_single_experiment(tmp_path)
-    logger = build_test_logger(tmp_path)
-    pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
-
-    X = np.array([0.5, 0.5, 0.5])
-    assert pred.kernel_similarity(X, X) == pytest.approx(0.0)
-
-
-def test_kernel_similarity_identical_points_after_training(tmp_path):
-    """sim(x, x) should be close to 1.0 for identical inputs (when KDE is fitted)."""
-    agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
-    pred = agent.pred_system
-
-    if pred._kde_bandwidth is None:
-        pytest.skip("KDE not fitted — not enough training configs")
-
-    X = datamodule.params_to_array(exp.parameters.get_values_dict())
-    sim = pred.kernel_similarity(X, X)
-    assert sim == pytest.approx(1.0, abs=1e-6)
-
-
-def test_kernel_similarity_decreases_with_distance(tmp_path):
-    """sim(x, y) < sim(x, x) when x != y (assuming KDE is fitted)."""
-    agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
-    pred = agent.pred_system
-
-    if pred._kde_bandwidth is None:
-        pytest.skip("KDE not fitted — not enough training configs")
-
-    train_params = exp.parameters.get_values_dict()
-    X1 = datamodule.params_to_array(train_params)
-
-    far_params = dict(train_params)
-    far_params["param_1"] = 9.0
-    X2 = datamodule.params_to_array(far_params)
-
-    sim_self = pred.kernel_similarity(X1, X1)
-    sim_other = pred.kernel_similarity(X1, X2)
-    assert sim_other < sim_self
+# kernel_similarity, uncertainty_batch, and boundary_evidence have been
+# removed with the integrated-objective refactor. Their tests lived here
+# (and in test_new_features.py's TestVirtualKDEPoints) and have been deleted.
+# New tests for the integrated objective live at the bottom of this file.
 
 
 # ===========================================================================
@@ -338,18 +298,18 @@ def test_compute_performance_std_none_for_nan_feature_std(tmp_path):
 # UCB acquisition function integration
 # ===========================================================================
 
-def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
-    """_acquisition_func integrates perf_fn and uncertainty_fn correctly."""
+def test_acquisition_objective_combines_perf_and_delta_evidence(tmp_path):
+    """_acquisition_objective combines combined_score perf with Δ∫E via κ."""
     _, dataset, _ = build_workflow_stack(tmp_path)
 
     perf_calls = []
-    unc_calls = []
+    de_calls = []
 
     calibration = build_calibration_system(
         tmp_path / "cal",
         dataset,
         perf_fn=lambda p: (perf_calls.append(p), {"performance_1": 0.8, "performance_2": 0.6})[1],
-        uncertainty_fn=lambda X: (unc_calls.append(X.shape), 0.3)[1],
+        delta_integrated_evidence_fn=lambda batch: (de_calls.append(batch.shape), 0.3)[1],
     )
 
     datamodule = build_initialized_datamodule(
@@ -362,61 +322,30 @@ def test_acquisition_func_uses_perf_fn_and_uncertainty_fn(tmp_path):
     )
     calibration._active_datamodule = datamodule
 
-    # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
     valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)
     w = 0.4
-    result = calibration._acquisition_func(X, w_explore=w)
+    result = calibration._acquisition_objective(X, kappa=w)
 
     assert len(perf_calls) == 1
-    assert len(unc_calls) == 1
-    # Expected sys_perf = avg(0.8, 0.6) = 0.7; u = 0.3
-    # Score = (1-0.4)*0.7 + 0.4*0.3 = 0.42 + 0.12 = 0.54 → result = -0.54
+    assert len(de_calls) == 1
+    # combined_score with equal weights: (0.8 + 0.6)/2 = 0.7; Δ∫E = 0.3
+    # score = (1-0.4)*0.7 + 0.4*0.3 = 0.54 → objective = -0.54
     assert result == pytest.approx(-((1 - w) * 0.7 + w * 0.3), abs=1e-4)
 
 
-def test_inference_func_uses_perf_fn(tmp_path):
-    """_inference_func should call perf_fn and return negative system performance."""
-    _, dataset, _ = build_workflow_stack(tmp_path)
-
-    expected_perf = 0.75
-    calibration = build_calibration_system(
-        tmp_path / "cal",
-        dataset,
-        perf_fn=lambda p: {"performance_1": expected_perf, "performance_2": expected_perf},
-    )
-
-    datamodule = build_initialized_datamodule(
-        dataset=dataset,
-        input_parameters=["param_1", "param_2", "n_layers", "n_segments", "speed"],
-        input_features=[],
-        output_columns=[],
-        fitted=True,
-        split_codes={SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []},
-    )
-    calibration._active_datamodule = datamodule
-
-    # Use valid params (param_2 min=1) to avoid sanitize_values rejection.
-    valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
-    X = datamodule.params_to_array(valid_params)
-    result = calibration._inference_func(X)
-
-    # System performance = weighted avg of 0.75, 0.75 → 0.75
-    assert result == pytest.approx(-expected_perf, abs=1e-4)
-
-
-def test_acquisition_func_with_no_active_datamodule_returns_zero(tmp_path):
-    """_acquisition_func returns 0.0 (and doesn't crash) when _active_datamodule is None."""
+def test_acquisition_objective_with_no_active_datamodule_returns_zero(tmp_path):
+    """_acquisition_objective returns 0.0 (and doesn't crash) when _active_datamodule is None."""
     dataset = build_dataset_with_single_experiment(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
     X = np.zeros(3)
-    result = calibration._acquisition_func(X, w_explore=0.5)
+    result = calibration._acquisition_objective(X, kappa=0.5)
     assert result == pytest.approx(0.0)
 
 
 # ===========================================================================
-# Trajectory diversity via step-loop
+# Schedule diversity via step-loop
 # ===========================================================================
 
 def test_run_calibration_with_similarity_fn_completes(tmp_path):
@@ -427,7 +356,7 @@ def test_run_calibration_with_similarity_fn_completes(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_step_parameter("speed", "dim_1")
+    cs.configure_schedule_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     # Replace similarity_fn with constant 1.0
@@ -452,7 +381,7 @@ def test_run_calibration_without_similarity_fn_still_works(tmp_path):
 
     cs = agent.calibration_system
     cs.similarity_fn = None  # explicit no diversity
-    cs.configure_step_parameter("speed", "dim_1")
+    cs.configure_schedule_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     current_params = exp.parameters.get_values_dict()
@@ -493,11 +422,11 @@ def test_calibration_system_get_models_returns_empty_list(tmp_path):
 
 
 # ===========================================================================
-# KDE bandwidth + trajectory step-loop integration
+# KDE bandwidth + schedule step-loop integration
 # ===========================================================================
 
-def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(tmp_path):
-    """After KDE fitting, run_calibration with trajectory configs should return an
+def test_run_calibration_schedule_respects_delta_constraints_with_fitted_kde(tmp_path):
+    """After KDE fitting, run_calibration with schedule configs should return an
     ExperimentSpec whose consecutive speed waypoints differ by at most the configured delta."""
     delta = 50.0
 
@@ -509,22 +438,22 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    if agent.pred_system._kde_bandwidth is None:
+    if not agent.pred_system._model_kdes:
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
-    cs.configure_step_parameter("speed", "n_layers")
+    cs.configure_schedule_parameter("speed", "n_layers")
     cs.configure_adaptation_delta({"speed": delta})
 
     first_exp = dataset.get_experiment(codes[0])
     current_params = first_exp.parameters.get_values_dict()
-    current_params["speed"] = 100.0  # must supply runtime param for trajectory stepping
+    current_params["speed"] = 100.0  # must supply runtime param for schedule stepping
 
     result = cs.run_calibration(
         datamodule=datamodule,
         mode=Mode.EXPLORATION,
         current_params=current_params,
-        w_explore=0.5,
+        kappa=0.5,
     )
 
     assert isinstance(result, ExperimentSpec)
@@ -547,8 +476,8 @@ def test_run_calibration_trajectory_respects_delta_constraints_with_fitted_kde(t
         )
 
 
-def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
-    """agent.exploration_step() with trajectory configs returns an ExperimentSpec."""
+def test_exploration_step_with_schedule_returns_experiment_spec(tmp_path):
+    """agent.exploration_step() with schedule configs returns an ExperimentSpec."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
     datamodule = build_prepared_workflow_datamodule(
@@ -556,8 +485,7 @@ def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
     )
     agent.train(datamodule=datamodule, validate=False, test=False)
 
-    agent.calibration_system.configure_step_parameter("speed", "n_layers")
-    agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
+    agent.configure_schedule("speed", "n_layers", delta=50.0)
 
     first_exp = dataset.get_experiment(codes[0])
     current_params = first_exp.parameters.get_values_dict()
@@ -568,3 +496,162 @@ def test_exploration_step_with_trajectory_returns_experiment_spec(tmp_path):
     )
 
     assert isinstance(result, ExperimentSpec)
+
+
+# ===========================================================================
+# Evidence model: data point counting
+# ===========================================================================
+
+def test_evidence_grows_with_data(tmp_path):
+    """More latent points near a query → lower uncertainty (more evidence)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("Evidence model not fitted — not enough distinct training configs")
+
+    n_exp = len(codes)
+    for kde in pred._model_kdes.values():
+        # Each process experiment contributes 1 latent point (no weight normalization)
+        assert len(kde.latent_points) == n_exp, (
+            f"expected {n_exp} latent points (one per process experiment), "
+            f"got {len(kde.latent_points)}"
+        )
+
+    # Uncertainty near training data should be lower than far away
+    first_exp = dataset.get_experiment(codes[0])
+    X_train = datamodule.params_to_array(first_exp.parameters.get_values_dict())
+    ood_params = dict(first_exp.parameters.get_values_dict())
+    ood_params["param_1"] = 9.9
+    X_ood = datamodule.params_to_array(ood_params)
+
+    u_train = pred.uncertainty(X_train)
+    u_ood = pred.uncertainty(X_ood)
+    assert u_train < u_ood
+
+
+def test_schedule_experiment_contributes_multiple_evidence_points(tmp_path):
+    """Schedule experiment with 2 segments contributes 2 evidence points (one per segment)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    evaluate_loaded_workflow_experiments(agent=agent, dataset=dataset, category_value="B")
+
+    first_exp = dataset.get_experiment(codes[0])
+    dim_names = first_exp.parameters.get_dim_names()
+    if not dim_names:
+        pytest.skip("workflow schema has no dimensional params — cannot create schedule")
+    dim = dim_names[0]
+    first_exp.record_parameter_update(
+        ParameterProposal.from_dict({"param_1": 7.5}, source_step="adaptation_step"),
+        dimension=dim,
+        step_index=1,
+    )
+
+    datamodule = build_prepared_workflow_datamodule(
+        agent=agent, dataset=dataset, val_size=0.0, test_size=0.0, recompute=True
+    )
+    agent.train(datamodule=datamodule, validate=False, test=False)
+
+    pred = agent.pred_system
+    if not pred._model_kdes:
+        pytest.skip("Evidence model not fitted")
+
+    # 3 experiments: exp_001 has 2 segments → 2 points; exp_002, exp_003 → 1 each = 4 total
+    for kde in pred._model_kdes.values():
+        assert len(kde.latent_points) == 4, (
+            f"expected 4 latent points (2+1+1), got {len(kde.latent_points)}"
+        )
+
+
+# ===========================================================================
+# Integrated-objective evidence math
+# ===========================================================================
+
+def test_peak1_gaussian_integral_matches_analytic(tmp_path):
+    """Verify ∫_{ℝ^D} ρ_j(z) dz = (σ·√(2π))^D for the peak-1 Gaussian kernel.
+
+    The kernel is ``exp(-d²/(2σ²))`` (peak 1 at the centre), so its integral
+    is the standard Gaussian normalisation factor raised to D — not 1.
+    """
+    from pred_fab.orchestration.prediction import PredictionSystem as PS
+    for D in (1, 2, 3):
+        sigma = 0.15 * np.sqrt(D)
+        half = 5.0 * sigma
+        n = 51
+        axes = [np.linspace(-half, half, n) for _ in range(D)]
+        grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, D)
+        centers = np.zeros((1, D))
+        vals = PS._gaussian_density(grid, centers, sigma).reshape([n] * D + [1])[..., 0]
+        mass = np.trapezoid(vals, axes[0], axis=0)
+        for ax in range(1, D):
+            mass = np.trapezoid(mass, axes[ax], axis=0)
+        expected = (sigma * np.sqrt(2.0 * np.pi)) ** D
+        assert float(mass) == pytest.approx(expected, rel=1e-2)
+
+
+def _make_estimator_and_index_helper():
+    from pred_fab.orchestration.evidence import (
+        KernelIndex, SobolLocalEstimator,
+    )
+    return KernelIndex, SobolLocalEstimator
+
+
+def test_integrated_evidence_grows_with_data():
+    """∫E dz grows monotonically as more centers are added."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    rng = np.random.default_rng(0)
+    D = 3
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=256)
+
+    index_empty = KernelIndex(np.empty((0, D)), np.empty((0,)), sigma)
+    E_prev = estimator.integrated_evidence(index_empty)
+    assert E_prev == pytest.approx(0.0)
+
+    centers: list[np.ndarray] = []
+    for _ in range(6):
+        centers.append(rng.uniform(0.1, 0.9, size=D))
+        arr = np.stack(centers)
+        w = np.ones(len(arr))
+        index = KernelIndex(arr, w, sigma)
+        E_new = estimator.integrated_evidence(index)
+        assert E_new > E_prev - 1e-8  # monotone non-decreasing
+        E_prev = E_new
+
+
+def test_integrated_evidence_saturates():
+    """∫E dz stays bounded by the unit-cube volume even with many stacked kernels."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    D = 2
+    sigma = 0.1
+    estimator = SobolLocalEstimator(box=3.0, n_samples=256)
+    centers = np.tile(np.array([[0.5, 0.5]]), (50, 1))
+    weights = np.ones(50)
+    index = KernelIndex(centers, weights, sigma)
+    E = estimator.integrated_evidence(index)
+    assert 0.0 < E < 1.0
+
+
+def test_integrated_evidence_prefers_interior_over_corner():
+    """Corner kernel leaks half its mass outside [0,1]^D → smaller ∫E than a centered kernel."""
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    D = 3
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=512)
+    w = np.ones(1)
+
+    index_center = KernelIndex(np.array([[0.5, 0.5, 0.5]]), w, sigma)
+    index_corner = KernelIndex(np.array([[0.0, 0.0, 0.0]]), w, sigma)
+    E_center = estimator.integrated_evidence(index_center)
+    E_corner = estimator.integrated_evidence(index_corner)
+    assert E_center > E_corner
+
+
+# ------ Schedule DE branch convergence key rename ('Acquisition' -> 'Schedule') ------
+# The workflow-stack fixture here does not wire 'speed' into any model input, so the
+# exploration Schedule DE branch is not exercised (D_sched=0 fallback). Validation of
+# the rename is performed via the mock integration, not a unit test.

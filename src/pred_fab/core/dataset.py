@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Any, Optional, List, Tuple, Literal, Type
+from typing import Callable, Any, Literal
 import functools
 
 from .schema import DatasetSchema
@@ -20,15 +20,15 @@ from ..utils.enum import BlockType, Loaders
 class ParameterProposal:
     """Lightweight value object carrying proposed parameter values."""
 
-    values: Dict[str, Any]
-    source_step: Optional[str] = None
+    values: dict[str, Any]
+    source_step: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a shallow copy of proposed values."""
         return dict(self.values)
 
     @classmethod
-    def from_dict(cls, values: Dict[str, Any], source_step: Optional[str] = None) -> 'ParameterProposal':
+    def from_dict(cls, values: dict[str, Any], source_step: str | None = None) -> 'ParameterProposal':
         """Build proposal from a plain dictionary."""
         return cls(values=dict(values), source_step=source_step)
 
@@ -59,12 +59,12 @@ class ParameterProposal:
 class ParameterUpdateEvent:
     """Immutable record of an applied parameter update at a specific fabrication step."""
 
-    updates: Dict[str, Any]
-    dimension: Optional[str] = None
-    step_index: Optional[int] = None
-    source_step: Optional[str] = None
+    updates: dict[str, Any]
+    dimension: str | None = None
+    step_index: int | None = None
+    source_step: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize event to plain dictionary."""
         return {
             "updates": dict(self.updates),
@@ -74,7 +74,7 @@ class ParameterUpdateEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ParameterUpdateEvent':
+    def from_dict(cls, data: dict[str, Any]) -> 'ParameterUpdateEvent':
         """Deserialize event from plain dictionary."""
         return cls(
             updates=dict(data.get("updates", {})),
@@ -87,7 +87,7 @@ class ParameterUpdateEvent:
 class ParameterSchedule:
     """Sparse ordered schedule of runtime parameter changes for one dimension level."""
     dimension: str
-    entries: List[Tuple[int, 'ParameterProposal']] = field(default_factory=list)
+    entries: list[tuple[int, 'ParameterProposal']] = field(default_factory=list)
 
     def apply(self, experiment: 'ExperimentData') -> None:
         """Record all schedule entries as ParameterUpdateEvents on the experiment."""
@@ -101,7 +101,7 @@ class ParameterSchedule:
 class ExperimentSpec:
     """Initial parameter proposal plus optional per-dimension runtime schedules."""
     initial_params: 'ParameterProposal'
-    schedules: Dict[str, 'ParameterSchedule'] = field(default_factory=dict)
+    schedules: dict[str, 'ParameterSchedule'] = field(default_factory=dict)
 
     def apply_schedules(self, experiment: 'ExperimentData') -> None:
         """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
@@ -146,7 +146,7 @@ class ExperimentData:
         self.parameters = parameters
         self.performance = performance
         self.features = features
-        self.parameter_updates: List[ParameterUpdateEvent] = []
+        self.parameter_updates: list[ParameterUpdateEvent] = []
         # self.predicted_features = predicted_features
 
     # === Helper Methods for Validation ===
@@ -169,7 +169,7 @@ class ExperimentData:
                 )        
         return True
     
-    def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: Optional[int]) -> bool:
+    def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: int | None) -> bool:
         """Check if feature array is non-empty in specified range."""
         if not self.features.has(feature_code):
             raise KeyError(f"Feature code '{feature_code}' not found in experiment '{self.code}'")
@@ -192,7 +192,7 @@ class ExperimentData:
         start, _ = self.parameters.get_start_and_end_indices(event.dimension, event.step_index)
         return start
 
-    def get_effective_parameters_for_row(self, row_index: int) -> Dict[str, Any]:
+    def get_effective_parameters_for_row(self, row_index: int) -> dict[str, Any]:
         """Get effective parameter values at a flattened row index, including applied updates."""
         effective = self.parameters.get_values_dict().copy()
         for event in self.parameter_updates:
@@ -210,9 +210,9 @@ class ExperimentData:
 
     def get_effective_parameters_at_step(
         self,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        dimension: str | None = None,
+        step_index: int | None = None,
+    ) -> dict[str, Any]:
         """Get effective parameters at the start of the specified step context."""
         if dimension is None and step_index is None:
             return self.get_effective_parameters_for_row(0)
@@ -224,9 +224,9 @@ class ExperimentData:
     def record_parameter_update(
         self,
         proposal: ParameterProposal,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
-    ) -> Optional[ParameterUpdateEvent]:
+        dimension: str | None = None,
+        step_index: int | None = None,
+    ) -> ParameterUpdateEvent | None:
         """Record an applied parameter proposal for later reconstruction of effective training rows."""
         if dimension is None and step_index is not None:
             raise ValueError("step_index can only be provided with dimension.")
@@ -288,7 +288,7 @@ class ExperimentData:
         else:
             raise ValueError(f"Unknown block type: {block_type}")
         
-    def get_data_dict(self, block_type: str) -> Dict[str, Any]:
+    def get_data_dict(self, block_type: str) -> dict[str, Any]:
         """Get values as dict for a specific data type."""
         if block_type == BlockType.PARAMETERS:
             return self.parameters.get_values_dict()
@@ -333,7 +333,7 @@ class Dataset:
 
     def __init__(self,
                  schema: DatasetSchema,
-                 external_data: Optional[IExternalData] = None,
+                 external_data: IExternalData | None = None,
                  debug_flag: bool = False):
         self.schema = schema
         self.local_data = schema.local_data
@@ -344,10 +344,10 @@ class Dataset:
         self.logger = PfabLogger.get_logger(schema.local_data.get_log_folder('logs'))
         
         # Master storage using ExperimentData
-        self._experiments: Dict[str, ExperimentData] = {}  # exp_code → ExperimentData
+        self._experiments: dict[str, ExperimentData] = {}  # exp_code → ExperimentData
         
         # Feature column names
-        # self.feature_columns: Optional[Dict[str, List[str]]] = None
+        # self.feature_columns: dict[str, list[str]] | None = None
 
     def get_experiment(self, exp_code: str) -> ExperimentData:
         """Get complete ExperimentData for an exp_code."""
@@ -355,7 +355,7 @@ class Dataset:
             raise KeyError(f"Experiment {exp_code} not found")
         return self._experiments[exp_code]
 
-    def get_all_experiments(self) -> List[ExperimentData]:
+    def get_all_experiments(self) -> list[ExperimentData]:
         """Get list of all ExperimentData objects."""
         return list(self._experiments.values())
     
@@ -385,11 +385,11 @@ class Dataset:
     def _build_experiment_data(
         self,
         exp_code: str,
-        parameters: Dict[str, Any],
-        performance: Optional[Dict[str, Any]],
-        metric_arrays: Optional[Dict[str, np.ndarray]],
-        parameter_updates: Optional[List[Dict[str, Any]]] = None,
-        # predicted_arrays: Optional[Dict[str, np.ndarray]] = None
+        parameters: dict[str, Any],
+        performance: dict[str, Any] | None,
+        metric_arrays: dict[str, np.ndarray] | None,
+        parameter_updates: list[dict[str, Any]] | None = None,
+        # predicted_arrays: dict[str, np.ndarray] | None = None
     ) -> ExperimentData:
         """Build ExperimentData from loaded components."""
         # 1. Create shell with schema structure
@@ -423,10 +423,10 @@ class Dataset:
     def create_experiment(
         self,
         exp_code: str,
-        parameters: Dict[str, Any],
-        performance: Optional[Dict[str, Any]] = None,
-        features: Optional[Dict[str, np.ndarray]] = None,
-        parameter_updates: Optional[List[Dict[str, Any]]] = None,
+        parameters: dict[str, Any],
+        performance: dict[str, Any] | None = None,
+        features: dict[str, np.ndarray] | None = None,
+        parameter_updates: list[dict[str, Any]] | None = None,
         recompute: bool = False
     ) -> ExperimentData:
         """Create and register a new experiment; raises ValueError if it already exists and recompute=False."""
@@ -458,11 +458,11 @@ class Dataset:
         # Store
         self._experiments[exp_data.code] = exp_data
     
-    def get_experiment_codes(self) -> List[str]:
+    def get_experiment_codes(self) -> list[str]:
         """Get list of all experiment codes in dataset."""
         return list(self._experiments.keys())
     
-    def get_experiment_params(self, exp_code: str) -> Dict[str, Any]:
+    def get_experiment_params(self, exp_code: str) -> dict[str, Any]:
         """Get experiment parameters as dictionary."""
         exp_data = self.get_experiment(exp_code)
         params = {}
@@ -475,9 +475,31 @@ class Dataset:
         """Check if experiment exists in dataset."""
         return exp_code in self._experiments
 
-    def get_populated_experiment_codes(self) -> List[str]:
-        """Get list of experiments that have all features in schema populated."""
-        feature_names = list(self.schema.features.keys())
+    def get_populated_experiment_codes(self) -> list[str]:
+        """Get list of experiments that have all *measured* features populated.
+
+        Two classes of features are excluded from this check because they are
+        derived rather than measured:
+
+        - **Iterator features** (``Feature.iterator``): no stored tensor, computed
+          at export time from row position.
+        - **Recursive features** (``Feature.recursive``): tensor is derived by
+          shifting the source feature along recursive dimensions; populated by
+          ``FeatureSystem`` during ``agent.evaluate(...)``. If a recursive feature
+          is missing on disk (stale data from before it was added to the schema,
+          partial save, etc.) the experiment is still considered populated for
+          training-readiness — recursive cols will fall back to the boundary
+          value (0 after ``nan_to_num`` in ``_one_hot_encode``).
+
+        Without these skips, any schema using ``Feature.iterator(...)`` or
+        ``Feature.recursive(...)`` would block training entirely whenever the
+        derived tensor isn't currently on disk.
+        """
+        from pred_fab.core.data_objects import DataArray
+        feature_names = [
+            name for name, obj in self.schema.features.items()
+            if not (isinstance(obj, DataArray) and (obj.is_iterator or obj.is_recursive))
+        ]
         return [
             code for code in self.get_experiment_codes()
             if all(self.get_experiment(code).is_feature_populated(f) for f in feature_names)
@@ -534,13 +556,13 @@ class Dataset:
         exp = self._experiments[code]
         return exp.get_data_dict(block_type)
     
-    def _get_exp_feature_array(self, code: str, feature_name: str, block_type: BlockType) -> Optional[np.ndarray]:
+    def _get_exp_feature_array(self, code: str, feature_name: str, block_type: BlockType) -> np.ndarray | None:
         exp = self.get_experiment(code)
         if feature_name not in exp.features.values:
             raise KeyError(f"{block_type} '{feature_name}' not found for experiment '{code}'")
         return exp.features.tensor_to_table(feature_name, exp.features.get_value(feature_name), exp.parameters)
     
-    def _get_array_column_names(self, feature_name: str) -> List[str]:
+    def _get_array_column_names(self, feature_name: str) -> list[str]:
         """Get column names for a specific feature array."""
         if feature_name not in self.schema.features.data_objects:
             raise KeyError(f"Feature '{feature_name}' not found in schema")
@@ -573,7 +595,7 @@ class Dataset:
         
         return self.get_experiment(exp_code)
     
-    def load_experiments(self, exp_codes: List[str], recompute_flag: bool = False, verbose: bool = False) -> List[str]:
+    def load_experiments(self, exp_codes: list[str], recompute_flag: bool = False, verbose: bool = False) -> list[str]:
         """Load multiple experiments using hierarchical pattern with progress tracking."""
         
         self.logger.console_new_line()
@@ -674,7 +696,7 @@ class Dataset:
         """Save a single experiment hierarchically."""
         self.save_experiments([exp_code], recompute=recompute, verbose=verbose)
     
-    def save_experiments(self, exp_codes: List[str], recompute: bool = False, verbose=False) -> None:
+    def save_experiments(self, exp_codes: list[str], recompute: bool = False, verbose=False) -> None:
         """Save multiple experiments hierarchically with progress tracking."""        
         # Filter to experiments that exist in dataset
         codes_to_save = [code for code in exp_codes if self.has_experiment(code)]
@@ -748,8 +770,7 @@ class Dataset:
         #         feature_name=PRED_SUFFIX + name # pass to kwargs
         #     )
 
-        self.logger.console_success(f"Successfully saved experiments {codes_to_save}.")
-        self.logger.console_new_line()
+        self.logger.info(f"Successfully saved experiments {codes_to_save}.")
         
     def save_schema(self, recompute: bool = False, verbose: bool = True) -> None:
         """Save schema hierarchically."""        
@@ -770,7 +791,7 @@ class Dataset:
         elif verbose:
             self.logger.info(f"Skipped external push for schema '{self.schema.name}' (debug={self.debug_flag}, has_ext_data={self.external_data is not None}).")
     
-    def _check_for_retrieved_codes(self, target_pre: List[str], target_post: List[str], dtype: str, source: Loaders, verbose: bool) -> List[str]:
+    def _check_for_retrieved_codes(self, target_pre: list[str], target_post: list[str], dtype: str, source: Loaders, verbose: bool) -> list[str]:
         """Check which codes were successfully retrieved and log to console."""
         retrieved_codes = [code for code in target_pre if code not in target_post]
         if retrieved_codes:
@@ -787,14 +808,14 @@ class Dataset:
     
     def _hierarchical_load(self, 
                         dtype: str,
-                        target_codes: List[str],
-                        loader: Callable[..., Tuple[List[str], Dict[str, Any]]],
+                        target_codes: list[str],
+                        loader: Callable[..., tuple[list[str], dict[str, Any]]],
                         setter: Callable[[str, Any], None],
                         in_memory: Callable[[str], bool],
-                        external_loader: Optional[Callable[..., Tuple[List[str], Any]]] = None,
+                        external_loader: Callable[..., tuple[list[str], Any]] | None = None,
                         recompute_flag: bool = False,
                         verbose: bool = False,
-                        **kwargs) -> List[str]:
+                        **kwargs) -> list[str]:
         """Universal hierarchical data loading: Memory → Local Files → External Source"""
         # 1. Check memory
         memory_missing = [code for code in target_codes if not in_memory(code)]
@@ -835,11 +856,11 @@ class Dataset:
 
     def _hierarchical_save(self, 
                            dtype: str,
-                           target_codes: List[str],
+                           target_codes: list[str],
                            getter: Callable[[str], Any],
                            saver: Callable[..., bool],
-                           external_saver: Optional[Callable[..., bool]] = None,
-                           column_names: Optional[List[str]] = None,
+                           external_saver: Callable[..., bool] | None = None,
+                           column_names: list[str] | None = None,
                            recompute: bool = False,
                            verbose: bool = True,
                            **kwargs) -> None:
@@ -883,7 +904,7 @@ class Dataset:
         else:
             self.logger.warning(f"Skipped pushing {dtype} to external source due missing ExternalData source.")
 
-    def export_to_dataframe(self, experiment_codes: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def export_to_dataframe(self, experiment_codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows."""
         if not experiment_codes:
             return pd.DataFrame(), pd.DataFrame()
@@ -918,18 +939,38 @@ class Dataset:
             # Get all index combinations
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
             dim_iterators = exp_data.parameters.get_dim_iterator_codes(codes=dim_names)
-            
-            for row_idx, idx_tuple in enumerate(dim_combinations):
-                # Build X row (Static + Iterators)
-                row_dict = exp_data.get_effective_parameters_for_row(row_idx)
-                iterator_ctx: Dict[str, Any] = {}
+
+            # Iterator-derived features: precompute (feat_code, axis_iter_code, dim_size).
+            # Value at row k along this axis is k / (size - 1) — features without a
+            # stored tensor; populated directly into y rows for context injection.
+            iterator_features: list[tuple[str, str, int]] = []
+            for feat_code, feat_obj in self.schema.features.data_objects.items():
+                axis_code = getattr(feat_obj, "iterator_axis_code", None)
+                if axis_code is None:
+                    continue
+                # Find the dim parameter whose iterator_code matches.
+                size = None
                 for i, dim_name in enumerate(dim_names):
-                    # Keep model-facing columns on schema parameter codes.
-                    row_dict[dim_name] = idx_tuple[i]
-                    iterator_ctx[dim_iterators[i]] = idx_tuple[i]
-                
+                    if dim_iterators[i] == axis_code:
+                        size = int(exp_data.parameters.get_value(dim_name))
+                        break
+                if size is None:
+                    continue
+                iterator_features.append((feat_code, axis_code, size))
+
+            for row_idx, idx_tuple in enumerate(dim_combinations):
+                # Build X row: static parameters only. Dimension-size columns
+                # (e.g. n_layers, n_segments) keep their experiment values from
+                # get_effective_parameters_for_row — they are NOT overwritten
+                # with the iteration index. Models that need row-position
+                # awareness must declare an explicit Feature.iterator(...).
+                row_dict = exp_data.get_effective_parameters_for_row(row_idx)
+                iterator_ctx: dict[str, Any] = {
+                    dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
+                }
+
                 X_rows.append(row_dict)
-                
+
                 # Build y row (Features at index)
                 y_dict = {}
                 # Read feature values consistently from canonical tensor storage.
@@ -937,7 +978,15 @@ class Dataset:
                     val = exp_data.features.value_at(feature_name, exp_data.parameters, iterator_ctx)
                     if val is not None and not np.isnan(val):
                         y_dict[feature_name] = val
-                
+
+                # Iterator-derived features: compute from the iteration tuple.
+                for feat_code, axis_code, size in iterator_features:
+                    raw_idx = iterator_ctx.get(axis_code)
+                    if raw_idx is None:
+                        continue
+                    norm = float(raw_idx) / max(size - 1, 1)
+                    y_dict[feat_code] = norm
+
                 y_rows.append(y_dict)
         
         if not X_rows:

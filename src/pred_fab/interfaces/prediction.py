@@ -1,11 +1,14 @@
 """Abstract interface for prediction models that learn parameter→feature mappings."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Type, Optional, Any, final, Tuple
+from typing import Any, final
+import copy
 import numpy as np
+import torch
 
 from .base_interface import BaseInterface
 from ..utils.logger import PfabLogger
+from ..utils.enum import NormMethod
 from ..core import DataObject, Dataset
 
 
@@ -32,7 +35,7 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
-    def validate_dimensional_coherence(self, schema: Any) -> Optional[str]:
+    def validate_dimensional_coherence(self, schema: Any) -> str | None:
         """Enforce structural rules on the model's domain declarations and derive the domain code.
 
         1. Output features may not mix depths (error).
@@ -100,24 +103,34 @@ class IPredictionModel(BaseInterface):
     # - outputs
 
     @abstractmethod
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        """Run model inference on normalized X (batch, n_params) → normalized y (batch, n_features)."""
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        """Run model inference on normalized X (batch, n_inputs) → normalized y (batch, n_outputs).
+
+        Tensor-native contract. The framework guarantees X arrives as a CPU
+        float32 tensor in normalized input space; implementations should return
+        a CPU float32 tensor in normalized output space.
+        """
         pass
 
     @abstractmethod
-    def train(self, train_batches: List[Tuple[np.ndarray, np.ndarray]], val_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
-        """Train the model on (X, y) batch tuples."""
+    def train(
+        self,
+        train_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        val_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        **kwargs,
+    ) -> None:
+        """Train the model on (X, y) tensor batch tuples."""
         pass
 
     # === LATENT ENCODING ===
 
-    def encode(self, X: np.ndarray) -> np.ndarray:
+    def encode(self, X: torch.Tensor) -> torch.Tensor:
         """Map normalized parameters to latent space; default is identity. Override for custom latent encoding."""
         return X
 
     # === ONLINE LEARNING ===
 
-    def tuning(self, tune_batches: List[Tuple[np.ndarray, np.ndarray]], **kwargs) -> None:
+    def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:
         """Fine-tune with new measurements during fabrication; override to enable online learning."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support tuning. "
@@ -126,17 +139,187 @@ class IPredictionModel(BaseInterface):
     
     # === EXPORT/IMPORT SUPPORT ===
     
-    def _get_model_artifacts(self) -> Dict[str, Any]:
+    def _get_model_artifacts(self) -> dict[str, Any]:
         """Serialize trained model state for InferenceBundle export; override to enable. All values must be picklable."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support export. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable export."
         )
     
-    def _set_model_artifacts(self, artifacts: Dict[str, Any]) -> None:
+    def _set_model_artifacts(self, artifacts: dict[str, Any]) -> None:
         """Restore trained model state from artifacts dict; must exactly reverse _get_model_artifacts()."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support import. "
             f"Override _get_model_artifacts() and _set_model_artifacts() to enable import."
         )
+
+
+class IDeterministicModel(IPredictionModel):
+    """Prediction model backed by a known analytical formula, not learned from data.
+
+    Subclasses implement ``formula(X_raw)`` which receives denormalized inputs
+    (physical values, categoricals as integer indices) and returns raw output values.
+
+    ``forward_pass`` is pre-defined: it denormalizes inputs, calls ``formula``,
+    and renormalizes outputs — preserving the normalized-in/normalized-out contract
+    of ``IPredictionModel`` without the user needing to handle normalization.
+
+    ``train()`` is a no-op. ``encode()`` returns identity (no learned latent space).
+    """
+
+    def __init__(self, logger: PfabLogger) -> None:
+        self._norm_parameter_stats: dict[str, dict[str, Any]] = {}
+        self._norm_feature_stats: dict[str, dict[str, Any]] = {}
+        self._norm_categorical_mappings: dict[str, list[str]] = {}
+        self._norm_context_set = False
+        super().__init__(logger)
+
+    # === NORMALIZATION CONTEXT ===
+
+    @final
+    def set_normalization_context(
+        self,
+        parameter_stats: dict[str, dict[str, Any]],
+        feature_stats: dict[str, dict[str, Any]],
+        categorical_mappings: dict[str, list[str]],
+    ) -> None:
+        """Store normalization statistics so forward_pass can denormalize inputs and renormalize outputs.
+
+        Called by PredictionSystem after DataModule normalization is fitted.
+        """
+        self._norm_parameter_stats = copy.deepcopy(parameter_stats)
+        self._norm_feature_stats = copy.deepcopy(feature_stats)
+        self._norm_categorical_mappings = copy.deepcopy(categorical_mappings)
+        self._norm_context_set = True
+
+    @property
+    def categorical_mappings(self) -> dict[str, list[str]]:
+        """Mapping of categorical parameter names to their sorted category lists."""
+        return self._norm_categorical_mappings
+
+    # === ABSTRACT: USER IMPLEMENTS THIS ===
+
+    @abstractmethod
+    def formula(self, X: np.ndarray) -> np.ndarray:
+        """Compute output values from raw (denormalized) input values.
+
+        X has shape (batch, n_raw_inputs) with columns ordered by ``input_parameters``.
+        Real parameters are in original scale; categorical parameters are integer-encoded
+        (index into the sorted category list available via ``self.categorical_mappings``).
+
+        Must return shape (batch, n_outputs) in original (physical) scale.
+        """
+        ...
+
+    # === PRE-DEFINED PIPELINE ===
+
+    @final
+    def forward_pass(self, X: torch.Tensor) -> torch.Tensor:
+        """Denormalize inputs → formula → renormalize outputs.
+
+        Internal numpy boundary: ``formula(X_raw)`` operates on numpy arrays
+        in physical units; the tensor↔numpy round-trip is a once-per-call
+        boundary cost (cheap relative to the formula itself).
+        """
+        if not self._norm_context_set:
+            raise RuntimeError(
+                f"{self.__class__.__name__}.forward_pass() called before "
+                f"set_normalization_context(). This is set automatically by "
+                f"PredictionSystem during training."
+            )
+        X_np = X.detach().cpu().numpy()
+        X_raw = self._denormalize_inputs(X_np)
+        y_raw = self.formula(X_raw)
+        y_norm = self._normalize_outputs(y_raw)
+        return torch.from_numpy(y_norm.astype(np.float32))
+
+    @final
+    def train(
+        self,
+        train_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        val_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        **kwargs: Any,
+    ) -> None:
+        """No-op — deterministic models have no learned parameters."""
+        pass
+
+    def encode(self, X: torch.Tensor) -> torch.Tensor:
+        """Identity — no learned latent space for analytical models."""
+        return X
+
+    # === INTERNAL NORMALIZATION HELPERS ===
+
+    def _denormalize_inputs(self, X_norm: np.ndarray) -> np.ndarray:
+        """Reverse normalization and collapse one-hot categoricals to integer indices.
+
+        Output columns are ordered by ``input_parameters``: one column per parameter,
+        with categoricals collapsed from N one-hot columns to a single integer index.
+        """
+        batch_size = X_norm.shape[0]
+        raw_cols: list[np.ndarray] = []
+        col_idx = 0
+
+        for param in self.input_parameters:
+            if param in self._norm_categorical_mappings:
+                n_cats = len(self._norm_categorical_mappings[param])
+                onehot = X_norm[:, col_idx:col_idx + n_cats]
+                cat_idx = np.argmax(onehot, axis=1).astype(np.float64)
+                raw_cols.append(cat_idx.reshape(-1, 1))
+                col_idx += n_cats
+            else:
+                vals = X_norm[:, col_idx:col_idx + 1].copy()
+                if param in self._norm_parameter_stats:
+                    stats = self._norm_parameter_stats[param]
+                    vals = self._reverse_normalization(vals, stats)
+                raw_cols.append(vals)
+                col_idx += 1
+
+        return np.hstack(raw_cols) if raw_cols else np.empty((batch_size, 0))
+
+    def _normalize_outputs(self, y_raw: np.ndarray) -> np.ndarray:
+        """Apply normalization to raw output values."""
+        y_norm = y_raw.copy()
+        for i, feat in enumerate(self.outputs):
+            if feat in self._norm_feature_stats:
+                stats = self._norm_feature_stats[feat]
+                y_norm[:, i] = self._apply_normalization(y_norm[:, i], stats)
+        return y_norm
+
+    @staticmethod
+    def _reverse_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
+        """Reverse normalization for a data array using pre-computed stats."""
+        method = stats['method']
+        if method == NormMethod.NONE:
+            return data
+        elif method == NormMethod.STANDARD:
+            return data * stats['std'] + stats['mean']
+        elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return np.full_like(data, fill_value=stats['min'], dtype=np.float64)
+            return data * (stats['max'] - stats['min']) + stats['min']
+        elif method == NormMethod.ROBUST:
+            iqr = stats['q3'] - stats['q1']
+            return data * iqr + stats['median']
+        else:
+            raise ValueError(f"Unknown normalization method: {method}")
+
+    @staticmethod
+    def _apply_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
+        """Apply normalization to a data array using pre-computed stats."""
+        method = stats['method']
+        if method == NormMethod.NONE:
+            return data
+        elif method == NormMethod.STANDARD:
+            return (data - stats['mean']) / (stats['std'] + 1e-8)
+        elif method == NormMethod.MIN_MAX:
+            denom = stats['max'] - stats['min']
+            if abs(denom) < 1e-12:
+                return np.zeros_like(data, dtype=np.float64)
+            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
+        elif method == NormMethod.ROBUST:
+            iqr = stats['q3'] - stats['q1']
+            return (data - stats['median']) / (iqr + 1e-8)
+        else:
+            raise ValueError(f"Unknown normalization method: {method}")
 

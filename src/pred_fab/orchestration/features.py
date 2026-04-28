@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Optional, List, Tuple
+from typing import Any, Callable
 import numpy as np
 
 from pred_fab.core.data_objects import DataArray, Domain
@@ -15,9 +15,10 @@ class FeatureSystem(BaseOrchestrationSystem):
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
-        self.models: List[IFeatureModel] = []
-        self._schema: Optional[DatasetSchema] = None
-        self._model_domain_map: Dict[int, Tuple[Optional[Domain], Optional[int]]] = {}
+        self.models: list[IFeatureModel] = []
+        self._schema: DatasetSchema | None = None
+        self._model_domain_map: dict[int, tuple[Domain | None, int | None]] = {}
+        self._recursive_features: list[DataArray] = []
 
     def _set_feature_column_names(self, schema: DatasetSchema) -> None:
         """Derive and validate domain+depth from schema outputs, then set column names on DataArrays.
@@ -28,8 +29,8 @@ class FeatureSystem(BaseOrchestrationSystem):
         """
         self._schema = schema
         for model in self.models:
-            domain_codes: List[Optional[str]] = []
-            feature_depths: List[Optional[int]] = []
+            domain_codes: list[str | None] = []
+            feature_depths: list[int | None] = []
 
             for output_code in model.outputs:
                 # get data array
@@ -59,7 +60,7 @@ class FeatureSystem(BaseOrchestrationSystem):
             derived_depth = feature_depths[0] if feature_depths else None
 
             # Resolve the Domain object from the schema
-            domain: Optional[Domain] = None
+            domain: Domain | None = None
             if derived_domain_code is not None:
                 domain = schema.domains.get(derived_domain_code)
                 if domain is None:
@@ -82,16 +83,22 @@ class FeatureSystem(BaseOrchestrationSystem):
                         col_names = [ax.iterator_code for ax in axes] + [output_code]
                         data_array.set_columns(col_names)  # type: ignore[union-attr]
 
+        # Collect recursive features from the schema for post-hoc tensor derivation.
+        self._recursive_features = []
+        for feat_code, feat_obj in schema.features.items():
+            if isinstance(feat_obj, DataArray) and feat_obj.is_recursive:
+                self._recursive_features.append(feat_obj)
+
     # === FEATURE EXTRACTION ===
 
     def run_feature_extraction(
         self,
         exp_data: ExperimentData,
         evaluate_from: int = 0,
-        evaluate_to: Optional[int] = None,
+        evaluate_to: int | None = None,
         visualize: bool = False,
         recompute: bool = False
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Execute all feature extractions for an experiment and mutate exp_data with results."""
         # Handle recompute logic
         if recompute:
@@ -105,7 +112,7 @@ class FeatureSystem(BaseOrchestrationSystem):
         # recorded on the experiment (e.g. adapted print_speed during online adaptation) are
         # reflected in feature extraction.  ExperimentData.get_effective_parameters_for_row
         # applies all recorded ParameterUpdateEvents that start at or before the given row.
-        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None
+        get_params_for_row: Callable[[int], dict[str, Any]] | None = None
         if exp_data.parameter_updates:
             get_params_for_row = exp_data.get_effective_parameters_for_row
 
@@ -130,15 +137,15 @@ class FeatureSystem(BaseOrchestrationSystem):
         parameters: Parameters,
         features: Features,
         evaluate_from: int = 0,
-        evaluate_to: Optional[int] = None,
+        evaluate_to: int | None = None,
         visualize: bool = False,
-        skip_feature_code: Dict[str, bool] = {},
-        get_params_for_row: Optional[Callable[[int], Dict[str, Any]]] = None,
-    ) -> Dict[str, np.ndarray]:
+        skip_feature_code: dict[str, bool] = {},
+        get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
+    ) -> dict[str, np.ndarray]:
         """Run all feature models and return {code: tensor} dict."""
 
         # Prepare result dictionaries
-        feature_dict: Dict[str, np.ndarray] = {}
+        feature_dict: dict[str, np.ndarray] = {}
 
         # Run feature extraction for each feature code
         for feature_model in self.models:
@@ -178,4 +185,73 @@ class FeatureSystem(BaseOrchestrationSystem):
                 # Convert to canonical tensor via shared Features transformation.
                 feature_dict[code] = features.table_to_tensor(code, table, parameters)
 
+        # Derive recursive features by shifting source tensors.
+        for rec_feat in self._recursive_features:
+            source_code = rec_feat.recursive_source
+            if source_code is None or rec_feat.recursive_dimensions is None:
+                continue
+            if source_code not in feature_dict:
+                # Source may already be stored on the Features block (e.g. partial eval).
+                if features.has_value(source_code):
+                    source_tensor = features.get_value(source_code)
+                else:
+                    self.logger.warning(
+                        f"Recursive feature '{rec_feat.code}' references source '{source_code}' "
+                        f"which has not been computed."
+                    )
+                    continue
+            else:
+                source_tensor = feature_dict[source_code]
+
+            shifted = self._shift_tensor(
+                source_tensor,
+                rec_feat.recursive_dimensions,
+                rec_feat.recursive_depth or 1,
+                features,
+                parameters,
+            )
+            feature_dict[rec_feat.code] = shifted
+
         return feature_dict
+
+    def _shift_tensor(
+        self,
+        tensor: np.ndarray,
+        dimension_iterator_codes: tuple[str, ...],
+        step: int,
+        features: Features,
+        parameters: 'Parameters',
+    ) -> np.ndarray:
+        """Shift a source tensor backward along specified dimensions, padding boundaries with NaN."""
+        result = tensor.copy()
+        for iter_code in dimension_iterator_codes:
+            axis = self._resolve_axis_index(iter_code, features, parameters)
+            if axis is None:
+                continue
+            result = self._shift_along_axis(result, axis, step)
+        return result
+
+    def _resolve_axis_index(
+        self,
+        iterator_code: str,
+        features: Features,
+        parameters: 'Parameters',
+    ) -> int | None:
+        """Map a dimension iterator code (e.g. 'layer_idx') to a tensor axis index."""
+        dim_objs = parameters._get_domain_axis_objects()
+        iterator_codes = [d.iterator_code for d in dim_objs]
+        if iterator_code in iterator_codes:
+            return iterator_codes.index(iterator_code)
+        self.logger.warning(f"Iterator code '{iterator_code}' not found in domain axes.")
+        return None
+
+    @staticmethod
+    def _shift_along_axis(tensor: np.ndarray, axis: int, step: int) -> np.ndarray:
+        """Shift tensor values backward along an axis by ``step``, padding leading positions with NaN."""
+        result = np.full_like(tensor, np.nan)
+        src = [slice(None)] * tensor.ndim
+        dst = [slice(None)] * tensor.ndim
+        src[axis] = slice(None, tensor.shape[axis] - step)
+        dst[axis] = slice(step, None)
+        result[tuple(dst)] = tensor[tuple(src)]
+        return result

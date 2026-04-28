@@ -1,7 +1,7 @@
-from typing import Any, Dict, Tuple, Type, Optional, List
+from typing import Any
 import numpy as np
 
-from ..utils import PfabLogger
+from ..utils import PfabLogger, profiler
 from ..core import Dataset, ExperimentData, DataReal, Parameters
 from ..interfaces import IEvaluationModel
 from .base_system import BaseOrchestrationSystem
@@ -12,7 +12,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
-        self.models: List[IEvaluationModel] = []
+        self.models: list[IEvaluationModel] = []
 
     # === EVALUATION ===
 
@@ -20,7 +20,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         self,
         exp_data: ExperimentData,
         recompute: bool = False
-    ) -> Dict[str, Optional[float]]:
+    ) -> dict[str, float | None]:
         """Score all features for a completed experiment and store results in exp_data.
 
         This is post-experiment documentation only — the resulting performance values are
@@ -29,7 +29,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         """
         # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
         # so that evaluation models can iterate rows uniformly regardless of feature depth.
-        features_dict: Dict[str, np.ndarray] = {}
+        features_dict: dict[str, np.ndarray] = {}
         for code, tensor in exp_data.features.get_values_dict().items():
             features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
@@ -53,15 +53,15 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
     def _evaluate_feature_dict(
         self,
-        features_dict: Dict[str, np.ndarray],
+        features_dict: dict[str, np.ndarray],
         parameters: Parameters,
-        incomplete_features: Dict[str, bool] = {},
-        skip_for_code: Dict[str, bool] = {}
-    ) -> Dict[str, Optional[float]]:
+        incomplete_features: dict[str, bool] = {},
+        skip_for_code: dict[str, bool] = {}
+    ) -> dict[str, float | None]:
         """Run all evaluation models and return {perf_code: value} dict."""
-        
+
         # Prepare result dictionaries
-        performance_dict: Dict[str, Optional[float]] = {}
+        performance_dict: dict[str, float | None] = {}
 
         # Run evaluation for each performance code
         for eval_model in self.models:
@@ -83,9 +83,51 @@ class EvaluationSystem(BaseOrchestrationSystem):
             # Collect results
             performance_dict[eval_model.output_performance] = avg_performance
             self.logger.info(f"Computed performance '{eval_model.output_performance}': {avg_performance}")
-        
+
         return performance_dict
-    
-    def get_models(self) -> List[IEvaluationModel]:
+
+    def _evaluate_feature_dict_batched(
+        self,
+        features_dicts_S: list[dict[str, np.ndarray]],
+        parameters_list: list[Parameters],
+    ) -> list[dict[str, float | None]]:
+        """Batched eval over S candidates: per eval_model, dispatch one
+        ``compute_performance_batched`` call processing all S candidates in
+        parallel. Returns one ``{perf_code: value}`` dict per candidate.
+
+        Models with ``TARGETS_CONSTANT=True`` benefit from vectorised numpy
+        arithmetic across all ``(S, n_rows)`` cells; others fall back to a
+        per-candidate scalar loop inside ``compute_performance_batched``.
+
+        Used by the calibration hot path (``perf_fn_batched`` in PfabAgent).
+        ``incomplete_features`` / ``skip_for_code`` filtering doesn't apply
+        here — calibration always evaluates from in-memory predictions.
+        """
+        S = len(features_dicts_S)
+        result: list[dict[str, float | None]] = [{} for _ in range(S)]
+        if S == 0:
+            return result
+
+        with profiler.section("eval._evaluate_feature_dict_batched"):
+            for eval_model in self.models:
+                feat_code = eval_model.input_feature
+                feature_arrays: list[np.ndarray] = []
+                valid_indices: list[int] = []
+                for s, feat_dict in enumerate(features_dicts_S):
+                    if feat_code in feat_dict:
+                        feature_arrays.append(feat_dict[feat_code])
+                        valid_indices.append(s)
+                if not feature_arrays:
+                    continue
+
+                valid_params = [parameters_list[s] for s in valid_indices]
+                with profiler.section(f"eval.compute_performance_batched [{eval_model.output_performance}]"):
+                    avgs = eval_model.compute_performance_batched(feature_arrays, valid_params)
+                for k, s in enumerate(valid_indices):
+                    result[s][eval_model.output_performance] = avgs[k]
+
+        return result
+
+    def get_models(self) -> list[IEvaluationModel]:
         """Return registered evaluation models."""
         return self.models

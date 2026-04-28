@@ -2,5 +2,13 @@
 __pycache__/
 .pytest_cache/
 .vscode/
+.idea/
 tests/workflows/local
 logs/
+concepts/plots/
+uv.lock
+
+# OS metadata
+.DS_Store
+Thumbs.db
+local/

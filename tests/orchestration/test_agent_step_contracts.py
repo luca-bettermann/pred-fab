@@ -22,7 +22,7 @@ def test_exploration_step_returns_experiment_spec(tmp_path):
 
     agent.calibration_system.run_calibration = _spy_run_calibration  # type: ignore[assignment]
     try:
-        result = agent.exploration_step(datamodule=datamodule, w_explore=0.8, n_optimization_rounds=1)
+        result = agent.exploration_step(datamodule=datamodule, kappa=0.8, n_optimization_rounds=1)
     finally:
         agent.calibration_system.run_calibration = original  # type: ignore[assignment]
 

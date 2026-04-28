@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Tuple, Optional, List, final, Dict
+from typing import final
 from abc import ABC, abstractmethod
 from numpy.typing import NDArray
 
@@ -12,14 +12,24 @@ from ..utils import PfabLogger
 class IEvaluationModel(BaseInterface):
     """Abstract base for evaluation models that score features against target values."""
 
+    # Class flag: set True if ``_compute_target_value`` and ``_compute_scaling_factor``
+    # do not depend on the per-row dimension iterator values (i.e. target / scaling
+    # are functions of ``params`` only, constant across rows of a single
+    # ``compute_performance`` call). When True, ``compute_performance_batched``
+    # takes a vectorised fast path: target/scaling are evaluated once per
+    # candidate and the per-row arithmetic runs as numpy broadcasts across
+    # ``(S, n_rows)``. Default False for backwards compatibility (per-row
+    # variation supported via the scalar loop).
+    TARGETS_CONSTANT: bool = False
+
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
-    
+
     # === ABSTRACT METHODS ===
 
     # abstract methods from BaseInterface:
     # - input_parameters
-    
+
     @property
     @abstractmethod
     def input_feature(self) -> str:
@@ -33,11 +43,11 @@ class IEvaluationModel(BaseInterface):
         ...
 
     @abstractmethod
-    def _compute_target_value(self, params: Dict, **dimensions) -> float:
+    def _compute_target_value(self, params: dict, **dimensions) -> float:
         """Compute the target (ideal) value for scoring at the given parameter context."""
         ...
-    
-    def _compute_scaling_factor(self, params: Dict, **dimensions) -> Optional[float]:
+
+    def _compute_scaling_factor(self, params: dict, **dimensions) -> float | None:
         """Optionally return a scaling factor for performance normalization; None uses target_value as denominator."""
         return None
     
@@ -48,8 +58,8 @@ class IEvaluationModel(BaseInterface):
         self,
         feature_array: NDArray,
         parameters: Parameters,
-        feature_std: Optional[NDArray] = None,
-    ) -> Tuple[Optional[float], List[Optional[float]], Optional[List[Optional[float]]]]:
+        feature_std: NDArray | None = None,
+    ) -> tuple[float | None, list[float | None], list[float | None] | None]:
         """Score each row of feature_array against its target; returns (avg, per-row list, per-row std or None)."""
         # Unpack DataBlocks
         params = parameters.get_values_dict()
@@ -61,8 +71,8 @@ class IEvaluationModel(BaseInterface):
         else:
             dim_iterator_codes = []
 
-        performance_list: List[Optional[float]] = []
-        std_list: List[Optional[float]] = []
+        performance_list: list[float | None] = []
+        std_list: list[float | None] = []
 
         for i, row in enumerate(feature_array):
             # Extract current dimension values
@@ -114,9 +124,77 @@ class IEvaluationModel(BaseInterface):
         return avg_performance, performance_list, std_list if feature_std is not None else None
 
     @final
+    def compute_performance_batched(
+        self,
+        feature_arrays_S: list[NDArray],
+        parameters_list: list[Parameters],
+    ) -> list[float | None]:
+        """Vectorised ``compute_performance`` over S candidates.
+
+        Default path loops the scalar ``compute_performance`` per candidate.
+        Fast path (when ``TARGETS_CONSTANT=True``): target/scaling are computed
+        once per candidate (no dim_dict), then perf arithmetic vectorises
+        across all ``(S, n_rows)`` cells. Saves ``~S × n_rows`` Python calls
+        per acquisition objective evaluation.
+
+        Returns a list of ``avg_performance`` values, one per candidate. The
+        per-row + std outputs of the scalar API are not exposed here — they
+        aren't consumed by the calibration hot path.
+        """
+        S = len(feature_arrays_S)
+        if S == 0:
+            return []
+        if not self.TARGETS_CONSTANT:
+            return [
+                self.compute_performance(arr, params)[0]
+                for arr, params in zip(feature_arrays_S, parameters_list)
+            ]
+
+        # Fast path: vectorised. Stack feature arrays into (S, n_rows, n_cols).
+        # All arrays share shape — same experiment topology per acquisition call.
+        try:
+            F_S = np.stack(feature_arrays_S, axis=0)
+        except ValueError:
+            # Heterogeneous shapes: fall back to scalar loop.
+            return [
+                self.compute_performance(arr, params)[0]
+                for arr, params in zip(feature_arrays_S, parameters_list)
+            ]
+        feature_values = F_S[..., -1]  # (S, n_rows)
+
+        # Compute target / scaling once per candidate (TARGETS_CONSTANT contract).
+        S_actual = F_S.shape[0]
+        targets = np.empty(S_actual, dtype=np.float64)
+        denoms = np.empty(S_actual, dtype=np.float64)
+        for s, params_obj in enumerate(parameters_list):
+            params = params_obj.get_values_dict()
+            t = float(self._compute_target_value(params))
+            sc = self._compute_scaling_factor(params)
+            targets[s] = t
+            if sc is not None and sc > 0:
+                denoms[s] = float(sc)
+            elif t > 0:
+                denoms[s] = t
+            else:
+                denoms[s] = np.nan  # neither valid → unscaled, returns NaN below
+
+        # Broadcast (S, 1) against (S, n_rows). NaN feature values propagate;
+        # nanmean ignores them. Clamp to [0, 1] matches the scalar path.
+        diffs = np.abs(feature_values - targets[:, None])
+        perfs = 1.0 - diffs / denoms[:, None]
+        perfs = np.clip(perfs, 0.0, 1.0)
+        nan_feat = np.isnan(feature_values)
+        perfs = np.where(nan_feat, np.nan, perfs)
+
+        with np.errstate(invalid='ignore'):
+            avgs = np.nanmean(perfs, axis=1)
+
+        return [None if np.isnan(a) else float(a) for a in avgs]
+
+    @final
     def _compute_performance_value(
-        self, feature_value: float, target_value: float, scaling_factor: Optional[float]
-    ) -> Optional[float]:
+        self, feature_value: float, target_value: float, scaling_factor: float | None
+    ) -> float | None:
         """Return 1 − |feature − target| / denominator, clamped to [0, 1].
 
         denominator is scaling_factor when provided, else target_value.
@@ -152,7 +230,7 @@ class IEvaluationModel(BaseInterface):
 
     @final
     @property
-    def input_features(self) -> List[str]:
+    def input_features(self) -> list[str]:
         """Wrap input_feature scalar as a single-element list."""
         input_feat = self.input_feature
         if not isinstance(input_feat, str):
@@ -161,7 +239,7 @@ class IEvaluationModel(BaseInterface):
 
     @final
     @property
-    def outputs(self) -> List[str]:
+    def outputs(self) -> list[str]:
         """Wrap output_performance scalar as a single-element list."""
         perf_code = self.output_performance
         if not isinstance(perf_code, str):

@@ -4,7 +4,7 @@ import os
 import json
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, Set, Optional, List
+from typing import Any
 
 from pred_fab.utils import LocalData, PfabLogger
 
@@ -16,7 +16,7 @@ from .data_blocks import (
     Features,
     Domains,
 )
-from .data_objects import DataArray, Domain
+from .data_objects import DataArray, DataDomainAxis, Domain
 from ..utils.enum import Roles
 
 class DatasetSchema:
@@ -46,7 +46,7 @@ class DatasetSchema:
         self._initialize()
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], root_folder: str) -> 'DatasetSchema':
+    def from_dict(cls, data: dict[str, Any], root_folder: str) -> 'DatasetSchema':
         """Reconstruct schema from dictionary."""
         parameter_block = Parameters.from_dict(data["parameters"])
         feature_block = Features.from_dict(data["features"])
@@ -78,6 +78,58 @@ class DatasetSchema:
         self.registry.register_schema(self.name, schema_hash, schema_struct)
         self.local_data.set_schema(self.name)
         self.logger.console_success(f"Successfully initialized schema with ID: {self.name}.")
+
+    def state_report(self) -> None:
+        """Print schema overview to console."""
+        _B = "\033[1m"
+        _D = "\033[2m"
+        _R = "\033[0m"
+
+        lines = [f"\n  {_B}Schema: {self.name}{_R}"]
+
+        # Parameters (exclude domain axis params)
+        lines.append(f"\n  {_D}Parameters{_R}")
+        for code, obj in self.parameters.items():
+            if isinstance(obj, DataDomainAxis):
+                continue
+            c = obj.constraints
+            lo, hi = c.get("min", ""), c.get("max", "")
+            bounds = f"[{lo}, {hi}]" if lo != "" else ""
+            if obj.runtime_adjustable:
+                ptype = "runtime"
+            else:
+                ptype = ""
+            lines.append(f"    {code:<20s} {bounds:<15s} {_D}{ptype}{_R}")
+
+        # Domains
+        if self.domains and len(list(self.domains.keys())) > 0:
+            lines.append(f"\n  {_D}Domains{_R}")
+            for domain_code, domain in self.domains.items():
+                lines.append(f"    {domain_code}")
+                for axis in domain.axes:
+                    lo, hi = axis.min_val, axis.max_val
+                    bounds = f"[{lo}, {hi}]"
+                    fixed = "fixed" if (hi is not None and lo == hi) else ""
+                    lines.append(f"      {axis.code:<18s} {bounds:<15s} {_D}{fixed}{_R}")
+
+        # Features
+        lines.append(f"\n  {_D}Features{_R}")
+        for code, obj in self.features.items():
+            if hasattr(obj, 'is_recursive') and obj.is_recursive:
+                ftype = "recursive"
+            elif hasattr(obj, 'context') and obj.context:
+                ftype = "context"
+            else:
+                ftype = ""
+            lines.append(f"    {code:<20s} {_D}{ftype}{_R}")
+
+        # Performance attributes
+        lines.append(f"\n  {_D}Performance{_R}")
+        for code in self.performance_attrs.keys():
+            lines.append(f"    {code}")
+
+        self.logger.console_summary("\n".join(lines))
+        self.logger.console_new_line()
 
     def _initialize_feature_columns(self) -> None:
         """Set iterator column names on each feature DataArray from domain definitions."""
@@ -115,14 +167,20 @@ class DatasetSchema:
         hash_str = json.dumps(structure, sort_keys=True)
         return hashlib.sha256(hash_str.encode()).hexdigest()
 
-    def _block_to_hash_structure(self, block: DataBlock) -> Dict[str, Any]:
-        """Convert DataBlock to hashable structure using to_hash_dict() (excludes operational metadata)."""
-        return {
-            name: obj.to_hash_dict()
-            for name, obj in block.items()
-        }
+    def _block_to_hash_structure(self, block: DataBlock) -> dict[str, Any]:
+        """Convert DataBlock to hashable structure using to_hash_dict() (excludes operational metadata).
 
-    def to_dict(self) -> Dict[str, Any]:
+        Recursive features are excluded — they derive from existing tensors and
+        don't change storage structure.
+        """
+        result: dict[str, Any] = {}
+        for name, obj in block.items():
+            if isinstance(obj, DataArray) and obj.is_recursive:
+                continue
+            result[name] = obj.to_hash_dict()
+        return result
+
+    def to_dict(self) -> dict[str, Any]:
         """Serialize schema to dictionary for storage."""
         return {
             "parameters": self.parameters.to_dict(),
@@ -132,7 +190,7 @@ class DatasetSchema:
             "schema_id": self.name
         }
 
-    def get_domain_for_feature(self, feature_code: str) -> Optional['Domain']:
+    def get_domain_for_feature(self, feature_code: str) -> Domain | None:
         """Return the Domain for a feature, or None for scalar features."""
         feat_obj = self.features.data_objects.get(feature_code)
         if feat_obj is None or not isinstance(feat_obj, DataArray):
@@ -166,7 +224,7 @@ class SchemaRegistry:
     def __init__(self, local_folder: str):
         self.local_folder = local_folder
         self.registry_path = os.path.join(self.local_folder, "schema_registry.json")
-        self.registry: Dict[str, Dict[str, Any]] = {}
+        self.registry: dict[str, dict[str, Any]] = {}
 
         self._load_registry()
 
@@ -187,7 +245,7 @@ class SchemaRegistry:
         with open(self.registry_path, 'w') as f:
             json.dump(self.registry, f, indent=2)
 
-    def register_schema(self, name: str, schema_hash: str, schema_struct: Dict[str, Any]) -> None:
+    def register_schema(self, name: str, schema_hash: str, schema_struct: dict[str, Any]) -> None:
         """Register schema with a specific name, validating against existing entries."""
 
         # 1. Check if name already exists
@@ -228,7 +286,7 @@ class SchemaRegistry:
             for entry in self.registry.values()
         )
 
-    def get_hash_by_id(self, schema_id: str) -> Optional[str]:
+    def get_hash_by_id(self, schema_id: str) -> str | None:
         """Get schema hash by schema_id."""
         for schema_hash, entry in self.registry.items():
             if entry["schema_id"] == schema_id:

@@ -1,23 +1,25 @@
 """PfabAgent — main orchestration class for the PFAB framework."""
 
-import textwrap
-from typing import Any, Dict, List, Set, Type, Optional, Tuple
+from typing import Any
 import numpy as np
 
 from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
+from ..core.data_objects import DataArray
 from ..core import ParameterProposal, ExperimentSpec
 from ..orchestration import (
     FeatureSystem,
     EvaluationSystem,
     PredictionSystem,
-    CalibrationSystem
+    CalibrationSystem,
+    Optimizer,
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, StepType, Mode, SourceStep
+from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
+from .evidence import EstimatorConfig
 
 
 class PfabAgent:
@@ -50,25 +52,40 @@ class PfabAgent:
         self.calibration_system: CalibrationSystem
         
         # Model registry (store classes and params until dataset is initialized)
-        self._feature_model_specs: List[Tuple[Type[IFeatureModel], dict]] = []  # List of (class, kwargs)
-        self._evaluation_model_specs: List[Tuple[Type[IEvaluationModel], dict]] = []  # List of (class, kwargs)
-        self._prediction_model_specs: List[Tuple[Type[IPredictionModel], dict]] = []  # List of (class, kwargs)
+        self._feature_model_specs: list[tuple[type[IFeatureModel], dict]] = []  # List of (class, kwargs)
+        self._evaluation_model_specs: list[tuple[type[IEvaluationModel], dict]] = []  # List of (class, kwargs)
+        self._prediction_model_specs: list[tuple[type[IPredictionModel], dict]] = []  # List of (class, kwargs)
         
         # Initialization state guard
         self._initialized = False
 
         # Context snapshot: current measured values of context features, injected into perf_fn.
-        self._context_snapshot: Dict[str, float] = {}
+        self._context_snapshot: dict[str, float] = {}
+
+        # Console reporter (created in initialize_systems)
+        self._console: ConsoleReporter | None = None
 
         # Progress tracking
-        self.active_exp: Optional[ExperimentData] = None
+        self.active_exp: ExperimentData | None = None
         
+    def _assert_initialized(self) -> None:
+        """Raise if the agent has not been initialized yet."""
+        if not self._initialized:
+            raise RuntimeError("Agent not initialized. Call initialize_systems() first.")
+
+    @property
+    def console(self) -> ConsoleReporter:
+        """Schema-aware console reporter; available after initialize_systems()."""
+        if self._console is None:
+            raise RuntimeError("Console not available. Call initialize_systems() first.")
+        return self._console
+
     # === MODEL REGISTRATION ===
 
     def _register_model(
             self, 
-            model_class: Type[Any], 
-            model_specs: List[Tuple[Type[Any], dict]], 
+            model_class: type[Any], 
+            model_specs: list[tuple[type[Any], dict]], 
             kwargs: dict
         ) -> None:
         """General registration logic."""
@@ -85,15 +102,15 @@ class PfabAgent:
         model_specs.append((model_class, kwargs))
         self.logger.info(f"Registered model: {model_class.__name__}")
 
-    def register_feature_model(self, feature_class: Type[Any], **kwargs) -> None:
+    def register_feature_model(self, feature_class: type[Any], **kwargs) -> None:
         """Register a feature model."""
         self._register_model(feature_class, self._feature_model_specs, kwargs)
 
-    def register_evaluation_model(self, evaluation_class: Type[IEvaluationModel], **kwargs) -> None:
+    def register_evaluation_model(self, evaluation_class: type[IEvaluationModel], **kwargs) -> None:
         """Register an evaluation model."""
         self._register_model(evaluation_class, self._evaluation_model_specs, kwargs)
     
-    def register_prediction_model(self, prediction_class: Type[IPredictionModel], **kwargs) -> None:
+    def register_prediction_model(self, prediction_class: type[IPredictionModel], **kwargs) -> None:
         """Register a prediction model."""
         self._register_model(prediction_class, self._prediction_model_specs, kwargs)
     
@@ -101,7 +118,8 @@ class PfabAgent:
 
     def initialize_systems(self, schema: DatasetSchema, verbose_flag: bool = False) -> None:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
-                
+        self.schema = schema
+
         # Step 1: Initialize systems (dataset will be set later)
         self.logger.info("Instantiating models from registered classes...")
         if not self._feature_model_specs:
@@ -153,16 +171,65 @@ class PfabAgent:
             except Exception:
                 return {}
 
+        def _perf_fn_batched(params_dicts: list[dict[str, Any]]) -> list[dict[str, float | None]]:
+            """Batched perf evaluation: one autoreg pass + one batched eval call.
+
+            The eval side dispatches each registered ``IEvaluationModel`` once
+            with all S candidates' feature arrays. Models with
+            ``TARGETS_CONSTANT=True`` vectorise the per-row arithmetic across
+            ``(S, n_rows)`` in one numpy op; others fall back to a per-
+            candidate loop inside ``compute_performance_batched``.
+            """
+            if not params_dicts:
+                return []
+            try:
+                merged_list = []
+                for pd_ in params_dicts:
+                    m = dict(pd_)
+                    if _ctx:
+                        m.update(_ctx)
+                    merged_list.append(m)
+                results_list = _pred.predict_for_calibration_batched(merged_list)
+                feat_dicts = [feat_arrs for feat_arrs, _ in results_list]
+                params_blocks = [pb for _, pb in results_list]
+                return _eval._evaluate_feature_dict_batched(feat_dicts, params_blocks)
+            except Exception:
+                return [{} for _ in params_dicts]
+
         self.calibration_system = CalibrationSystem(
             schema=schema,
             logger=self.logger,
             perf_fn=_perf_fn,
+            perf_fn_batched=_perf_fn_batched,
             uncertainty_fn=_pred.uncertainty,
-            similarity_fn=_pred.kernel_similarity,
+            delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
+            delta_integrated_evidence_batched_fn=_pred.delta_integrated_evidence_batched,
+            delta_integrated_evidence_joint_batched_fn=_pred.delta_integrated_evidence_joint_batched,
+            push_virtual_points_fn=_pred.push_virtual_points,
+            pop_virtual_points_fn=_pred.pop_virtual_points,
+            n_exp_fn=lambda: _pred._n_exp,
+            fit_empty_kde_fn=_pred.fit_empty_kde,
         )
 
         # validate against schema
         self._validate_systems_against_schema(schema)
+
+        # Build console reporter from schema metadata
+        from ..core.data_objects import DataCategorical
+        param_codes = list(schema.parameters.keys())
+        perf_codes = list(schema.performance_attrs.keys())
+        param_categories = {
+            code: obj.constraints.get("categories", [])
+            for code, obj in schema.parameters.items()
+            if isinstance(obj, DataCategorical)
+        }
+        self._console = ConsoleReporter(
+            logger=self.logger,
+            param_codes=param_codes,
+            perf_codes=perf_codes,
+            param_categories=param_categories,
+        )
+
         self._initialized = True
 
         self.logger.console_success(f"Successfully initialized agentic systems.")
@@ -210,8 +277,17 @@ class PfabAgent:
         self._check_sets_against_keys(set(output_features), schema.features.keys())
         self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
+        # Recursive features (derived by tensor shifting) and iterator features
+        # (auto-populated from row index) are produced without a feature model —
+        # treat them as computed for validation purposes.
+        derived_codes = {
+            code for code, obj in schema.features.items()
+            if isinstance(obj, DataArray) and (obj.is_recursive or obj.is_iterator)
+        }
+        output_features_set = set(output_features) | derived_codes
+
         # Validate that all input features are represented as outputs features
-        uncomputed_inputs = set(input_features) - set(output_features)
+        uncomputed_inputs = set(input_features) - output_features_set
         if uncomputed_inputs:
             raise ValueError(
                 f"The following input features are not computed by any model: "
@@ -228,63 +304,58 @@ class PfabAgent:
 
     def set_active_experiment(self, exp_data: ExperimentData) -> None:
         """Set the active experiment for online operations."""
-        if not self._initialized:
-             raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         
         self.active_exp = exp_data
         self.logger.info(f"Active experiment set to: {exp_data.code}")
 
     def state_report(self) -> None:
-        """Log an overview of the registered models and their I/O to the console."""
+        """Log an overview of all agent systems to the console."""
+        _B = "\033[1m"
+        _D = "\033[2m"
+        _R = "\033[0m"
+
         if not self._initialized:
             self.logger.console_warning("Agent not initialized. No models to report.")
             return
 
-        summary = ["\n===== Agent State Report ====="]
-        
-        def _add_section(name: str, models: List[Any], width=25) -> None:
+        lines = [f"\n  {_B}Agent{_R}"]
+
+        def _add_model_section(name: str, models: list[Any]) -> None:
             if not models:
                 return
-            
-            # Header with newline before it
-            header = f"\n{name:<{width}} | {'Inputs':<{width}} | {'Outputs':<{width}}"
-            summary.append(header)
-            divider = "-" * (3 * width + 6)
-            summary.append(divider)
-            
+            lines.append(f"\n  {_D}{name}{_R}")
             for model in models:
                 inp_str = ", ".join(model.input_parameters + model.input_features)
                 out_str = ", ".join(model.outputs)
-                
-                # Wrap text to multiple lines if needed
-                inp_lines = textwrap.wrap(inp_str, width=width) if inp_str else [""]
-                out_lines = textwrap.wrap(out_str, width=width) if out_str else [""]
-                
-                # If wrap returns empty list for empty string (python behavior varies), ensure list has one element
-                if not inp_lines: inp_lines = [""]
-                if not out_lines: out_lines = [""]
+                lines.append(f"    {model.__class__.__name__:<20s} {inp_str:<30s} → {out_str}")
 
-                max_lines = max(len(inp_lines), len(out_lines))
-                model_name = model.__class__.__name__
-
-                for i in range(max_lines):
-                    col1 = model_name if i == 0 else ""
-                    col2 = inp_lines[i] if i < len(inp_lines) else ""
-                    col3 = out_lines[i] if i < len(out_lines) else ""
-                    summary.append(f"{col1:<{width}} | {col2:<{width}} | {col3:<{width}}")
-
-        # Report on systems
         if self.feature_system:
-            _add_section("Feature System", self.feature_system.models)
-            
+            _add_model_section("Feature System", self.feature_system.models)
         if self.eval_system:
-            _add_section("Evaluation System", self.eval_system.models)
-            
+            _add_model_section("Evaluation System", self.eval_system.models)
         if self.pred_system:
-            _add_section("Prediction System", self.pred_system.models)
-            
-        self.logger.console_new_line()
-        self.logger.console_info("\n".join(summary))
+            _add_model_section("Prediction System", self.pred_system.models)
+
+        # # Calibration System (config — not a trained system)
+        # cal = self.calibration_system
+        # lines.append(f"\n  {_D}Calibration System{_R}")
+        #
+        # pw_parts = [f"{k}={v:g}" for k, v in cal.performance_weights.items()]
+        # lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
+        #
+        # explore_parts = [f"radius={cal._exploration_radius:g}",
+        #                  f"buffer={cal._buffer:g}",
+        #                  f"decay_exp={cal._decay_exp:g}"]
+        # lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
+        #
+        # for code in cal.data_objects.keys():
+        #     low, high = cal._get_hierarchical_bounds_for_code(code)
+        #     bounds_str = f"[{low}, {high}]"
+        #     delta = cal.trust_regions.get(code, "─")
+        #     lines.append(f"    {code:<20s} {bounds_str:<15s} {_D}{delta}{_R}")
+
+        self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
     def calibration_state_report(self) -> None:
@@ -292,65 +363,80 @@ class PfabAgent:
 
     # === STEP METHODS ==
     
-    def exploration_step(
+    def acquisition_step(
         self,
         datamodule: DataModule,
-        w_explore: float = 0.5,
+        kappa: float = 0.5,
         n_optimization_rounds: int = 5,
-        current_params: Optional[Dict[str, Any]] = None,
+        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """UCB-based exploration proposal. Iterates over trajectory dimensions when configured."""
+        """Unified proposal step: κ>0 = exploration, κ=0 = inference."""
         self._check_systems(StepType.FULL)
 
+        mode = Mode.INFERENCE if kappa == 0.0 else Mode.EXPLORATION
         result = self.calibration_system.run_calibration(
             datamodule=datamodule,
-            mode=Mode.EXPLORATION,
+            mode=mode,
             current_params=current_params,
-            w_explore=w_explore,
+            kappa=kappa,
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        self.logger.console_success("Successfully completed exploration step.")
+        # Console: show proposal (single or schedule)
+        cal = self.calibration_system
+        if self._console is not None and self._console.enabled:
+            self._console.print_proposal_row(
+                [], cal.last_opt_perf, cal.last_opt_unc, cal.last_opt_score,
+            )
+            tunable_codes = set(cal.get_tunable_params(datamodule))
+            params = dict(result.initial_params) if result.initial_params else {}
+            tunable = {k: v for k, v in params.items() if k in tunable_codes}
+
+            if cal.last_schedule and len(cal.last_schedule) > 1:
+                self._console.print_schedule_table(
+                    cal.last_schedule, tunable_codes, cal.schedule_configs,
+                )
+            else:
+                self._console.print_params_line(tunable)
+
+        self.logger.info(f"Successfully completed acquisition step (kappa={kappa}).")
         return result
+
+    # Backward-compatible aliases
+    def exploration_step(self, datamodule: DataModule, kappa: float = 0.5,
+                         n_optimization_rounds: int = 5,
+                         current_params: dict[str, Any] | None = None) -> ExperimentSpec:
+        """Alias for acquisition_step with kappa > 0."""
+        return self.acquisition_step(datamodule, kappa=kappa,
+                                     n_optimization_rounds=n_optimization_rounds,
+                                     current_params=current_params)
 
     def inference_step(
         self,
         exp_data: ExperimentData,
         datamodule: DataModule,
-        w_explore: float = 0.5,
         n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
-        current_params: Optional[Dict[str, Any]] = None,
+        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """Extract features, evaluate, then return an inference-guided proposal."""
+        """Feature extraction + evaluation, then acquisition_step with kappa=0."""
         self._check_systems(StepType.FULL)
 
-        # 1. Extract Features
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
-
-        # 2. Evaluate Performance
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
-        # 3. Calibrate
-        result = self.calibration_system.run_calibration(
-            datamodule=datamodule,
-            mode=Mode.INFERENCE,
-            current_params=current_params,
-            w_explore=w_explore,
-            n_optimization_rounds=n_optimization_rounds,
-        )
-
-        self.logger.console_success("Successfully completed inference step.")
-        return result
+        return self.acquisition_step(datamodule, kappa=0.0,
+                                     n_optimization_rounds=n_optimization_rounds,
+                                     current_params=current_params)
 
     def adaptation_step(
         self,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
-        exp_data: Optional[ExperimentData] = None,
+        dimension: str | None = None,
+        step_index: int | None = None,
+        exp_data: ExperimentData | None = None,
         mode: Mode = Mode.INFERENCE,
-        w_explore: float = 0.0,
+        kappa: float = 0.0,
         record: bool = False,
         **kwargs
     ) -> ExperimentSpec:
@@ -384,7 +470,7 @@ class PfabAgent:
             mode=mode,
             current_params=current_params,
             target_indices=target_indices,
-            w_explore=w_explore,
+            kappa=kappa,
         )
         # Tag as adaptation (run_calibration uses mode-derived source_step).
         proposal = ParameterProposal.from_dict(
@@ -397,7 +483,7 @@ class PfabAgent:
             exp_data.record_parameter_update(proposal, dimension=dimension, step_index=step_index)
             self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
 
-        self.logger.console_success("Successfully completed adaptation step.")
+        self.logger.info("Successfully completed adaptation step.")
         return result
 
     # === ADDITIONAL API CALLS ===
@@ -414,7 +500,7 @@ class PfabAgent:
         # Extract Features and Evaluate Performance
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute_flag, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
-        self.logger.console_success(f"Successfully evaluated experiment '{exp_data.code}'.")
+        self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
     def train(
         self,
@@ -422,7 +508,7 @@ class PfabAgent:
         validate: bool = True,
         test: bool = False,
         **kwargs
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Train prediction models and optionally validate/test."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
@@ -430,17 +516,26 @@ class PfabAgent:
         # Train prediction models using provided DataModule
         self.pred_system.train(datamodule, **kwargs)
 
+        # Update running performance range for acquisition normalization
+        if self.calibration_system is not None:
+            self.calibration_system.update_perf_range(datamodule)
+
         # Run validation on trained models if requested
         if validate or test:
-            return self.pred_system.validate(use_test=test)
+            perf_weights = None
+            if self.calibration_system is not None:
+                perf_weights = self.calibration_system.performance_weights
+            return self.pred_system.validate(
+                use_test=test, performance_weights=perf_weights,
+            )
         
     def predict(
         self,
-        exp_data: Optional[ExperimentData] = None,
-        dimension: Optional[str] = None,
-        step_index: Optional[int] = None,
+        exp_data: ExperimentData | None = None,
+        dimension: str | None = None,
+        step_index: int | None = None,
         batch_size: int = 1000
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Predict features for an experiment slice and mutate feature tensors."""
         if self.pred_system is None:
             raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
@@ -459,92 +554,108 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="predicted")
         return predictions
     
-    def configure(
+    def configure_performance(
         self,
         *,
-        bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        performance_weights: Optional[Dict[str, float]] = None,
-        fixed_params: Optional[Dict[str, Any]] = None,
-        adaptation_delta: Optional[Dict[str, float]] = None,
-        step_parameters: Optional[Dict[str, str]] = None,
-        ofat_strategy: Optional[List[str]] = None,
-        exploration_radius: Optional[float] = None,
-        optimizer: Optional[str] = None,
-        force: bool = False,
+        weights: dict[str, float],
     ) -> None:
-        """Configure the agent.  All parameters are keyword-only and optional.
+        """Set performance weights for calibration and uncertainty aggregation."""
+        self._assert_initialized()
+        self.calibration_system.set_performance_weights(weights)
+        if self._console is not None:
+            self._console._perf_weights = weights
+        # Map performance weights to feature names for per-model KDE aggregation.
+        feature_weights: dict[str, float] = {}
+        for eval_model in self.eval_system.models:
+            perf_name = eval_model.output_performance
+            feat_name = eval_model.input_feature
+            if perf_name in weights:
+                feature_weights[feat_name] = weights[perf_name]
+        if feature_weights:
+            self.pred_system.set_uncertainty_weights(feature_weights)
 
-        Call configure() one or more times at any phase — only the supplied
-        arguments are applied; the rest remain unchanged.
-
-        bounds              — search space for offline calibration, keyed by parameter code.
-        performance_weights — relative importance of each performance attribute (default 1.0).
-        fixed_params        — parameters held constant during calibration (e.g. design intent).
-        adaptation_delta    — trust-region half-widths for online/layer-by-layer adaptation.
-        step_parameters     — {param_code: dimension_code} pairs declaring which runtime
-                              parameters are re-optimised at each step of the given dimension.
-        ofat_strategy       — cycle through these parameter codes one-at-a-time per adaptation
-                              step (OFAT).  Requires adaptation_delta to be set first.
-        exploration_radius  — NatPN evidence model bubble size c:
-                              h = c·√d/√N (radius), γ = max(1, c·√N) (sharpness).
-                              Larger c → slower transition from exploration to exploitation.
-        optimizer           — 'lbfgsb' (default, gradient-based multi-start) or
-                              'de' (differential evolution, global search, slower).
-        force               — overwrite already-configured settings without warning.
-        """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-
-        if bounds is not None:
-            self.calibration_system.configure_param_bounds(bounds, force=force)
-        if performance_weights is not None:
-            self.calibration_system.set_performance_weights(performance_weights)
-        if fixed_params is not None:
-            self.calibration_system.configure_fixed_params(fixed_params, force=force)
-        if adaptation_delta is not None:
-            self.calibration_system.configure_adaptation_delta(adaptation_delta, force=force)
-        if step_parameters is not None:
-            for param_code, dim_code in step_parameters.items():
-                self.calibration_system.configure_step_parameter(param_code, dim_code, force=force)
-        if ofat_strategy is not None:
-            self.calibration_system.configure_ofat_strategy(ofat_strategy)
-        if exploration_radius is not None:
-            self.pred_system.configure_exploration(exploration_radius)
-        if optimizer is not None:
-            self.calibration_system.optimizer = optimizer
-
-    # ── Backward-compatible wrappers (kept for existing test code) ──────────────
-
-    def configure_calibration(
+    def configure_exploration(
         self,
-        performance_weights: Optional[Dict[str, float]] = None,
-        bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-        fixed_params: Optional[Dict[str, Any]] = None,
-        adaptation_delta: Optional[Dict[str, float]] = None,
-        exploration_radius: Optional[float] = None,
+        *,
+        sigma: float | None = None,
+        estimator: EstimatorConfig | None = None,
+    ) -> None:
+        """Configure the integrated-evidence objective (σ and estimator choice)."""
+        self._assert_initialized()
+        if sigma is None and estimator is None:
+            return
+        self.pred_system.configure_exploration(sigma=sigma, estimator=estimator)
+
+    def configure_optimizer(
+        self,
+        *,
+        backend: Optimizer | None = None,
+        online_backend: Optimizer | None = None,
+        de_maxiter: int | None = None,
+        de_popsize: int | None = None,
+        de_tol: float | None = None,
+        lbfgsb_maxfun: int | None = None,
+        lbfgsb_eps: float | None = None,
+    ) -> None:
+        """Set optimizer backend and tuning parameters."""
+        self._assert_initialized()
+        cal = self.calibration_system
+        if backend is not None:
+            cal.optimizer = backend
+        if online_backend is not None:
+            cal.online_optimizer = online_backend
+        if de_maxiter is not None:
+            cal.de_maxiter = de_maxiter
+        if de_popsize is not None:
+            cal.de_popsize = de_popsize
+        if de_tol is not None:
+            cal.de_tol = de_tol
+        if lbfgsb_maxfun is not None:
+            cal.lbfgsb_maxfun = lbfgsb_maxfun
+        if lbfgsb_eps is not None:
+            cal.lbfgsb_eps = lbfgsb_eps
+
+    def configure_scheduled_sampling(
+        self,
+        n_rounds: int = 4,
+        schedule_floor: float = 0.0,
+    ) -> None:
+        """Configure scheduled sampling for models with recursive input features.
+
+        Models declaring a Feature.recursive(...) input are trained across
+        ``n_rounds`` refit passes, with the recursive-feature column values
+        annealed from measured prior values (round 0) to the model's own
+        predictions (last round). Closes the train/inference distribution gap
+        for autoregressive prediction. See PFAB - Scheduled Sampling.
+
+        Args:
+            n_rounds: Number of refit rounds. Default 4. Set to 1 to disable
+                scheduled sampling (single teacher-forced training pass).
+            schedule_floor: Minimum student probability in round 1 (default 0).
+                Use a small positive floor (e.g. 0.1) to skip the pure
+                teacher-forcing baseline.
+        """
+        self._assert_initialized()
+        self.pred_system.n_ss_rounds = int(n_rounds)
+        self.pred_system.ss_schedule_floor = float(schedule_floor)
+
+    def configure_schedule(
+        self,
+        parameter: str,
+        dimension: str,
+        *,
+        delta: float | None = None,
+        smoothing: float | None = None,
         force: bool = False,
     ) -> None:
-        """Deprecated: use configure() instead."""
-        self.configure(
-            bounds=bounds,
-            performance_weights=performance_weights,
-            fixed_params=fixed_params,
-            adaptation_delta=adaptation_delta,
-            exploration_radius=exploration_radius,
-            force=force,
-        )
-
-    def configure_step_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
-        """Deprecated: use configure(step_parameters={code: dimension_code}) instead."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_step_parameter(code, dimension_code, force=force)
-
-    def configure_ofat_strategy(self, codes: List[str]) -> None:
-        """Deprecated: use configure(ofat_strategy=codes) instead."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        self.calibration_system.configure_ofat_strategy(codes)
+        """Configure a parameter to vary per step of a dimension."""
+        self._assert_initialized()
+        cal = self.calibration_system
+        cal.configure_schedule_parameter(parameter, dimension, force=force)
+        if delta is not None:
+            cal.configure_adaptation_delta({parameter: delta}, force=force)
+        if smoothing is not None:
+            cal.schedule_smoothing = smoothing
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 
@@ -563,31 +674,36 @@ class PfabAgent:
         """Number of optimizer restarts used in the most recent calibration step."""
         return self.calibration_system.last_opt_n_starts
 
+    @property
+    def last_baseline_nfev(self) -> int:
+        """Number of DE evaluations in the most recent baseline step."""
+        return getattr(self.calibration_system, 'last_baseline_nfev', 0)
+
     # ── Acquisition introspection ───────────────────────────────────────────────
 
-    def predict_performance(self, params: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    def predict_performance(self, params: dict[str, Any]) -> dict[str, float | None]:
         """Run the prediction + evaluation pipeline at params and return performance scores.
 
         Uses the same perf_fn the optimizer uses internally — useful for logging what the
         model predicts at a proposed point before committing to an experiment.
         Requires the agent to be trained (pred_system must have a fitted model).
         """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
+        self._assert_initialized()
         return self.calibration_system.perf_fn(params)
 
-    def predict_uncertainty(self, params: Dict[str, Any], datamodule: DataModule) -> float:
+    def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
         """Return the predicted uncertainty (0–1) at params.
 
         Uses the same evidence model the acquisition function queries.
+        Boundary evidence is included in the uncertainty computation.
         Pass the current datamodule so params are normalized consistently.
         Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
         """
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        return float(self.pred_system.uncertainty(datamodule.params_to_array(params)))
+        self._assert_initialized()
+        X = datamodule.params_to_array(params)
+        return float(self.pred_system.uncertainty(X))
 
-    def update_context_snapshot(self, values: Dict[str, float]) -> None:
+    def update_context_snapshot(self, values: dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.
 
         Call this with the latest measured context values (e.g. temperature, humidity)
@@ -600,15 +716,22 @@ class PfabAgent:
     def baseline_step(
         self,
         n: int,
-        param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
-    ) -> List[ExperimentSpec]:
-        """Generate n space-filling baseline proposals using LHS. No trained model required."""
-        if not self._initialized:
-            raise RuntimeError("Agent not initialized.")
-        result = self.calibration_system.run_baseline(
-            n=n,
-            param_bounds=param_bounds,
-        )
+    ) -> list[ExperimentSpec]:
+        """Generate n space-filling baseline proposals via batch-aware evidence maximization.
+
+        Uses the acquisition objective with κ=1 (pure exploration: maximize ΔI,
+        the integrated evidence gain). Each new proposal is added to the
+        evidence field so subsequent proposals naturally space-fill.
+        """
+        self._assert_initialized()
+        # Bypass the encoder during baseline so the (random-init) prediction
+        # model can't taint placement: evidence/KDE operates on raw normalised
+        # input space here. Auto-managed; not user-facing.
+        self.pred_system._bypass_encoder = True
+        try:
+            result = self.calibration_system.run_baseline(n=n)
+        finally:
+            self.pred_system._bypass_encoder = False
         self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
         return result
 
@@ -616,8 +739,8 @@ class PfabAgent:
 
     def _instantiate_model_group(
             self,
-            model_specs: List[Tuple[Type[Any], dict]],
-            system_model_list: List[Any],
+            model_specs: list[tuple[type[Any], dict]],
+            system_model_list: list[Any],
             model_type: str
         ) -> None:
         """Instantiate a group of models and add to system."""
@@ -629,7 +752,7 @@ class PfabAgent:
                 raise ValueError(f"{model_type} model {_class.__name__} registered multiple times.")
             system_model_list.append(model)
 
-    def _check_sets_against_keys(self, model_codes: Set[str], schema_keys: List[str]) -> None:
+    def _check_sets_against_keys(self, model_codes: set[str], schema_keys: list[str]) -> None:
         not_represented = model_codes - set(schema_keys)
         if not_represented:
             raise ValueError(
@@ -663,8 +786,7 @@ class PfabAgent:
     
     def _check_systems(self, step: StepType) -> None:
         """Validate that all systems are initialized and active for a full step."""
-        if not self._initialized:
-            raise RuntimeError("Cannot perform step before initialize() is called.")
+        self._assert_initialized()
         
         if step == StepType.EVAL:
             rel_systems = [self.feature_system, self.eval_system]
@@ -684,10 +806,10 @@ class PfabAgent:
         
     def _step_config(
             self, 
-            exp_data: Optional[ExperimentData], 
-            dimension: Optional[str] = None, 
-            step_index: Optional[int] = None
-            ) -> Tuple[ExperimentData, int, Optional[int]]:
+            exp_data: ExperimentData | None, 
+            dimension: str | None = None, 
+            step_index: int | None = None
+            ) -> tuple[ExperimentData, int, int | None]:
         """Helper to configure step parameters and retrieve exp_data."""
         # Retrieve experiment data
         if exp_data is None:
@@ -710,11 +832,11 @@ class PfabAgent:
             self,
             exp_code: str,
             start: int,
-            end: Optional[int],
+            end: int | None,
             action: str
         ) -> None:
         """Helper to log step completion messages."""
         log_text = f"Experiment '{exp_code}' {action} successfully"
         if start and end:
             log_text += f" for dimension range [{start}:{end}]"
-        self.logger.console_info(log_text)
+        self.logger.info(log_text)

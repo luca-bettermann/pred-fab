@@ -11,16 +11,29 @@ requires-python = ">=3.9"
 dependencies = [
     "numpy>=2.0.2",
     "pandas>=2.3.1",
+    "matplotlib>=3.8",
     "pytest>=8.4.1",
     "scikit-learn>=1.6.1",
     "scikit-optimize>=0.10.2",
 ]
 
 [project.optional-dependencies]
+torch = [
+    "torch>=2.0",
+]
 dev = [
     "pytest>=8.4.1",
     "pyright>=1.1.0",
+    "torch>=2.0",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources.torch]
+index = "pytorch-cpu"
 
 [tool.setuptools.packages.find]
 where = ["src"]
