@@ -2301,33 +2301,43 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_start: int,
         batch_end: int,
         dim_info: dict[str, Any]
-    ) -> tuple[pd.DataFrame, list[tuple[int, ...]]]:
-        """Build feature matrix X with static params + iterator-derived features.
+    ) -> tuple[dict[str, torch.Tensor], list[tuple[int, ...]]]:
+        """Build a tensor-dict feature batch (commit 16b: pandas-free).
 
-        Mirrors Dataset.export_to_dataframe at training time: dimension-size
-        columns (e.g. n_layers) carry the experiment's actual size, and
-        Feature.iterator(...) values are computed per-row from the iteration
-        tuple as idx[axis_pos] / (size - 1).
+        Mirrors ``Dataset.export_to_tensor_dict`` semantics: per-column
+        tensor with categoricals as long-index, numerics + iterator-derived
+        features as float. Caller (``_predict_and_store_batch_to_dict``)
+        passes the dict to ``DataModule.prepare_input_from_tensor_dict``.
         """
         shape = dim_info['shape']
         param_base = dim_info['param_base']
         iterator_feats = dim_info['iterator_feats']
+        dm = self._assert_trained()
 
-        X_batch_rows = []
-        batch_indices = []
+        batch_indices: list[tuple[int, ...]] = [
+            tuple(np.unravel_index(pos, shape))
+            for pos in range(batch_start, batch_end)
+        ]
+        n_cells = len(batch_indices)
+        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
 
-        for pos in range(batch_start, batch_end):
-            idx = np.unravel_index(pos, shape)
-            batch_indices.append(idx)
+        X_dict: dict[str, torch.Tensor] = {}
+        for col_name in dm.input_columns:
+            if col_name in dm.categorical_mappings:
+                cats = dm.categorical_mappings[col_name]
+                cat_to_idx = {c: i for i, c in enumerate(cats)}
+                v = param_base.get(col_name, cats[0] if cats else None)
+                cell_val = cat_to_idx.get(v, 0)
+                X_dict[col_name] = torch.full((n_cells,), cell_val, dtype=torch.long)
+            elif col_name in iter_feat_lookup:
+                axis_pos, size = iter_feat_lookup[col_name]
+                vals = [float(idx[axis_pos]) / max(size - 1, 1) for idx in batch_indices]
+                X_dict[col_name] = torch.tensor(vals, dtype=torch.float32)
+            else:
+                v_f = float(param_base.get(col_name, 0.0))
+                X_dict[col_name] = torch.full((n_cells,), v_f, dtype=torch.float32)
 
-            row = param_base.copy()
-            for feat_code, axis_pos, size in iterator_feats:
-                row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
-
-            X_batch_rows.append(row)
-
-        X_batch = pd.DataFrame(X_batch_rows)
-        return X_batch, batch_indices
+        return X_dict, batch_indices
 
     def _predict_autoregressive(
         self,
@@ -2357,18 +2367,28 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         n_cells = predict_to - predict_from
 
-        # Pre-build the static + iterator-feature batch (one prepare_input call).
-        rows = []
-        cell_indices: list[tuple[int, ...]] = []
-        for pos in range(predict_from, predict_to):
-            idx = np.unravel_index(pos, shape)
-            cell_indices.append(idx)
-            row = dim_info['param_base'].copy()
-            for feat_code, axis_pos, size in iterator_feats:
-                row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
-            rows.append(row)
-        X_df = pd.DataFrame(rows)
-        X_norm = dm.prepare_input(X_df)  # (n_cells, n_input_cols), tensor
+        # Strategy D commit 16b: pandas-free X build via tensor dict.
+        cell_indices: list[tuple[int, ...]] = [
+            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
+        ]
+        param_base = dim_info['param_base']
+        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
+        X_dict_flat: dict[str, torch.Tensor] = {}
+        for col_name in dm.input_columns:
+            if col_name in dm.categorical_mappings:
+                cats = dm.categorical_mappings[col_name]
+                cat_to_idx = {c: i for i, c in enumerate(cats)}
+                v = param_base.get(col_name, cats[0] if cats else None)
+                cell_val = cat_to_idx.get(v, 0)
+                X_dict_flat[col_name] = torch.full((n_cells,), cell_val, dtype=torch.long)
+            elif col_name in iter_feat_lookup:
+                axis_pos, size = iter_feat_lookup[col_name]
+                vals = [float(idx[axis_pos]) / max(size - 1, 1) for idx in cell_indices]
+                X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
+            else:
+                v_f = float(param_base.get(col_name, 0.0))
+                X_dict_flat[col_name] = torch.full((n_cells,), v_f, dtype=torch.float32)
+        X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (n_cells, n_input_cols)
 
         # Pre-resolve per-recursive-feature column indices and normalisation
         # stats so the inner loop is just tensor writes + forward_pass.
@@ -2414,15 +2434,17 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _predict_and_store_batch_to_dict(
         self,
         predictions: dict[str, np.ndarray],
-        X_batch: pd.DataFrame,
+        X_batch: dict[str, torch.Tensor],
         batch_indices: list[tuple[int, ...]],
         model: IPredictionModel | None = None,
     ) -> None:
-        """Run model prediction on X_batch and store results with per-feature index truncation."""
-        dm = self._assert_trained()
+        """Run model prediction on X_batch tensor dict and store results.
 
-        # Prepare input (one-hot + normalize) — returns a tensor.
-        X_norm = dm.prepare_input(X_batch)
+        Strategy D commit 16b: ``X_batch`` is now a tensor dict (was DataFrame);
+        prep goes through ``prepare_input_from_tensor_dict``.
+        """
+        dm = self._assert_trained()
+        X_norm = dm.prepare_input_from_tensor_dict(X_batch)
 
         models_to_run = [model] if model is not None else self.models
         for m in models_to_run:
