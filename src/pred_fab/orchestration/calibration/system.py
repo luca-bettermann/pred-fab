@@ -2479,8 +2479,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 opt, static_out, _sched_out = self.engine.run(
                     acq_single, N=1, D_static=n_input, D_sched=0, L=1,
                     static_bounds=bounds.tolist(), sched_bounds=[], sched_deltas=np.array([]),
-                    optimizer=chosen_opt,
-                    default_optimizer=self.optimizer,
                     x0=datamodule.params_to_array(working_params) if working_params else None,
                     n_restarts=n_rounds,
                     label="Optimizing", show_progress=console,

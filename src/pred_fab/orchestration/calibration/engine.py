@@ -119,8 +119,6 @@ class OptimizationEngine:
         sched_bounds: list[tuple[float, float]],
         sched_deltas: np.ndarray,
         *,
-        optimizer: Optimizer | None = None,
-        default_optimizer: Optimizer = Optimizer.DE,
         init_pop: np.ndarray | None = None,
         integrality_static: list[bool] | None = None,
         x0: np.ndarray | None = None,
@@ -128,14 +126,15 @@ class OptimizationEngine:
         label: str = "Optimizing",
         show_progress: bool = False,
     ) -> tuple[_OptResult, np.ndarray, np.ndarray]:
-        """Single optimization engine for all calibration use cases.
+        """DE optimization engine for the static-acquisition path.
 
         Vector layout per unit: [static, sched_step0, offset_1, ..., offset_{L-1}]
-        Total vars: N x (D_static + D_sched + (L-1) x D_sched)
+        Total vars: N x (D_static + D_sched + (L-1) x D_sched).
+        Gradient backend has its own ``run_acquisition_gradient`` entry point —
+        this one is DE-only.
 
         Returns (opt_result, static_out[N, D_static], sched_out[N, L, D_sched]).
         """
-        active_optimizer = optimizer or default_optimizer
         D_unit = D_static + D_sched + max(L - 1, 0) * D_sched
         n_vars = N * D_unit
 
@@ -182,8 +181,7 @@ class OptimizationEngine:
 
             return step_sum / L
 
-        # --- 3. Run optimizer ---
-        del active_optimizer  # only DE is reachable; gradient path lives in run_acquisition_gradient
+        # --- 3. Run DE ---
         opt = self._run_de(
             _objective,
             all_bounds,
