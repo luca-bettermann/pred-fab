@@ -237,6 +237,7 @@ class OptimizationEngine:
         lr: float | None = None,
         method: str | None = None,
         x0: np.ndarray | None = None,
+        compile_objective: bool = False,
         label: str = "Optimizing",
         show_progress: bool = False,
     ) -> _OptResult:
@@ -252,6 +253,11 @@ class OptimizationEngine:
 
         Convention matches DE: ``objective_tensor`` returns the **negated**
         score (lower is better). Score in the result is ``−min(objective)``.
+
+        ``compile_objective=True`` (Strategy D commit 20) wraps the objective
+        with ``torch.compile(dynamic=True)``; first call traces, subsequent
+        calls reuse the JIT graph. Falls back to eager silently on compile
+        failure (e.g. unsupported ops in the objective graph).
         """
         n_starts = n_starts if n_starts is not None else self.gradient_n_starts
         n_iters = n_iters if n_iters is not None else self.gradient_n_iters
@@ -263,6 +269,15 @@ class OptimizationEngine:
         D = len(bounds)
         if D == 0:
             return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
+
+        # Optional torch.compile wrap of the objective (commit 20).
+        if compile_objective:
+            try:
+                objective_tensor = torch.compile(objective_tensor, dynamic=True)  # type: ignore[assignment]
+            except Exception as e:
+                self.logger.warning(
+                    f"torch.compile failed for objective_tensor; running eager: {e!r}"
+                )
 
         bounds_arr = np.asarray(bounds, dtype=np.float64)
         lo_t = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)

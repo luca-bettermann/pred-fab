@@ -597,6 +597,43 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="predicted")
         return predictions
     
+    def to(self, device: str | torch.device) -> "PfabAgent":
+        """Move all torch state to ``device`` (Strategy D commit 20).
+
+        Calls ``.to(device)`` on every ``nn.Module`` instance held by the
+        framework: prediction model networks, categorical embeddings, and
+        ``nn.Module``-based normalisers. After this call, ``forward_pass``
+        / ``encode`` operate on the new device.
+
+        Returns self for chaining (`agent.to('cuda').baseline_step(3)`).
+
+        Caveat: KDE state (``_model_kdes`` latent_points / point_weights),
+        the optimiser engine's RNG, and several other CPU-bound numpy
+        objects are NOT moved by this call. They get coerced to the model
+        device at acquisition-call boundaries via per-call tensor moves.
+        Full GPU support (no CPU intermediates inside the acquisition graph)
+        is the next layer of GPU work.
+        """
+        self._assert_initialized()
+
+        for model in self.pred_system.models:
+            if hasattr(model, "_model") and model._model is not None:
+                model._model = model._model.to(device)
+            if hasattr(model, "_cat_embeddings"):
+                model._cat_embeddings = model._cat_embeddings.to(device)
+            if hasattr(model, "_compiled_forward") and model._compiled_forward is not None:
+                # torch.compile-d module; rebuild the compiled wrapper around
+                # the moved net at next first-call.
+                model._compiled_forward = None
+
+        if self.pred_system.datamodule is not None:
+            for stats in self.pred_system.datamodule._parameter_stats.values():
+                stats.to(device)
+            for stats in self.pred_system.datamodule._feature_stats.values():
+                stats.to(device)
+
+        return self
+
     def configure_performance(
         self,
         *,
