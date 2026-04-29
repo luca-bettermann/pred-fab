@@ -326,7 +326,7 @@ def test_one_hot_encode_includes_categorical_columns(tmp_path):
     datamodule._fit_normalize()
 
     X_df, _ = dataset.export_to_dataframe(codes)
-    X_arr = datamodule._one_hot_encode(X_df)
+    X_arr = datamodule._encode_inputs(X_df)
 
     # One-hot columns for param_3 categories (A, B, C) should be present
     assert any("param_3" in col for col in datamodule.input_columns)
@@ -353,7 +353,7 @@ def test_one_hot_encode_handles_missing_categorical_column(tmp_path):
     X_df_missing = X_df.drop(columns=["param_3"], errors="ignore")
 
     # Should not raise; fills missing with 0
-    X_arr = datamodule._one_hot_encode(X_df_missing)
+    X_arr = datamodule._encode_inputs(X_df_missing)
     assert X_arr is not None
     assert X_arr.shape[1] == len(datamodule.input_columns)
 
@@ -373,7 +373,7 @@ def test_one_hot_encode_output_is_float32(tmp_path):
     datamodule._fit_normalize()
 
     X_df, _ = dataset.export_to_dataframe(codes)
-    X_arr = datamodule._one_hot_encode(X_df)
+    X_arr = datamodule._encode_inputs(X_df)
     assert X_arr.dtype == np.float32
 
 

@@ -2100,14 +2100,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if is_schedule:
             L = len(step_grid)
 
-            col_map = datamodule.get_onehot_column_map()
+            # Strategy D commit 14: categoricals appear once (parent) in input_columns
+            # and behave as static (integer) params in the schedule split.
+            cat_codes = set(datamodule.categorical_mappings.keys())
             context_codes = set(datamodule.context_feature_codes)
             sched_set = set(self.schedule_configs.keys())
             static_codes: list[str] = []
             sched_codes: list[str] = []
 
             for code in datamodule.input_columns:
-                if code in context_codes or code in col_map or code in self.fixed_params:
+                if code in context_codes or code in cat_codes or code in self.fixed_params:
                     static_codes.append(code)
                 elif code in sched_set:
                     sched_codes.append(code)

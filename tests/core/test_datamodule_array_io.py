@@ -160,13 +160,17 @@ def test_set_parameter_normalize_override_affects_stats(tmp_path):
     assert "median" in dm._parameter_stats["param_1"]
 
 
-# ===== get_onehot_column_map() =====
+# ===== Categorical handling (Strategy D commit 14: cat-index, no one-hot) =====
 
-def test_get_onehot_column_map_returns_correct_mapping(tmp_path):
-    """One-hot column map should map 'param_3_B' -> ('param_3', 'B') etc."""
+def test_categorical_appears_once_in_input_columns(tmp_path):
+    """Strategy D commit 14: each categorical contributes ONE column (the parent name).
+
+    The legacy one-hot expansion (param_3 → param_3_A / param_3_B / param_3_C)
+    is replaced by a single int-index column. Cardinality is recorded in
+    ``cat_cardinalities``.
+    """
     agent, dataset, codes = build_workflow_stack(tmp_path)
     evaluate_loaded_workflow_experiments(agent, dataset)
-    # Manually build a DataModule that includes param_3 (workflow agent excludes it)
     dm = DataModule(dataset)
     dm.initialize(
         input_parameters=["param_1", "param_2", "n_layers", "n_segments", "param_3"],
@@ -175,23 +179,23 @@ def test_get_onehot_column_map_returns_correct_mapping(tmp_path):
     )
     dm.prepare(val_size=0.0, test_size=0.0, recompute=True)
 
-    col_map = dm.get_onehot_column_map()
+    assert "param_3" in dm.input_columns
+    # Legacy expansion artefacts must NOT appear:
+    assert "param_3_A" not in dm.input_columns
+    assert "param_3_B" not in dm.input_columns
+    # categorical_mappings still tracks the category list (defines index encoding):
+    assert dm.categorical_mappings["param_3"] == sorted(["A", "B", "C"])
+    # Cardinality recorded for model use:
+    cat_idx = dm.input_columns.index("param_3")
+    assert dm.cat_cardinalities.get(cat_idx) == 3
 
-    # param_3 has categories A, B, C
-    assert "param_3_A" in col_map
-    assert "param_3_B" in col_map
-    assert "param_3_C" in col_map
-    assert col_map["param_3_B"] == ("param_3", "B")
 
-
-def test_get_onehot_column_map_is_empty_when_no_categoricals(tmp_path):
-    """Datamodule with no categorical inputs should produce an empty map."""
+def test_no_categoricals_means_empty_cardinalities(tmp_path):
+    """Datamodule with no categorical inputs has empty cat_cardinalities."""
     dataset = build_dataset_with_single_experiment(tmp_path)
     dm = DataModule(dataset)
     dm.initialize(input_parameters=["param_1", "dim_1", "dim_2"], input_features=[], output_columns=[])
-
-    col_map = dm.get_onehot_column_map()
-    assert col_map == {}
+    assert dm.cat_cardinalities == {}
 
 
 # ===== copy() =====

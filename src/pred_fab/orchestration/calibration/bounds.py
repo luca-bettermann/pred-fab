@@ -174,18 +174,15 @@ class BoundsManager:
     def get_tunable_params(self, datamodule: DataModule) -> list[str]:
         """Return codes of parameters the optimizer can actually vary.
 
-        Excludes: context features, fixed params, features (lag values),
-        and one-hot columns. Only returns the original parameter codes
-        that have non-zero-width bounds.
+        Excludes: context features, fixed params, features (lag values).
+        Strategy D commit 14: categoricals appear once (parent) in input_columns
+        — no need to filter one-hot expansion any more.
         """
         context_codes = set(datamodule.context_feature_codes)
-        col_map = datamodule.get_onehot_column_map()
         schema_params = set(datamodule.dataset.schema.parameters.data_objects.keys())
         tunable = []
         for code in datamodule.input_columns:
             if code in context_codes:
-                continue
-            if code in col_map:
                 continue
             if code not in schema_params:
                 continue
@@ -198,9 +195,12 @@ class BoundsManager:
         return tunable
 
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
-        """Return normalized optimization bounds over the full parameter space."""
+        """Return normalized optimization bounds over the full parameter space.
+
+        Strategy D commit 14: categorical columns have integer bounds
+        ``[0, n_cats - 1]`` (one cat-index column per categorical).
+        """
         bounds_list = []
-        col_map = datamodule.get_onehot_column_map()
         context_codes = set(datamodule.context_feature_codes)
 
         for code in datamodule.input_columns:
@@ -208,13 +208,13 @@ class BoundsManager:
                 bounds_list.append(self._normalize_bounds(code, 0.0, 0.0, datamodule))
                 continue
 
-            if code in col_map:
-                parent_param, cat_val = col_map[code]
-                if parent_param in self.fixed_params:
-                    val = 1.0 if self.fixed_params[parent_param] == cat_val else 0.0
-                    low, high = val, val
+            if code in datamodule.categorical_mappings:
+                cats = datamodule.categorical_mappings[code]
+                if code in self.fixed_params:
+                    fixed_idx = float(cats.index(self.fixed_params[code])) if self.fixed_params[code] in cats else 0.0
+                    low, high = fixed_idx, fixed_idx
                 else:
-                    low, high = 0.0, 1.0
+                    low, high = 0.0, float(len(cats) - 1)
             else:
                 low, high = self._get_hierarchical_bounds_for_code(code)
 
@@ -224,20 +224,22 @@ class BoundsManager:
         return np.array(bounds_list)
 
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
-        """Return normalized trust-region bounds centred on current_params."""
+        """Return normalized trust-region bounds centred on current_params.
+
+        Strategy D commit 14: categorical columns clamp to current cat-index.
+        """
         bounds_list = []
-        col_map = datamodule.get_onehot_column_map()
 
         for code in datamodule.input_columns:
             curr = 0.0
-            is_one_hot = code in col_map
+            is_categorical = code in datamodule.categorical_mappings
 
-            if is_one_hot:
-                parent_param, cat_val = col_map[code]
-                if parent_param and parent_param in current_params:
-                     curr = 1.0 if current_params[parent_param] == cat_val else 0.0
-                elif code in current_params:
-                    curr = current_params[code]
+            if is_categorical:
+                cats = datamodule.categorical_mappings[code]
+                if code in current_params and current_params[code] in cats:
+                    curr = float(cats.index(current_params[code]))
+                else:
+                    curr = 0.0
             else:
                 if code in current_params:
                     curr = current_params[code]

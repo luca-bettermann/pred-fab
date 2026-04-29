@@ -46,14 +46,21 @@ class DataModule:
         self._is_fitted = False
         
         # Feature system metadata (no data storage)
-        self.input_columns: list[str] = []  # Processed columns (after one-hot)
+        # Strategy D commit 14: input_columns lists each parameter / feature
+        # ONCE (no expansion). Categoricals are emitted as a single int-index
+        # column; models that want one-hot do ``F.one_hot`` themselves in
+        # forward (and learnable cats use ``nn.Embedding``).
+        self.input_columns: list[str] = []
         self.output_columns: list[str] = []
+        # parent_col → ordered list of categories. Index in this list is the
+        # cat-index encoding emitted in batches.
         self.categorical_mappings: dict[str, list[str]] = {}
         # Context features: observed but uncontrollable — input only, never in output_columns.
         self._context_feature_codes: list[str] = []
-        # Precomputed extraction plan for fast numpy-based one-hot encoding.
-        # Each entry: (src_col, cat_val) — cat_val=None means plain numeric column.
-        self._col_extraction: list[tuple[str, Any | None]] = []
+        # Cardinality lookup: {col_index_in_input_columns: n_categories}.
+        # Empty for non-categorical columns. Models read this via
+        # ``set_categorical_context`` to size their internal one-hot/embedding.
+        self._cat_cardinalities: dict[int, int] = {}
         
         # Column normalization methods map (for X)
         self._col_norm_methods: dict[str, NormMethod] = {}
@@ -87,30 +94,33 @@ class DataModule:
         self._initialized = True
         
     def _set_input_columns(self, input_parameters: list[str], input_features: list[str]):
+        """Build ``input_columns`` (parent-level, no categorical expansion).
+
+        Strategy D commit 14: each categorical parameter contributes ONE
+        int-index column to the batch (its category index in
+        ``categorical_mappings[parent]``). Cardinality is tracked in
+        ``_cat_cardinalities`` so models can size their own
+        ``F.one_hot`` / ``nn.Embedding`` internally.
+        """
         # Store parameter methods
         for col in input_parameters:
             method = self._get_parameter_normalize_method(col)
             self._col_norm_methods[col] = method
 
-            # If categorical, store categories as well
             if method == NormMethod.CATEGORICAL:
-                # Try to find categories in schema constraints
-                categories = []
-                
-                # Check regular parameters
+                # Schema validation
                 if not self.dataset.schema.parameters.has(col):
                     raise KeyError(f"Parameter '{col}' can not be retrieved from schema.")
                 obj = self.dataset.schema.parameters.get(col)
                 if not isinstance(obj, DataCategorical):
                     raise ValueError(f"Obj expected to be of type 'DataCategorical', got {obj.__class__} instead.")
-                # If categorical, store mapping
-                categories = sorted(obj.constraints["categories"])                
+                # Sorted category list — index in this list is the encoding.
+                categories = sorted(obj.constraints["categories"])
                 self.categorical_mappings[col] = categories
-                # Store one hot encodings as inputs
-                for category in categories:
-                    col_name = f"{col}_{category}"
-                    self.input_columns.append(col_name)
-                    self._col_norm_methods[col_name] = NormMethod.NONE
+                # Single column for the parameter; cardinality recorded for models.
+                col_idx = len(self.input_columns)
+                self.input_columns.append(col)
+                self._cat_cardinalities[col_idx] = len(categories)
             else:
                 self.input_columns.append(col)
 
@@ -125,15 +135,10 @@ class DataModule:
                 if isinstance(feat_obj, DataArray) and feat_obj.context:
                     self._context_feature_codes.append(col)
 
-        # Precompute per-column extraction plan for fast numpy one-hot encoding.
-        col_map = self.get_onehot_column_map()  # one_hot_col → (parent, cat_val)
-        self._col_extraction = []
-        for col in self.input_columns:
-            if col in col_map:
-                parent, cat_val = col_map[col]
-                self._col_extraction.append((parent, cat_val))
-            else:
-                self._col_extraction.append((col, None))
+    @property
+    def cat_cardinalities(self) -> dict[int, int]:
+        """``{col_index: n_categories}`` — what models need for own-side one-hot."""
+        return dict(self._cat_cardinalities)
 
 
     # === DATAMODULE OPERATIONS ===
@@ -255,16 +260,17 @@ class DataModule:
         X_df = self._inject_context_features(X_df, y_df)
 
         # Process X (One-hot)
-        X_arr = self._one_hot_encode(X_df)
+        X_arr = self._encode_inputs(X_df)
         # Restrict y to output_columns only so that index-based operations below stay aligned.
         y_arr = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
 
-        # Fit X
+        # Fit X — skip categorical columns (cat-index passed through unnormalised; commit 14).
         self._parameter_stats = {}
         for i, col in enumerate(self.input_columns):
             method = self._col_norm_methods.get(col, NormMethod.NONE)
-            if method != NormMethod.NONE:
-                self._parameter_stats[col] = make_normaliser(method, X_arr[:, i])
+            if method == NormMethod.NONE or method == NormMethod.CATEGORICAL:
+                continue
+            self._parameter_stats[col] = make_normaliser(method, X_arr[:, i])
 
         # Fit y
         self._feature_stats = {}
@@ -399,7 +405,7 @@ class DataModule:
             and self._ss_p_student > 0
             and self._ss_predictions_by_exp is not None):
             X_df = self._perturb_recursive_features(X_df, codes)
-        X = self._one_hot_encode(X_df)
+        X = self._encode_inputs(X_df)
         # Restrict to output_columns to keep index-based normalization and model-filtering aligned.
         y = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
 
@@ -426,7 +432,7 @@ class DataModule:
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
 
-        X_arr = self._one_hot_encode(X_df)
+        X_arr = self._encode_inputs(X_df)
 
         # Normalize
         self._normalize_batch(X_arr, self.input_columns, self._parameter_stats)
@@ -536,39 +542,18 @@ class DataModule:
         self.input_columns = copy.deepcopy(state.get('input_columns', []))
         self.output_columns = copy.deepcopy(state.get('output_columns', []))
     
-    def get_onehot_column_map(self) -> dict[str, tuple[str, Any]]:
-        """Return mapping of one-hot column name → (parent_parameter_code, category_value)."""
-        col_map = {}
-        for parent, categories in self.categorical_mappings.items():
-            for cat in categories:
-                col_name = f"{parent}_{cat}"
-                col_map[col_name] = (parent, cat)
-        return col_map
-
     def get_input_indices(self, codes: list[str], skip_missing: bool = False) -> list[int]:
-        """Return input_columns indices for the given schema codes, expanding categoricals to one-hot.
+        """Return input_columns indices for the given schema codes.
 
-        Categorical codes (e.g. "design") are expanded to all their one-hot column indices
-        (e.g. design_A, design_B, design_C) in sorted category order.
-        When skip_missing=True, codes that cannot be resolved are silently ignored;
-        otherwise a ValueError is raised.
+        Strategy D commit 14: each schema code maps to exactly ONE column
+        index — categoricals are no longer expanded.
         """
         indices: list[int] = []
         for code in codes:
-            if code in self.categorical_mappings:
-                for cat in sorted(self.categorical_mappings[code]):
-                    col = f"{code}_{cat}"
-                    if col in self.input_columns:
-                        indices.append(self.input_columns.index(col))
-                    elif not skip_missing:
-                        raise ValueError(
-                            f"One-hot column '{col}' for categorical '{code}' not found in input_columns."
-                        )
-            else:
-                if code in self.input_columns:
-                    indices.append(self.input_columns.index(code))
-                elif not skip_missing:
-                    raise ValueError(f"Column '{code}' not found in input_columns.")
+            if code in self.input_columns:
+                indices.append(self.input_columns.index(code))
+            elif not skip_missing:
+                raise ValueError(f"Column '{code}' not found in input_columns.")
         return indices
 
     # === SHARED NORMALIZATION HELPERS ===
@@ -616,52 +601,33 @@ class DataModule:
             if col in stats:
                 data[:, i] = self._apply_normalization(data[:, i], stats[col])
     
-    def _one_hot_encode(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Apply one-hot encoding and align columns to schema using a precomputed numpy extraction plan."""
+    def _encode_inputs(self, X_df: pd.DataFrame) -> np.ndarray:
+        """Encode a DataFrame to ``(n_rows, n_input_cols)`` float array.
+
+        Strategy D commit 14: categoricals emit a single int-index column
+        (encoded as float for shape uniformity); numerics emit float values
+        directly. Models that want one-hot expansion do it themselves in
+        ``forward`` via ``F.one_hot`` (cardinality available via
+        ``DataModule.cat_cardinalities``).
+        """
         n = len(X_df)
         result = np.zeros((n, len(self.input_columns)), dtype=np.float32)
-        for j, (src_col, cat_val) in enumerate(self._col_extraction):
-            if src_col not in X_df.columns:
+        for j, col in enumerate(self.input_columns):
+            if col not in X_df.columns:
                 continue  # missing column stays 0.0
-            vals = X_df[src_col].values
-            if cat_val is None:
-                result[:, j] = vals.astype(np.float32)
+            vals = X_df[col].values
+            if col in self.categorical_mappings:
+                # Categorical → cat-index float (categories ordered by self.categorical_mappings[col]).
+                cat_list = self.categorical_mappings[col]
+                cat_to_idx = {c: i for i, c in enumerate(cat_list)}
+                result[:, j] = np.array(
+                    [cat_to_idx.get(v, 0) for v in vals], dtype=np.float32,
+                )
             else:
-                result[:, j] = (vals == cat_val).astype(np.float32)
+                result[:, j] = vals.astype(np.float32)
         # Replace NaN with 0 — recursive features use NaN for boundary padding.
         np.nan_to_num(result, copy=False, nan=0.0)
         return result
-
-    def _decode_one_hot(self, denorm_array: np.ndarray, consumed_cols: set) -> dict[str, Any]:
-        """Decode one-hot encoded categories from array."""
-        params = {}
-        for original_col, categories in self.categorical_mappings.items():
-            # Find indices of one-hot columns
-            one_hot_cols = [f"{original_col}_{cat}" for cat in categories]
-            indices = []
-            
-            for oh_col in one_hot_cols:
-                if oh_col in self.input_columns:
-                    indices.append(self.input_columns.index(oh_col))
-            
-            if indices:
-                # Get values for this group
-                group_values = denorm_array[indices]
-                # Argmax to find active category
-                max_idx = np.argmax(group_values)
-                
-                # Map back to category name
-                existing_cats = [
-                    cat for cat in categories 
-                    if f"{original_col}_{cat}" in self.input_columns
-                ]
-                
-                if existing_cats:
-                    params[original_col] = existing_cats[max_idx]
-                    
-                    for idx in indices:
-                        consumed_cols.add(self.input_columns[idx])
-        return params
 
     # === CALIBRATION HELPERS ===
 
@@ -675,7 +641,12 @@ class DataModule:
         return arr_t.detach().cpu().numpy()[0]
 
     def array_to_params(self, array: np.ndarray) -> dict[str, Any]:
-        """Reverse-normalize and decode a 1D input array back to a parameter dict."""
+        """Reverse-normalize and decode a 1D input array back to a parameter dict.
+
+        Strategy D commit 14: categorical columns hold a cat-index (rounded to
+        nearest int); decoding maps it back to the category string via
+        ``categorical_mappings``.
+        """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
 
@@ -688,15 +659,17 @@ class DataModule:
             if col in self._parameter_stats:
                 denorm_array[i] = self._reverse_normalization(np.array([array[i]]), self._parameter_stats[col])[0]
 
-        consumed_cols = set()
-
-        # 1. Handle Categorical (Reverse One-Hot)
-        params = self._decode_one_hot(denorm_array, consumed_cols)
-
-        # 2. Handle Continuous (skip context features — they are not controllable)
+        params: dict[str, Any] = {}
         ctx = set(self._context_feature_codes)
         for i, col in enumerate(self.input_columns):
-            if self.input_columns[i] not in consumed_cols and col not in ctx:
+            if col in ctx:
+                continue  # context features are uncontrollable
+            if col in self.categorical_mappings:
+                cats = self.categorical_mappings[col]
+                idx = int(round(float(denorm_array[i])))
+                idx = max(0, min(idx, len(cats) - 1))
+                params[col] = cats[idx]
+            else:
                 params[col] = float(denorm_array[i])
 
         # Apply canonical parameter coercion/rounding at the array->dict boundary.
@@ -712,52 +685,35 @@ class DataModule:
     ) -> torch.Tensor:
         """Tensor-typed mirror of ``params_to_array``. Returns ``(len(input_columns),)``.
 
-        Direct tensor construction without the pandas DataFrame round-trip
-        used by ``params_to_array``. Two consequences:
+        Strategy D commit 14: categoricals emit a single int-index column
+        (encoded as float for shape uniformity); models expand via
+        ``F.one_hot`` / ``nn.Embedding`` in their forward.
 
-        - **Gradient flow**: if any value in ``params`` is a ``torch.Tensor``
-          with ``requires_grad=True``, the gradient flows through normalisation
-          (which is affine for all NormMethod variants) into the output tensor.
-          Used by Strategy D's gradient-based acquisition where the optimiser
-          drives params from a leaf tensor.
-        - **No DataFrame**: avoids the per-call ``pd.DataFrame([params])``
-          construction. Cheap directly; matters at acquisition-loop frequency.
-
-        Categoricals stay one-hot internally (matching ``params_to_array``);
-        the embedding migration (Strategy D commit 7a) replaces this with an
-        integer-index path additively.
-
-        Equivalent semantics to ``params_to_array(params)`` to ~1e-6
-        relative — the tensor path uses the same normalisation stats and
-        one-hot extraction plan.
+        Gradient flow: if any continuous value is a ``torch.Tensor`` with
+        ``requires_grad=True``, the gradient flows through normalisation
+        (affine for all NormMethod variants) into the output tensor.
+        Used by Strategy D's gradient-based acquisition. Categorical
+        positions are non-differentiable by construction (discrete choices).
         """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
 
-        zero = torch.zeros((), dtype=dtype)
         out: list[torch.Tensor] = []
-        for j, (src_col, cat_val) in enumerate(self._col_extraction):
-            col_name = self.input_columns[j]
-            raw = params.get(src_col, 0.0) if cat_val is None else params.get(src_col, None)
-
-            if cat_val is not None:
-                # Categorical one-hot column: 1.0 if raw matches cat_val, else 0.0
-                # (string equality, not gradient-traversable — categoricals are
-                # discrete by definition; the embedding path handles learnable
-                # representations.)
-                t = (
-                    torch.tensor(1.0, dtype=dtype)
-                    if raw is not None and raw == cat_val
-                    else zero
-                )
+        for j, col_name in enumerate(self.input_columns):
+            if col_name in self.categorical_mappings:
+                # Categorical column: emit cat-index as float (no grad).
+                cats = self.categorical_mappings[col_name]
+                raw = params.get(col_name, None)
+                idx = cats.index(raw) if (raw is not None and raw in cats) else 0
+                t: torch.Tensor = torch.tensor(float(idx), dtype=dtype)
             else:
-                # Continuous: preserve grad if raw is a tensor; else lift to tensor.
+                # Continuous: preserve grad if raw is a tensor; else lift.
+                raw = params.get(col_name, 0.0)
                 if isinstance(raw, torch.Tensor):
                     t = raw.to(dtype=dtype) if raw.dtype != dtype else raw
                 else:
                     raw_f = 0.0 if raw is None else float(raw)
-                    # NaN guard matches _one_hot_encode's nan_to_num for boundary padding.
-                    if raw_f != raw_f:  # NaN
+                    if raw_f != raw_f:  # NaN guard
                         raw_f = 0.0
                     t = torch.tensor(raw_f, dtype=dtype)
 
@@ -769,19 +725,12 @@ class DataModule:
         return torch.stack(out)
 
     def tensor_to_params(self, tensor: torch.Tensor) -> dict[str, Any]:
-        """Tensor-typed inverse of ``array_to_params``. Returns a dict of Python scalars.
+        """Tensor-typed inverse of ``array_to_params`` (commit 14).
 
-        Denormalisation runs in tensor land via
-        ``_reverse_normalization_tensor`` (composes with
-        ``_apply_normalization_tensor`` to the identity within float-precision
-        tolerance). One-hot decoding + ``schema.sanitize_values`` happen at
-        the dict boundary in numpy/Python — those are categorical decisions
-        and parameter type coercion, not differentiable operations.
-
-        For acquisition-output decoding (the main use case), gradient flow
-        on the output dict isn't needed — the optimiser is done by then.
-        Callers that need gradients on the decoded scalars should consume
-        the tensor directly before this conversion.
+        Categoricals at column j are decoded by rounding the (denormalised)
+        cat-index float to nearest int and looking up
+        ``categorical_mappings[col][idx]``. Gradient flow on the output dict
+        isn't preserved — categorical decoding is inherently discrete.
         """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -798,13 +747,18 @@ class DataModule:
             if stats is not None:
                 denorm_t[i] = self._reverse_normalization_tensor(tensor[i], stats)
 
-        # Numpy boundary for categorical decode + schema sanitise.
         denorm_array = denorm_t.detach().cpu().numpy()
-        consumed_cols: set[str] = set()
-        params = self._decode_one_hot(denorm_array, consumed_cols)
+        params: dict[str, Any] = {}
         ctx = set(self._context_feature_codes)
         for i, col in enumerate(self.input_columns):
-            if col not in consumed_cols and col not in ctx:
+            if col in ctx:
+                continue
+            if col in self.categorical_mappings:
+                cats = self.categorical_mappings[col]
+                idx = int(round(float(denorm_array[i])))
+                idx = max(0, min(idx, len(cats) - 1))
+                params[col] = cats[idx]
+            else:
                 params[col] = float(denorm_array[i])
 
         return self.dataset.schema.parameters.sanitize_values(params, ignore_unknown=True)
