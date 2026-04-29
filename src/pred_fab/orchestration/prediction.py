@@ -2018,154 +2018,55 @@ class PredictionSystem(BaseOrchestrationSystem):
         model: IPredictionModel,
         recursive_specs: list[tuple[str, str, int, int]],
     ) -> None:
-        """S-parallel autoregressive prediction with tensor-native predictions storage.
+        """S-parallel autoregressive prediction → in-place ``predictions_list`` writes.
 
-        Inside the cell loop everything is tensor-only:
-          - Recursive feature substitution gathers from a ``(S, n_source_flat)``
-            view of ``predictions_stack`` via a precomputed flat-index tensor —
-            one tensor read per cell-step per spec (no per-candidate Python
-            lookup, no numpy↔tensor round-trip).
-          - Predictions storage is ``predictions_stack[feat]: (S, *feat_shape)``;
-            per-cell scatter is one tensor write per output feature.
-          - Normalisation / denormalisation run in tensor land via
-            ``_apply_normalization_tensor`` and ``denormalize_values`` (which is
-            also tensor-pure under Layer 4).
+        Thin no-grad wrapper around ``_predict_autoregressive_batched_tensor``:
+        builds the seed ``x_norm_S = (S, n_input)`` from each candidate's
+        ``param_base``, resolves ``feat_shapes`` from the pre-allocated numpy
+        arrays, runs the tensor autoreg under ``torch.no_grad()`` so no
+        autograd graph is retained, then copies back to numpy at the API
+        boundary preserving the target dtype.
 
-        Per-candidate ``np.ndarray`` dicts in ``predictions_list`` are populated
-        once at the end of the loop — the API boundary.
+        ``predict_from`` / ``predict_to`` are accepted for signature compat
+        with ``_predict_non_recursive_batched``; the tensor variant covers
+        the full ``shape`` derived from ``dim_info_list`` (callers in
+        ``_predict_with_recursion_groups`` already pass the full range).
         """
+        del predict_from, predict_to  # tensor variant covers the full shape; chunking happens at the per-experiment loop level
         S = len(predictions_list)
-        n_cells = predict_to - predict_from
-        shape = dim_info_list[0]['shape']
-        iterator_feats = dim_info_list[0]['iterator_feats']
+        if S == 0:
+            return
         dm = self._assert_trained()
-        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
 
-        # Cell index lookup as ndarray for vectorised flat-index ops below.
-        if shape:
-            cell_indices_arr = np.empty((n_cells, len(shape)), dtype=np.int64)
-            for cell_row, pos in enumerate(range(predict_from, predict_to)):
-                cell_indices_arr[cell_row] = np.unravel_index(pos, shape)
-        else:
-            cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
+        # Per-candidate parameter seed: (S, n_input). param_base is
+        # narrowed to this model's declared inputs; missing input_columns
+        # default to 0 in params_to_tensor and get clobbered per cell by
+        # iterator / recursive overrides inside the tensor variant.
+        x_norm_S = torch.stack([
+            dm.params_to_tensor(di['param_base']) for di in dim_info_list
+        ])
 
-        # Build (S × n_cells, n_input_cols) tensor — pandas-free direct
-        # construction via tensor dict + prepare_input_from_tensor_dict.
-        with profiler.section("autoreg.build_X_dict [tensor + iter_feats]"):
-            X_dict_flat = self._build_X_dict_flat(dm, dim_info_list, cell_indices_arr, iterator_feats)
-        with profiler.section("autoreg.prepare_input_from_tensor_dict [normalize]"):
-            X_norm_flat = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
-        n_input_cols = X_norm_flat.shape[1]
-        X_stack = X_norm_flat.view(S, n_cells, n_input_cols).clone()
-
-        # Allocate predictions_stack (one tensor per output feature, shape
-        # (S, *feat_shape)). Pre-compute per-feature flat-scatter indices in
-        # the feature's own ravel space (feat_depth may be < len(shape)).
-        predictions_stack: dict[str, torch.Tensor] = {}
+        # feat_shapes from the pre-allocated arrays. Within a shape group
+        # (caller's invariant) all candidates share feat_shape.
         feat_shapes: dict[str, tuple[int, ...]] = {}
-        feat_flat_per_cell: dict[str, torch.Tensor] = {}
         for feat in model.outputs:
-            if feat not in predictions_list[0]:
-                continue
-            feat_shape = tuple(predictions_list[0][feat].shape)
-            # Within-group invariant: all candidates share feat_shape (their
-            # iterator-axis params match by group). Verify cheaply; if violated,
-            # skip predictions_stack for this feat and fall through to legacy
-            # per-candidate scatter at loop time.
-            consistent = True
-            for s in range(1, S):
-                if feat in predictions_list[s] and tuple(predictions_list[s][feat].shape) != feat_shape:
-                    consistent = False
-                    break
-            if not consistent:
-                continue
-            feat_shapes[feat] = feat_shape
-            tensor_shape = (S, *feat_shape) if feat_shape else (S,)
-            predictions_stack[feat] = torch.full(tensor_shape, float('nan'), dtype=X_stack.dtype)
+            if feat in predictions_list[0]:
+                feat_shapes[feat] = tuple(predictions_list[0][feat].shape)
 
-            feat_depth = len(feat_shape)
-            if feat_depth == 0:
-                flat = np.zeros(n_cells, dtype=np.int64)
-            else:
-                sub_idx = cell_indices_arr[:, :feat_depth]
-                flat = np.ravel_multi_index(sub_idx.T, feat_shape).astype(np.int64)
-            feat_flat_per_cell[feat] = torch.from_numpy(flat)
-
-        # Pre-resolve recursive feature plan: per-spec gather indices into the
-        # source feature's flat space, plus a validity mask for boundary cells.
-        # Tuple shape: (source_code, prior_flat_t, prior_valid_t, col_idx, stats)
-        recursive_plan: list[tuple[str, torch.Tensor, torch.Tensor, int, dict | None]] = []
-        for input_code, source_code, axis_idx, depth in recursive_specs:
-            if input_code not in dm.input_columns:
-                continue
-            if source_code not in predictions_stack:
-                # Source feature isn't allocated in tensor stack (e.g. inconsistent
-                # feat_shape across candidates); skip the recursive substitution
-                # for this spec — its column will keep its prepared default.
-                continue
-            col_idx = dm.input_columns.index(input_code)
-            stats = dm._parameter_stats.get(input_code)
-            source_shape = feat_shapes[source_code]
-            source_depth = len(source_shape)
-
-            prior_idx_arr = cell_indices_arr.copy()
-            if axis_idx < prior_idx_arr.shape[1]:
-                prior_idx_arr[:, axis_idx] -= depth
-                valid = prior_idx_arr[:, axis_idx] >= 0
-            else:
-                valid = np.ones(n_cells, dtype=bool)
-
-            if source_depth:
-                prior_sub = prior_idx_arr[:, :source_depth].copy()
-                prior_sub[~valid] = 0  # clamp invalid rows; mask zeroes them out
-                flat_np = np.ravel_multi_index(prior_sub.T, source_shape).astype(np.int64)
-            else:
-                flat_np = np.zeros(n_cells, dtype=np.int64)
-            recursive_plan.append((
-                source_code,
-                torch.from_numpy(flat_np),
-                torch.from_numpy(valid),
-                col_idx,
-                stats,
-            ))
-
-        for cell_row in range(n_cells):
-            with profiler.section("autoreg.recursive_substitute [per cell]"):
-                for source_code, prior_flat_t, prior_valid_t, col_idx, stats in recursive_plan:
-                    src_flat = predictions_stack[source_code].view(S, -1)  # (S, source_n_flat)
-                    raw_S = src_flat[:, int(prior_flat_t[cell_row].item())]  # (S,)
-                    # NaN means "not yet predicted"; treat as 0 (matches scalar path).
-                    raw_S = torch.where(torch.isnan(raw_S), torch.zeros_like(raw_S), raw_S)
-                    if not bool(prior_valid_t[cell_row].item()):
-                        raw_S = torch.zeros_like(raw_S)
-                    norm_S = dm._apply_normalization_tensor(raw_S, stats) if stats is not None else raw_S
-                    X_stack[:, cell_row, col_idx] = norm_S.to(X_stack.dtype)
-
-            with profiler.section("autoreg.forward_pass [per cell]"):
-                X_model = X_stack[:, cell_row, :].index_select(1, input_indices_t)  # (S, n_cols_filtered)
-                y_pred_norm = model.forward_pass(X_model)                            # (S, n_outputs)
-
-            with profiler.section("autoreg.denormalize [per cell]"):
-                y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
-
-            with profiler.section("autoreg.predictions_scatter [per cell]"):
-                for i, feature_name in enumerate(model.outputs):
-                    if feature_name in predictions_stack:
-                        stack_flat = predictions_stack[feature_name].view(S, -1)
-                        stack_flat[:, int(feat_flat_per_cell[feature_name][cell_row].item())] = y_pred[:, i].to(stack_flat.dtype)
+        with torch.no_grad():
+            preds = self._predict_autoregressive_batched_tensor(
+                x_norm_S, dim_info_list, model, recursive_specs, feat_shapes,
+            )
 
         # API boundary: copy tensor stack into per-candidate numpy arrays.
         with profiler.section("autoreg.copy_to_numpy [API boundary]"):
-            for feat, stack in predictions_stack.items():
+            for feat, stack in preds.items():
                 stack_np = stack.detach().cpu().numpy()
                 for s in range(S):
                     target = predictions_list[s].get(feat)
                     if target is None:
                         continue
-                    target_dtype = target.dtype
-                    # Preserve target's dtype (typically float64 from np.full(_, nan)).
-                    predictions_list[s][feat] = stack_np[s].astype(target_dtype, copy=False)
+                    predictions_list[s][feat] = stack_np[s].astype(target.dtype, copy=False)
 
     def _predict_from_params(
         self,
