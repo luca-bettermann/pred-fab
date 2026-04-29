@@ -741,13 +741,14 @@ class DataModule:
     # === CALIBRATION HELPERS ===
 
     def params_to_array(self, params: dict[str, Any]) -> np.ndarray:
-        """Convert a parameter dict to a normalized 1D input array (numpy, calibration-side use)."""
+        """Convert a parameter dict to a normalized 1D input array (numpy, calibration-side use).
+
+        Strategy D commit 16b: thin wrapper around the tensor-native
+        ``params_to_tensor`` (commit 1) — no pandas roundtrip.
+        """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
-
-        df = pd.DataFrame([params])
-        arr_t = self.prepare_input(df)
-        return arr_t.detach().cpu().numpy()[0]
+        return self.params_to_tensor(params).detach().cpu().numpy()
 
     def array_to_params(self, array: np.ndarray) -> dict[str, Any]:
         """Reverse-normalize and decode a 1D input array back to a parameter dict.
