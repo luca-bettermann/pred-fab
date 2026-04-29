@@ -716,24 +716,23 @@ class KernelFieldEstimator(EvidenceEstimator):
         """Dense-regime implementation: sum over all old kernels per probe.
 
         Mirrors the numpy ``integrated_evidence_perturbed_batched_joint``
-        body in torch ops. No truncation mask in commit 4 baseline — the
-        existing numpy path already used 5σ truncation only when n_kernels
-        >= truncation_threshold (10 by default), and the dense regime here
-        targets the regime where most kernels actively contribute. A 5σ
-        truncation will land alongside the KNN regime in commit 4b.
+        body in torch ops. All tensor moves target ``new_centers_SL.device``
+        — when the caller has placed inputs on GPU, the entire dense KDE
+        compute runs there end-to-end (Strategy D commit 20b).
         """
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
         D = int(new_centers_SL.shape[2])
         dtype = new_centers_SL.dtype
+        device = new_centers_SL.device
         sigma = index_old.sigma
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
 
-        # Probes / quad weights / per-probe self-density (numpy cache → torch).
+        # Probes / quad weights / per-probe self-density — convert to caller device.
         offsets_np, quad_weights_np, self_density_np = self._probes_weights_self(D, sigma)
-        offsets = torch.from_numpy(offsets_np).to(dtype=dtype)
-        quad_weights = torch.from_numpy(quad_weights_np).to(dtype=dtype)
-        self_density = torch.from_numpy(self_density_np).to(dtype=dtype)
+        offsets = torch.from_numpy(offsets_np).to(device=device, dtype=dtype)
+        quad_weights = torch.from_numpy(quad_weights_np).to(device=device, dtype=dtype)
+        self_density = torch.from_numpy(self_density_np).to(device=device, dtype=dtype)
         M = offsets.shape[0]
 
         n_old = len(index_old.centers) if not index_old.is_empty else 0
@@ -764,8 +763,8 @@ class KernelFieldEstimator(EvidenceEstimator):
             return (new_weights_SL * integral_new_SL).sum(dim=-1)
 
         # === Branch 2: old kernels exist ===
-        old_centers = torch.from_numpy(index_old.centers).to(dtype=dtype)
-        old_weights = torch.from_numpy(index_old.weights).to(dtype=dtype)
+        old_centers = torch.from_numpy(index_old.centers).to(device=device, dtype=dtype)
+        old_weights = torch.from_numpy(index_old.weights).to(device=device, dtype=dtype)
 
         # Per-old precompute (independent of S — could be cached across acquisition
         # generations in a future optimisation; for now recompute per call).
