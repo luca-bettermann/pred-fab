@@ -24,7 +24,6 @@ from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, SplitType
 from pred_fab.core import ExperimentSpec, ParameterProposal
 from pred_fab.utils.enum import Mode
-from scipy.stats import qmc
 
 
 
