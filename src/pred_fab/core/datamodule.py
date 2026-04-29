@@ -5,8 +5,6 @@ import pandas as pd
 import numpy as np
 import torch
 import copy
-from sklearn.model_selection import train_test_split
-
 from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
 from .normalisers import (
@@ -197,24 +195,29 @@ class DataModule:
             }
             return
         
+        # Strategy D: torch-native random split (was sklearn.train_test_split).
+        # Same shuffle-then-slice semantics; deterministic via the explicit
+        # random_seed.
+        rng = np.random.default_rng(self.random_seed)
+        shuffled = rng.permutation(indices)
+
         # Split off test set
         if test_size > 0.0:
-            train_val_idx, test_idx = train_test_split(
-                indices,
-                test_size=test_size,
-                random_state=self.random_seed
-            )
+            n_test = int(round(len(shuffled) * test_size))
+            test_idx = shuffled[:n_test]
+            train_val_idx = shuffled[n_test:]
         else:
-            train_val_idx = indices
+            train_val_idx = shuffled
             test_idx = np.array([], dtype=int)
-        
+
         # Split remaining into train/val
         if val_size > 0.0 and len(train_val_idx) > 0:
-            train_idx, val_idx = train_test_split(
-                train_val_idx,
-                test_size=val_size / (1.0 - test_size) if test_size < 1.0 else 0.0, # adjust val_size relative to remaining
-                random_state=self.random_seed
-            )
+            # val_size is given as a fraction of the original indices set; adjust
+            # relative to the post-test remainder so the absolute counts match.
+            adjusted = val_size / (1.0 - test_size) if test_size < 1.0 else 0.0
+            n_val = int(round(len(train_val_idx) * adjusted))
+            val_idx = train_val_idx[:n_val]
+            train_idx = train_val_idx[n_val:]
         else:
             train_idx = train_val_idx
             val_idx = np.array([], dtype=int)
