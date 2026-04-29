@@ -416,7 +416,8 @@ def test_get_batches_with_batch_size_1_returns_one_batch_per_row(tmp_path):
 
     batches = datamodule.get_batches(SplitType.TRAIN)
     assert len(batches) >= 1
-    for X_b, y_b in batches:
+    for batch in batches:
+        X_b = batch[0]  # commit 16b: (X, y, cell_meta) 3-tuples
         assert X_b.shape[0] == 1
 
 
@@ -453,7 +454,7 @@ def test_get_batches_x_has_correct_number_of_columns(tmp_path):
 
     batches = datamodule.get_batches(SplitType.TRAIN)
     assert len(batches) > 0
-    X_b, _ = batches[0]
+    X_b = batches[0][0]  # commit 16b: (X, y, cell_meta) 3-tuples
     assert X_b.shape[1] == len(datamodule.input_columns)
 
 

@@ -123,12 +123,26 @@ class PredictionSystem(BaseOrchestrationSystem):
                 codes.append(code)
         return codes
     
-    def _filter_batches_for_model(self, batches: list[tuple[np.ndarray, np.ndarray]], model: IPredictionModel) -> list[tuple[np.ndarray, np.ndarray]]:
-        """Filter batch X/y to the columns required by this model, expanding categoricals to one-hot."""
+    def _filter_batches_for_model(
+        self,
+        batches: list[tuple[torch.Tensor, torch.Tensor]] | list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+        model: IPredictionModel,
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Filter batch X/y to the model's declared input/output columns.
+
+        Strategy D commit 16b: accepts either 2-tuples ``(X, y)`` or
+        3-tuples ``(X, y, cell_meta)``; returns 2-tuples for ``model.train``
+        which doesn't need cell_meta. Cell metadata is consumed by
+        PredictionSystem-level orchestrators (e.g. SS substitution).
+        """
         dm = self._assert_trained()
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
         output_indices = [dm.output_columns.index(f) for f in model.outputs]
-        return [(X[:, input_indices], y[:, output_indices]) for X, y in batches]
+        result: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for batch in batches:
+            X, y = batch[0], batch[1]
+            result.append((X[:, input_indices], y[:, output_indices]))
+        return result
 
     def _build_model_dependency_graph(self) -> dict[int, set[int]]:
         """For each model, the set of OTHER models it depends on (consumes a
@@ -1606,8 +1620,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
 
-        # Concatenate batches (tensors)
-        X_list, y_list = zip(*batches)
+        # Concatenate batches (commit 16b: now (X, y, cell_meta) 3-tuples — drop meta).
+        X_list = [b[0] for b in batches]
+        y_list = [b[1] for b in batches]
         X_split = torch.cat(X_list, dim=0)
         y_split = torch.cat(y_list, dim=0)
 

@@ -441,41 +441,56 @@ class DataModule:
         self._feature_stats = {}
         self._is_fitted = True
     
-    def get_batches(self, split: SplitType = SplitType.TRAIN) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Return list of normalized (X, y) tensor batch tuples for the given split.
+    def get_batches(
+        self, split: SplitType = SplitType.TRAIN,
+    ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Return ``(X, y, cell_meta)`` tensor batch tuples for the given split.
 
-        Strategy D commit 15b: SS perturbation removed from this code path —
-        ``PredictionSystem`` handles substitution via stateless
-        ``DataModule.substitute_recursive_features`` outside ``get_batches``.
+        Strategy D commit 16b: tensor-native end-to-end. Uses
+        ``Dataset.export_to_tensor_dict`` directly (no pandas) and returns
+        ``cell_meta`` as the third tuple element for downstream callers
+        (SS substitution, per-cell loss masking, etc).
         """
         codes = self._split_codes.get(split, [])
         if not codes:
             return []
 
-        X_df, y_df = self.dataset.export_to_dataframe(codes)
-        if X_df.empty:
+        exported = self.dataset.export_to_tensor_dict(
+            codes,
+            x_columns=self.input_columns,
+            y_columns=self.output_columns,
+            categorical_mappings=self.categorical_mappings,
+        )
+        if exported.is_empty():
             return []
 
-        X_df = self._inject_context_features(X_df, y_df)
-        X = self._encode_inputs(X_df)
-        # Restrict to output_columns to keep index-based normalization and model-filtering aligned.
-        y = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
+        X_dict = self._inject_context_features_tensor(exported.X, exported.y)
+        X_t = self.prepare_input_from_tensor_dict(X_dict)
 
-        # Normalize
-        if self._is_fitted:
-            self._normalize_batch(X, self.input_columns, self._parameter_stats)
-            self._normalize_batch(y, self.output_columns, self._feature_stats)
+        # Build y as (n_rows, len(output_columns)) tensor; apply normalisation per col.
+        n_rows = exported.n_rows
+        y_cols = []
+        for col in self.output_columns:
+            col_t = exported.y.get(col, torch.zeros(n_rows, dtype=torch.float32))
+            stats = self._feature_stats.get(col)
+            if stats is not None:
+                col_t = self._apply_normalization_tensor(col_t, stats)
+            y_cols.append(col_t.reshape(-1))
+        y_t = torch.stack(y_cols, dim=-1) if y_cols else torch.zeros((n_rows, 0))
 
-        X_t = torch.from_numpy(X)
-        y_t = torch.from_numpy(y)
+        cell_meta = exported.cell_meta
 
         # Batch
         if self.batch_size is None:
-            return [(X_t, y_t)]
+            return [(X_t, y_t, cell_meta)]
 
-        batches: list[tuple[torch.Tensor, torch.Tensor]] = []
+        batches: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
         for i in range(0, X_t.shape[0], self.batch_size):
-            batches.append((X_t[i:i+self.batch_size], y_t[i:i+self.batch_size]))
+            batches.append((
+                X_t[i:i + self.batch_size],
+                y_t[i:i + self.batch_size],
+                cell_meta[i:i + self.batch_size],
+            ))
 
         return batches
 
