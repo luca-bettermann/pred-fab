@@ -7,7 +7,7 @@ Integrates with DataModule for normalization and batching.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 import copy
 import pandas as pd
 import numpy as np
@@ -88,12 +88,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
         self._uncertainty_weights: dict[str, float] = {}
 
-        # Scheduled-sampling configuration. Triggered automatically for any
-        # model with recursive input features. n_ss_rounds=4 means 4 refits
-        # with student probability annealed linearly from 0 → 1. The RNG used
-        # for per-row Bernoulli draws is self.rng (inherited from
-        # BaseOrchestrationSystem; derives from agent's random_seed).
-        self.n_ss_rounds: int = 4
+        # Scheduled-sampling configuration (Strategy D commit 15). Triggered
+        # automatically for any model with recursive input features. Cadence
+        # is now per-epoch (refresh every model.EPOCHS / n_ss_refreshes
+        # epochs) instead of K-refit. p_student annealed linearly from
+        # ss_schedule_floor → 1.0 across the training run.
+        self.n_ss_refreshes: int = 4
         self.ss_schedule_floor: float = 0.0
 
     def _assert_trained(self) -> DataModule:
@@ -186,11 +186,13 @@ class PredictionSystem(BaseOrchestrationSystem):
                     return True
         return False
 
-    def _ss_p_for_round(self, round_idx: int, n_rounds: int) -> float:
-        """Linear schedule: 0 (round 0, teacher-forced) → 1.0 (last round)."""
-        if round_idx == 0 or n_rounds <= 1:
-            return 0.0
-        progress = round_idx / (n_rounds - 1)  # 0, 1/(n-1), ..., 1
+    def _ss_p_for_progress(self, progress: float) -> float:
+        """Linear schedule: 0.0 → 1.0 over [0, 1] training progress.
+
+        Strategy D commit 15: replaces ``_ss_p_for_round`` (K-refit cadence)
+        with continuous progress, queried inside ``model.train``'s epoch loop.
+        """
+        progress = max(0.0, min(1.0, progress))
         return self.ss_schedule_floor + (1.0 - self.ss_schedule_floor) * progress
 
     def _autoreg_predict_training_data(
@@ -251,14 +253,16 @@ class PredictionSystem(BaseOrchestrationSystem):
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration.
 
-        Models with recursive input features are trained via scheduled sampling:
-        n_ss_rounds refits with student probability annealed from 0 → 1, so the
-        model is gradually exposed to its own outputs in place of measured
-        prior values. Models without recursive features train in a single pass.
+        Strategy D commit 15: Phase C absorbed — per-epoch refresh inside
+        each model's ``train()`` replaces the K-refit loop. For models with
+        recursive input features, an ``epoch_callback`` is supplied; the
+        model invokes it periodically to refresh SS predictions and update
+        ``p_student`` from the schedule. Models without recursive features
+        receive ``epoch_callback=None`` and train normally.
 
-        Cross-model recursive dependencies are honoured by topologically sorting
-        models so source-producing models train (and are predict-cached) before
-        their consumers.
+        Cross-model recursive dependencies are honoured by topologically
+        sorting models so source-producing models train (and are
+        predict-cached) before their consumers.
         """
         self.datamodule = datamodule
 
@@ -289,47 +293,54 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Topological order: models producing recursive sources train first so
         # downstream models' SS predictions are available.
         ordered_models = self._topo_sort_models()
-        val_batches = self.datamodule.get_batches(SplitType.VAL)
         total = len(ordered_models)
         trained_count = 0
 
-        console = self.logger._console_output_enabled
         for model in ordered_models:
             has_recursive = self._model_has_recursive_inputs(model)
-            n_rounds = self.n_ss_rounds if has_recursive and self.n_ss_rounds > 1 else 1
-            label = f"Training {model.__class__.__name__}"
-            _bar = ProgressBar(label, max_iter=n_rounds) if console else None
-
-            if has_recursive and self.n_ss_rounds > 1:
-                # Scheduled sampling: K refits with annealed student probability,
-                # all surfaced as one progress bar that ticks once per round.
-                for round_idx in range(self.n_ss_rounds):
-                    p_student = self._ss_p_for_round(round_idx, self.n_ss_rounds)
-                    if p_student > 0:
-                        preds_by_exp = self._autoreg_predict_training_data()
-                        self.datamodule.set_scheduled_sampling_state(
-                            preds_by_exp, p_student=p_student, rng=self.rng,
-                        )
-                    else:
-                        self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
-                    train_batches = self.datamodule.get_batches(SplitType.TRAIN)
-                    if _bar is not None:
-                        _bar.step()
-                    self._fit_single_round(model, train_batches, val_batches, **kwargs)
-                self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
-                if _bar is not None:
-                    _bar.finish(suffix="done  (autoregressive)")
+            kwargs_with_ss = dict(kwargs)
+            if has_recursive and self.n_ss_refreshes > 0:
+                kwargs_with_ss["epoch_callback"] = self._build_ss_epoch_callback(model)
             else:
-                train_batches = self.datamodule.get_batches(SplitType.TRAIN)
-                if _bar is not None:
-                    _bar.step()
-                self._fit_single_round(model, train_batches, val_batches, **kwargs)
-                if _bar is not None:
-                    _bar.finish(suffix="done")
+                # Ensure clean slate (no leftover SS state from a previous model).
+                self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
+
+            train_batches = self.datamodule.get_batches(SplitType.TRAIN)
+            val_batches = self.datamodule.get_batches(SplitType.VAL)
+            self._fit_single_round(model, train_batches, val_batches, **kwargs_with_ss)
+            self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
             trained_count += 1
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
         self._fit_kde(datamodule)
+
+    def _build_ss_epoch_callback(
+        self, model: IPredictionModel,
+    ) -> Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None]:
+        """Return the per-epoch SS refresh callable for ``model.train``.
+
+        Strategy D commit 15. Given training progress in ``[0, 1]``, the
+        callable: (1) computes current-network predictions on training
+        experiments, (2) installs them on the DataModule with the current
+        ``p_student`` from the linear schedule, (3) re-fetches train
+        batches with the fresh SS substitution applied, (4) filters them
+        to this model's input columns. Returns ``None`` early when
+        ``p_student == 0`` (teacher-forced — no need to re-fetch).
+        """
+        def _refresh(progress: float) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
+            if self.datamodule is None:
+                return None
+            p = self._ss_p_for_progress(progress)
+            if p <= 0.0:
+                self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
+                return None
+            preds_by_exp = self._autoreg_predict_training_data()
+            self.datamodule.set_scheduled_sampling_state(
+                preds_by_exp, p_student=p, rng=self.rng,
+            )
+            fresh_batches = self.datamodule.get_batches(SplitType.TRAIN)
+            return self._filter_batches_for_model(fresh_batches, model)
+        return _refresh
     
     # === EVIDENCE MODEL (integrated objective) ===
     #

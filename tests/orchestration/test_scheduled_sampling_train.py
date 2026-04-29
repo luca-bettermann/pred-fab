@@ -208,25 +208,27 @@ def test_model_has_recursive_inputs_false(tmp_path):
     assert pred._model_has_recursive_inputs(pred.models[0]) is False
 
 
-# ── Schedule ──
+# ── Schedule (Strategy D commit 15: per-epoch progress in [0, 1]) ──
 
-def test_ss_schedule_round_zero_is_teacher_forced(tmp_path):
+def test_ss_schedule_progress_zero_is_teacher_forced(tmp_path):
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    pred.n_ss_rounds = 4
-    assert pred._ss_p_for_round(0, 4) == 0.0
+    pred.n_ss_refreshes = 4
+    assert pred._ss_p_for_progress(0.0) == 0.0
 
 
-def test_ss_schedule_last_round_is_full_student(tmp_path):
+def test_ss_schedule_progress_one_is_full_student(tmp_path):
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    pred.n_ss_rounds = 4
-    assert pred._ss_p_for_round(3, 4) == 1.0
+    pred.n_ss_refreshes = 4
+    assert pred._ss_p_for_progress(1.0) == 1.0
 
 
-def test_ss_schedule_floor_lifts_round_one(tmp_path):
+def test_ss_schedule_floor_lifts_early_progress(tmp_path):
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
     pred.ss_schedule_floor = 0.2
-    p1 = pred._ss_p_for_round(1, 4)
-    assert p1 > 0.2
+    # At progress=0.25 (early), p_student should be ≥ 0.2 (the floor) per the
+    # linear schedule: p = floor + (1 - floor) * progress.
+    p_early = pred._ss_p_for_progress(0.25)
+    assert p_early > 0.2
