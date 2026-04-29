@@ -1993,20 +1993,40 @@ class PredictionSystem(BaseOrchestrationSystem):
         else:
             cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
 
-        # Build (S × n_cells, n_input_cols) tensor in one prepare_input call.
-        with profiler.section("autoreg.build_X_df [pandas + iter_feats]"):
-            all_rows = []
-            for s in range(S):
-                param_base = dim_info_list[s]['param_base']
-                for cell_row in range(n_cells):
-                    row = param_base.copy()
-                    idx_arr = cell_indices_arr[cell_row]
-                    for feat_code, axis_pos, size in iterator_feats:
-                        row[feat_code] = float(idx_arr[axis_pos]) / max(size - 1, 1)
-                    all_rows.append(row)
-            X_df = pd.DataFrame(all_rows)
-        with profiler.section("autoreg.prepare_input [one-hot + normalize]"):
-            X_norm_flat = dm.prepare_input(X_df)              # (S × n_cells, n_input_cols)
+        # Build (S × n_cells, n_input_cols) tensor — Strategy D commit 16b:
+        # pandas-free direct construction via tensor dict + prepare_input_from_tensor_dict.
+        with profiler.section("autoreg.build_X_dict [tensor + iter_feats]"):
+            n_total = S * n_cells
+            iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
+            X_dict_flat: dict[str, torch.Tensor] = {}
+            for col_name in dm.input_columns:
+                if col_name in dm.categorical_mappings:
+                    cats = dm.categorical_mappings[col_name]
+                    cat_to_idx = {c: i for i, c in enumerate(cats)}
+                    idx_vals: list[int] = []
+                    for s in range(S):
+                        param_base = dim_info_list[s]['param_base']
+                        v = param_base.get(col_name, cats[0] if cats else None)
+                        cell_val = cat_to_idx.get(v, 0)
+                        idx_vals.extend([cell_val] * n_cells)
+                    X_dict_flat[col_name] = torch.tensor(idx_vals, dtype=torch.long)
+                elif col_name in iter_feat_lookup:
+                    axis_pos, size = iter_feat_lookup[col_name]
+                    vals: list[float] = []
+                    for _s in range(S):
+                        for cell_row in range(n_cells):
+                            idx_arr = cell_indices_arr[cell_row]
+                            vals.append(float(idx_arr[axis_pos]) / max(size - 1, 1))
+                    X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
+                else:
+                    vals = []
+                    for s in range(S):
+                        param_base = dim_info_list[s]['param_base']
+                        v = float(param_base.get(col_name, 0.0))
+                        vals.extend([v] * n_cells)
+                    X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
+        with profiler.section("autoreg.prepare_input_from_tensor_dict [normalize]"):
+            X_norm_flat = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
         n_input_cols = X_norm_flat.shape[1]
         X_stack = X_norm_flat.view(S, n_cells, n_input_cols).clone()
 
