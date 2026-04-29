@@ -2,12 +2,39 @@
 
 import numpy as np
 import pandas as pd
+import torch
 import os
 from dataclasses import dataclass, field
 from typing import Callable, Any, Literal
 import functools
 
 from .schema import DatasetSchema
+
+
+@dataclass(frozen=True)
+class ExportedTensorDict:
+    """Tensor-native dataset export (Strategy D commit 16).
+
+    Each row corresponds to one (experiment, cell) pair. ``cell_meta[i]``
+    gives the ``(exp_idx, cell_idx)`` for row ``i`` — useful for Phase C
+    SS substitution (looking up prior-cell predictions per row).
+
+    - ``X``: ``dict[col_name, (n_rows,) tensor]`` — categoricals are long
+      indices into their ``categorical_mappings`` list; numerics are float.
+    - ``y``: ``dict[col_name, (n_rows,) float tensor]`` — NaN where the
+      feature value is missing for that cell.
+    - ``cell_meta``: ``(n_rows, 2)`` long tensor with ``[exp_idx, cell_idx]``.
+    """
+    X: dict[str, torch.Tensor]
+    y: dict[str, torch.Tensor]
+    cell_meta: torch.Tensor
+
+    @property
+    def n_rows(self) -> int:
+        return int(self.cell_meta.shape[0])
+
+    def is_empty(self) -> bool:
+        return self.n_rows == 0
 from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDomainAxis
 
 from ..interfaces.external_data import IExternalData
@@ -904,51 +931,50 @@ class Dataset:
         else:
             self.logger.warning(f"Skipped pushing {dtype} to external source due missing ExternalData source.")
 
-    def export_to_dataframe(self, experiment_codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows."""
-        if not experiment_codes:
-            return pd.DataFrame(), pd.DataFrame()
-        
-        X_rows = []
-        y_rows = []
-        
-        for code in experiment_codes:
+    def _build_export_rows(
+        self, experiment_codes: list[str],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[tuple[int, int]]]:
+        """Shared row builder used by ``export_to_dataframe`` and ``export_to_tensor_dict``.
+
+        Strategy D commit 16. Returns ``(X_rows, y_rows, cell_meta)`` where
+        ``cell_meta[i] = (exp_idx, flat_cell_idx)`` for row ``i`` — the
+        (experiment-code-index, flat-cell-index) pair used by Phase C SS
+        substitution to identify each row's prior-cell coordinates.
+        """
+        X_rows: list[dict[str, Any]] = []
+        y_rows: list[dict[str, Any]] = []
+        cell_meta: list[tuple[int, int]] = []
+
+        for exp_idx, code in enumerate(experiment_codes):
             exp_data = self.get_experiment(code)
             if exp_data.features is None:
                 continue
-            
-            # Get parameter info
+
             dim_names = exp_data.parameters.get_dim_names()
 
             if not dim_names:
-                # Case 1: No dimensions (Scalar experiment)
-                y_dict = {}
+                # Case 1: scalar experiment (no dimensions).
+                y_dict: dict[str, Any] = {}
                 for feature_name in exp_data.features.keys():
                     value = exp_data.features.get_value(feature_name)
-                    # Handle scalar or 1-element array
                     if isinstance(value, np.ndarray):
                         y_dict[feature_name] = float(value.flat[0])
                     else:
                         y_dict[feature_name] = float(value)
-                
                 X_rows.append(exp_data.get_effective_parameters_for_row(0))
                 y_rows.append(y_dict)
+                cell_meta.append((exp_idx, 0))
                 continue
-            
-            # Case 2: Multi-dimensional experiment
-            # Get all index combinations
+
+            # Case 2: multi-dimensional.
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
             dim_iterators = exp_data.parameters.get_dim_iterator_codes(codes=dim_names)
 
-            # Iterator-derived features: precompute (feat_code, axis_iter_code, dim_size).
-            # Value at row k along this axis is k / (size - 1) — features without a
-            # stored tensor; populated directly into y rows for context injection.
             iterator_features: list[tuple[str, str, int]] = []
             for feat_code, feat_obj in self.schema.features.data_objects.items():
                 axis_code = getattr(feat_obj, "iterator_axis_code", None)
                 if axis_code is None:
                     continue
-                # Find the dim parameter whose iterator_code matches.
                 size = None
                 for i, dim_name in enumerate(dim_names):
                     if dim_iterators[i] == axis_code:
@@ -959,27 +985,18 @@ class Dataset:
                 iterator_features.append((feat_code, axis_code, size))
 
             for row_idx, idx_tuple in enumerate(dim_combinations):
-                # Build X row: static parameters only. Dimension-size columns
-                # (e.g. n_layers, n_segments) keep their experiment values from
-                # get_effective_parameters_for_row — they are NOT overwritten
-                # with the iteration index. Models that need row-position
-                # awareness must declare an explicit Feature.iterator(...).
                 row_dict = exp_data.get_effective_parameters_for_row(row_idx)
                 iterator_ctx: dict[str, Any] = {
                     dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
                 }
-
                 X_rows.append(row_dict)
 
-                # Build y row (Features at index)
                 y_dict = {}
-                # Read feature values consistently from canonical tensor storage.
                 for feature_name in exp_data.features.keys():
                     val = exp_data.features.value_at(feature_name, exp_data.parameters, iterator_ctx)
                     if val is not None and not np.isnan(val):
                         y_dict[feature_name] = val
 
-                # Iterator-derived features: compute from the iteration tuple.
                 for feat_code, axis_code, size in iterator_features:
                     raw_idx = iterator_ctx.get(axis_code)
                     if raw_idx is None:
@@ -988,11 +1005,105 @@ class Dataset:
                     y_dict[feat_code] = norm
 
                 y_rows.append(y_dict)
-        
+                cell_meta.append((exp_idx, row_idx))
+
+        return X_rows, y_rows, cell_meta
+
+    def export_to_dataframe(self, experiment_codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows.
+
+        Strategy D commit 16: now a thin wrapper around ``_build_export_rows``;
+        the same row-builder backs ``export_to_tensor_dict``.
+        """
+        if not experiment_codes:
+            return pd.DataFrame(), pd.DataFrame()
+        X_rows, y_rows, _ = self._build_export_rows(experiment_codes)
         if not X_rows:
             return pd.DataFrame(), pd.DataFrame()
-        
         return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
+
+    def export_to_tensor_dict(
+        self,
+        experiment_codes: list[str],
+        x_columns: list[str] | None = None,
+        y_columns: list[str] | None = None,
+        categorical_mappings: dict[str, list[str]] | None = None,
+    ) -> "ExportedTensorDict":
+        """Tensor-native export (Strategy D commit 16).
+
+        Per-column tensors with dtype-aware encoding (cats → long, numerics →
+        float). Returns ``ExportedTensorDict`` with:
+          - ``X``: ``dict[col, torch.Tensor]`` of length ``n_rows`` per column
+          - ``y``: ``dict[col, torch.Tensor]`` of length ``n_rows`` per column
+            (NaN for cells where the feature value is missing)
+          - ``cell_meta``: ``(n_rows, 2)`` long tensor — ``[exp_idx, cell_idx]``
+            per row, used by Phase C SS substitution
+
+        ``x_columns`` / ``y_columns`` (when supplied) restrict + order the
+        output dict keys; ``categorical_mappings`` (parent_col → category
+        list) determines which X columns get encoded as long-tensor cat
+        indices instead of float values.
+        """
+        if not experiment_codes:
+            return ExportedTensorDict({}, {}, torch.zeros((0, 2), dtype=torch.long))
+
+        X_rows, y_rows, cell_meta_list = self._build_export_rows(experiment_codes)
+        if not X_rows:
+            return ExportedTensorDict({}, {}, torch.zeros((0, 2), dtype=torch.long))
+
+        cat_maps = categorical_mappings or {}
+        n_rows = len(X_rows)
+
+        def _x_cols() -> list[str]:
+            if x_columns is not None:
+                return x_columns
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for row in X_rows:
+                for k in row.keys():
+                    if k not in seen:
+                        seen.add(k)
+                        ordered.append(k)
+            return ordered
+
+        def _y_cols() -> list[str]:
+            if y_columns is not None:
+                return y_columns
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for row in y_rows:
+                for k in row.keys():
+                    if k not in seen:
+                        seen.add(k)
+                        ordered.append(k)
+            return ordered
+
+        X_dict: dict[str, torch.Tensor] = {}
+        for col in _x_cols():
+            if col in cat_maps:
+                cats = cat_maps[col]
+                cat_to_idx = {c: i for i, c in enumerate(cats)}
+                idxs = [cat_to_idx.get(row.get(col), 0) for row in X_rows]
+                X_dict[col] = torch.tensor(idxs, dtype=torch.long)
+            else:
+                vals = []
+                for row in X_rows:
+                    v = row.get(col)
+                    vals.append(0.0 if v is None else float(v))
+                X_dict[col] = torch.tensor(vals, dtype=torch.float32)
+
+        y_dict_t: dict[str, torch.Tensor] = {}
+        for col in _y_cols():
+            vals = []
+            for row in y_rows:
+                v = row.get(col)
+                vals.append(float('nan') if v is None else float(v))
+            y_dict_t[col] = torch.tensor(vals, dtype=torch.float32)
+
+        cell_meta_tensor = torch.tensor(cell_meta_list, dtype=torch.long) \
+            if cell_meta_list else torch.zeros((0, 2), dtype=torch.long)
+
+        return ExportedTensorDict(X_dict, y_dict_t, cell_meta_tensor)
 
     def _logging(self, msg: str, verbose_func: Callable[[str], None], verbose: bool):
         if verbose:

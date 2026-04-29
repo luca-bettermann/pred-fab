@@ -428,16 +428,58 @@ class DataModule:
         return batches
 
     def prepare_input(self, X_df: pd.DataFrame) -> torch.Tensor:
-        """Prepare input DataFrame for inference (one-hot + normalize), returning a tensor."""
+        """Prepare input DataFrame for inference (encode + normalize), returning a tensor.
+
+        Strategy D commit 16: thin shim over ``prepare_input_from_tensor_dict``.
+        Pandas users keep this entry point; tensor-typed callers (autoreg
+        loop, etc.) can call ``prepare_input_from_tensor_dict`` directly to
+        skip the DataFrame→numpy→tensor roundtrip.
+        """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
 
         X_arr = self._encode_inputs(X_df)
-
         # Normalize
         self._normalize_batch(X_arr, self.input_columns, self._parameter_stats)
-
         return torch.from_numpy(X_arr)
+
+    def prepare_input_from_tensor_dict(
+        self, X_dict: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """Tensor-native ``prepare_input`` (Strategy D commit 16).
+
+        Takes a tensor dict as produced by ``Dataset.export_to_tensor_dict``
+        (or constructed directly by the autoreg loop) and returns a stacked
+        ``(n_rows, n_input_cols)`` tensor with normalisation applied. No
+        pandas, no numpy roundtrip.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+        if not X_dict:
+            return torch.zeros((0, len(self.input_columns)), dtype=torch.float32)
+
+        # Determine n_rows from any column
+        n_rows = next(iter(X_dict.values())).shape[0]
+        cols: list[torch.Tensor] = []
+        for col_name in self.input_columns:
+            if col_name in X_dict:
+                col_t = X_dict[col_name]
+                # Categoricals are long-typed; numerics are float.
+                if col_name in self.categorical_mappings:
+                    col_f = col_t.to(dtype=torch.float32)
+                else:
+                    col_f = col_t.to(dtype=torch.float32)
+                # Replace NaNs (boundary cells) with 0 — matches _encode_inputs.
+                col_f = torch.nan_to_num(col_f, nan=0.0)
+            else:
+                col_f = torch.zeros(n_rows, dtype=torch.float32)
+
+            stats = self._parameter_stats.get(col_name)
+            if stats is not None:
+                col_f = self._apply_normalization_tensor(col_f, stats)
+            cols.append(col_f.reshape(-1))
+
+        return torch.stack(cols, dim=-1)
 
     def denormalize_output(self, y_norm: torch.Tensor) -> torch.Tensor:
         """Reverse normalization for target features (y)."""
