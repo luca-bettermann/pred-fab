@@ -1886,6 +1886,38 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return -scores
 
+    def _acquisition_joint_batched_tensor(
+        self,
+        full_S_NL: torch.Tensor,
+        kappa: float,
+        perf_range: tuple[float, float] | None,
+    ) -> torch.Tensor:
+        """Tensor mirror of ``_acquisition_joint_batched_objective`` (commit 12).
+
+        Returns ``(S,)`` torch tensor of negated κ-weighted scores for the
+        gradient optimiser. Gradient flows from each candidate's score back
+        through the (S, N, L, D) input tensor — used by the schedule path's
+        gradient migration.
+        """
+        with profiler.section("acq._acquisition_joint_batched_tensor"):
+            S, N, L, D = full_S_NL.shape
+            NL = N * L
+            dtype = full_S_NL.dtype
+            scores = torch.zeros(S, dtype=dtype)
+
+            if kappa < 1.0:
+                flat_rows = full_S_NL.reshape(S * NL, D)
+                perfs_flat = self._per_candidate_perf_tensor(flat_rows, perf_range)
+                perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1)
+                scores = scores + (1.0 - kappa) * perfs_S.to(dtype=dtype)
+
+            if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_tensor_fn is not None:
+                flat_per_candidate = full_S_NL.reshape(S, NL, D)
+                evidence_S = self.delta_integrated_evidence_joint_batched_tensor_fn(flat_per_candidate)
+                scores = scores + kappa * evidence_S.to(dtype=dtype)
+
+            return -scores
+
     def _run_phase(
         self,
         phase_param_codes: list[str],
@@ -2266,10 +2298,63 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     f"D_sched={D_sched}, total_vars={sched_space.total_vars}"
                 )
 
-                opt = self.engine._run_de(
-                    _schedule_acquisition_objective_vectorized, sched_space.bounds,
-                    label="Schedule", show_progress=console, vectorized=True,
+                # Strategy D commit 12: gradient path with absolute-step encoding.
+                # Each step k ∈ [0, 1] strict via sigmoid reparam — no offset
+                # cumulative drift, no soft bound penalty, no smoothing factor.
+                # Delta constraint between adjacent steps becomes a soft (smooth)
+                # penalty in the tensor objective.
+                use_gradient = (
+                    self.optimizer == Optimizer.GRADIENT
+                    and self.delta_integrated_evidence_joint_batched_tensor_fn is not None
                 )
+
+                if use_gradient:
+                    # Absolute-step encoding: total_vars = L * D_sched (one slot per step per dim).
+                    # Each slot bounded to its sched param's [lo, hi] via sigmoid in run_acquisition_gradient.
+                    abs_bounds: list[tuple[float, float]] = []
+                    for _k in range(L):
+                        for d_s in range(D_sched):
+                            abs_bounds.append(sched_de_bounds[d_s])
+
+                    flat_x_t = torch.from_numpy(flat_x).float()
+                    sched_col_indices = torch.tensor(
+                        [code_to_idx[c] for c in sched_codes], dtype=torch.long,
+                    )
+
+                    def _schedule_objective_tensor(x_S: torch.Tensor) -> torch.Tensor:
+                        """Tensor schedule objective — (S, L*D_sched) → (S,) negated scores."""
+                        S = int(x_S.shape[0])
+                        # Decode into (S, L, D_sched) absolute-step values.
+                        steps_SLD = x_S.reshape(S, L, D_sched)
+                        # Build (S, 1, L, n_input) by broadcasting fixed_x and overwriting sched cols.
+                        full_S_NL = flat_x_t.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
+                            S, 1, L, n_input,
+                        ).clone()
+                        full_S_NL[:, 0, :, sched_col_indices] = steps_SLD
+                        scores_neg = self._acquisition_joint_batched_tensor(
+                            full_S_NL, kappa, sched_perf_range,
+                        )
+                        # Soft delta-constraint penalty: λ · Σ_k max(0, |Δstep|−delta)²
+                        if D_sched > 0 and L > 1:
+                            sched_delta_t = torch.tensor(sched_delta_norms, dtype=x_S.dtype)
+                            valid_delta = sched_delta_t > 0
+                            if bool(valid_delta.any().item()):
+                                step_diffs = (steps_SLD[:, 1:, :] - steps_SLD[:, :-1, :]).abs()
+                                excess = (step_diffs - sched_delta_t).clamp(min=0.0)
+                                excess = excess * valid_delta.to(dtype=excess.dtype)
+                                delta_penalty_S = (excess ** 2).sum(dim=(1, 2))
+                                scores_neg = scores_neg + 5.0 * delta_penalty_S
+                        return scores_neg
+
+                    opt = self.engine.run_acquisition_gradient(
+                        _schedule_objective_tensor, abs_bounds,
+                        label="Schedule", show_progress=console,
+                    )
+                else:
+                    opt = self.engine._run_de(
+                        _schedule_acquisition_objective_vectorized, sched_space.bounds,
+                        label="Schedule", show_progress=console, vectorized=True,
+                    )
                 self.last_opt_nfev += opt.nfev
                 self.convergence_history["Schedule"] = opt.convergence_history
 
@@ -2278,7 +2363,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 proposals: list[dict[str, Any]] = []
                 if opt.best_x is not None:
-                    pts = sched_space.decode(opt.best_x)
+                    # Strategy D commit 12: decode either offset encoding (DE
+                    # path via SolutionSpace.decode) or absolute encoding
+                    # (gradient path: shape (L * D_sched,) → (L, D_sched)).
+                    if use_gradient:
+                        pts = opt.best_x.reshape(L, D_sched)
+                    else:
+                        pts = sched_space.decode(opt.best_x)
                     for k in range(L):
                         step_params = datamodule.array_to_params(_pts_row_to_dm(pts[k]))
                         step_params.update(self.fixed_params)
@@ -2302,7 +2393,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 if opt.best_x is not None:
                     try:
-                        x0_step = _pts_row_to_dm(sched_space.decode(opt.best_x)[0])
+                        # Same dual-decode as above (commit 12).
+                        if use_gradient:
+                            pts0 = opt.best_x.reshape(L, D_sched)[0]
+                        else:
+                            pts0 = sched_space.decode(opt.best_x)[0]
+                        x0_step = _pts_row_to_dm(pts0)
                         _params = datamodule.array_to_params(x0_step)
                         _perf_dict = self.perf_fn(_params)
                         _pv = [
