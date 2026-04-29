@@ -29,18 +29,34 @@
 | 10 | `scipy.spatial.cKDTree` → `torch.cdist + torch.where` 5σ mask in `KernelIndex.density_at`; full `scipy.spatial` removal | +26 / −19 | shipped |
 | 11 | `scipy.stats.qmc.Sobol` → `torch.quasirandom.SobolEngine` (had shipped earlier as commit 12 in old numbering) | +5 / −2 | shipped |
 
-**End of Phase 1 status: zero `scipy` imports anywhere in `pred_fab/`.** 654 tests pass. Acquisition optimisation, QMC, and spatial neighbour lookup are all torch-native.
+**End of Phase 1 status: zero `scipy` imports anywhere in `pred_fab/`.** 652 tests pass. Acquisition optimisation, QMC, and spatial neighbour lookup are all torch-native.
 
-**Phase 2-5 planned, not yet shipped:**
+**Phase 5 commit 18 (partial) shipped:**
 
-| Phase | Commits | Net LOC | Gist |
+| Commit | What | LOC | Status |
 |---|---|---|---|
-| 2 | 12 | −80 net | Schedule path gradient migration + delete offset encoding + soft bound penalty + smoothing |
-| 3 | 13-16 | −640 net | nn.Module normalisers, categorical-index, Phase C SS absorption, tensor-native prepare_input |
-| 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it |
-| 5 | 18-20 | −90 net | API simplification, `run_baseline`/`run_calibration` unification, GPU + `torch.compile` over full graph |
+| 18a | Drop `Optimizer.LBFGSB` enum + `_run_lbfgsb` + `online_optimizer` + `lbfgsb_*` config knobs (the LBFGSB path was made redundant by `run_acquisition_gradient` using `torch.optim.LBFGS` internally). 4 LBFGSB tests removed, 2 gradient-config tests added. | −208 / +55 | shipped |
 
-These are sized correctly in the roadmap below but are not safe for autonomous overnight execution — each touches multiple foundational modules and would risk extensive test breakage without careful per-commit review. Schedule and data layer migrations are the natural next focus.
+**Phase 3 commit 13 shipped:**
+
+| Commit | What | LOC | Status |
+|---|---|---|---|
+| 13 | `nn.Module` normalisers replace stat dicts. Adds `pred_fab/core/normalisers.py` with `StandardScalerModule`, `MinMaxScalerModule`, `RobustScalerModule`, `IdentityNormaliser`. `DataModule._parameter_stats` / `_feature_stats` hold module instances now; existing dict-style access (`stats[col]["mean"]`) preserved via `NormaliserModule.__getitem__`. `_apply_normalization` / `_reverse_normalization` collapse to `module(data)` / `module.reverse(data)` — ~80 LOC method-dispatch deleted from DataModule. Stats serialise via `state_dict` / `torch.save`; `get_normalization_state` still emits legacy dict format for on-disk bundle compat. | +343 / −117 | shipped |
+
+**Phase 2-3-4-5 still planned, not yet shipped:**
+
+| Phase | Commits | Net LOC | Gist | Risk |
+|---|---|---|---|---|
+| 3 | 14 | −80 net | One-hot → categorical-index tensors + `nn.Embedding` opt-in | medium |
+| 3 | 15 | −330 net | Phase C SS absorption (per-minibatch SS in `train()`); deletes K-refit + DM SS state machinery; rewrites 14 SS tests | high |
+| 3 | 16 | −80 net | Tensor-native `prepare_input` + `export_to_tensor_dict`; drops pandas roundtrip from autoreg | medium |
+| 2 | 12 | −80 net | Schedule path gradient migration; deletes offset encoding, soft bound penalty, smoothing factor | high |
+| 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration` (KernelField is the only path); drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15) | low (gated on 12, 15) |
+| 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification | medium |
+| 5 | 20 | +30 net | `agent.to('cuda')` + `torch.compile` over full acquisition graph | medium |
+| 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it | low |
+
+**Net so far: −388 LOC delivered, −860 LOC delete remaining target.**
 
 **End-to-end works**: `agent.configure_optimizer(backend=Optimizer.GRADIENT)` followed by `agent.baseline_step(n)` runs the gradient path through the Process phase (continuous params; integer / domain phase still DE). 654 tests pass.
 
