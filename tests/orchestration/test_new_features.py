@@ -42,8 +42,7 @@ class TestOptimizerConfig:
         assert agent.calibration_system.de_popsize == 20
 
     def test_configure_gradient_optimizer(self, tmp_path):
-        """GRADIENT path is the alternative;
-        LBFGSB enum and online_optimizer were dropped."""
+        """GRADIENT backend can be selected via configure_optimizer."""
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(backend=Optimizer.GRADIENT)
         assert agent.calibration_system.optimizer == Optimizer.GRADIENT
@@ -52,12 +51,6 @@ class TestOptimizerConfig:
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(gradient_n_starts=8)
         assert agent.calibration_system.engine.gradient_n_starts == 8
-
-    def test_configure_schedule_smoothing(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.calibration_system.schedule_smoothing = 0.2
-        assert agent.calibration_system.schedule_smoothing == 0.2
-
 
 # ===========================================================================
 # Performance range tracking

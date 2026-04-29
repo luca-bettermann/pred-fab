@@ -13,15 +13,7 @@ from ...utils import PfabLogger, ProgressBar, profiler
 
 
 class Optimizer(Enum):
-    """Optimization backend for the calibration acquisition function.
-
-    collapsed from {DE, LBFGSB, GRADIENT}
-    to {DE, GRADIENT}. LBFGSB was a thin wrapper around scipy.optimize
-    that became redundant once the gradient path landed (which uses
-    torch.optim.LBFGS directly inside ``run_acquisition_gradient``). DE
-    stays for integer-phase optimisation until the schedule path lands
-    its torch-native enumeration in commit 12.
-    """
+    """Optimization backend for the calibration acquisition function."""
     DE       = "de"         # torch-native differential evolution (integer-aware)
     GRADIENT = "gradient"   # autograd multi-start, torch.optim Adam/LBFGS
 
@@ -60,7 +52,6 @@ class OptimizationEngine:
         # diversity for smooth-ish acquisition landscapes while halving
         # evaluations per generation. Tunable via configure_optimizer.
         self.de_popsize: int = 8
-        self.de_tol: float = 0.0  # legacy; superseded by no-improvement-window
         self.de_no_improve_window: int = 10  # generations without improvement → halt
         self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
 
@@ -192,10 +183,7 @@ class OptimizationEngine:
             return step_sum / L
 
         # --- 3. Run optimizer ---
-        # LBFGSB branch deleted — gradient
-        # path now lives in run_acquisition_gradient and is dispatched
-        # directly from CalibrationSystem rather than via this enum.
-        del active_optimizer  # no longer used: only DE is reachable here
+        del active_optimizer  # only DE is reachable; gradient path lives in run_acquisition_gradient
         opt = self._run_de(
             _objective,
             all_bounds,

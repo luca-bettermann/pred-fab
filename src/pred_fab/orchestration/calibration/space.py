@@ -32,10 +32,6 @@ class SolutionSpace:
         sched_delta_norms: list[float] | None = None,
         step0_values: np.ndarray | None = None,           # (n_exp, D_sched) fixed step0 values (normalized)
     ):
-        # ``schedule_smoothing`` arg removed — smoothness
-        # emerges naturally from the gradient schedule path's autograd coupling
-        # between adjacent steps. Legacy DE schedule path no longer applies a
-        # smoothing penalty (lam=0).
         self._n_experiments = n_experiments
         self._static_params = static_params
         self._sched_params = sched_params

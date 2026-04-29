@@ -663,12 +663,7 @@ class PfabAgent:
         *,
         sigma: float | None = None,
     ) -> None:
-        """Configure the integrated-evidence objective (σ — kernel bandwidth).
-
-        ``estimator`` knob dropped —
-        ``KernelFieldEstimator`` is the only path. SobolLocal was a
-        research alternative that's no longer maintained.
-        """
+        """Configure the integrated-evidence objective (σ — kernel bandwidth)."""
         self._assert_initialized()
         if sigma is None:
             return
@@ -680,19 +675,12 @@ class PfabAgent:
         backend: Optimizer | None = None,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
-        de_tol: float | None = None,
         gradient_n_starts: int | None = None,
         gradient_n_iters: int | None = None,
         gradient_lr: float | None = None,
         gradient_method: str | None = None,
     ) -> None:
-        """Set optimiser backend and tuning parameters.
-
-        ``online_backend`` and the
-        ``lbfgsb_*`` knobs dropped — the LBFGSB enum + scipy L-BFGS-B
-        path were deleted in favour of the gradient path's
-        ``torch.optim.LBFGS`` (used internally by ``run_acquisition_gradient``).
-        """
+        """Set optimiser backend and tuning parameters."""
         self._assert_initialized()
         cal = self.calibration_system
         if backend is not None:
@@ -701,8 +689,6 @@ class PfabAgent:
             cal.de_maxiter = de_maxiter
         if de_popsize is not None:
             cal.de_popsize = de_popsize
-        if de_tol is not None:
-            cal.de_tol = de_tol
         if gradient_n_starts is not None:
             cal.engine.gradient_n_starts = gradient_n_starts
         if gradient_n_iters is not None:

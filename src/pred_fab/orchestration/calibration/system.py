@@ -198,14 +198,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.engine.de_popsize = value
 
     @property
-    def de_tol(self) -> float:
-        return self.engine.de_tol
-
-    @de_tol.setter
-    def de_tol(self, value: float) -> None:
-        self.engine.de_tol = value
-
-    @property
     def de_no_improve_window(self) -> int:
         return self.engine.de_no_improve_window
 
@@ -269,14 +261,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
         return self.bounds._get_trust_region_bounds(datamodule, current_params)
-
-    # ------------------------------------------------------------------
-    # Console / reporting
-    # ------------------------------------------------------------------
-
-    def _print_optimized_line(self, nfev: int, suffix: str = "") -> None:
-        """Deprecated — progress bar finish now handles this."""
-        pass  # kept for backward compat; DE/LBFGSB bars show iter+nfev
 
     def _get_n_exp(self) -> int:
         """Current experiment count from the prediction system."""
@@ -2355,8 +2339,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 bounds = all_global_bounds
                 n_rounds = n_optimization_rounds
 
-            # online_optimizer dropped — single
-            # path. Online and offline both use the configured self.optimizer.
             chosen_opt = self.optimizer
 
             # Vectorised DE path: pass S candidates through the autoreg loop in one
@@ -2487,8 +2469,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
 
             self.last_opt_nfev = opt.nfev
-            if console:
-                self._print_optimized_line(opt.nfev)
             self.last_opt_n_starts = opt.n_starts
             self.last_opt_score = opt.score
 

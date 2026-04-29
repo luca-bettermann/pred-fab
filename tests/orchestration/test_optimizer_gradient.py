@@ -30,7 +30,6 @@ def engine(tmp_path) -> OptimizationEngine:
 
 def test_optimizer_gradient_enum_present():
     assert Optimizer.GRADIENT.value == "gradient"
-    # enum is now {DE, GRADIENT}; LBFGSB dropped.
     assert Optimizer.GRADIENT in {Optimizer.DE, Optimizer.GRADIENT}
 
 
