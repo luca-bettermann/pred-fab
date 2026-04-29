@@ -753,30 +753,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not self._model_kdes or S == 0 or new_norm_batch_S.size == 0:
             return np.zeros(S, dtype=np.float64)
 
-        weights_S = (
-            np.ones(S, dtype=np.float64)
-            if new_weights_S is None
-            else np.asarray(new_weights_S, dtype=float)
+        weights_t = (
+            None if new_weights_S is None
+            else torch.from_numpy(np.asarray(new_weights_S, dtype=float)).double()
         )
-
-        out = np.zeros(S, dtype=np.float64)
-        total_w = 0.0
-        for kde in self._model_kdes.values():
-            new_centers_z_active = self._encode_batch_from_norm_for_model(
-                kde.model, new_norm_batch_S, kde.active_mask
-            )  # (S, n_active)
-
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
-            E_old = self._estimator.integrated_evidence(index_old)
-
-            # Vectorised: returns (S,) E_new[s] in one broadcast computation.
-            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched(
-                index_old, new_centers_z_active, weights_S,
+        with torch.no_grad():
+            out_t = self.delta_integrated_evidence_batched_tensor(
+                torch.from_numpy(np.ascontiguousarray(new_norm_batch_S)).double(),
+                weights_t,
             )
-            out += kde.weight * (E_new_per_s - E_old)
-            total_w += kde.weight
-
-        return out / total_w if total_w > 0 else out
+        return out_t.detach().cpu().numpy().astype(np.float64)
 
     def delta_integrated_evidence_joint_batched(
         self,
@@ -785,10 +771,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> np.ndarray:
         """Per-candidate joint Δ∫E for S candidates, each adding L kernels jointly.
 
-        Used by schedule-mode acquisition where each DE candidate decodes to
-        an L-step trajectory whose joint Δ∫E is the score. Vectorises across
-        S so a single call replaces an S-times Python loop over the scalar
-        ``delta_integrated_evidence_aggregated`` (with L jointly added per call).
+        No-grad numpy shim around
+        :meth:`delta_integrated_evidence_joint_batched_tensor`.
 
         Shapes:
           - ``new_norm_batch_SL``: ``(S, L, D_global)`` — S candidates × L points each.
@@ -800,40 +784,18 @@ class PredictionSystem(BaseOrchestrationSystem):
         floating-point reduction noise.
         """
         S = int(new_norm_batch_SL.shape[0])
-        if S == 0 or new_norm_batch_SL.size == 0:
+        if S == 0 or new_norm_batch_SL.size == 0 or not self._model_kdes:
             return np.zeros(S, dtype=np.float64)
-        L = int(new_norm_batch_SL.shape[1])
-        if not self._model_kdes:
-            return np.zeros(S, dtype=np.float64)
-
-        weights_SL = (
-            np.ones((S, L), dtype=np.float64)
-            if new_weights_SL is None
-            else np.asarray(new_weights_SL, dtype=float)
+        weights_t = (
+            None if new_weights_SL is None
+            else torch.from_numpy(np.asarray(new_weights_SL, dtype=float)).double()
         )
-
-        # Flatten (S, L, D) → (S*L, D) for the batched encoder, then reshape to
-        # (S, L, n_active) for the joint estimator API.
-        flat_batch = new_norm_batch_SL.reshape(S * L, -1)
-
-        out = np.zeros(S, dtype=np.float64)
-        total_w = 0.0
-        for kde in self._model_kdes.values():
-            new_centers_z_active_flat = self._encode_batch_from_norm_for_model(
-                kde.model, flat_batch, kde.active_mask,
-            )  # (S*L, n_active)
-            new_centers_z_active = new_centers_z_active_flat.reshape(S, L, -1)
-
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
-            E_old = self._estimator.integrated_evidence(index_old)
-
-            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint(
-                index_old, new_centers_z_active, weights_SL,
+        with torch.no_grad():
+            out_t = self.delta_integrated_evidence_joint_batched_tensor(
+                torch.from_numpy(np.ascontiguousarray(new_norm_batch_SL)).double(),
+                weights_t,
             )
-            out += kde.weight * (E_new_per_s - E_old)
-            total_w += kde.weight
-
-        return out / total_w if total_w > 0 else out
+        return out_t.detach().cpu().numpy().astype(np.float64)
 
     def _encode_batch_from_norm_for_model(
         self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
