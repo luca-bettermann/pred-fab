@@ -339,55 +339,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         X_SD: np.ndarray,
         perf_range: tuple[float, float] | None,
     ) -> np.ndarray:
-        """Weighted performance for S normalised parameter vectors (one per row).
-
-        Calls ``perf_fn_batched`` once if available — the batched perf path runs
-        S autoregressive trajectories in parallel inside ``predict_for_calibration_batched``,
-        amortising forward_pass overhead across the candidate batch dim.
-        Falls back to a Python loop over ``_per_candidate_perf`` if no batched
-        perf_fn was registered.
-        """
+        """No-grad numpy shim around :meth:`_per_candidate_perf_tensor`."""
         S = X_SD.shape[0]
         if S == 0:
             return np.empty((0,), dtype=np.float64)
-
-        dm = self._active_datamodule
-        if dm is None:
-            return np.zeros(S, dtype=np.float64)
-
-        if self.perf_fn_batched is None:
-            return np.array(
-                [self._per_candidate_perf(X_SD[i], perf_range) for i in range(S)],
-                dtype=np.float64,
+        with torch.no_grad():
+            out_t = self._per_candidate_perf_tensor(
+                torch.from_numpy(np.ascontiguousarray(X_SD)).double(), perf_range,
             )
-
-        # Decode S parameter dicts. Decode failures → 0 perf for that candidate.
-        with profiler.section("calibration.array_to_params [decode S]"):
-            params_list: list[dict[str, Any] | None] = []
-            for i in range(S):
-                try:
-                    params_list.append(dm.array_to_params(X_SD[i].reshape(-1)))
-                except (ValueError, KeyError):
-                    params_list.append(None)
-
-        valid_idx = [i for i, p in enumerate(params_list) if p is not None]
-        if not valid_idx:
-            return np.zeros(S, dtype=np.float64)
-
-        try:
-            with profiler.section("calibration.perf_fn_batched [predict + eval]"):
-                perf_dicts = self.perf_fn_batched([params_list[i] for i in valid_idx])  # type: ignore[arg-type]
-        except Exception:
-            return np.array(
-                [self._per_candidate_perf(X_SD[i], perf_range) for i in range(S)],
-                dtype=np.float64,
-            )
-
-        out = np.zeros(S, dtype=np.float64)
-        with profiler.section("calibration.normalize_perf_dict [aggregate S]"):
-            for k, i in enumerate(valid_idx):
-                out[i] = self._normalize_perf_dict(perf_dicts[k], perf_range)
-        return out
+        return out_t.detach().cpu().numpy().astype(np.float64)
 
     def _normalize_perf_dict(
         self,
@@ -477,9 +437,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if dm is None:
             return torch.zeros(S, dtype=X_SD.dtype)
         if self.perf_fn_tensor is None:
-            # Detach + numpy fallback (no gradient).
+            # Scalar fallback when no tensor closure is registered (test path).
             X_np = X_SD.detach().cpu().numpy()
-            out_np = self._per_candidate_perf_batched(X_np, perf_range)
+            out_np = np.array(
+                [self._per_candidate_perf(X_np[i], perf_range) for i in range(S)],
+                dtype=np.float64,
+            )
             return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
 
         # Build per-candidate params dicts. Continuous values stay as 0-D
@@ -507,8 +470,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 [params_list[i] for i in valid_idx]  # type: ignore[index]
             )
         except Exception:
+            # Scalar fallback if the tensor closure raises.
             X_np = X_SD.detach().cpu().numpy()
-            out_np = self._per_candidate_perf_batched(X_np, perf_range)
+            out_np = np.array(
+                [self._per_candidate_perf(X_np[i], perf_range) for i in range(S)],
+                dtype=np.float64,
+            )
             return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
 
         # System-perf aggregation: weighted sum across perf codes, normalised

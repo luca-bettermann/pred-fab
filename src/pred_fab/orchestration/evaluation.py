@@ -87,48 +87,6 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
         return performance_dict
 
-    def _evaluate_feature_dict_batched(
-        self,
-        features_dicts_S: list[dict[str, np.ndarray]],
-        parameters_list: list[Parameters],
-    ) -> list[dict[str, float | None]]:
-        """Batched eval over S candidates: per eval_model, dispatch one
-        ``compute_performance_batched`` call processing all S candidates in
-        parallel. Returns one ``{perf_code: value}`` dict per candidate.
-
-        Models with ``TARGETS_CONSTANT=True`` benefit from vectorised numpy
-        arithmetic across all ``(S, n_rows)`` cells; others fall back to a
-        per-candidate scalar loop inside ``compute_performance_batched``.
-
-        Used by the calibration hot path (``perf_fn_batched`` in PfabAgent).
-        ``incomplete_features`` / ``skip_for_code`` filtering doesn't apply
-        here — calibration always evaluates from in-memory predictions.
-        """
-        S = len(features_dicts_S)
-        result: list[dict[str, float | None]] = [{} for _ in range(S)]
-        if S == 0:
-            return result
-
-        with profiler.section("eval._evaluate_feature_dict_batched"):
-            for eval_model in self.models:
-                feat_code = eval_model.input_feature
-                feature_arrays: list[np.ndarray] = []
-                valid_indices: list[int] = []
-                for s, feat_dict in enumerate(features_dicts_S):
-                    if feat_code in feat_dict:
-                        feature_arrays.append(feat_dict[feat_code])
-                        valid_indices.append(s)
-                if not feature_arrays:
-                    continue
-
-                valid_params = [parameters_list[s] for s in valid_indices]
-                with profiler.section(f"eval.compute_performance_batched [{eval_model.output_performance}]"):
-                    avgs = eval_model.compute_performance_batched(feature_arrays, valid_params)
-                for k, s in enumerate(valid_indices):
-                    result[s][eval_model.output_performance] = avgs[k]
-
-        return result
-
     def _evaluate_feature_dict_tensor(
         self,
         features_dicts_S: list[dict[str, torch.Tensor]],

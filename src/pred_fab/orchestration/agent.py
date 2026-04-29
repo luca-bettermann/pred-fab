@@ -176,29 +176,28 @@ class PfabAgent:
                 return {}
 
         def _perf_fn_batched(params_dicts: list[dict[str, Any]]) -> list[dict[str, float | None]]:
-            """Batched perf evaluation: one autoreg pass + one batched eval call.
+            """No-grad numpy shim around :func:`_perf_fn_tensor`.
 
-            The eval side dispatches each registered ``IEvaluationModel`` once
-            with all S candidates' feature arrays. Models with
-            ``TARGETS_CONSTANT=True`` vectorise the per-row arithmetic across
-            ``(S, n_rows)`` in one numpy op; others fall back to a per-
-            candidate loop inside ``compute_performance_batched``.
+            Returns a per-candidate ``list[dict[perf_code, float|None]]`` to
+            keep the caller-facing numpy contract; gradient-traversable use
+            cases call ``_perf_fn_tensor`` directly.
             """
             if not params_dicts:
                 return []
             try:
-                merged_list = []
-                for pd_ in params_dicts:
-                    m = dict(pd_)
-                    if _ctx:
-                        m.update(_ctx)
-                    merged_list.append(m)
-                results_list = _pred.predict_for_calibration_batched(merged_list)
-                feat_dicts = [feat_arrs for feat_arrs, _ in results_list]
-                params_blocks = [pb for _, pb in results_list]
-                return _eval._evaluate_feature_dict_batched(feat_dicts, params_blocks)
+                with torch.no_grad():
+                    perf_dict_S = _perf_fn_tensor(params_dicts)
             except Exception:
                 return [{} for _ in params_dicts]
+
+            S = len(params_dicts)
+            result: list[dict[str, float | None]] = [{} for _ in range(S)]
+            for code, t in perf_dict_S.items():
+                t_cpu = t.detach().cpu()
+                for s in range(S):
+                    v = float(t_cpu[s].item())
+                    result[s][code] = None if v != v else v  # NaN → None
+            return result
 
         def _perf_fn_tensor(
             params_dicts: list[dict[str, Any]],
