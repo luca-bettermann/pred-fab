@@ -437,6 +437,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         return -self._acquisition(x_flat.reshape(1, -1), kappa, perf_range)
 
+    @staticmethod
+    def _kappa_blend(scores, perfs, evidences, kappa: float):
+        """Negated κ-weighted blend: −[(1−κ)·perfs + κ·evidences].
+
+        Backend-agnostic — both arms work for numpy ndarrays and torch tensors
+        via operator overloading. ``perfs`` / ``evidences`` may be ``None`` when
+        their respective branch is inactive (κ at boundary, or evidence_fn
+        unavailable). Returns ``-scores`` so callers can directly hand it to
+        a minimiser.
+        """
+        if perfs is not None and kappa < 1.0:
+            scores = scores + (1.0 - kappa) * perfs
+        if evidences is not None and kappa > 0.0:
+            scores = scores + kappa * evidences
+        return -scores
+
     def _acquisition_objective_vectorized(
         self,
         X_DS: np.ndarray,
@@ -454,26 +470,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
             X_SD = np.ascontiguousarray(X_DS.T)  # (S, D)
             S = X_SD.shape[0]
 
-            scores = np.zeros(S, dtype=np.float64)
-
+            perfs: np.ndarray | None = None
             if kappa < 1.0:
                 perfs = self._per_candidate_perf_batched(X_SD, perf_range)
-                scores += (1.0 - kappa) * perfs
 
+            evidences: np.ndarray | None = None
             if kappa > 0.0:
                 # Evidence per candidate (each treated as single added kernel).
                 # Prefer the batched API: caches old-state work + batched encoder
                 # forward across S. Falls back to S × scalar API if unavailable.
                 if self.delta_integrated_evidence_batched_fn is not None:
                     with profiler.section("acq.delta_integrated_evidence_batched [KDE batch S]"):
-                        evidences_S = self.delta_integrated_evidence_batched_fn(X_SD)
-                    scores += kappa * np.asarray(evidences_S, dtype=np.float64)
+                        evidences = np.asarray(
+                            self.delta_integrated_evidence_batched_fn(X_SD), dtype=np.float64,
+                        )
                 elif self.delta_integrated_evidence_fn is not None:
                     with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
-                        for i in range(S):
-                            scores[i] += kappa * float(self.delta_integrated_evidence_fn(X_SD[i:i+1]))
+                        evidences = np.array(
+                            [float(self.delta_integrated_evidence_fn(X_SD[i:i+1])) for i in range(S)],
+                            dtype=np.float64,
+                        )
 
-            return -scores
+            return self._kappa_blend(np.zeros(S, dtype=np.float64), perfs, evidences, kappa)
 
     def _per_candidate_perf_tensor(
         self,
@@ -603,22 +621,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         with profiler.section("acq._acquisition_objective_tensor"):
             S = int(X_SD.shape[0])
-            scores = torch.zeros(S, dtype=X_SD.dtype)
 
+            perfs: torch.Tensor | None = None
             if kappa < 1.0:
                 perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
-                scores = scores + (1.0 - kappa) * perfs
 
+            evidences: torch.Tensor | None = None
             if kappa > 0.0:
                 if self.delta_integrated_evidence_batched_tensor_fn is not None:
-                    de = self.delta_integrated_evidence_batched_tensor_fn(X_SD)
-                    scores = scores + kappa * de.to(dtype=X_SD.dtype)
+                    evidences = self.delta_integrated_evidence_batched_tensor_fn(X_SD).to(dtype=X_SD.dtype)
                 elif self.delta_integrated_evidence_batched_fn is not None:
                     # Fallback: numpy. Gradient lost.
                     de_np = self.delta_integrated_evidence_batched_fn(X_SD.detach().cpu().numpy())
-                    scores = scores + kappa * torch.from_numpy(de_np).to(dtype=X_SD.dtype)
+                    evidences = torch.from_numpy(de_np).to(dtype=X_SD.dtype)
 
-            return -scores
+            return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -1799,22 +1816,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
         with profiler.section("acq._acquisition_joint_batched_objective [per gen]"):
             S, N, L, D = full_S_NL.shape
             NL = N * L
-            scores = np.zeros(S, dtype=np.float64)
 
+            perfs_S: np.ndarray | None = None
             if kappa < 1.0:
                 flat_rows = full_S_NL.reshape(S * NL, D)
                 with profiler.section("acq.perf_batched [N×L per S]"):
                     perfs_flat = self._per_candidate_perf_batched(flat_rows, perf_range)
                 perfs_S = perfs_flat.reshape(S, NL).mean(axis=-1)
-                scores += (1.0 - kappa) * perfs_S
 
+            evidence_S: np.ndarray | None = None
             if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_fn is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
                 with profiler.section("acq.delta_evidence_joint [KDE batch S, joint NL]"):
-                    evidence_S = self.delta_integrated_evidence_joint_batched_fn(flat_per_candidate)
-                scores += kappa * np.asarray(evidence_S, dtype=np.float64)
+                    evidence_S = np.asarray(
+                        self.delta_integrated_evidence_joint_batched_fn(flat_per_candidate),
+                        dtype=np.float64,
+                    )
 
-            return -scores
+            return self._kappa_blend(np.zeros(S, dtype=np.float64), perfs_S, evidence_S, kappa)
 
     def _acquisition_joint_batched_tensor(
         self,
@@ -1833,20 +1852,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
             S, N, L, D = full_S_NL.shape
             NL = N * L
             dtype = full_S_NL.dtype
-            scores = torch.zeros(S, dtype=dtype)
 
+            perfs_S: torch.Tensor | None = None
             if kappa < 1.0:
                 flat_rows = full_S_NL.reshape(S * NL, D)
                 perfs_flat = self._per_candidate_perf_tensor(flat_rows, perf_range)
-                perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1)
-                scores = scores + (1.0 - kappa) * perfs_S.to(dtype=dtype)
+                perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1).to(dtype=dtype)
 
+            evidence_S: torch.Tensor | None = None
             if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_tensor_fn is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                evidence_S = self.delta_integrated_evidence_joint_batched_tensor_fn(flat_per_candidate)
-                scores = scores + kappa * evidence_S.to(dtype=dtype)
+                evidence_S = self.delta_integrated_evidence_joint_batched_tensor_fn(flat_per_candidate).to(dtype=dtype)
 
-            return -scores
+            return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
 
     def _run_phase(
         self,
