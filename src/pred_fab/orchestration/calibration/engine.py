@@ -110,14 +110,10 @@ class OptimizationEngine:
 
     def run(
         self,
-        per_step_fn: Callable[[np.ndarray], float],
+        objective: Callable[[np.ndarray], float],
         N: int,
         D_static: int,
-        D_sched: int,
-        L: int,
         static_bounds: list[tuple[float, float]],
-        sched_bounds: list[tuple[float, float]],
-        sched_deltas: np.ndarray,
         *,
         init_pop: np.ndarray | None = None,
         integrality_static: list[bool] | None = None,
@@ -125,17 +121,16 @@ class OptimizationEngine:
         n_restarts: int = 0,
         label: str = "Optimizing",
         show_progress: bool = False,
-    ) -> tuple[_OptResult, np.ndarray, np.ndarray]:
+    ) -> tuple[_OptResult, np.ndarray]:
         """DE optimization engine for the static-acquisition path.
 
-        Vector layout per unit: [static, sched_step0, offset_1, ..., offset_{L-1}]
-        Total vars: N x (D_static + D_sched + (L-1) x D_sched).
-        Gradient backend has its own ``run_acquisition_gradient`` entry point —
-        this one is DE-only.
+        Vector layout per unit: ``[static]`` (no schedule offsets — the
+        gradient backend owns the schedule path via ``run_acquisition_gradient``
+        plus ``_optimise_schedule_for_experiment`` with absolute-step encoding).
 
-        Returns (opt_result, static_out[N, D_static], sched_out[N, L, D_sched]).
+        Returns ``(opt_result, static_out[N, D_static])``.
         """
-        D_unit = D_static + D_sched + max(L - 1, 0) * D_sched
+        D_unit = D_static
         n_vars = N * D_unit
 
         # --- 1. Build bounds ---
@@ -149,37 +144,10 @@ class OptimizationEngine:
                 all_bounds.append(static_bounds[d])
                 if integrality is not None:
                     integrality.append(integrality_static[d])  # type: ignore[index]
-            for d in range(D_sched):
-                all_bounds.append(sched_bounds[d])
-                if integrality is not None:
-                    integrality.append(False)
-            for _k in range(1, L):
-                for d in range(D_sched):
-                    dn = float(sched_deltas[d])
-                    all_bounds.append((-dn, dn))
-                    if integrality is not None:
-                        integrality.append(False)
 
         # --- 2. Build objective wrapper ---
         def _objective(x_flat: np.ndarray) -> float:
-            units = x_flat.reshape(N, D_unit)
-            step_sum = 0.0
-
-            for k in range(L):
-                pts = np.zeros((N, D_static + D_sched))
-                for u in range(N):
-                    pts[u, :D_static] = units[u, :D_static]
-                    if D_sched > 0:
-                        step0 = units[u, D_static:D_static + D_sched]
-                        abs_val = step0.copy()
-                        for kk in range(1, k + 1):
-                            off_start = D_static + D_sched + (kk - 1) * D_sched
-                            abs_val = abs_val + units[u, off_start:off_start + D_sched]
-                        pts[u, D_static:] = abs_val
-
-                step_sum += per_step_fn(pts)
-
-            return step_sum / L
+            return objective(x_flat.reshape(N, D_unit))
 
         # --- 3. Run DE ---
         opt = self._run_de(
@@ -194,21 +162,11 @@ class OptimizationEngine:
 
         # --- 4. Decode result ---
         if opt.best_x is not None:
-            units = opt.best_x.reshape(N, D_unit)
+            static_out = opt.best_x.reshape(N, D_unit)
         else:
-            units = np.full((N, D_unit), 0.5)
+            static_out = np.full((N, D_unit), 0.5)
 
-        static_out = units[:, :D_static]
-        sched_out = np.zeros((N, L, D_sched))
-        if D_sched > 0:
-            for u in range(N):
-                step0 = units[u, D_static:D_static + D_sched]
-                sched_out[u, 0] = step0
-                for k in range(1, L):
-                    off_start = D_static + D_sched + (k - 1) * D_sched
-                    sched_out[u, k] = sched_out[u, k - 1] + units[u, off_start:off_start + D_sched]
-
-        return opt, static_out, sched_out
+        return opt, static_out
 
     def run_acquisition_gradient(
         self,

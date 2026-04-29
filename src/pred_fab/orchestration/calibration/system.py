@@ -1194,8 +1194,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         space = SolutionSpace(
             n_experiments=n,
             static_params=all_static_tuples,
-            sched_params=[],
-            per_exp_L=[1] * n,
             trust_regions={},
             int_set=all_int_set,
             int_ranges_map=all_int_ranges,
@@ -2482,9 +2480,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     """Evaluate acquisition/inference at a single point."""
                     return objective(pts[0])
 
-                opt, static_out, _sched_out = self.engine.run(
-                    acq_single, N=1, D_static=n_input, D_sched=0, L=1,
-                    static_bounds=bounds.tolist(), sched_bounds=[], sched_deltas=np.array([]),
+                opt, static_out = self.engine.run(
+                    acq_single, N=1, D_static=n_input,
+                    static_bounds=bounds.tolist(),
                     x0=datamodule.params_to_array(working_params) if working_params else None,
                     n_restarts=n_rounds,
                     label="Optimizing", show_progress=console,
