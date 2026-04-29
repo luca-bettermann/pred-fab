@@ -37,21 +37,22 @@
 |---|---|---|---|
 | 18a | Drop `Optimizer.LBFGSB` enum + `_run_lbfgsb` + `online_optimizer` + `lbfgsb_*` config knobs (the LBFGSB path was made redundant by `run_acquisition_gradient` using `torch.optim.LBFGS` internally). 4 LBFGSB tests removed, 2 gradient-config tests added. | −208 / +55 | shipped |
 
-**Phase 3 commit 13 shipped:**
+**Phase 3 commits 13, 14, 15 shipped:**
 
 | Commit | What | LOC | Status |
 |---|---|---|---|
 | 13 | `nn.Module` normalisers replace stat dicts. Adds `pred_fab/core/normalisers.py` with `StandardScalerModule`, `MinMaxScalerModule`, `RobustScalerModule`, `IdentityNormaliser`. `DataModule._parameter_stats` / `_feature_stats` hold module instances now; existing dict-style access (`stats[col]["mean"]`) preserved via `NormaliserModule.__getitem__`. `_apply_normalization` / `_reverse_normalization` collapse to `module(data)` / `module.reverse(data)` — ~80 LOC method-dispatch deleted from DataModule. Stats serialise via `state_dict` / `torch.save`; `get_normalization_state` still emits legacy dict format for on-disk bundle compat. | +343 / −117 | shipped |
+| 14 | One-hot → cat-index. DataModule emits a single int-index column per categorical (commit 14 DataModule side); `TorchMLPModel` learns a dense `nn.Embedding(C, d)` per cat with `d` via FastAI heuristic (commit 14 model side). `IPredictionModel.set_categorical_context(col_to_cardinality)` interface; `PredictionSystem._compute_model_cat_cardinalities` translates DM col_idx → model col_idx. `BoundsManager` uses `[0, n_cats-1]` integer bounds for cats. Deleted `_decode_one_hot`, `get_onehot_column_map`, `_col_extraction`. | +298 / −224 | shipped |
+| 15 | Per-epoch SS refresh inside `model.train` (Phase C absorption — partial). K-refit loop in `PredictionSystem.train` replaced by single `train()` call per model with optional `epoch_callback`. `TorchMLPModel.train` invokes the callback at `SS_N_REFRESHES` checkpoints; callback re-fetches batches with current SS state. `_ss_p_for_round` → `_ss_p_for_progress` (continuous schedule). Caveat: DataModule SS state machinery survives until commit 16 lands cell-meta in batches. | +131 / −75 | shipped |
 
-**Phase 2-3-4-5 still planned, not yet shipped — design notes below for the architectural pieces:**
+**Phase 2-3-4-5 remaining — design notes below for the architectural pieces:**
 
 | Phase | Commits | Net LOC | Gist | Risk |
 |---|---|---|---|---|
-| 3 | 14 | −80 net | One-hot → categorical-index tensors + `nn.Embedding` opt-in | medium |
-| 3 | 15 | −200 net | Phase C SS absorption (per-minibatch SS in `train()`); deletes K-refit + DM SS state machinery; rewrites 14 SS tests | high |
-| 3 | 16 | −80 net | Tensor-native `prepare_input` + `export_to_tensor_dict`; drops pandas roundtrip from autoreg | medium |
+| 3 | 16 | −80 net | Tensor-native `prepare_input` + `export_to_tensor_dict` (per-column tensors + `cell_meta`); drops pandas roundtrip from autoreg. Unblocks the Phase C deletion (DM SS state can move to model-side once cell_meta is in batches). | high |
+| 3 | 15b | ~−210 net | Delete legacy DM SS state (`_ss_predictions_by_exp`, `_ss_p_student`, `_ss_rng`, `set_scheduled_sampling_state`, `_perturb_recursive_features`); move substitution into model.train using cell_meta from commit 16. | high (depends on 16) |
 | 2 | 12 | −80 net | Schedule path gradient migration; deletes offset encoding, soft bound penalty, smoothing factor | high |
-| 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration`; drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15) | low |
+| 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration`; drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15b) | low |
 | 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification | medium |
 | 5 | 20 | +30 net | `agent.to('cuda')` + `torch.compile` over full acquisition graph | medium |
 | 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it | low |
