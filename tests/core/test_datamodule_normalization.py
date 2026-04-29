@@ -157,12 +157,16 @@ def test_compute_normalization_stats_robust(tmp_path):
 
 
 def test_compute_normalization_stats_none_returns_method_only(tmp_path):
+    """Strategy D commit 13: returns IdentityNormaliser instance instead of stats dict.
+    Dict-like __getitem__ still resolves ``stats["method"]`` for backwards compat.
+    """
     dataset = build_dataset_with_single_experiment(tmp_path)
     dm = DataModule(dataset)
 
     data = np.array([1.0, 2.0])
     stats = dm._compute_normalization_stats(data, NormMethod.NONE)
-    assert stats == {'method': NormMethod.NONE}
+    assert stats["method"] == NormMethod.NONE
+    assert "method" in stats
 
 
 # ===== _apply_normalization() =====
@@ -203,11 +207,12 @@ def test_apply_normalization_robust_centers_median_near_zero(tmp_path):
 
 
 def test_apply_normalization_none_returns_unchanged(tmp_path):
+    """Strategy D commit 13: NormMethod.NONE produces an IdentityNormaliser."""
     dataset = build_dataset_with_single_experiment(tmp_path)
     dm = DataModule(dataset)
 
     data = np.array([1.0, 2.0, 3.0])
-    stats = {'method': NormMethod.NONE}
+    stats = dm._compute_normalization_stats(data, NormMethod.NONE)
     result = dm._apply_normalization(data, stats)
 
     np.testing.assert_array_equal(result, data)

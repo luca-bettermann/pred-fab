@@ -9,6 +9,11 @@ from sklearn.model_selection import train_test_split
 
 from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
+from .normalisers import (
+    NormaliserModule,
+    make_normaliser,
+    normaliser_from_dict,
+)
 from ..utils import NormMethod, SplitType
 
 
@@ -33,8 +38,11 @@ class DataModule:
         self._parameter_overrides: dict[str, NormMethod] = {}
         
         # Fitted normalization parameters
-        self._feature_stats: dict[str, dict[str, Any]] = {}
-        self._parameter_stats: dict[str, dict[str, Any]] = {}
+        # Strategy D commit 13: stats dicts replaced by NormaliserModule
+        # instances. Dict-like __getitem__ on the modules preserves the old
+        # access pattern (e.g. ``stats[col]["mean"]`` still works).
+        self._feature_stats: dict[str, NormaliserModule] = {}
+        self._parameter_stats: dict[str, NormaliserModule] = {}
         self._is_fitted = False
         
         # Feature system metadata (no data storage)
@@ -256,14 +264,14 @@ class DataModule:
         for i, col in enumerate(self.input_columns):
             method = self._col_norm_methods.get(col, NormMethod.NONE)
             if method != NormMethod.NONE:
-                self._parameter_stats[col] = self._compute_normalization_stats(X_arr[:, i], method)
+                self._parameter_stats[col] = make_normaliser(method, X_arr[:, i])
 
         # Fit y
         self._feature_stats = {}
         for i, col in enumerate(self.output_columns):
             method = self._get_feature_normalize_method(col)
             if method != NormMethod.NONE:
-                self._feature_stats[col] = self._compute_normalization_stats(y_arr[:, i], method)
+                self._feature_stats[col] = make_normaliser(method, y_arr[:, i])
         
         self._is_fitted = True
 
@@ -475,25 +483,55 @@ class DataModule:
             return data_obj.normalize_strategy
     
     def get_normalization_state(self) -> dict[str, Any]:
-        """Export normalization state for inference bundle."""
+        """Export normalisation state for inference bundle.
+
+        Strategy D commit 13: stat values come from the NormaliserModule
+        instances (still serialised as plain dicts for backwards compat
+        with prior on-disk inference bundles).
+        """
         if not self._is_fitted:
             raise RuntimeError("DataModule has not been fitted yet.")
+
+        def _module_to_dict(m: NormaliserModule) -> dict[str, Any]:
+            d: dict[str, Any] = {"method": m.method}
+            if m.method == NormMethod.STANDARD:
+                d["mean"] = m["mean"]
+                d["std"] = m["std"]
+            elif m.method == NormMethod.MIN_MAX:
+                d["min"] = m["min"]
+                d["max"] = m["max"]
+            elif m.method == NormMethod.ROBUST:
+                d["median"] = m["median"]
+                d["q1"] = m["q1"]
+                d["q3"] = m["q3"]
+            return d
+
         return {
             'method': self._default_normalize,
             'is_fitted': True,
-            'feature_stats': copy.deepcopy(self._feature_stats),
-            'parameter_stats': copy.deepcopy(self._parameter_stats),
+            'feature_stats': {k: _module_to_dict(v) for k, v in self._feature_stats.items()},
+            'parameter_stats': {k: _module_to_dict(v) for k, v in self._parameter_stats.items()},
             'categorical_mappings': copy.deepcopy(self.categorical_mappings),
             'input_columns': copy.deepcopy(self.input_columns),
             'output_columns': copy.deepcopy(self.output_columns)
         }
-    
+
     def set_normalization_state(self, state: dict[str, Any]) -> None:
-        """Restore normalization state from exported bundle."""
+        """Restore normalisation state from exported bundle.
+
+        Accepts either the legacy stat-dict format or the new module-typed
+        format; both rebuild fresh NormaliserModule instances.
+        """
         self._default_normalize = state['method']
         self._is_fitted = state['is_fitted']
-        self._feature_stats = copy.deepcopy(state.get('feature_stats', {}))
-        self._parameter_stats = copy.deepcopy(state.get('parameter_stats', {}))
+
+        def _coerce(item: Any) -> NormaliserModule:
+            if isinstance(item, NormaliserModule):
+                return item
+            return normaliser_from_dict(item)
+
+        self._feature_stats = {k: _coerce(v) for k, v in state.get('feature_stats', {}).items()}
+        self._parameter_stats = {k: _coerce(v) for k, v in state.get('parameter_stats', {}).items()}
         self.categorical_mappings = copy.deepcopy(state.get('categorical_mappings', {}))
         self.input_columns = copy.deepcopy(state.get('input_columns', []))
         self.output_columns = copy.deepcopy(state.get('output_columns', []))
@@ -535,73 +573,22 @@ class DataModule:
 
     # === SHARED NORMALIZATION HELPERS ===
     
-    def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> dict[str, Any]:
-        """Compute normalization statistics for a data array."""
-        if method == NormMethod.NONE:
-            return {'method': NormMethod.NONE}
-        elif method == NormMethod.STANDARD:
-            return {
-                'method': method,
-                'mean': float(np.mean(data)),
-                'std': float(np.std(data))
-            }
-        elif method == NormMethod.MIN_MAX:
-            return {
-                'method': method,
-                'min': float(np.min(data)),
-                'max': float(np.max(data))
-            }
-        elif method == NormMethod.ROBUST:
-            return {
-                'method': method,
-                'median': float(np.median(data)),
-                'q1': float(np.percentile(data, 25)),
-                'q3': float(np.percentile(data, 75))
-            }
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
-    
-    def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Apply normalization to data array using pre-computed stats."""
-        method = stats['method']
+    def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> NormaliserModule:
+        """Fit a NormaliserModule to ``data`` (Strategy D commit 13).
 
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                # Degenerate range: keep normalized value at 0 to avoid exploding magnitudes.
-                return np.zeros_like(data, dtype=np.float64)
-            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
-
-    def _apply_normalization_tensor(self, data: torch.Tensor, stats: dict[str, Any]) -> torch.Tensor:
-        """Tensor-native equivalent of _apply_normalization for the autoreg hot path.
-
-        Stats values stay as Python floats — they broadcast cleanly against torch
-        tensors without an explicit pre-tensorisation step.
+        Replaces the legacy dict-of-stats output. The returned module exposes
+        ``module["mean"]`` / ``module["min"]`` etc. via ``__getitem__`` so
+        existing dict-style access patterns still work.
         """
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return torch.zeros_like(data)
-            return (data - stats['min']) / (denom + 1e-8)
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            raise ValueError(f"Unknown normalization method: {method}. Expected one of {[m for m in NormMethod]}.")
+        return make_normaliser(method, data)
+
+    def _apply_normalization(self, data: np.ndarray, stats: NormaliserModule) -> np.ndarray:
+        """Apply normalisation by delegating to the NormaliserModule (commit 13)."""
+        return stats(data)  # type: ignore[return-value]
+
+    def _apply_normalization_tensor(self, data: torch.Tensor, stats: NormaliserModule) -> torch.Tensor:
+        """Tensor-native equivalent — same module dispatch."""
+        return stats(data)
 
     def normalize_parameter_bounds(self, col: str, low: float, high: float) -> tuple[float, float]:
         """Normalize raw parameter bounds if normalization stats exist for the column."""
@@ -612,49 +599,19 @@ class DataModule:
         n_high = self._apply_normalization(np.array([high]), stats)[0]
         return (min(n_low, n_high), max(n_low, n_high))
     
-    def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Reverse normalization for data array."""
-        method = stats['method']
+    def _reverse_normalization(self, data_norm: np.ndarray, stats: NormaliserModule) -> np.ndarray:
+        """Reverse normalisation by delegating to the NormaliserModule (commit 13)."""
+        return stats.reverse(data_norm)  # type: ignore[return-value]
 
-        if method == NormMethod.NONE:
-            return data_norm
-        elif method == NormMethod.STANDARD:
-            return data_norm * stats['std'] + stats['mean']
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                # Degenerate range: value is fixed at min/max in original space.
-                return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
-            return data_norm * (stats['max'] - stats['min']) + stats['min']
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return data_norm * iqr + stats['median']
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
+    def _reverse_normalization_tensor(self, data_norm: torch.Tensor, stats: NormaliserModule) -> torch.Tensor:
+        """Tensor-native equivalent — same module dispatch."""
+        return stats.reverse(data_norm)
 
-    def _reverse_normalization_tensor(self, data_norm: torch.Tensor, stats: dict[str, Any]) -> torch.Tensor:
-        """Tensor-native equivalent of _reverse_normalization."""
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data_norm
-        elif method == NormMethod.STANDARD:
-            return data_norm * stats['std'] + stats['mean']
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return torch.full_like(data_norm, fill_value=float(stats['min']))
-            return data_norm * denom + stats['min']
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return data_norm * iqr + stats['median']
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
-
-    def _normalize_batch(self, data: np.ndarray, columns: list[str], stats: dict[str, dict[str, Any]]) -> None:
+    def _normalize_batch(self, data: np.ndarray, columns: list[str], stats: dict[str, NormaliserModule]) -> None:
         """Apply normalization to a batch of data in-place."""
         if not self._is_fitted:
             return
-            
+
         for i, col in enumerate(columns):
             if col in stats:
                 data[:, i] = self._apply_normalization(data[:, i], stats[col])
