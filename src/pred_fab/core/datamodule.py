@@ -241,6 +241,20 @@ class DataModule:
                 X_df[code] = y_df[code].values
         return X_df
 
+    def _inject_context_features_tensor(
+        self,
+        X_dict: dict[str, torch.Tensor],
+        y_dict: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Tensor-native equivalent of ``_inject_context_features`` (commit 16)."""
+        if not self._context_feature_codes:
+            return X_dict
+        out = dict(X_dict)
+        for code in self._context_feature_codes:
+            if code in y_dict:
+                out[code] = y_dict[code]
+        return out
+
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
         if not self._initialized:
@@ -253,32 +267,44 @@ class DataModule:
         if not codes:
             return
 
-        X_df, y_df = self.dataset.export_to_dataframe(codes)
-        if X_df.empty:
+        # Strategy D commit 16: tensor-native fit path. No pandas roundtrip.
+        exported = self.dataset.export_to_tensor_dict(
+            codes,
+            x_columns=self.input_columns,
+            y_columns=self.output_columns,
+            categorical_mappings=self.categorical_mappings,
+        )
+        if exported.is_empty():
             return
 
-        X_df = self._inject_context_features(X_df, y_df)
-
-        # Process X (One-hot)
-        X_arr = self._encode_inputs(X_df)
-        # Restrict y to output_columns only so that index-based operations below stay aligned.
-        y_arr = y_df.reindex(columns=self.output_columns).values.astype(np.float32)
+        X_dict = self._inject_context_features_tensor(exported.X, exported.y)
 
         # Fit X — skip categorical columns (cat-index passed through unnormalised; commit 14).
         self._parameter_stats = {}
-        for i, col in enumerate(self.input_columns):
+        for col in self.input_columns:
             method = self._col_norm_methods.get(col, NormMethod.NONE)
             if method == NormMethod.NONE or method == NormMethod.CATEGORICAL:
                 continue
-            self._parameter_stats[col] = make_normaliser(method, X_arr[:, i])
+            if col not in X_dict:
+                continue
+            col_arr = X_dict[col].cpu().numpy()
+            self._parameter_stats[col] = make_normaliser(method, col_arr)
 
-        # Fit y
+        # Fit y — tensor-native: read each output col tensor from exported.y.
+        # Skip cells where the value is NaN (missing measurement) when fitting.
         self._feature_stats = {}
-        for i, col in enumerate(self.output_columns):
+        for col in self.output_columns:
             method = self._get_feature_normalize_method(col)
-            if method != NormMethod.NONE:
-                self._feature_stats[col] = make_normaliser(method, y_arr[:, i])
-        
+            if method == NormMethod.NONE:
+                continue
+            if col not in exported.y:
+                continue
+            col_arr = exported.y[col].cpu().numpy()
+            valid = col_arr[~np.isnan(col_arr)]
+            if valid.size == 0:
+                continue
+            self._feature_stats[col] = make_normaliser(method, valid)
+
         self._is_fitted = True
 
     def fit_normalization(self, split: SplitType = SplitType.TRAIN) -> None:
