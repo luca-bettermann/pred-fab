@@ -43,20 +43,78 @@
 |---|---|---|---|
 | 13 | `nn.Module` normalisers replace stat dicts. Adds `pred_fab/core/normalisers.py` with `StandardScalerModule`, `MinMaxScalerModule`, `RobustScalerModule`, `IdentityNormaliser`. `DataModule._parameter_stats` / `_feature_stats` hold module instances now; existing dict-style access (`stats[col]["mean"]`) preserved via `NormaliserModule.__getitem__`. `_apply_normalization` / `_reverse_normalization` collapse to `module(data)` / `module.reverse(data)` — ~80 LOC method-dispatch deleted from DataModule. Stats serialise via `state_dict` / `torch.save`; `get_normalization_state` still emits legacy dict format for on-disk bundle compat. | +343 / −117 | shipped |
 
-**Phase 2-3-4-5 still planned, not yet shipped:**
+**Phase 2-3-4-5 still planned, not yet shipped — design notes below for the architectural pieces:**
 
 | Phase | Commits | Net LOC | Gist | Risk |
 |---|---|---|---|---|
 | 3 | 14 | −80 net | One-hot → categorical-index tensors + `nn.Embedding` opt-in | medium |
-| 3 | 15 | −330 net | Phase C SS absorption (per-minibatch SS in `train()`); deletes K-refit + DM SS state machinery; rewrites 14 SS tests | high |
+| 3 | 15 | −200 net | Phase C SS absorption (per-minibatch SS in `train()`); deletes K-refit + DM SS state machinery; rewrites 14 SS tests | high |
 | 3 | 16 | −80 net | Tensor-native `prepare_input` + `export_to_tensor_dict`; drops pandas roundtrip from autoreg | medium |
 | 2 | 12 | −80 net | Schedule path gradient migration; deletes offset encoding, soft bound penalty, smoothing factor | high |
-| 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration` (KernelField is the only path); drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15) | low (gated on 12, 15) |
+| 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration`; drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15) | low |
 | 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification | medium |
 | 5 | 20 | +30 net | `agent.to('cuda')` + `torch.compile` over full acquisition graph | medium |
 | 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it | low |
 
-**Net so far: −388 LOC delivered, −860 LOC delete remaining target.**
+**Net so far: −388 LOC delivered. Target after full migration: ~−1100 LOC end-state simpler.**
+
+---
+
+## Design notes — architectural decisions for commits 14, 15, 16
+
+Each of the next three commits has an embedded design choice that affects the prediction-model authoring contract. Documenting them so the morning review has a clear basis for sign-off.
+
+### Commit 14 — One-hot → categorical-index. Open question: where does one-hot expansion happen?
+
+**Today**: `DataModule._set_input_columns` expands a categorical column with C categories into C float columns (`param_3_A`, `param_3_B`, ...). Models receive `(batch, n_input_cols_expanded)` tensors. `n_input_cols` of the model's `nn.Linear` is set to the expanded count.
+
+**Proposed**: `DataModule.input_columns` stays at the parent level (`param_3` once, not C times). The batch column for `param_3` is a categorical *index* (0, 1, ..., C-1) encoded as float. The expanded one-hot disappears from DataModule.
+
+**The decision**: how does the model receive cats? Two clean options:
+
+| Option | What | Pros | Cons |
+|---|---|---|---|
+| **A. Model handles its own one-hot** | Model gets cat-index column. In its `forward()`, it does `F.one_hot(idx, num_classes=C).float()` before the Linear stack. Requires `model.set_categorical_context(col_idx_to_cardinality)` called by `PredictionSystem` during training setup. | True torch-native — model owns the representation choice. Embeddings drop in (`nn.Embedding(C, d)` at the same hook). Models that don't use cats are unaffected. | Each model needs a small ~10-15 LOC scaffold. `IDeterministicModel` (numpy) needs a different path — gets the parent-level dict, no expansion. |
+| **B. DataModule keeps one-hot output** | `DataModule.input_columns` collapses internally for storage but emits expanded one-hot at `prepare_input` / `get_batches`. | Zero model changes — drop-in. | Just internal cleanup; no real architectural win. The "F.one_hot in forward" pattern stays unrealised. Doesn't deliver the `nn.Embedding` opt-in promise. |
+
+**Default if no answer**: Option A. It's the only one that delivers the user's "no fallbacks" intent — the parent column appears once in the batch, models that want one-hot expand it themselves, and `nn.Embedding` is a one-line swap inside `forward`. The ~15 LOC per model is contained to `TorchMLPModel`'s base class (no per-subclass code).
+
+### Commit 15 — Phase C SS absorption. Open question: where does prior-cell prediction come from?
+
+**Today**: `PredictionSystem.train` loops K rounds. Each round: pre-compute predictions for all (exp, cell) via `_autoreg_predict_training_data`, set DataModule SS state, fit_single_round. The pre-computed predictions per cell are looked up in `_perturb_recursive_features` at batch time.
+
+**Proposed**: Per-minibatch substitution inside `TorchMLPModel.train()`. With prob `p_student`, replace a recursive feature column's value with the model's *current* prediction at the prior cell.
+
+**The decision**: when does the prior-cell prediction get computed?
+
+| Option | What | Pros | Cons |
+|---|---|---|---|
+| **A. Per-epoch refresh inside `train()`** | At the start of each epoch, run autoreg once on the training set to get predictions per (exp, cell). Cache. Per-minibatch substitution reads from cache. Same cadence as existing K-refit but inside `train()` instead of `PredictionSystem.train`. | Same correctness as legacy K-refit, just relocated. Roughly ~−200 LOC delete (DM SS state + K-refit loop in PredictionSystem). | Cache is still per-epoch stale, not truly "per minibatch with current network state". Doesn't unlock the autograd-traversable substitution win the plan promises. |
+| **B. True per-minibatch with current state** | At each minibatch, identify rows with non-trivial prior-cell coords, run a forward on those prior cells, substitute. Network state used is exactly the current state. | Autograd-friendly — substitution graph composes with the loss. The "differentiable autoreg" win the plan promised. | More compute per minibatch (~+1 forward per minibatch). Coordination logic is non-trivial: each row's prior cell may not be in this minibatch, so we need a separate forward on prior-cell inputs. |
+| **C. Drop SS, fold into ground-truth-only training** | Eliminate scheduled sampling entirely; rely on the differentiable autoreg in acquisition (already shipped) to handle train/inference distribution gap implicitly. | Biggest deletion (~−330 LOC). Aligns with "no fallbacks" stance — SS was a workaround for non-differentiable autoreg. | Loses the SS exposure-bias correction that's been validated empirically. Regression risk on autoregressive models. |
+
+**Default if no answer**: Option A. It delivers the LOC delete and the architectural cleanup (no DM SS state, single training entry point) without taking on the per-minibatch forward overhead. Option B's autograd benefit only matters if it's actually used by acquisition — but acquisition already uses the differentiable autoreg path independently. Option C is too aggressive without empirical validation.
+
+### Commit 16 — Tensor-native `prepare_input` + `export_to_tensor_dict`. Open question: schema / cell ordering.
+
+**Today**: `Dataset.export_to_dataframe(codes)` → `(X_df, y_df)` pandas DataFrames. `DataModule.prepare_input(X_df)` does pandas → numpy → tensor with one-hot + normalisation.
+
+**Proposed**: `Dataset.export_to_tensor_dict(codes) → dict[col, torch.Tensor]` and `DataModule.prepare_input(params_dict_or_tensor_dict) → torch.Tensor`. Drops pandas from the framework hot path entirely.
+
+**The decision**: cell-ordering and metadata semantics.
+
+The pandas DataFrame embeds row-ordering that's inherited from `dataset.export_to_dataframe`'s implementation — typically (exp_code, cell_idx) lexicographic. Tensor-dict needs to either:
+
+| Option | What | Pros | Cons |
+|---|---|---|---|
+| **A. Tensor-dict output: `{col: (n_rows,) tensor}` + `cell_meta: (n_rows, 2) tensor`** | Each column is a separate tensor; cell coordinates available for SS lookup / loss masking. | Direct tensor — no pandas. Cell metadata explicit. | Slightly verbose API. Need to define `cell_meta` shape semantically. |
+| **B. Stacked `(n_rows, n_cols)` tensor + `column_index: dict[col, int]`** | Single tensor with column index. | Simplest API. Cheaper indexing. | Loss of per-column dtype (categoricals as long, reals as float would need separate columns). |
+
+**Default if no answer**: Option A. Per-column dtype is necessary once cat-index is a long tensor (commit 14). The cell_meta tensor enables Phase C SS substitution by giving (exp_idx, cell_coord) per row — exactly what the substitution callable needs.
+
+---
+
+**These three commits depend on the design choices above.** Doing them without clarity on the choices risks producing a design that doesn't match the user's intent. Recommend morning review of the defaults before executing.
 
 **End-to-end works**: `agent.configure_optimizer(backend=Optimizer.GRADIENT)` followed by `agent.baseline_step(n)` runs the gradient path through the Process phase (continuous params; integer / domain phase still DE). 654 tests pass.
 
