@@ -197,20 +197,26 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     def _autoreg_predict_training_data(
         self,
-    ) -> dict[str, dict[str, np.ndarray]]:
+    ) -> dict[str, dict[str, torch.Tensor]]:
         """Predict full feature tensors for every training experiment using
-        the current state of all (already-trained) models. Used as the source
-        of student predictions for scheduled sampling and cross-model deps.
+        the current state of all (already-trained) models. Used as the
+        source of student predictions for scheduled sampling.
+
+        Strategy D commit 15b: returns torch tensors (was np.ndarray) so
+        ``DataModule.substitute_recursive_features`` can consume directly.
         """
         if self.datamodule is None:
             return {}
-        out: dict[str, dict[str, np.ndarray]] = {}
+        out: dict[str, dict[str, torch.Tensor]] = {}
         train_codes = self.datamodule._split_codes.get(SplitType.TRAIN, [])
         for exp_code in train_codes:
             exp = self.datamodule.dataset.get_experiment(exp_code)
             params = exp.get_effective_parameters_for_row(0)
-            tensors = self._predict_from_params(params=params, batch_size=1000)
-            out[exp_code] = tensors
+            tensors_np = self._predict_from_params(params=params, batch_size=1000)
+            out[exp_code] = {
+                feat: torch.from_numpy(np.asarray(arr, dtype=np.float32))
+                for feat, arr in tensors_np.items()
+            }
         return out
 
     def _fit_single_round(
@@ -301,14 +307,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             kwargs_with_ss = dict(kwargs)
             if has_recursive and self.n_ss_refreshes > 0:
                 kwargs_with_ss["epoch_callback"] = self._build_ss_epoch_callback(model)
-            else:
-                # Ensure clean slate (no leftover SS state from a previous model).
-                self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
 
             train_batches = self.datamodule.get_batches(SplitType.TRAIN)
             val_batches = self.datamodule.get_batches(SplitType.VAL)
             self._fit_single_round(model, train_batches, val_batches, **kwargs_with_ss)
-            self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
             trained_count += 1
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
@@ -319,27 +321,56 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None]:
         """Return the per-epoch SS refresh callable for ``model.train``.
 
-        Strategy D commit 15. Given training progress in ``[0, 1]``, the
+        Strategy D commit 15b. Given training progress in ``[0, 1]``, the
         callable: (1) computes current-network predictions on training
-        experiments, (2) installs them on the DataModule with the current
-        ``p_student`` from the linear schedule, (3) re-fetches train
-        batches with the fresh SS substitution applied, (4) filters them
-        to this model's input columns. Returns ``None`` early when
-        ``p_student == 0`` (teacher-forced — no need to re-fetch).
+        experiments, (2) fetches clean training batches + cell_meta via
+        ``Dataset.export_to_tensor_dict``, (3) calls
+        ``DataModule.substitute_recursive_features`` to apply SS
+        substitution row-wise using cell_meta lookups, (4) filters the
+        result to this model's input columns.
+
+        Returns ``None`` early when ``p_student == 0`` (no substitution
+        needed — model.train will keep its current batches).
+
+        No DM state — substitution is stateless via the substitute method.
         """
         def _refresh(progress: float) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
             if self.datamodule is None:
                 return None
             p = self._ss_p_for_progress(progress)
             if p <= 0.0:
-                self.datamodule.set_scheduled_sampling_state(None, 0.0, None)
                 return None
+
             preds_by_exp = self._autoreg_predict_training_data()
-            self.datamodule.set_scheduled_sampling_state(
-                preds_by_exp, p_student=p, rng=self.rng,
+            dm = self.datamodule
+
+            # Fetch fresh batches + cell_meta from the canonical tensor source.
+            train_codes = dm._split_codes.get(SplitType.TRAIN, [])
+            if not train_codes:
+                return None
+            exported = dm.dataset.export_to_tensor_dict(
+                train_codes,
+                x_columns=dm.input_columns,
+                y_columns=dm.output_columns,
+                categorical_mappings=dm.categorical_mappings,
             )
-            fresh_batches = self.datamodule.get_batches(SplitType.TRAIN)
-            return self._filter_batches_for_model(fresh_batches, model)
+            if exported.is_empty():
+                return None
+            X = dm.prepare_input_from_tensor_dict(exported.X)
+            y = torch.stack(
+                [exported.y.get(c, torch.zeros(exported.n_rows)) for c in dm.output_columns],
+                dim=-1,
+            )
+            cell_meta = exported.cell_meta
+
+            # Stateless substitution at the right boundary (DataModule).
+            torch_rng = torch.Generator()
+            torch_rng.manual_seed(int(self.rng.randint(0, 2**31 - 1)))
+            X_sub = dm.substitute_recursive_features(
+                X, cell_meta, train_codes, preds_by_exp, p_student=p, rng=torch_rng,
+            )
+
+            return self._filter_batches_for_model([(X_sub, y)], model)
         return _refresh
     
     # === EVIDENCE MODEL (integrated objective) ===
