@@ -838,23 +838,17 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _encode_batch_from_norm_for_model(
         self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
     ) -> np.ndarray:
-        """Encode a (S, D_global) batch through one model's penultimate layer in one forward.
+        """No-grad numpy shim around :meth:`_encode_batch_from_norm_for_model_tensor`.
 
-        Returns ``(S, n_active)`` — the active-mask-filtered latent activations,
-        matching the per-row output of ``_encode_from_norm_array_for_model`` but
-        amortising the model.encode() call across the S candidate batch dim.
+        Returns ``(S, n_active)`` — the active-mask-filtered latent activations.
         """
-        if self.datamodule is None:
-            return X_norm_batch[:, active_mask] if X_norm_batch.ndim > 1 else X_norm_batch[active_mask].reshape(1, -1)
-        input_cols = model.input_parameters + model.input_features
-        input_indices = self.datamodule.get_input_indices(input_cols, skip_missing=True)
-        if not input_indices:
-            return X_norm_batch[:, active_mask] if X_norm_batch.ndim > 1 else X_norm_batch[active_mask].reshape(1, -1)
-        X_model = X_norm_batch[:, input_indices].astype(np.float32)
-        if self._bypass_encoder:
-            return X_model[:, active_mask]
-        z_t = model.encode(torch.from_numpy(X_model))
-        return z_t.detach().cpu().numpy()[:, active_mask]
+        if X_norm_batch.ndim == 1:
+            X_norm_batch = X_norm_batch.reshape(1, -1)
+        with torch.no_grad():
+            z_t = self._encode_batch_from_norm_for_model_tensor(
+                model, torch.from_numpy(np.ascontiguousarray(X_norm_batch)).float(), active_mask,
+            )
+        return z_t.detach().cpu().numpy()
 
     def _encode_batch_from_norm_for_model_tensor(
         self, model: IPredictionModel, X_norm_batch: torch.Tensor, active_mask: np.ndarray,
