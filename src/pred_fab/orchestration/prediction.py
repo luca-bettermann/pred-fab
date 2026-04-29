@@ -579,14 +579,14 @@ class PredictionSystem(BaseOrchestrationSystem):
     def configure_exploration(
         self,
         sigma: float | None = None,
-        estimator: EstimatorConfig | None = None,
     ) -> None:
-        """Configure σ and/or the evidence estimator."""
+        """Configure σ (kernel bandwidth for the evidence objective).
+
+        Strategy D commit 18: ``estimator`` knob dropped —
+        ``KernelFieldEstimator`` is the canonical path.
+        """
         if sigma is not None:
             self._sigma = float(sigma)
-        if estimator is not None:
-            self._estimator_config = estimator
-            self._estimator = make_estimator(estimator)
 
         if self._model_kdes:
             resolved = self._resolve_sigma()
@@ -594,7 +594,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                 kde.sigma = resolved
             self.logger.info(
                 f"Evidence model updated: σ={self._sigma}, "
-                f"estimator={self._estimator_config.type}, "
                 f"{len(self._model_kdes)} models."
             )
 

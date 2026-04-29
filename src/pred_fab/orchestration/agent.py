@@ -621,13 +621,17 @@ class PfabAgent:
         self,
         *,
         sigma: float | None = None,
-        estimator: EstimatorConfig | None = None,
     ) -> None:
-        """Configure the integrated-evidence objective (σ and estimator choice)."""
+        """Configure the integrated-evidence objective (σ — kernel bandwidth).
+
+        Strategy D commit 18: ``estimator`` knob dropped —
+        ``KernelFieldEstimator`` is the only path. SobolLocal was a
+        research alternative that's no longer maintained.
+        """
         self._assert_initialized()
-        if sigma is None and estimator is None:
+        if sigma is None:
             return
-        self.pred_system.configure_exploration(sigma=sigma, estimator=estimator)
+        self.pred_system.configure_exploration(sigma=sigma)
 
     def configure_optimizer(
         self,
@@ -666,35 +670,6 @@ class PfabAgent:
             cal.engine.gradient_lr = gradient_lr
         if gradient_method is not None:
             cal.engine.gradient_method = gradient_method
-
-    def configure_scheduled_sampling(
-        self,
-        n_rounds: int = 4,
-        schedule_floor: float = 0.0,
-    ) -> None:
-        """Configure scheduled sampling for models with recursive input features.
-
-        Models declaring a Feature.recursive(...) input are trained across
-        ``n_rounds`` per-epoch refresh checkpoints during training, with
-        the recursive-feature column values annealed from measured prior
-        values (start) to the model's own predictions (end). Closes the
-        train/inference distribution gap for autoregressive prediction.
-        See PFAB - Scheduled Sampling.
-
-        Strategy D commit 15: ``n_rounds`` now controls the number of
-        per-epoch refresh checkpoints inside ``model.train`` (replacing
-        the legacy K-refit cadence). Set to 0 to disable scheduled sampling.
-
-        Args:
-            n_rounds: Number of refresh checkpoints during training. Default 4.
-                Set to 0 to disable scheduled sampling (teacher-forced only).
-            schedule_floor: Minimum student probability at the first refresh
-                (default 0). Use a small positive floor (e.g. 0.1) to skip
-                the pure teacher-forcing baseline.
-        """
-        self._assert_initialized()
-        self.pred_system.n_ss_refreshes = int(n_rounds)
-        self.pred_system.ss_schedule_floor = float(schedule_floor)
 
     def configure_schedule(
         self,
