@@ -49,14 +49,16 @@
 | 18b | Drop `Optimizer.LBFGSB` enum, `online_optimizer`, `lbfgsb_*` knobs (already in earlier commit); drop `configure_scheduled_sampling`; drop `estimator` knob from `configure_exploration` (KernelField is the canonical path). | ~−45 | shipped |
 | 16b | `DataModule.get_batches` returns `(X, y, cell_meta)` 3-tuples; pandas-free internals via `export_to_tensor_dict`. Autoreg loops in `_predict_autoregressive`, `_predict_autoregressive_batched`, `_predict_non_recursive_batched`, `_build_batch_features` migrated to tensor-dict construction. `tune` slicing migrated. `params_to_array` thin-wraps `params_to_tensor`. **`pandas` import dropped from `prediction.py`** entirely. | ~+120 / −80 | shipped |
 | 12 | Schedule path gradient migration. `_acquisition_joint_batched_tensor` mirrors the numpy joint-batched objective. `_phase3_schedule` gains a gradient branch with **absolute-step encoding** (each step k ∈ [0, 1] strict via sigmoid reparam) replacing offset encoding for the gradient route — no cumulative drift, no soft bound penalty. Delta constraint becomes a smooth quadratic `5.0 · Σ max(0, |Δstep| − delta)²` penalty in the tensor objective. Decode-back handles both encodings. DE path stays for `Optimizer.DE`. | ~+101 / −5 | shipped |
+| 20 | GPU + `torch.compile` foundations. ``run_acquisition_gradient`` gains a ``compile_objective`` kwarg that wraps the objective with ``torch.compile(dynamic=True)`` (eager fallback on failure). ``agent.to(device)`` moves prediction model networks, categorical embeddings, and `nn.Module` normalisers to the target device. KDE latent points + RNG state remain CPU-bound for now — full GPU support is a follow-up that touches KDE storage. | +52 | shipped |
 
-**Remaining (Phases 1, 2, 3 fully shipped; Phase 5 mostly):**
+**Remaining work (most of Strategy D shipped):**
 
 | Phase | Commits | Net LOC | Gist | Risk |
 |---|---|---|---|---|
-| 2 | 12b | −110 (conditional) | After commit 12 has been validated on real workloads, retire the DE schedule path entirely: delete `_STATIC_DRIFT_FRAC`, `schedule_smoothing` engine attr, `_schedule_smoothing_factor`, `_schedule_acquisition_objective_vectorized`'s soft bound penalty + smoothing penalty calls, `sched_deltas_norm` offset bookkeeping in `SolutionSpace`. The gradient path becomes the only schedule route. | medium |
-| 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification — both routes converge through `_run_phase` once schedule is gradient-typed | medium |
-| 5 | 20 | +30 net | `agent.to('cuda')` for GPU + `torch.compile` over full acquisition graph. Wrap `objective_tensor` inside `run_acquisition_gradient` with `torch.compile`; move embeddings + normalisers + KDE latent points to device via `agent.to`. | medium |
+| 2 | 12b | −110 (conditional) | Once commit 12's gradient schedule is validated on real workloads, retire the DE schedule path entirely: delete `_STATIC_DRIFT_FRAC`, `schedule_smoothing`, `_schedule_smoothing_factor`, `_schedule_acquisition_objective_vectorized`'s soft bound + smoothing penalties, `sched_deltas_norm` offset bookkeeping in `SolutionSpace`. The gradient path becomes the only schedule route. **Win #2 fully realised** when this lands. | medium |
+| 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification — both routes converge through `_run_phase` after the gradient schedule is the canonical path | medium |
+| 5 | 20b | small | Full GPU support: move KDE latent points + RNG state to device. After 20b: `agent.to('cuda')` works end-to-end for the full acquisition graph (currently model + embeddings + normalisers move; KDE state and a few CPU intermediates remain). | low |
+| | 8 | flip | After commit 12 / 20 validation, flip the default `cal.optimizer` from DE to GRADIENT for the user-facing API. Currently the gradient path is opt-in. | low |
 | 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it | low |
 
 **Net so far: −388 LOC delivered. Target after full migration: ~−1100 LOC end-state simpler.**
