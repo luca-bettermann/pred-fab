@@ -255,6 +255,132 @@ class DataModule:
                 out[code] = y_dict[code]
         return out
 
+    def substitute_recursive_features(
+        self,
+        X: torch.Tensor,
+        cell_meta: torch.Tensor,
+        experiment_codes: list[str],
+        predictions_by_exp: dict[str, dict[str, torch.Tensor]],
+        p_student: float,
+        rng: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Replace recursive-feature column values with predictions at prior cells.
+
+        Strategy D commit 15b — stateless, tensor-typed, no DM SS state. Pure
+        gather/scatter using ``cell_meta`` and the schema's recursive-feature
+        metadata. The caller (typically PredictionSystem) is responsible for
+        producing fresh ``predictions_by_exp`` from the current network state.
+
+        Args:
+            X: ``(n_rows, n_input_cols)`` normalised input batch.
+            cell_meta: ``(n_rows, 2)`` long tensor with ``[exp_idx, cell_idx]``
+                per row (from ``Dataset.export_to_tensor_dict``).
+            experiment_codes: list whose ``[exp_idx]`` indexing matches
+                ``cell_meta[:, 0]``. Used to fetch each experiment's
+                ``dim_sizes`` (for unravel/ravel) and to key into
+                ``predictions_by_exp``.
+            predictions_by_exp: ``{exp_code: {source_feat: predictions_tensor}}``.
+                Each predictions_tensor matches the schema's domain shape
+                for that feature (e.g. ``(n_layers, n_segments)``).
+            p_student: per-row substitution probability. ``0`` → no substitution
+                (return X unchanged). ``1`` → substitute every row's recursive
+                feature columns.
+            rng: optional torch RNG for deterministic per-row Bernoulli draws.
+
+        Returns:
+            New tensor of shape ``(n_rows, n_input_cols)``. Original X
+            unmodified. Boundary cells (prior < 0) substitute with NaN —
+            matches the legacy ``_perturb_recursive_features`` semantics.
+
+        No-op fast paths: ``p_student <= 0``, no recursive features in
+        schema, empty batch.
+        """
+        if p_student <= 0.0 or X.numel() == 0:
+            return X
+
+        schema = self.dataset.schema
+        # (input_col_idx, source_code, iter_axis_code, depth) per recursive feature.
+        recursive_feats: list[tuple[int, str, str, int]] = []
+        for feat_code, feat_obj in schema.features.data_objects.items():
+            if not getattr(feat_obj, "is_recursive", False):
+                continue
+            if feat_code not in self.input_columns:
+                continue
+            source_code = getattr(feat_obj, "recursive_source", None)
+            if source_code is None:
+                continue
+            depth = getattr(feat_obj, "recursive_depth", None) or 1
+            for iter_code in (getattr(feat_obj, "recursive_dimensions", None) or ()):
+                col_idx = self.input_columns.index(feat_code)
+                recursive_feats.append((col_idx, source_code, iter_code, depth))
+        if not recursive_feats:
+            return X
+
+        # Working copy — never mutate caller's tensor.
+        X_out = X.clone()
+        n_rows = int(X.shape[0])
+
+        # Per-experiment metadata cache (dim_sizes + dim_iterators).
+        exp_meta: dict[int, tuple[list[int], list[str]]] = {}
+
+        for row in range(n_rows):
+            exp_idx = int(cell_meta[row, 0].item())
+            cell_idx_flat = int(cell_meta[row, 1].item())
+
+            if exp_idx not in exp_meta:
+                exp = self.dataset.get_experiment(experiment_codes[exp_idx])
+                dim_names = exp.parameters.get_dim_names()
+                if not dim_names:
+                    exp_meta[exp_idx] = ([], [])
+                    continue
+                dim_iterators = exp.parameters.get_dim_iterator_codes(codes=dim_names)
+                dim_sizes = [int(exp.parameters.get_value(dn)) for dn in dim_names]
+                exp_meta[exp_idx] = (dim_sizes, dim_iterators)
+
+            dim_sizes, dim_iterators = exp_meta[exp_idx]
+            if not dim_sizes:
+                continue
+            cell = list(np.unravel_index(cell_idx_flat, tuple(dim_sizes)))
+
+            preds_for_exp = predictions_by_exp.get(experiment_codes[exp_idx], {})
+
+            for col_idx, source_code, iter_code, depth in recursive_feats:
+                # Per-row Bernoulli — substitute with prob p_student.
+                draw = (
+                    float(torch.rand(1, generator=rng).item())
+                    if rng is not None else float(np.random.random())
+                )
+                if draw >= p_student:
+                    continue
+
+                axis_idx = next(
+                    (i for i, ic in enumerate(dim_iterators) if ic == iter_code),
+                    None,
+                )
+                if axis_idx is None:
+                    continue
+
+                prior = cell.copy()
+                prior[axis_idx] -= depth
+                if prior[axis_idx] < 0:
+                    new_val = float("nan")
+                else:
+                    src = preds_for_exp.get(source_code)
+                    if src is None:
+                        continue
+                    src_idx = tuple(prior[: src.ndim])
+                    new_val = float(src[src_idx].item()) if torch.is_tensor(src) else float(src[src_idx])
+
+                # Apply parameter normalisation if a stat exists for this column.
+                col_name = self.input_columns[col_idx]
+                stats = self._parameter_stats.get(col_name)
+                if stats is not None:
+                    new_val_t = stats(torch.tensor(new_val, dtype=X_out.dtype))
+                    new_val = float(new_val_t.item())  # type: ignore[arg-type]
+                X_out[row, col_idx] = new_val
+
+        return X_out
+
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
         if not self._initialized:

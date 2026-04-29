@@ -50,8 +50,8 @@
 
 | Phase | Commits | Net LOC | Gist | Risk |
 |---|---|---|---|---|
-| 3 | 16b | −80 net | Migrate ``DataModule.get_batches`` and the autoreg loop in ``PredictionSystem._predict_autoregressive_batched`` to use ``Dataset.export_to_tensor_dict`` + ``DataModule.prepare_input_from_tensor_dict``; drop the pandas DataFrame construction in the autoreg cell loop. (Foundations shipped in 16: ``export_to_tensor_dict``, ``prepare_input_from_tensor_dict``, ``_fit_normalize`` already migrated.) | medium |
-| 3 | 15b | ~−210 net | Delete legacy DM SS state (`_ss_predictions_by_exp`, `_ss_p_student`, `_ss_rng`, `set_scheduled_sampling_state`, `_perturb_recursive_features`); move substitution into model.train using cell_meta from commit 16. | high (depends on 16b) |
+| 3 | 16b | −80 net | Migrate ``DataModule.get_batches`` and the autoreg loop in ``PredictionSystem._predict_autoregressive_batched`` to use ``Dataset.export_to_tensor_dict`` + ``DataModule.prepare_input_from_tensor_dict``; drop the pandas DataFrame construction in the autoreg cell loop. ``get_batches`` return shape extended to include ``cell_meta`` per batch. (Foundations shipped in 16.) | medium |
+| 3 | 15b | ~−210 net | Replace stateful ``DataModule._perturb_recursive_features`` (pandas, walks experiments via DM SS state) with stateless ``DataModule.substitute_recursive_features(X, cell_meta, predictions, p_student, rng)`` (tensor, no DM state). PredictionSystem orchestrates the cadence + supplies fresh predictions; DataModule owns the substitution mechanic. Models never see ``cell_meta`` or recursive-feature schema. Deletes ``_ss_predictions_by_exp``, ``_ss_p_student``, ``_ss_rng``, ``set_scheduled_sampling_state``, ``_perturb_recursive_features`` (~−210 LOC). | high (depends on 16b) |
 | 2 | 12 | −80 net | Schedule path gradient migration; deletes offset encoding, soft bound penalty, smoothing factor | high |
 | 5 | 18b | −20 net | Drop `estimator` knob from `configure_exploration`; drop `smoothing` from `configure_schedule` (after commit 12); drop `configure_scheduled_sampling` (after commit 15b) | low |
 | 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification | medium |
