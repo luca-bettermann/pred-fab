@@ -160,10 +160,10 @@ def test_set_parameter_normalize_override_affects_stats(tmp_path):
     assert "median" in dm._parameter_stats["param_1"]
 
 
-# ===== Categorical handling (Strategy D commit 14: cat-index, no one-hot) =====
+# ===== Categorical handling (cat-index, no one-hot) =====
 
 def test_categorical_appears_once_in_input_columns(tmp_path):
-    """Strategy D commit 14: each categorical contributes ONE column (the parent name).
+    """each categorical contributes ONE column (the parent name).
 
     The legacy one-hot expansion (param_3 → param_3_A / param_3_B / param_3_C)
     is replaced by a single int-index column. Cardinality is recorded in

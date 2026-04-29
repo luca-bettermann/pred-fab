@@ -32,7 +32,7 @@ class SolutionSpace:
         sched_delta_norms: list[float] | None = None,
         step0_values: np.ndarray | None = None,           # (n_exp, D_sched) fixed step0 values (normalized)
     ):
-        # Strategy D commit 12b: ``schedule_smoothing`` arg removed — smoothness
+        # ``schedule_smoothing`` arg removed — smoothness
         # emerges naturally from the gradient schedule path's autograd coupling
         # between adjacent steps. Legacy DE schedule path no longer applies a
         # smoothing penalty (lam=0).

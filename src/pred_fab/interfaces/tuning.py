@@ -27,7 +27,7 @@ class IResidualModel(BaseInterface):
 class MLPResidualModel(IResidualModel):
     """Torch-native MLP residual model with warm-start for online updates.
 
-    Strategy D: replaced sklearn ``MLPRegressor`` with a tiny ``nn.Sequential``
+    replaced sklearn ``MLPRegressor`` with a tiny ``nn.Sequential``
     + Adam loop. Fit-and-call semantics match the sklearn variant; ``fit``
     keeps the network state across calls (warm-start equivalent), so online
     updates retain prior weights.

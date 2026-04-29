@@ -5,7 +5,7 @@ import warnings
 
 import numpy as np
 import torch
-# Strategy D commit 9: scipy.optimize fully replaced — torch DE for global,
+# scipy.optimize fully replaced — torch DE for global,
 # torch.optim.LBFGS for local. Module is scipy-free.
 
 from ...core import DataModule
@@ -15,7 +15,7 @@ from ...utils import PfabLogger, ProgressBar, profiler
 class Optimizer(Enum):
     """Optimization backend for the calibration acquisition function.
 
-    Strategy D commit 18 (partial): collapsed from {DE, LBFGSB, GRADIENT}
+    collapsed from {DE, LBFGSB, GRADIENT}
     to {DE, GRADIENT}. LBFGSB was a thin wrapper around scipy.optimize
     that became redundant once the gradient path landed (which uses
     torch.optim.LBFGS directly inside ``run_acquisition_gradient``). DE
@@ -70,7 +70,7 @@ class OptimizationEngine:
         self.gradient_lr: float = 0.05
         self.gradient_method: str = "adam"  # "adam" | "lbfgs"
 
-        # Smart-init parameters (Strategy D commit 9b — BoTorch gen_batch_initial_conditions
+        # Smart-init parameters (BoTorch gen_batch_initial_conditions
         # pattern). raw_samples Sobol points are batch-evaluated, top-K selected via
         # Boltzmann sampling with temperature `eta` to balance quality vs. diversity.
         # 0 disables (uniform random multi-start fallback).
@@ -192,7 +192,7 @@ class OptimizationEngine:
             return step_sum / L
 
         # --- 3. Run optimizer ---
-        # Strategy D commit 18 (partial): LBFGSB branch deleted — gradient
+        # LBFGSB branch deleted — gradient
         # path now lives in run_acquisition_gradient and is dispatched
         # directly from CalibrationSystem rather than via this enum.
         del active_optimizer  # no longer used: only DE is reachable here
@@ -251,7 +251,7 @@ class OptimizationEngine:
         Convention matches DE: ``objective_tensor`` returns the **negated**
         score (lower is better). Score in the result is ``−min(objective)``.
 
-        ``compile_objective=True`` (Strategy D commit 20) wraps the objective
+        ``compile_objective=True`` wraps the objective
         with ``torch.compile(dynamic=True)``; first call traces, subsequent
         calls reuse the JIT graph. Falls back to eager silently on compile
         failure (e.g. unsupported ops in the objective graph).
@@ -281,7 +281,7 @@ class OptimizationEngine:
         hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
         span_t = hi_t - lo_t  # (D,)
 
-        # Smart initial conditions (Strategy D commit 9b — BoTorch
+        # Smart initial conditions (BoTorch
         # gen_batch_initial_conditions pattern):
         #   1. Draw `raw_samples` Sobol points
         #   2. Forward the objective on all of them in one batched no-grad call
@@ -417,7 +417,7 @@ class OptimizationEngine:
         popsize: int | None = None,
         vectorized: bool = False,
     ) -> _OptResult:
-        """Torch-native differential evolution (Strategy D commit 9).
+        """Torch-native differential evolution.
 
         Replaces ``scipy.optimize.differential_evolution`` with a pure-torch
         implementation. Same `_run_de` signature; population update is one
@@ -600,7 +600,7 @@ class OptimizationEngine:
         budget per step) within trust-region bounds. Returns discounted sum
         of scores.
 
-        Strategy D commit 9 step B: replaced ``scipy.optimize.minimize`` with
+        replaced ``scipy.optimize.minimize`` with
         the torch-native DE inside this engine. Same per-step eval budget.
         """
         if depth <= 0:

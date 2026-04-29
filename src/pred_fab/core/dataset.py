@@ -13,7 +13,7 @@ from .schema import DatasetSchema
 
 @dataclass(frozen=True)
 class ExportedTensorDict:
-    """Tensor-native dataset export (Strategy D commit 16).
+    """Tensor-native dataset export.
 
     Each row corresponds to one (experiment, cell) pair. ``cell_meta[i]``
     gives the ``(exp_idx, cell_idx)`` for row ``i`` — useful for Phase C
@@ -936,7 +936,7 @@ class Dataset:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[tuple[int, int]]]:
         """Shared row builder used by ``export_to_dataframe`` and ``export_to_tensor_dict``.
 
-        Strategy D commit 16. Returns ``(X_rows, y_rows, cell_meta)`` where
+        . Returns ``(X_rows, y_rows, cell_meta)`` where
         ``cell_meta[i] = (exp_idx, flat_cell_idx)`` for row ``i`` — the
         (experiment-code-index, flat-cell-index) pair used by Phase C SS
         substitution to identify each row's prior-cell coordinates.
@@ -1012,7 +1012,7 @@ class Dataset:
     def export_to_dataframe(self, experiment_codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows.
 
-        Strategy D commit 16: now a thin wrapper around ``_build_export_rows``;
+        now a thin wrapper around ``_build_export_rows``;
         the same row-builder backs ``export_to_tensor_dict``.
         """
         if not experiment_codes:
@@ -1029,7 +1029,7 @@ class Dataset:
         y_columns: list[str] | None = None,
         categorical_mappings: dict[str, list[str]] | None = None,
     ) -> "ExportedTensorDict":
-        """Tensor-native export (Strategy D commit 16).
+        """Tensor-native export.
 
         Per-column tensors with dtype-aware encoding (cats → long, numerics →
         float). Returns ``ExportedTensorDict`` with:

@@ -36,7 +36,7 @@ class DataModule:
         self._parameter_overrides: dict[str, NormMethod] = {}
         
         # Fitted normalization parameters
-        # Strategy D commit 13: stats dicts replaced by NormaliserModule
+        # stats dicts replaced by NormaliserModule
         # instances. Dict-like __getitem__ on the modules preserves the old
         # access pattern (e.g. ``stats[col]["mean"]`` still works).
         self._feature_stats: dict[str, NormaliserModule] = {}
@@ -44,7 +44,7 @@ class DataModule:
         self._is_fitted = False
         
         # Feature system metadata (no data storage)
-        # Strategy D commit 14: input_columns lists each parameter / feature
+        # input_columns lists each parameter / feature
         # ONCE (no expansion). Categoricals are emitted as a single int-index
         # column; models that want one-hot do ``F.one_hot`` themselves in
         # forward (and learnable cats use ``nn.Embedding``).
@@ -88,7 +88,7 @@ class DataModule:
     def _set_input_columns(self, input_parameters: list[str], input_features: list[str]):
         """Build ``input_columns`` (parent-level, no categorical expansion).
 
-        Strategy D commit 14: each categorical parameter contributes ONE
+        each categorical parameter contributes ONE
         int-index column to the batch (its category index in
         ``categorical_mappings[parent]``). Cardinality is tracked in
         ``_cat_cardinalities`` so models can size their own
@@ -195,7 +195,7 @@ class DataModule:
             }
             return
         
-        # Strategy D: torch-native random split (was sklearn.train_test_split).
+        # torch-native random split (was sklearn.train_test_split).
         # Same shuffle-then-slice semantics; deterministic via the explicit
         # random_seed.
         rng = np.random.default_rng(self.random_seed)
@@ -263,7 +263,7 @@ class DataModule:
     ) -> torch.Tensor:
         """Replace recursive-feature column values with predictions at prior cells.
 
-        Strategy D commit 15b — stateless, tensor-typed, no DM SS state. Pure
+        stateless, tensor-typed, no DM SS state. Pure
         gather/scatter using ``cell_meta`` and the schema's recursive-feature
         metadata. The caller (typically PredictionSystem) is responsible for
         producing fresh ``predictions_by_exp`` from the current network state.
@@ -390,7 +390,7 @@ class DataModule:
         if not codes:
             return
 
-        # Strategy D commit 16: tensor-native fit path. No pandas roundtrip.
+        # tensor-native fit path. No pandas roundtrip.
         exported = self.dataset.export_to_tensor_dict(
             codes,
             x_columns=self.input_columns,
@@ -449,7 +449,7 @@ class DataModule:
     ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Return ``(X, y, cell_meta)`` tensor batch tuples for the given split.
 
-        Strategy D commit 16b: tensor-native end-to-end. Uses
+        tensor-native end-to-end. Uses
         ``Dataset.export_to_tensor_dict`` directly (no pandas) and returns
         ``cell_meta`` as the third tuple element for downstream callers
         (SS substitution, per-cell loss masking, etc).
@@ -500,7 +500,7 @@ class DataModule:
     def prepare_input(self, X_df: pd.DataFrame) -> torch.Tensor:
         """Prepare input DataFrame for inference (encode + normalize), returning a tensor.
 
-        Strategy D commit 16: thin shim over ``prepare_input_from_tensor_dict``.
+        thin shim over ``prepare_input_from_tensor_dict``.
         Pandas users keep this entry point; tensor-typed callers (autoreg
         loop, etc.) can call ``prepare_input_from_tensor_dict`` directly to
         skip the DataFrame→numpy→tensor roundtrip.
@@ -516,7 +516,7 @@ class DataModule:
     def prepare_input_from_tensor_dict(
         self, X_dict: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Tensor-native ``prepare_input`` (Strategy D commit 16).
+        """Tensor-native ``prepare_input``.
 
         Takes a tensor dict as produced by ``Dataset.export_to_tensor_dict``
         (or constructed directly by the autoreg loop) and returns a stacked
@@ -603,7 +603,7 @@ class DataModule:
     def get_normalization_state(self) -> dict[str, Any]:
         """Export normalisation state for inference bundle.
 
-        Strategy D commit 13: stat values come from the NormaliserModule
+        stat values come from the NormaliserModule
         instances (still serialised as plain dicts for backwards compat
         with prior on-disk inference bundles).
         """
@@ -657,7 +657,7 @@ class DataModule:
     def get_input_indices(self, codes: list[str], skip_missing: bool = False) -> list[int]:
         """Return input_columns indices for the given schema codes.
 
-        Strategy D commit 14: each schema code maps to exactly ONE column
+        each schema code maps to exactly ONE column
         index — categoricals are no longer expanded.
         """
         indices: list[int] = []
@@ -671,7 +671,7 @@ class DataModule:
     # === SHARED NORMALIZATION HELPERS ===
     
     def _compute_normalization_stats(self, data: np.ndarray, method: NormMethod) -> NormaliserModule:
-        """Fit a NormaliserModule to ``data`` (Strategy D commit 13).
+        """Fit a NormaliserModule to ``data``.
 
         Replaces the legacy dict-of-stats output. The returned module exposes
         ``module["mean"]`` / ``module["min"]`` etc. via ``__getitem__`` so
@@ -716,7 +716,7 @@ class DataModule:
     def _encode_inputs(self, X_df: pd.DataFrame) -> np.ndarray:
         """Encode a DataFrame to ``(n_rows, n_input_cols)`` float array.
 
-        Strategy D commit 14: categoricals emit a single int-index column
+        categoricals emit a single int-index column
         (encoded as float for shape uniformity); numerics emit float values
         directly. Models that want one-hot expansion do it themselves in
         ``forward`` via ``F.one_hot`` (cardinality available via
@@ -746,7 +746,7 @@ class DataModule:
     def params_to_array(self, params: dict[str, Any]) -> np.ndarray:
         """Convert a parameter dict to a normalized 1D input array (numpy, calibration-side use).
 
-        Strategy D commit 16b: thin wrapper around the tensor-native
+        thin wrapper around the tensor-native
         ``params_to_tensor`` (commit 1) — no pandas roundtrip.
         """
         if not self._is_fitted:
@@ -756,7 +756,7 @@ class DataModule:
     def array_to_params(self, array: np.ndarray) -> dict[str, Any]:
         """Reverse-normalize and decode a 1D input array back to a parameter dict.
 
-        Strategy D commit 14: categorical columns hold a cat-index (rounded to
+        categorical columns hold a cat-index (rounded to
         nearest int); decoding maps it back to the category string via
         ``categorical_mappings``.
         """
@@ -798,14 +798,14 @@ class DataModule:
     ) -> torch.Tensor:
         """Tensor-typed mirror of ``params_to_array``. Returns ``(len(input_columns),)``.
 
-        Strategy D commit 14: categoricals emit a single int-index column
+        categoricals emit a single int-index column
         (encoded as float for shape uniformity); models expand via
         ``F.one_hot`` / ``nn.Embedding`` in their forward.
 
         Gradient flow: if any continuous value is a ``torch.Tensor`` with
         ``requires_grad=True``, the gradient flows through normalisation
         (affine for all NormMethod variants) into the output tensor.
-        Used by Strategy D's gradient-based acquisition. Categorical
+        Used by the gradient-based acquisition. Categorical
         positions are non-differentiable by construction (discrete choices).
         """
         if not self._is_fitted:

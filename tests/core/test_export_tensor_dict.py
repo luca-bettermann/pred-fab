@@ -1,5 +1,5 @@
 """Tests for Dataset.export_to_tensor_dict + DataModule.prepare_input_from_tensor_dict
-(Strategy D commit 16).
+().
 
 Three guarantees:
   1. ``export_to_tensor_dict`` produces per-column tensors with dtype-aware

@@ -1,4 +1,4 @@
-"""Tests for scale-aware DataLoader in TorchMLPModel.train (Strategy D commit 6).
+"""Tests for scale-aware DataLoader in TorchMLPModel.train.
 
 Two guarantees this commit promises:
   1. Below ``MINIBATCH_THRESHOLD`` (1000 rows), single-batch full-GD path

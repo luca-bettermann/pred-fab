@@ -208,7 +208,7 @@ def test_model_has_recursive_inputs_false(tmp_path):
     assert pred._model_has_recursive_inputs(pred.models[0]) is False
 
 
-# ── Schedule (Strategy D commit 15: per-epoch progress in [0, 1]) ──
+# ── Schedule (per-epoch progress in [0, 1]) ──
 
 def test_ss_schedule_progress_zero_is_teacher_forced(tmp_path):
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))

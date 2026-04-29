@@ -1,4 +1,4 @@
-"""nn.Module-based normalisers (Strategy D commit 13).
+"""nn.Module-based normalisers.
 
 Replaces the legacy dict-of-stats representation
 (``{"method": NormMethod.STANDARD, "mean": 0.5, "std": 0.2}``) with proper

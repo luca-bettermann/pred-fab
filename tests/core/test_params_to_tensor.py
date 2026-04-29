@@ -1,4 +1,4 @@
-"""Tests for tensor-typed params_to_tensor / tensor_to_params (Strategy D commit 1).
+"""Tests for tensor-typed params_to_tensor / tensor_to_params.
 
 Three guarantees this commit promises:
   1. Numerical equivalence with the existing numpy params_to_array /

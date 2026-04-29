@@ -23,7 +23,7 @@ class TestOptimizerConfig:
     """agent.configure_optimizer() sets optimizer parameters."""
 
     def test_default_optimizer_is_gradient(self, tmp_path):
-        """Strategy D: GRADIENT is the default optimizer.
+        """GRADIENT is the default optimizer.
 
         DE remains opt-in for the integer-phase fallback and for users who
         explicitly configure it via ``configure_optimizer(backend=DE)``.
@@ -42,7 +42,7 @@ class TestOptimizerConfig:
         assert agent.calibration_system.de_popsize == 20
 
     def test_configure_gradient_optimizer(self, tmp_path):
-        """Strategy D commit 18 (partial): GRADIENT path is the alternative;
+        """GRADIENT path is the alternative;
         LBFGSB enum and online_optimizer were dropped."""
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(backend=Optimizer.GRADIENT)

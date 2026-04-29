@@ -175,7 +175,7 @@ class BoundsManager:
         """Return codes of parameters the optimizer can actually vary.
 
         Excludes: context features, fixed params, features (lag values).
-        Strategy D commit 14: categoricals appear once (parent) in input_columns
+        categoricals appear once (parent) in input_columns
         — no need to filter one-hot expansion any more.
         """
         context_codes = set(datamodule.context_feature_codes)
@@ -197,7 +197,7 @@ class BoundsManager:
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
         """Return normalized optimization bounds over the full parameter space.
 
-        Strategy D commit 14: categorical columns have integer bounds
+        categorical columns have integer bounds
         ``[0, n_cats - 1]`` (one cat-index column per categorical).
         """
         bounds_list = []
@@ -226,7 +226,7 @@ class BoundsManager:
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
         """Return normalized trust-region bounds centred on current_params.
 
-        Strategy D commit 14: categorical columns clamp to current cat-index.
+        categorical columns clamp to current cat-index.
         """
         bounds_list = []
 

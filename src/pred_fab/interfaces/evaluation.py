@@ -216,7 +216,7 @@ class IEvaluationModel(BaseInterface):
         denom`` and the ``torch.clamp`` (zero gradient outside [0, 1] —
         correct behaviour for saturated scores).
 
-        Used by Strategy D's gradient-based acquisition where the
+        Used by the gradient-based acquisition where the
         prediction tensor flows from a leaf params tensor and we need
         ``∂avg/∂feat`` to backprop further.
         """

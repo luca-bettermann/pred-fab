@@ -114,7 +114,7 @@ class IPredictionModel(BaseInterface):
         Used by the existing DE acquisition path.
 
         ``gradient_pass=True``: gradients flow through the network to its
-        inputs. Used by Strategy D's gradient-based acquisition. Implementations
+        inputs. Used by the gradient-based acquisition. Implementations
         should skip any ``torch.no_grad()`` context they otherwise apply.
         """
         pass
@@ -136,12 +136,12 @@ class IPredictionModel(BaseInterface):
 
         ``gradient_pass=True`` instructs the implementation to keep autograd
         graph live through the encoder (skip ``torch.no_grad()``). Used by
-        Strategy D's gradient acquisition path.
+        the gradient acquisition path.
         """
         del gradient_pass  # base impl is identity, gradient flows naturally
         return X
 
-    # === CATEGORICAL CONTEXT (Strategy D commit 14) ===
+    # === CATEGORICAL CONTEXT ===
 
     def set_categorical_context(self, col_to_cardinality: dict[int, int]) -> None:
         """Inform the model which of its input columns are categorical (cat-index).

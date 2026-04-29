@@ -1,4 +1,4 @@
-"""End-to-end smoke for Optimizer.GRADIENT routed through baseline_step (Strategy D commit 5).
+"""End-to-end smoke for Optimizer.GRADIENT routed through baseline_step.
 
 Goal: confirm that selecting ``Optimizer.GRADIENT`` actually exercises the
 tensor acquisition path (``run_acquisition_gradient`` in OptimizationEngine,

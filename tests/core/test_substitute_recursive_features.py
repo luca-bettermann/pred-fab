@@ -1,4 +1,4 @@
-"""Tests for DataModule.substitute_recursive_features (Strategy D commit 15b).
+"""Tests for DataModule.substitute_recursive_features.
 
 Stateless tensor-typed substitution. The legacy stateful
 ``_perturb_recursive_features`` is replaced by this method; tests exercise

@@ -1,4 +1,4 @@
-"""Tests for tensor-typed evaluation (Strategy D commit 3).
+"""Tests for tensor-typed evaluation.
 
 Three guarantees this commit promises:
   1. Numerical equivalence with compute_performance_batched (numpy path)

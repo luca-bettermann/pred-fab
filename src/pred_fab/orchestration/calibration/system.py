@@ -126,7 +126,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
-        # Strategy D final flip: GRADIENT is the default (commit 8).
+        # GRADIENT is the default (commit 8).
         # ``Optimizer.DE`` remains an opt-in for users who explicitly want it
         # via ``configure_optimizer(backend=Optimizer.DE)``. Internal phase
         # dispatch automatically falls back to DE for integer-only phases
@@ -500,7 +500,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Routes through ``perf_fn_tensor`` (autograd-traversable). When the
         tensor closure is unavailable, falls back to numpy scalar perf
-        (gradient lost). Strategy D commit 5.
+        (gradient lost).
         """
         S = int(X_SD.shape[0])
         if S == 0:
@@ -614,7 +614,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Takes ``(S, D)`` torch tensor — one row per candidate — and returns
         ``(S,)`` of negated scores (lower = better). Mirrors
         ``_acquisition_objective_vectorized`` but routes through the tensor
-        APIs added in Strategy D commits 2-4 so gradient flows from each
+        APIs added in so gradient flows from each
         candidate's score back through the per-candidate parameters.
         """
         with profiler.section("acq._acquisition_objective_tensor"):
@@ -1251,7 +1251,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"D_sched=0, total_vars={space.total_vars}, maxiter={smart_maxiter}"
         )
 
-        # Strategy D commit 5: gradient path when configured + tensor APIs wired
+        # gradient path when configured + tensor APIs wired
         # + no integer params (rounded variables aren't differentiable; DE
         # remains the right tool for them).
         use_gradient = (
@@ -1518,7 +1518,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Per-experiment schedule refinement via gradient + absolute encoding.
 
-        Strategy D commit 12c. Variable layout (absolute):
+        . Variable layout (absolute):
           [0 .. D_static)                          continuous static (drift trust region)
           [D_static .. D_static + L_i * D_sched)   per-step sched values (each in [0, 1])
 
@@ -2078,7 +2078,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if is_schedule:
             L = len(step_grid)
 
-            # Strategy D commit 14: categoricals appear once (parent) in input_columns
+            # categoricals appear once (parent) in input_columns
             # and behave as static (integer) params in the schedule split.
             cat_codes = set(datamodule.categorical_mappings.keys())
             context_codes = set(datamodule.context_feature_codes)
@@ -2175,7 +2175,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     else:
                         sched_delta_norms.append(0.0)
 
-                # Strategy D commit 12b: gradient is the only schedule path.
+                # gradient is the only schedule path.
                 # Absolute-step encoding (each step k ∈ [0, 1] strict via sigmoid
                 # reparam) — no offset cumulative drift, no soft bound penalty,
                 # no smoothing factor. Delta constraint between adjacent steps
@@ -2355,7 +2355,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 bounds = all_global_bounds
                 n_rounds = n_optimization_rounds
 
-            # Strategy D commit 18 (partial): online_optimizer dropped — single
+            # online_optimizer dropped — single
             # path. Online and offline both use the configured self.optimizer.
             chosen_opt = self.optimizer
 

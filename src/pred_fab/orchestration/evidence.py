@@ -41,7 +41,7 @@ DEFAULT_ANGULAR_GAP_DEG: float = 45.0
 
 
 # ---------------------------------------------------------------------------
-# Scale-aware regime dispatcher (Strategy D commit 4)
+# Scale-aware regime dispatcher
 # ---------------------------------------------------------------------------
 
 def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
@@ -81,7 +81,7 @@ def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 class KernelIndex:
     """Spatial index over Gaussian kernel centres for fast D(z) evaluation.
 
-    Strategy D commit 10: replaced ``scipy.spatial.cKDTree`` neighbour
+    replaced ``scipy.spatial.cKDTree`` neighbour
     lookup with batched ``torch.cdist`` distance computation. For
     n_kernels < ``truncation_threshold`` (default 10), full distance is
     computed directly (correct + cheap). Above the threshold a 5σ-radius
@@ -659,7 +659,7 @@ class KernelFieldEstimator(EvidenceEstimator):
 
         Returns ``(S,)`` torch tensor with autograd flowing from each
         candidate's ``E_new[s]`` back through ``new_centers_SL`` (and
-        ``new_weights_SL`` if ``requires_grad=True``). Used by Strategy D's
+        ``new_weights_SL`` if ``requires_grad=True``). Used by 's
         gradient-based acquisition optimiser (commit 5).
 
         ``index_old.centers`` / ``.weights`` arrive as numpy from the (still
@@ -718,7 +718,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         Mirrors the numpy ``integrated_evidence_perturbed_batched_joint``
         body in torch ops. All tensor moves target ``new_centers_SL.device``
         — when the caller has placed inputs on GPU, the entire dense KDE
-        compute runs there end-to-end (Strategy D commit 20b).
+        compute runs there end-to-end.
         """
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
@@ -858,7 +858,7 @@ class SobolLocalEstimator(EvidenceEstimator):
         volume = box_side ** D
         n = self._resolve_n_samples(D)
 
-        # Torch-native QMC (Strategy D commit 12). draw() returns (n, D)
+        # Torch-native QMC. draw() returns (n, D)
         # in the unit cube; SobolEngine wants log2(n) for power-of-2 lengths
         # but accepts arbitrary n via .draw(n). Scrambled for sample diversity.
         with warnings.catch_warnings():

@@ -1,4 +1,4 @@
-"""Tests for OptimizationEngine.run_acquisition_gradient (Strategy D commit 5).
+"""Tests for OptimizationEngine.run_acquisition_gradient.
 
 Three guarantees this commit promises:
   1. Sigmoid bound reparameterisation keeps the returned ``best_x`` strictly
@@ -30,7 +30,7 @@ def engine(tmp_path) -> OptimizationEngine:
 
 def test_optimizer_gradient_enum_present():
     assert Optimizer.GRADIENT.value == "gradient"
-    # Strategy D commit 18 (partial): enum is now {DE, GRADIENT}; LBFGSB dropped.
+    # enum is now {DE, GRADIENT}; LBFGSB dropped.
     assert Optimizer.GRADIENT in {Optimizer.DE, Optimizer.GRADIENT}
 
 

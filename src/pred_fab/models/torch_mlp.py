@@ -15,7 +15,7 @@ and return ``torch.Tensor`` directly; no numpy↔tensor conversion happens here.
 Other model shapes (transformer, GNN, LSTM) should subclass ``TorchMLPModel``
 and override ``_build_network`` to return a different ``nn.Module``.
 
-**Scale-aware training (Strategy D commit 6):** at ``n_rows > MINIBATCH_THRESHOLD``
+**Scale-aware training:** at ``n_rows > MINIBATCH_THRESHOLD``
 the train loop uses ``DataLoader(TensorDataset, batch_size=...)`` for shuffled
 minibatches. Below that, single-batch full-GD stays — DataLoader overhead
 isn't justified at mock-scale (~50-200 rows). Threshold is class-level so
@@ -51,7 +51,7 @@ class TorchMLPModel(IPredictionModel):
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
 
-    # Scale-aware minibatching threshold (Strategy D commit 6). At or below
+    # Scale-aware minibatching threshold. At or below
     # this many training rows, the train loop uses single full-batch GD —
     # DataLoader/shuffle overhead doesn't pay at mock scale. Above, a
     # ``DataLoader`` runs ``MINIBATCH_SIZE`` shuffled minibatches per epoch.
@@ -59,7 +59,7 @@ class TorchMLPModel(IPredictionModel):
     MINIBATCH_THRESHOLD: int = 1000
     MINIBATCH_SIZE: int = 256
 
-    # Strategy D commit 15: number of equally-spaced SS refresh checkpoints
+    # number of equally-spaced SS refresh checkpoints
     # during a training run. Effective only when train() is called with an
     # ``epoch_callback``; otherwise ignored. Default 4 matches the legacy
     # K-refit cadence of 4 rounds.
@@ -88,7 +88,7 @@ class TorchMLPModel(IPredictionModel):
         self._model: nn.Module | None = None
         self._compiled_forward: Any = None
         self._is_trained: bool = False
-        # Strategy D commit 14: ``nn.Embedding`` per categorical input column,
+        # ``nn.Embedding`` per categorical input column,
         # keyed by model-relative col index. Set via
         # ``set_categorical_context`` before training. Each cat column
         # encodes into a learned latent of size ``_embedding_dim(C)`` (FastAI
@@ -99,7 +99,7 @@ class TorchMLPModel(IPredictionModel):
         self._cat_cardinalities: dict[int, int] = {}
 
     def set_categorical_context(self, col_to_cardinality: dict[int, int]) -> None:
-        """Build embeddings for categorical input columns (Strategy D commit 14).
+        """Build embeddings for categorical input columns.
 
         Called by ``PredictionSystem`` before training; keys are
         model-relative column indices. One ``nn.Embedding(C, d)`` per cat
@@ -189,7 +189,7 @@ class TorchMLPModel(IPredictionModel):
         ``SS_N_REFRESHES`` equally-spaced points during training. The
         callback receives the current progress in ``[0, 1]`` and returns
         fresh ``train_batches`` with updated SS substitution applied (or
-        ``None`` to keep the current batches). Strategy D commit 15.
+        ``None`` to keep the current batches).
         """
         if not train_batches:
             return
@@ -215,7 +215,7 @@ class TorchMLPModel(IPredictionModel):
         net.train()
         self._cat_embeddings.train()
 
-        # Strategy D commit 15: per-epoch SS refresh (replaces K-refit). Refresh
+        # per-epoch SS refresh (replaces K-refit). Refresh
         # at SS_N_REFRESHES equally-spaced checkpoints during training; at each,
         # the callback returns fresh batches with current SS state.
         refresh_period = (
@@ -283,7 +283,7 @@ class TorchMLPModel(IPredictionModel):
         """Inference forward — applies categorical one-hot expansion first.
 
         ``gradient_pass=False`` (default): wraps in ``torch.no_grad()``.
-        ``gradient_pass=True``: keeps the autograd tape live (Strategy D
+        ``gradient_pass=True``: keeps the autograd tape live (
         gradient acquisition). Categorical expansion via ``_embed_cats``
         is non-differentiable (discrete index → one-hot float), but it
         doesn't break gradient flow on the *non-categorical* columns.

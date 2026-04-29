@@ -1,4 +1,4 @@
-"""Tests for tensor-typed KDE evaluation (Strategy D commit 4).
+"""Tests for tensor-typed KDE evaluation.
 
 Three guarantees this commit promises:
   1. Numerical equivalence between

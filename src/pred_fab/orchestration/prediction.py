@@ -63,7 +63,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         super().__init__(logger)
         self.models: list[IPredictionModel] = []
         self.residual_model: IResidualModel = MLPResidualModel(logger) if res_model is None else res_model
-        # Strategy D commit 20b: target device for tensor conversions inside
+        # target device for tensor conversions inside
         # KDE / gradient acquisition. Set by agent.to(device); defaults to CPU.
         # KDE storage (latent_points, point_weights) remains numpy on CPU; the
         # torch estimators convert to this device at call boundaries.
@@ -92,7 +92,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
         self._uncertainty_weights: dict[str, float] = {}
 
-        # Scheduled-sampling configuration (Strategy D commit 15). Triggered
+        # Scheduled-sampling configuration. Triggered
         # automatically for any model with recursive input features. Cadence
         # is now per-epoch (refresh every model.EPOCHS / n_ss_refreshes
         # epochs) instead of K-refit. p_student annealed linearly from
@@ -134,7 +134,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """Filter batch X/y to the model's declared input/output columns.
 
-        Strategy D commit 16b: accepts either 2-tuples ``(X, y)`` or
+        accepts either 2-tuples ``(X, y)`` or
         3-tuples ``(X, y, cell_meta)``; returns 2-tuples for ``model.train``
         which doesn't need cell_meta. Cell metadata is consumed by
         PredictionSystem-level orchestrators (e.g. SS substitution).
@@ -207,7 +207,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _ss_p_for_progress(self, progress: float) -> float:
         """Linear schedule: 0.0 → 1.0 over [0, 1] training progress.
 
-        Strategy D commit 15: replaces ``_ss_p_for_round`` (K-refit cadence)
+        replaces ``_ss_p_for_round`` (K-refit cadence)
         with continuous progress, queried inside ``model.train``'s epoch loop.
         """
         progress = max(0.0, min(1.0, progress))
@@ -220,7 +220,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         the current state of all (already-trained) models. Used as the
         source of student predictions for scheduled sampling.
 
-        Strategy D commit 15b: returns torch tensors (was np.ndarray) so
+        returns torch tensors (was np.ndarray) so
         ``DataModule.substitute_recursive_features`` can consume directly.
         """
         if self.datamodule is None:
@@ -247,7 +247,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """One fit call. Wrapped with progress bar by caller."""
         model_train_batches = self._filter_batches_for_model(train_batches, model)
         model_val_batches = self._filter_batches_for_model(val_batches, model)
-        # Strategy D commit 14: pass model-relative cat-index cardinalities
+        # pass model-relative cat-index cardinalities
         # so models with categorical inputs can size their internal one-hot
         # / nn.Embedding expansion. No-op for models without cats.
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
@@ -277,7 +277,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration.
 
-        Strategy D commit 15: Phase C absorbed — per-epoch refresh inside
+        Phase C absorbed — per-epoch refresh inside
         each model's ``train()`` replaces the K-refit loop. For models with
         recursive input features, an ``epoch_callback`` is supplied; the
         model invokes it periodically to refresh SS predictions and update
@@ -339,7 +339,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None]:
         """Return the per-epoch SS refresh callable for ``model.train``.
 
-        Strategy D commit 15b. Given training progress in ``[0, 1]``, the
+        . Given training progress in ``[0, 1]``, the
         callable: (1) computes current-network predictions on training
         experiments, (2) fetches clean training batches + cell_meta via
         ``Dataset.export_to_tensor_dict``, (3) calls
@@ -600,7 +600,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Configure σ (kernel bandwidth for the evidence objective).
 
-        Strategy D commit 18: ``estimator`` knob dropped —
+        ``estimator`` knob dropped —
         ``KernelFieldEstimator`` is the canonical path.
         """
         if sigma is not None:
@@ -862,7 +862,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Tensor mirror of :meth:`_encode_batch_from_norm_for_model`.
 
         Keeps grad through ``model.encode`` so that downstream Δ∫E backprops
-        all the way to ``X_norm_batch``. Strategy D commit 5.
+        all the way to ``X_norm_batch``.
         """
         active_idx = torch.from_numpy(np.flatnonzero(active_mask)).long()
         if self.datamodule is None:
@@ -886,7 +886,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Tensor mirror of :meth:`delta_integrated_evidence_batched`.
 
         Returns ``(S,)`` torch tensor; gradient flows from each Δ∫E[s] back
-        through the encoder into ``new_norm_batch_S``. Strategy D commit 5.
+        through the encoder into ``new_norm_batch_S``.
 
         Routes through ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint_torch``
         with ``L=1`` (each candidate is a single added kernel). Other
@@ -1179,7 +1179,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         ``torch.Tensor`` with ``requires_grad=True`` — gradients flow
         through ``params_to_tensor`` (affine normalisation) and the autoreg
         loop's ``forward_pass(gradient_pass=True)`` calls back into the
-        input tensors. Used by Strategy D's gradient-based acquisition
+        input tensors. Used by the gradient-based acquisition
         optimiser.
 
         Parameters that determine prediction *shape* (``n_layers``,
@@ -1487,7 +1487,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Copy fitted normalization state from offline training.
         temp_datamodule.set_normalization_state(dm.get_normalization_state())
 
-        # Strategy D commit 16b: tensor-native tune slicing (no pandas).
+        # tensor-native tune slicing (no pandas).
         exported = temp_dataset.export_to_tensor_dict(
             [exp_data.code],
             x_columns=temp_datamodule.input_columns,
@@ -1941,7 +1941,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         dm = self._assert_trained()
 
-        # Strategy D commit 16b: pandas-free X build via tensor dict.
+        # pandas-free X build via tensor dict.
         n_cells = len(cell_indices)
         iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
         X_dict_flat: dict[str, torch.Tensor] = {}
@@ -2030,7 +2030,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         else:
             cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
 
-        # Build (S × n_cells, n_input_cols) tensor — Strategy D commit 16b:
+        # Build (S × n_cells, n_input_cols) tensor — :
         # pandas-free direct construction via tensor dict + prepare_input_from_tensor_dict.
         with profiler.section("autoreg.build_X_dict [tensor + iter_feats]"):
             n_total = S * n_cells
@@ -2386,7 +2386,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         n_cells = predict_to - predict_from
 
-        # Strategy D commit 16b: pandas-free X build via tensor dict.
+        # pandas-free X build via tensor dict.
         cell_indices: list[tuple[int, ...]] = [
             tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
         ]
@@ -2459,7 +2459,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Run model prediction on X_batch tensor dict and store results.
 
-        Strategy D commit 16b: ``X_batch`` is now a tensor dict (was DataFrame);
+        ``X_batch`` is now a tensor dict (was DataFrame);
         prep goes through ``prepare_input_from_tensor_dict``.
         """
         dm = self._assert_trained()

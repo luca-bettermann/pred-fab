@@ -206,7 +206,7 @@ class PfabAgent:
 
             Gradient flows from each perf score back through
             ``predict_for_calibration_tensor`` into any tensor-valued continuous
-            parameters in ``params_dicts``. Strategy D commit 5.
+            parameters in ``params_dicts``.
             """
             if not params_dicts:
                 return {}
@@ -598,7 +598,7 @@ class PfabAgent:
         return predictions
     
     def to(self, device: str | torch.device) -> "PfabAgent":
-        """Move all torch state to ``device`` (Strategy D commit 20 + 20b).
+        """Move all torch state to ``device``.
 
         Calls ``.to(device)`` on every ``nn.Module`` instance held by the
         framework: prediction model networks, categorical embeddings, and
@@ -665,7 +665,7 @@ class PfabAgent:
     ) -> None:
         """Configure the integrated-evidence objective (σ — kernel bandwidth).
 
-        Strategy D commit 18: ``estimator`` knob dropped —
+        ``estimator`` knob dropped —
         ``KernelFieldEstimator`` is the only path. SobolLocal was a
         research alternative that's no longer maintained.
         """
@@ -688,7 +688,7 @@ class PfabAgent:
     ) -> None:
         """Set optimiser backend and tuning parameters.
 
-        Strategy D commit 18 (partial): ``online_backend`` and the
+        ``online_backend`` and the
         ``lbfgsb_*`` knobs dropped — the LBFGSB enum + scipy L-BFGS-B
         path were deleted in favour of the gradient path's
         ``torch.optim.LBFGS`` (used internally by ``run_acquisition_gradient``).
@@ -722,7 +722,7 @@ class PfabAgent:
     ) -> None:
         """Configure a parameter to vary per step of a dimension.
 
-        Strategy D commit 12b: ``smoothing`` knob dropped — under the
+        ``smoothing`` knob dropped — under the
         gradient schedule path, smoothness emerges naturally from the
         differentiable autoreg coupling between adjacent steps and the
         delta-constraint penalty.

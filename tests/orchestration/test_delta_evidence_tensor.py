@@ -1,4 +1,4 @@
-"""Tests for tensor-typed Δ∫E (Strategy D commit 5).
+"""Tests for tensor-typed Δ∫E.
 
 Equivalence and gradient flow for:
   - PredictionSystem.delta_integrated_evidence_batched_tensor

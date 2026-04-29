@@ -1,4 +1,4 @@
-"""Tests for predict_for_calibration_tensor (Strategy D commit 2).
+"""Tests for predict_for_calibration_tensor.
 
 Three guarantees this commit promises:
   1. Numerical equivalence with predict_for_calibration_batched (numpy

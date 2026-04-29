@@ -147,7 +147,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         per-cell prediction tensor of shape ``(*feat_shape,)``. Internally
         flattened to ``(S, n_rows)`` for the eval model. Gradient flows
         from the output back through the per-feat tensor inputs to whatever
-        leaf produced them (typically a params tensor in Strategy D commit 5).
+        leaf produced them (typically a params tensor in ).
 
         Candidates missing a required feature are excluded from that
         eval_model's batch — their entry in the output is filled with NaN
