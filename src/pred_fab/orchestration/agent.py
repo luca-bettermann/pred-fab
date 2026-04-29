@@ -598,29 +598,30 @@ class PfabAgent:
         return predictions
     
     def to(self, device: str | torch.device) -> "PfabAgent":
-        """Move all torch state to ``device`` (Strategy D commit 20).
+        """Move all torch state to ``device`` (Strategy D commit 20 + 20b).
 
         Calls ``.to(device)`` on every ``nn.Module`` instance held by the
         framework: prediction model networks, categorical embeddings, and
-        ``nn.Module``-based normalisers. After this call, ``forward_pass``
-        / ``encode`` operate on the new device.
+        ``nn.Module``-based normalisers. Records the device on
+        ``pred_system._device`` so KDE-side torch conversions inside the
+        acquisition graph target it. After this call, ``forward_pass`` /
+        ``encode`` and the gradient acquisition path operate on the new
+        device.
 
-        Returns self for chaining (`agent.to('cuda').baseline_step(3)`).
+        Returns self for chaining (``agent.to('cuda').baseline_step(3)``).
 
-        Caveat: KDE state (``_model_kdes`` latent_points / point_weights),
-        the optimiser engine's RNG, and several other CPU-bound numpy
-        objects are NOT moved by this call. They get coerced to the model
-        device at acquisition-call boundaries via per-call tensor moves.
-        Full GPU support (no CPU intermediates inside the acquisition graph)
-        is the next layer of GPU work.
+        Note: KDE storage (``_model_kdes`` latent_points / point_weights)
+        remains numpy on CPU; the torch estimators convert + move to
+        ``_device`` at call boundaries. RNG state stays on CPU.
         """
         self._assert_initialized()
+        device_t = torch.device(device) if isinstance(device, str) else device
 
         for model in self.pred_system.models:
             if hasattr(model, "_model") and model._model is not None:
-                model._model = model._model.to(device)
+                model._model = model._model.to(device_t)
             if hasattr(model, "_cat_embeddings"):
-                model._cat_embeddings = model._cat_embeddings.to(device)
+                model._cat_embeddings = model._cat_embeddings.to(device_t)
             if hasattr(model, "_compiled_forward") and model._compiled_forward is not None:
                 # torch.compile-d module; rebuild the compiled wrapper around
                 # the moved net at next first-call.
@@ -628,9 +629,12 @@ class PfabAgent:
 
         if self.pred_system.datamodule is not None:
             for stats in self.pred_system.datamodule._parameter_stats.values():
-                stats.to(device)
+                stats.to(device_t)
             for stats in self.pred_system.datamodule._feature_stats.values():
-                stats.to(device)
+                stats.to(device_t)
+
+        # Record on PredictionSystem so KDE torch conversions target it.
+        self.pred_system._device = device_t
 
         return self
 

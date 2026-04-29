@@ -63,6 +63,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         super().__init__(logger)
         self.models: list[IPredictionModel] = []
         self.residual_model: IResidualModel = MLPResidualModel(logger) if res_model is None else res_model
+        # Strategy D commit 20b: target device for tensor conversions inside
+        # KDE / gradient acquisition. Set by agent.to(device); defaults to CPU.
+        # KDE storage (latent_points, point_weights) remains numpy on CPU; the
+        # torch estimators convert to this device at call boundaries.
+        self._device: torch.device = torch.device("cpu")
 
         self.schema: DatasetSchema = schema
         self.local_data: LocalData = local_data
