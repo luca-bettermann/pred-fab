@@ -17,6 +17,7 @@ from ..orchestration import (
     EvaluationSystem,
     PredictionSystem,
     CalibrationSystem,
+    EvidenceBackend,
     Optimizer,
 )
 
@@ -243,13 +244,13 @@ class PfabAgent:
             perf_fn_batched=_perf_fn_batched,
             perf_fn_tensor=_perf_fn_tensor,
             uncertainty_fn=_pred.uncertainty,
-            delta_integrated_evidence_fn=_pred.delta_integrated_evidence_aggregated,
-            delta_integrated_evidence_batched_fn=_pred.delta_integrated_evidence_batched,
-            delta_integrated_evidence_joint_batched_fn=_pred.delta_integrated_evidence_joint_batched,
-            delta_integrated_evidence_batched_tensor_fn=_pred.delta_integrated_evidence_batched_tensor,
-            delta_integrated_evidence_joint_batched_tensor_fn=_pred.delta_integrated_evidence_joint_batched_tensor,
-            push_virtual_points_fn=_pred.push_virtual_points,
-            pop_virtual_points_fn=_pred.pop_virtual_points,
+            evidence=EvidenceBackend(
+                scalar=_pred.delta_integrated_evidence_aggregated,
+                batched=_pred.delta_integrated_evidence_batched,
+                joint_batched=_pred.delta_integrated_evidence_joint_batched,
+                batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
+                joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
+            ),
             n_exp_fn=lambda: _pred._n_exp,
             fit_empty_kde_fn=_pred.fit_empty_kde,
         )

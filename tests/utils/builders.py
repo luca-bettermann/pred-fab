@@ -9,7 +9,7 @@ from pred_fab.core import DataModule, Dataset, DatasetSchema
 from pred_fab.core.data_blocks import Features, Parameters, PerformanceAttributes, Domains
 from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute, Dimension, Domain
 from pred_fab.orchestration.agent import PfabAgent
-from pred_fab.orchestration.calibration import CalibrationSystem
+from pred_fab.orchestration.calibration import CalibrationSystem, EvidenceBackend
 from pred_fab.orchestration.prediction import PredictionSystem
 from pred_fab.utils import LocalData, PfabLogger, SplitType
 from tests.utils.interfaces import (
@@ -265,7 +265,7 @@ def build_calibration_system(
         logger=logger,
         perf_fn=perf_fn or _default_perf_fn,  # type: ignore[arg-type]
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
-        delta_integrated_evidence_fn=delta_integrated_evidence_fn,
+        evidence=EvidenceBackend(scalar=delta_integrated_evidence_fn),
     )
     # Fast DE settings for tests (production uses scipy defaults: 1000/15)
     cal.de_maxiter = 5

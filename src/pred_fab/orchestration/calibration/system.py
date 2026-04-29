@@ -24,6 +24,23 @@ _STATIC_DRIFT_FRAC = 0.2
 
 
 @dataclass
+class EvidenceBackend:
+    """Δ∫E callbacks the acquisition objective dispatches to.
+
+    Each entry is independent and may be ``None`` when that variant isn't
+    available — the κ-blend skips its arm. Five variants because the
+    acquisition path needs both single-point and joint (S × N × L) call
+    shapes, both numpy (DE) and torch (gradient), and a scalar fallback for
+    environments without a batched evidence implementation.
+    """
+    scalar: Callable[[np.ndarray], float] | None = None
+    batched: Callable[[np.ndarray], np.ndarray] | None = None
+    joint_batched: Callable[[np.ndarray], np.ndarray] | None = None
+    batched_tensor: Callable[..., torch.Tensor] | None = None
+    joint_batched_tensor: Callable[..., torch.Tensor] | None = None
+
+
+@dataclass
 class _ScheduleState:
     """Per-call state for the iterative Schedule phase (Phase 3).
 
@@ -70,13 +87,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         logger: PfabLogger,
         perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
-        delta_integrated_evidence_fn: Callable[[np.ndarray], float] | None = None,
-        delta_integrated_evidence_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
-        delta_integrated_evidence_joint_batched_fn: Callable[[np.ndarray], np.ndarray] | None = None,
-        delta_integrated_evidence_batched_tensor_fn: Callable[..., torch.Tensor] | None = None,
-        delta_integrated_evidence_joint_batched_tensor_fn: Callable[..., torch.Tensor] | None = None,
-        push_virtual_points_fn: Callable[[list[dict[str, Any]], list[float], DataModule | None], None] | None = None,
-        pop_virtual_points_fn: Callable[[], None] | None = None,
+        *,
+        evidence: EvidenceBackend | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
         perf_fn_batched: Callable[[list[dict[str, Any]]], list[dict[str, float | None]]] | None = None,
@@ -88,13 +100,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.perf_fn_batched = perf_fn_batched
         self.perf_fn_tensor = perf_fn_tensor
         self.uncertainty_fn = uncertainty_fn
-        self.delta_integrated_evidence_fn = delta_integrated_evidence_fn
-        self.delta_integrated_evidence_batched_fn = delta_integrated_evidence_batched_fn
-        self.delta_integrated_evidence_joint_batched_fn = delta_integrated_evidence_joint_batched_fn
-        self.delta_integrated_evidence_batched_tensor_fn = delta_integrated_evidence_batched_tensor_fn
-        self.delta_integrated_evidence_joint_batched_tensor_fn = delta_integrated_evidence_joint_batched_tensor_fn
-        self.push_virtual_points_fn = push_virtual_points_fn
-        self.pop_virtual_points_fn = pop_virtual_points_fn
+        self.evidence = evidence if evidence is not None else EvidenceBackend()
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn
 
@@ -419,8 +425,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             perfs = [self._per_candidate_perf(batch_norm[k], perf_range) for k in range(L)]
             score += (1.0 - kappa) * float(np.mean(perfs))
 
-        if kappa > 0.0 and self.delta_integrated_evidence_fn is not None:
-            de = float(self.delta_integrated_evidence_fn(batch_norm))
+        if kappa > 0.0 and self.evidence.scalar is not None:
+            de = float(self.evidence.scalar(batch_norm))
             score += kappa * de
 
         return score
@@ -479,15 +485,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # Evidence per candidate (each treated as single added kernel).
                 # Prefer the batched API: caches old-state work + batched encoder
                 # forward across S. Falls back to S × scalar API if unavailable.
-                if self.delta_integrated_evidence_batched_fn is not None:
+                if self.evidence.batched is not None:
                     with profiler.section("acq.delta_integrated_evidence_batched [KDE batch S]"):
                         evidences = np.asarray(
-                            self.delta_integrated_evidence_batched_fn(X_SD), dtype=np.float64,
+                            self.evidence.batched(X_SD), dtype=np.float64,
                         )
-                elif self.delta_integrated_evidence_fn is not None:
+                elif self.evidence.scalar is not None:
                     with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
                         evidences = np.array(
-                            [float(self.delta_integrated_evidence_fn(X_SD[i:i+1])) for i in range(S)],
+                            [float(self.evidence.scalar(X_SD[i:i+1])) for i in range(S)],
                             dtype=np.float64,
                         )
 
@@ -628,11 +634,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             evidences: torch.Tensor | None = None
             if kappa > 0.0:
-                if self.delta_integrated_evidence_batched_tensor_fn is not None:
-                    evidences = self.delta_integrated_evidence_batched_tensor_fn(X_SD).to(dtype=X_SD.dtype)
-                elif self.delta_integrated_evidence_batched_fn is not None:
+                if self.evidence.batched_tensor is not None:
+                    evidences = self.evidence.batched_tensor(X_SD).to(dtype=X_SD.dtype)
+                elif self.evidence.batched is not None:
                     # Fallback: numpy. Gradient lost.
-                    de_np = self.delta_integrated_evidence_batched_fn(X_SD.detach().cpu().numpy())
+                    de_np = self.evidence.batched(X_SD.detach().cpu().numpy())
                     evidences = torch.from_numpy(de_np).to(dtype=X_SD.dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
@@ -1257,7 +1263,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # remains the right tool for them).
         use_gradient = (
             self.optimizer == Optimizer.GRADIENT
-            and self.delta_integrated_evidence_joint_batched_tensor_fn is not None
+            and self.evidence.joint_batched_tensor is not None
             and not (space.integrality is not None and any(space.integrality))
         )
 
@@ -1280,7 +1286,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     # X_batch_S[:, :, phase_cols_t] = pts_S[:, :, phase_si_t]
                     src = pts_S.index_select(-1, phase_si_t)  # (S, n, |phase|)
                     X_batch_S[:, :, phase_cols_t] = src
-                de = self.delta_integrated_evidence_joint_batched_tensor_fn(X_batch_S)  # type: ignore[misc]
+                de = self.evidence.joint_batched_tensor(X_batch_S)  # type: ignore[misc]
                 return -de.to(dtype=x_flat_S.dtype)
 
             opt = self.engine.run_acquisition_gradient(
@@ -1825,11 +1831,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs_S = perfs_flat.reshape(S, NL).mean(axis=-1)
 
             evidence_S: np.ndarray | None = None
-            if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_fn is not None:
+            if kappa > 0.0 and self.evidence.joint_batched is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
                 with profiler.section("acq.delta_evidence_joint [KDE batch S, joint NL]"):
                     evidence_S = np.asarray(
-                        self.delta_integrated_evidence_joint_batched_fn(flat_per_candidate),
+                        self.evidence.joint_batched(flat_per_candidate),
                         dtype=np.float64,
                     )
 
@@ -1860,9 +1866,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1).to(dtype=dtype)
 
             evidence_S: torch.Tensor | None = None
-            if kappa > 0.0 and self.delta_integrated_evidence_joint_batched_tensor_fn is not None:
+            if kappa > 0.0 and self.evidence.joint_batched_tensor is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                evidence_S = self.delta_integrated_evidence_joint_batched_tensor_fn(flat_per_candidate).to(dtype=dtype)
+                evidence_S = self.evidence.joint_batched_tensor(flat_per_candidate).to(dtype=dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
 
@@ -2182,7 +2188,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # reparam) — no offset cumulative drift, no soft bound penalty,
                 # no smoothing factor. Delta constraint between adjacent steps
                 # becomes a smooth quadratic penalty in the tensor objective.
-                if self.delta_integrated_evidence_joint_batched_tensor_fn is None:
+                if self.evidence.joint_batched_tensor is None:
                     raise RuntimeError(
                         "Schedule optimisation requires the tensor Δ∫E closure. "
                         "PfabAgent wires it automatically; manual CalibrationSystem "
