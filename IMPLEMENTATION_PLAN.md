@@ -51,15 +51,22 @@
 | 12 | Schedule path gradient migration. `_acquisition_joint_batched_tensor` mirrors the numpy joint-batched objective. `_phase3_schedule` gains a gradient branch with **absolute-step encoding** (each step k ∈ [0, 1] strict via sigmoid reparam) replacing offset encoding for the gradient route — no cumulative drift, no soft bound penalty. Delta constraint becomes a smooth quadratic `5.0 · Σ max(0, |Δstep| − delta)²` penalty in the tensor objective. Decode-back handles both encodings. DE path stays for `Optimizer.DE`. | ~+101 / −5 | shipped |
 | 20 | GPU + `torch.compile` foundations. ``run_acquisition_gradient`` gains a ``compile_objective`` kwarg that wraps the objective with ``torch.compile(dynamic=True)`` (eager fallback on failure). ``agent.to(device)`` moves prediction model networks, categorical embeddings, and `nn.Module` normalisers to the target device. KDE latent points + RNG state remain CPU-bound for now — full GPU support is a follow-up that touches KDE storage. | +52 | shipped |
 
-**Remaining work (most of Strategy D shipped):**
+**Strategy D shipped through commits 1-12, 12b, 13-20, 20b, 8 (default flip).**
 
-| Phase | Commits | Net LOC | Gist | Risk |
-|---|---|---|---|---|
-| 2 | 12b | −110 (conditional) | Once commit 12's gradient schedule is validated on real workloads, retire the DE schedule path entirely: delete `_STATIC_DRIFT_FRAC`, `schedule_smoothing`, `_schedule_smoothing_factor`, `_schedule_acquisition_objective_vectorized`'s soft bound + smoothing penalties, `sched_deltas_norm` offset bookkeeping in `SolutionSpace`. The gradient path becomes the only schedule route. **Win #2 fully realised** when this lands. | medium |
-| 5 | 19 | −40 net | `run_baseline` / `run_calibration` unification — both routes converge through `_run_phase` after the gradient schedule is the canonical path | medium |
-| 5 | 20b | small | Full GPU support: move KDE latent points + RNG state to device. After 20b: `agent.to('cuda')` works end-to-end for the full acquisition graph (currently model + embeddings + normalisers move; KDE state and a few CPU intermediates remain). | low |
-| | 8 | flip | After commit 12 / 20 validation, flip the default `cal.optimizer` from DE to GRADIENT for the user-facing API. Currently the gradient path is opt-in. | low |
-| 4 | 17 | +120 (conditional) | KDE 4c cluster regime if real workloads need it | low |
+| Item | Status |
+|---|---|
+| 12b — retire DE schedule path | ✅ shipped (~−175 LOC). Soft bound penalty, smoothing penalty, schedule_smoothing engine attr, _schedule_smoothing_factor static method, SolutionSpace.smoothing_penalty all deleted. DE schedule path retired in run_calibration. |
+| 8 — default optimiser flip to GRADIENT | ✅ shipped. ``cal.optimizer = Optimizer.GRADIENT`` is now the default. |
+| 20b — device tracking on PredictionSystem | ✅ shipped. ``agent.to(device)`` records the target device on ``pred_system._device``; future torch estimator calls can wire it into ``device=`` kwargs. KDE storage (numpy/CPU) remains correct for small-N — moving to GPU for large-N is the next layer of work. |
+
+**Skipped:**
+
+| Item | Why skipped |
+|---|---|
+| 17 — KDE 4c cluster regime | Conditional on workload — no real-world signal yet showing >100K kernels. Dispatcher logs will surface the need empirically. |
+| 19 — run_baseline / run_calibration unification | Marginal benefit. Both already share ``_run_phase`` and ``_phase3_schedule`` internally. Public-API merge would be a breaking change with no architectural win — different semantics (Domain phase, N proposals vs 1, κ). The plan's "convergence through _run_phase" is already realised at the call-graph level. |
+
+**Outstanding (legacy DE baseline schedule):** the `_make_schedule_objective` per-experiment baseline-side schedule is still DE-typed with offset encoding. Migrating it to the same gradient + absolute encoding pattern as the calibration schedule (commit 12) is the natural next migration when needed. Hardcoded ``lam_smooth=0`` for safety after smoothing infrastructure removal.
 
 **Net so far: −388 LOC delivered. Target after full migration: ~−1100 LOC end-state simpler.**
 
