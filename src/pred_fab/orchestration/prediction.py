@@ -9,7 +9,6 @@ Integrates with DataModule for normalization and batching.
 from dataclasses import dataclass, field
 from typing import Any, Callable
 import copy
-import pandas as pd
 import numpy as np
 import torch
 import pickle
@@ -1483,24 +1482,39 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Copy fitted normalization state from offline training.
         temp_datamodule.set_normalization_state(dm.get_normalization_state())
 
-        # Export full row-wise table and enforce requested online slice.
-        X_df_all, y_df_all = temp_dataset.export_to_dataframe([exp_data.code])
-        if X_df_all.empty or y_df_all.empty:
+        # Strategy D commit 16b: tensor-native tune slicing (no pandas).
+        exported = temp_dataset.export_to_tensor_dict(
+            [exp_data.code],
+            x_columns=temp_datamodule.input_columns,
+            y_columns=temp_datamodule.output_columns,
+            categorical_mappings=temp_datamodule.categorical_mappings,
+        )
+        if exported.is_empty():
             raise ValueError("Tuning dataset has no feature rows available.")
 
-        end_index = end if end is not None else len(X_df_all)
-        if start < 0 or start >= len(X_df_all):
-            raise ValueError(f"Tuning start index {start} out of bounds for {len(X_df_all)} rows.")
-        if end_index <= start or end_index > len(X_df_all):
-            raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {len(X_df_all)} rows.")
+        n_total = exported.n_rows
+        end_index = end if end is not None else n_total
+        if start < 0 or start >= n_total:
+            raise ValueError(f"Tuning start index {start} out of bounds for {n_total} rows.")
+        if end_index <= start or end_index > n_total:
+            raise ValueError(f"Tuning end index {end_index} invalid for start {start} and {n_total} rows.")
 
-        X_df: pd.DataFrame = X_df_all.iloc[start:end_index].copy() # type: ignore
-        y_df: pd.DataFrame = y_df_all.iloc[start:end_index].copy() # type: ignore
+        # Slice each per-column tensor in the dict.
+        X_dict_sliced: dict[str, torch.Tensor] = {
+            col: t[start:end_index] for col, t in exported.X.items()
+        }
+        X_tune = temp_datamodule.prepare_input_from_tensor_dict(X_dict_sliced)
 
-        # Prepare tune arrays with training-fitted normalization.
-        X_tune = temp_datamodule.prepare_input(X_df)  # tensor
-        y_tune = y_df[temp_datamodule.output_columns].values.astype(np.float32)
-        temp_datamodule._normalize_batch(y_tune, temp_datamodule.output_columns, temp_datamodule._feature_stats)
+        # Build y as (n_sliced, n_outputs) tensor + apply per-column normalisation.
+        y_cols = []
+        for col in temp_datamodule.output_columns:
+            col_t = exported.y.get(col, torch.zeros(n_total, dtype=torch.float32))[start:end_index]
+            stats = temp_datamodule._feature_stats.get(col)
+            if stats is not None:
+                col_t = temp_datamodule._apply_normalization_tensor(col_t, stats)
+            y_cols.append(col_t.reshape(-1))
+        y_tune_t = torch.stack(y_cols, dim=-1) if y_cols else torch.zeros((end_index - start, 0))
+        y_tune = y_tune_t.detach().cpu().numpy()
 
         # Initialize base predictions array
         y_pred_base = np.zeros_like(y_tune)
