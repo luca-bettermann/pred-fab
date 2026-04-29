@@ -27,12 +27,15 @@ class SolutionSpace:
         trust_regions: dict[str, float],                   # delta per sched param (raw)
         int_set: set[int],                                 # integer param indices
         int_ranges_map: dict[int, int],                    # integer ranges
-        schedule_smoothing: float = 0.05,
         static_de_bounds: list[tuple[float, float]] | None = None,
         sched_de_bounds: list[tuple[float, float]] | None = None,
         sched_delta_norms: list[float] | None = None,
         step0_values: np.ndarray | None = None,           # (n_exp, D_sched) fixed step0 values (normalized)
     ):
+        # Strategy D commit 12b: ``schedule_smoothing`` arg removed — smoothness
+        # emerges naturally from the gradient schedule path's autograd coupling
+        # between adjacent steps. Legacy DE schedule path no longer applies a
+        # smoothing penalty (lam=0).
         self._n_experiments = n_experiments
         self._static_params = static_params
         self._sched_params = sched_params
@@ -40,7 +43,6 @@ class SolutionSpace:
         self._trust_regions = trust_regions
         self._int_set = int_set
         self._int_ranges_map = int_ranges_map
-        self._schedule_smoothing = schedule_smoothing
         self._step0_values = step0_values
 
         self._D_static = len(static_params)
@@ -153,41 +155,6 @@ class SolutionSpace:
                     pts[pt_idx, self._D_static:self._D_static + self._D_sched] = abs_speed
                 pt_idx += 1
         return pts
-
-    def smoothing_penalty(self, x_flat: np.ndarray, base_energy: float = 0.0) -> float:
-        """Compute absolute schedule smoothing penalty.
-
-        penalty = lam · Σ min(|Δv| / delta, 1.0) / n_experiments.
-        Decoupled from objective magnitude. base_energy is ignored (kept for API compat).
-        """
-        lam = self._schedule_smoothing
-        if lam <= 0 or self._D_sched == 0:
-            return 0.0
-        total = 0.0
-        for i in range(self._n_experiments):
-            L_i = self._per_exp_L[i]
-            if L_i <= 1:
-                continue
-            off = self._exp_offsets[i]
-            sv = np.zeros((L_i, self._D_sched))
-            if self._step0_fixed and self._step0_values is not None:
-                sv[0] = self._step0_values[i]
-                offset_base = off + self._D_static
-            else:
-                sv[0] = x_flat[off + self._D_static:off + self._D_static + self._D_sched]
-                offset_base = off + self._D_static + self._D_sched
-            for kk in range(1, L_i):
-                off_k = offset_base + (kk - 1) * self._D_sched
-                sv[kk] = sv[kk - 1] + x_flat[off_k:off_k + self._D_sched]
-            # Absolute cost per adjacent pair per dimension
-            for kk in range(1, L_i):
-                for d in range(self._D_sched):
-                    if self._sched_delta_arr[d] <= 0:
-                        continue
-                    change = abs(sv[kk, d] - sv[kk - 1, d])
-                    frac = min(change / self._sched_delta_arr[d], 1.0)
-                    total += lam * frac
-        return total / self._n_experiments
 
     def build_init_population(self, rng: np.random.RandomState, init_norm: np.ndarray) -> np.ndarray:
         """Build warm-started initial DE population from init_norm (n_experiments, n_numeric)."""

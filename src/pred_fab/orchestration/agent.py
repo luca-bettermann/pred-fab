@@ -714,17 +714,20 @@ class PfabAgent:
         dimension: str,
         *,
         delta: float | None = None,
-        smoothing: float | None = None,
         force: bool = False,
     ) -> None:
-        """Configure a parameter to vary per step of a dimension."""
+        """Configure a parameter to vary per step of a dimension.
+
+        Strategy D commit 12b: ``smoothing`` knob dropped — under the
+        gradient schedule path, smoothness emerges naturally from the
+        differentiable autoreg coupling between adjacent steps and the
+        delta-constraint penalty.
+        """
         self._assert_initialized()
         cal = self.calibration_system
         cal.configure_schedule_parameter(parameter, dimension, force=force)
         if delta is not None:
             cal.configure_adaptation_delta({parameter: delta}, force=force)
-        if smoothing is not None:
-            cal.schedule_smoothing = smoothing
 
     # ── Optimizer telemetry (read-only, set after each calibration step) ────────
 

@@ -77,9 +77,6 @@ class OptimizationEngine:
         self.gradient_raw_samples: int = 256
         self.gradient_init_eta: float = 1.0
 
-        # Schedule smoothing: penalizes speed changes between adjacent layers
-        self.schedule_smoothing: float = 0.05
-
     def smart_maxiter(self, D: int) -> int:
         """Per-call DE maxiter scaled with decision-variable count, capped by
         the configured global ceiling and floored at 5 (scipy DE requirement).
@@ -587,25 +584,6 @@ class OptimizationEngine:
             score=float(-best_val),
             convergence_history=history,
         )
-
-    @staticmethod
-    def _schedule_smoothing_factor(
-        scheduled_values: np.ndarray,
-        deltas: np.ndarray,
-        lam: float,
-    ) -> float:
-        """Multiplicative penalty in (0, 1] for schedule jumps."""
-        if lam <= 0 or scheduled_values.shape[0] <= 1:
-            return 1.0
-        factor = 1.0
-        for k in range(1, scheduled_values.shape[0]):
-            for d in range(scheduled_values.shape[1]):
-                if deltas[d] <= 0:
-                    continue
-                change = abs(scheduled_values[k, d] - scheduled_values[k - 1, d])
-                frac = min(change / deltas[d], 1.0)
-                factor *= (1.0 - lam * frac)
-        return factor
 
     def _wrap_mpc_objective(
         self,
