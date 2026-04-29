@@ -141,6 +141,21 @@ class IPredictionModel(BaseInterface):
         del gradient_pass  # base impl is identity, gradient flows naturally
         return X
 
+    # === CATEGORICAL CONTEXT (Strategy D commit 14) ===
+
+    def set_categorical_context(self, col_to_cardinality: dict[int, int]) -> None:
+        """Inform the model which of its input columns are categorical (cat-index).
+
+        ``col_to_cardinality`` maps **model-relative column index** → number of
+        categories for each categorical column in the model's input space
+        (after column selection in ``_filter_batches_for_model``).
+
+        Default: no-op. Override in models that consume categorical inputs
+        (typically ``TorchMLPModel`` subclasses use this to size internal
+        ``F.one_hot`` / ``nn.Embedding`` expansion).
+        """
+        del col_to_cardinality  # base impl ignores
+
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:

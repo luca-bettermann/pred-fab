@@ -32,6 +32,15 @@ from ..interfaces import IPredictionModel
 from ..utils import PfabLogger
 
 
+def _embedding_dim(cardinality: int) -> int:
+    """FastAI tabular heuristic for categorical embedding dimension.
+
+    Balanced bottleneck for any C — modest compression at small C, capped
+    at 50 for very large C so memory stays bounded.
+    """
+    return min(50, (cardinality + 1) // 2)
+
+
 class TorchMLPModel(IPredictionModel):
     """Feed-forward MLP base. Subclasses set ``HIDDEN`` and the IPredictionModel properties."""
 
@@ -73,6 +82,66 @@ class TorchMLPModel(IPredictionModel):
         self._model: nn.Module | None = None
         self._compiled_forward: Any = None
         self._is_trained: bool = False
+        # Strategy D commit 14: ``nn.Embedding`` per categorical input column,
+        # keyed by model-relative col index. Set via
+        # ``set_categorical_context`` before training. Each cat column
+        # encodes into a learned latent of size ``_embedding_dim(C)`` (FastAI
+        # heuristic), then concatenates with non-categorical columns ahead
+        # of the Linear stack. Embeddings are part of ``state_dict()`` and
+        # transfer via ``.to(device)`` automatically.
+        self._cat_embeddings: nn.ModuleDict = nn.ModuleDict()
+        self._cat_cardinalities: dict[int, int] = {}
+
+    def set_categorical_context(self, col_to_cardinality: dict[int, int]) -> None:
+        """Build embeddings for categorical input columns (Strategy D commit 14).
+
+        Called by ``PredictionSystem`` before training; keys are
+        model-relative column indices. One ``nn.Embedding(C, d)`` per cat
+        column with ``d = _embedding_dim(C)`` (FastAI tabular heuristic).
+        """
+        self._cat_cardinalities = dict(col_to_cardinality)
+        # ModuleDict keys must be strings.
+        self._cat_embeddings = nn.ModuleDict({
+            str(col_idx): nn.Embedding(C, _embedding_dim(C))
+            for col_idx, C in col_to_cardinality.items()
+        })
+
+    def _embed_cats(self, X: torch.Tensor) -> torch.Tensor:
+        """Embed categorical cat-index columns; pass others through.
+
+        Returns a tensor whose categorical columns have been replaced by
+        their learned ``d``-dim embedding, concatenated in column order.
+        """
+        if not self._cat_embeddings:
+            return X
+        n_cols = int(X.shape[-1])
+        cols: list[torch.Tensor] = []
+        for j in range(n_cols):
+            key = str(j)
+            if key in self._cat_embeddings:
+                C = self._cat_cardinalities[j]
+                idx = X[..., j].long().clamp(0, C - 1)
+                # nn.Embedding output: (..., d). Cast to X's dtype for concat.
+                cols.append(self._cat_embeddings[key](idx).to(dtype=X.dtype))
+            else:
+                cols.append(X[..., j:j + 1])
+        return torch.cat(cols, dim=-1)
+
+    def _expanded_input_size(self, n_raw: int) -> int:
+        """Input size after categorical embedding expansion.
+
+        Each cat column contributes ``embedding_dim`` (typically << C);
+        non-cat columns contribute 1 each.
+        """
+        if not self._cat_cardinalities:
+            return n_raw
+        size = 0
+        for j in range(n_raw):
+            if j in self._cat_cardinalities:
+                size += _embedding_dim(self._cat_cardinalities[j])
+            else:
+                size += 1
+        return size
 
     @classmethod
     def _probe_compile_available(cls, logger: PfabLogger | None = None) -> bool:
@@ -115,16 +184,25 @@ class TorchMLPModel(IPredictionModel):
         if y.ndim == 1:
             y = y.reshape(-1, 1)
         n_rows = int(X.shape[0])
+        n_raw = int(X.shape[1])
+        n_expanded = self._expanded_input_size(n_raw)
 
         torch.manual_seed(self.SEED)
-        net = self._build_network(X.shape[1], n_outputs)
+        net = self._build_network(n_expanded, n_outputs)
 
-        optimizer = torch.optim.Adam(net.parameters(), lr=self.LR, weight_decay=self.WEIGHT_DECAY)
+        # Include embedding params alongside network params — both are learned
+        # jointly. _cat_embeddings is empty when no categoricals, so chain
+        # gracefully.
+        params = list(net.parameters()) + list(self._cat_embeddings.parameters())
+        optimizer = torch.optim.Adam(params, lr=self.LR, weight_decay=self.WEIGHT_DECAY)
         loss_fn = nn.MSELoss()
         net.train()
+        self._cat_embeddings.train()
 
         # Scale-aware loop: above the threshold, shuffle into minibatches per
         # epoch via DataLoader; otherwise full-batch GD (mock-scale path).
+        # NOTE: must recompute _embed_cats per step — embeddings are learning,
+        # so a cached pre-loop expansion would be stale after the first update.
         if n_rows > self.MINIBATCH_THRESHOLD:
             batch_size = min(self.MINIBATCH_SIZE, max(n_rows // 4, 1))
             loader = DataLoader(
@@ -133,16 +211,17 @@ class TorchMLPModel(IPredictionModel):
             for _ in range(self.EPOCHS):
                 for X_b, y_b in loader:
                     optimizer.zero_grad()
-                    loss = loss_fn(net(X_b), y_b)
+                    loss = loss_fn(net(self._embed_cats(X_b)), y_b)
                     loss.backward()
                     optimizer.step()
         else:
             for _ in range(self.EPOCHS):
                 optimizer.zero_grad()
-                loss = loss_fn(net(X), y)
+                loss = loss_fn(net(self._embed_cats(X)), y)
                 loss.backward()
                 optimizer.step()
         net.eval()
+        self._cat_embeddings.eval()
 
         self._model = net
         if self.COMPILE and self._probe_compile_available(self.logger):
@@ -152,7 +231,7 @@ class TorchMLPModel(IPredictionModel):
                 # so any failure surfaces here (with fallback) rather than
                 # mid-acquisition where it would crash inference.
                 with torch.no_grad():
-                    _ = compiled(torch.zeros(1, X.shape[1], dtype=X.dtype))
+                    _ = compiled(torch.zeros(1, n_expanded, dtype=X.dtype))
                 self._compiled_forward = compiled
             except Exception as e:
                 self.logger.warning(
@@ -163,40 +242,36 @@ class TorchMLPModel(IPredictionModel):
         self._is_trained = True
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Inference forward.
+        """Inference forward — applies categorical one-hot expansion first.
 
-        ``gradient_pass=False`` (default): wraps in ``torch.no_grad()`` —
-        autograd tape not built. Used by the existing batched DE path which
-        is gradient-free.
-
-        ``gradient_pass=True``: skips the no_grad context so gradients flow
-        through the network to its inputs. Used by Strategy D's gradient-based
-        acquisition where the optimiser drives params from a leaf tensor and
-        needs ``∂predictions/∂params``. Note: ``self._compiled_forward`` is
-        bypassed in gradient mode — torch.compile's traced graph doesn't
-        compose cleanly with autograd today; eager forward is correct +
-        efficient enough at our model sizes.
+        ``gradient_pass=False`` (default): wraps in ``torch.no_grad()``.
+        ``gradient_pass=True``: keeps the autograd tape live (Strategy D
+        gradient acquisition). Categorical expansion via ``_embed_cats``
+        is non-differentiable (discrete index → one-hot float), but it
+        doesn't break gradient flow on the *non-categorical* columns.
         """
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
             return torch.zeros((X.shape[0], n_outputs), dtype=X.dtype)
+        X_expanded = self._embed_cats(X)
         if gradient_pass:
-            return self._model(X).reshape(-1, n_outputs)
+            return self._model(X_expanded).reshape(-1, n_outputs)
         net = self._compiled_forward if self._compiled_forward is not None else self._model
         with torch.no_grad():
-            return net(X).reshape(-1, n_outputs)
+            return net(X_expanded).reshape(-1, n_outputs)
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         if self._model is None or not self._is_trained:
             return X
+        X_expanded = self._embed_cats(X)
         layers = list(self._model.children())
         if gradient_pass:
-            h = X
+            h = X_expanded
             for layer in layers[:-1]:
                 h = layer(h)
             return h
         with torch.no_grad():
-            h = X
+            h = X_expanded
             for layer in layers[:-1]:
                 h = layer(h)
             return h

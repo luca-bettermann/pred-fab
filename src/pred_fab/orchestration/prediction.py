@@ -221,10 +221,32 @@ class PredictionSystem(BaseOrchestrationSystem):
         """One fit call. Wrapped with progress bar by caller."""
         model_train_batches = self._filter_batches_for_model(train_batches, model)
         model_val_batches = self._filter_batches_for_model(val_batches, model)
+        # Strategy D commit 14: pass model-relative cat-index cardinalities
+        # so models with categorical inputs can size their internal one-hot
+        # / nn.Embedding expansion. No-op for models without cats.
+        model.set_categorical_context(self._compute_model_cat_cardinalities(model))
         self.logger.info(f"Training model for features {model.outputs}...")
         model.train(model_train_batches, model_val_batches, **kwargs)
         primary = model.outputs[0] if model.outputs else "unknown"
         self.logger.info(f"Trained model for '{primary}'")
+
+    def _compute_model_cat_cardinalities(self, model: IPredictionModel) -> dict[int, int]:
+        """Translate DataModule cat cardinalities into model-relative col indices.
+
+        For each model input column j (after ``_filter_batches_for_model``
+        column selection), checks whether the corresponding DataModule
+        column is categorical and, if so, records its cardinality.
+        """
+        dm = self._assert_trained()
+        if not dm.cat_cardinalities:
+            return {}
+        input_cols = model.input_parameters + model.input_features
+        input_indices = dm.get_input_indices(input_cols, skip_missing=True)
+        result: dict[int, int] = {}
+        for model_idx, dm_idx in enumerate(input_indices):
+            if dm_idx in dm.cat_cardinalities:
+                result[model_idx] = dm.cat_cardinalities[dm_idx]
+        return result
 
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration.
