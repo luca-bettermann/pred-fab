@@ -1516,49 +1516,112 @@ class CalibrationSystem(BaseOrchestrationSystem):
         state: _ScheduleState,
         i_exp: int,
     ) -> tuple[np.ndarray, np.ndarray, float]:
-        """Run the inner DE for one experiment; return (new_static, new_trajectory, best_obj).
+        """Per-experiment schedule refinement via gradient + absolute encoding.
 
-        Variable layout in the DE vector:
-          [0 .. D_static)                   continuous static (drift trust region)
-          [D_static .. D_static+D_sched)    step 0 (free in [0, 1])
-          [D_static+D_sched ..)             offsets for steps 1..L_i-1 (in [-δ, +δ])
+        Strategy D commit 12c. Variable layout (absolute):
+          [0 .. D_static)                          continuous static (drift trust region)
+          [D_static .. D_static + L_i * D_sched)   per-step sched values (each in [0, 1])
+
+        Each variable bounded strictly via sigmoid in run_acquisition_gradient;
+        delta constraint between adjacent steps is a soft tensor penalty.
         """
-        bounds = self._build_schedule_per_exp_bounds(state, i_exp)
-        init = self._build_schedule_per_exp_init(state, i_exp)
+        L_i = state.per_exp_L[i_exp]
+        D_static = state.D_static
+        D_sched = state.D_sched
+
+        # Absolute-step bounds.
+        abs_bounds: list[tuple[float, float]] = []
+        for si in range(D_static):
+            centre = float(state.static_norms[i_exp, si])
+            lo_b = max(0.0, centre - _STATIC_DRIFT_FRAC)
+            hi_b = min(1.0, centre + _STATIC_DRIFT_FRAC)
+            if hi_b <= lo_b:
+                hi_b = min(1.0, lo_b + 1e-6)
+            abs_bounds.append((lo_b, hi_b))
+        for _k in range(L_i):
+            for _si in range(D_sched):
+                abs_bounds.append((0.0, 1.0))
+
+        # Initial values: current static + current trajectory steps.
+        init = np.zeros(D_static + L_i * D_sched)
+        init[:D_static] = state.static_norms[i_exp]
+        for k in range(L_i):
+            base = D_static + k * D_sched
+            init[base:base + D_sched] = state.schedule_norms[i_exp][k]
+        init = np.clip(
+            init,
+            np.array([lo for lo, _ in abs_bounds]),
+            np.array([hi for _, hi in abs_bounds]),
+        )
+
+        # Pre-build static-col indexing tensors for the objective closure.
         background = self._build_schedule_background(state, skip=i_exp)
-        objective = self._make_schedule_objective(state, i_exp, background)
-        n_vars = len(init)
+        background_t = torch.from_numpy(background).float() if background.size else torch.zeros((0, state.n_dm_cols), dtype=torch.float32)
+        base_row_t = torch.from_numpy(state.exp_base_rows[i_exp]).float()
+        static_col_idxs = torch.tensor(
+            [col_idx for _, col_idx in state.static_col_map], dtype=torch.long,
+        )
+        sched_col_idxs = torch.tensor(
+            [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
+        )
+        sched_delta_t = torch.tensor(state.sched_delta_norms, dtype=torch.float32) \
+            if state.sched_delta_norms else torch.zeros(D_sched, dtype=torch.float32)
 
-        # Inner DE sizing — population is the literal row count of init_pop
-        # (passed via init=, which overrides scipy's popsize multiplier). Keep
-        # ≥10 rows for diversity, capped by de_popsize, floored at 5 for scipy.
-        popsize = min(max(10, 4 * n_vars), max(self.de_popsize, 5))
-        init_pop = np.tile(init, (popsize, 1))
-        # Per-dim jitter scales to bound width — wide bounds (static drift,
-        # step-0) get wide jitter, tight bounds (offsets) stay tight. Without
-        # this, all dims share σ=0.02 and wide-bound dims never explore.
-        bound_widths = np.array([hi_b - lo_b for lo_b, hi_b in bounds])
-        sigmas = 0.30 * bound_widths
-        jitter = self.engine.rng.normal(0, 1.0, size=init_pop.shape) * sigmas
-        init_pop = init_pop + jitter
-        for v_idx, (lo_b, hi_b) in enumerate(bounds):
-            init_pop[:, v_idx] = np.clip(init_pop[:, v_idx], lo_b, hi_b)
-        init_pop[0] = init  # keep one centre exact
+        kappa = 1.0  # baseline schedule: pure Δ∫E
 
-        inner_maxiter = self.engine.smart_maxiter(n_vars)
-        opt = self.engine._run_de(
-            objective, bounds, init_pop=init_pop,
+        def _per_exp_schedule_objective_tensor(x_S: torch.Tensor) -> torch.Tensor:
+            """(S, D_static + L_i * D_sched) → (S,) negated scores."""
+            S = int(x_S.shape[0])
+            stat = x_S[:, :D_static]                                  # (S, D_static)
+            traj = x_S[:, D_static:].reshape(S, L_i, D_sched)         # (S, L_i, D_sched)
+            n_dm_cols = base_row_t.shape[0]
+
+            # Build (S, L_i, n_dm_cols) candidate rows.
+            cand = base_row_t.unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone()
+            if D_static > 0:
+                # static: same value for every step in the trajectory.
+                stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static)
+                cand[:, :, static_col_idxs] = stat_per_step
+            if D_sched > 0:
+                cand[:, :, sched_col_idxs] = traj
+
+            # Append background to candidates per S → (S, L_i + M_bg, n_dm_cols).
+            if background_t.shape[0] > 0:
+                bg_expanded = background_t.unsqueeze(0).expand(S, -1, -1)
+                full = torch.cat([cand, bg_expanded], dim=1)
+            else:
+                full = cand
+
+            # Reshape to (S, 1, NL, D_global) for the joint-batched tensor objective.
+            full_S_NL = full.unsqueeze(1)
+            scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
+
+            # Soft delta-constraint penalty per (step k, dim si).
+            if D_sched > 0 and L_i > 1:
+                valid = sched_delta_t > 0
+                if bool(valid.any().item()):
+                    step_diffs = (traj[:, 1:, :] - traj[:, :-1, :]).abs()
+                    excess = (step_diffs - sched_delta_t).clamp(min=0.0) * valid.to(dtype=traj.dtype)
+                    delta_penalty_S = (excess ** 2).sum(dim=(1, 2))
+                    scores_neg = scores_neg + 10.0 * delta_penalty_S
+
+            return scores_neg
+
+        opt = self.engine.run_acquisition_gradient(
+            _per_exp_schedule_objective_tensor,
+            abs_bounds,
+            x0=init,
             label=f"Schedule {i_exp + 1}/{state.n}",
             show_progress=self.logger._console_output_enabled,
-            maxiter=inner_maxiter,
-            popsize=popsize,
         )
         best_x = opt.best_x if opt.best_x is not None else init
         self.last_baseline_nfev += opt.nfev
-        new_static, new_sched = self._decode_schedule_per_exp_x(state, best_x, i_exp)
-        # opt.score = -result.fun (DE minimises), so best_obj = result.fun = -score.
+
+        # Decode absolute encoding: static = x[:D_static]; trajectory = reshape rest.
+        new_static = best_x[:D_static].copy()
+        new_traj = best_x[D_static:].reshape(L_i, D_sched).copy()
         best_obj = -opt.score
-        return new_static, new_sched, best_obj
+        return new_static, new_traj, best_obj
 
     def _build_schedule_background(
         self,
@@ -1579,123 +1642,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 rows.append(row)
         return np.stack(rows) if rows else np.zeros((0, state.n_dm_cols))
 
-    def _build_schedule_per_exp_bounds(
-        self,
-        state: _ScheduleState,
-        i_exp: int,
-    ) -> list[tuple[float, float]]:
-        """Bounds for the per-experiment DE vector — order matches variable layout."""
-        bounds: list[tuple[float, float]] = []
-        # Static stays within ±_STATIC_DRIFT_FRAC of its Phase-2 warm start.
-        for si in range(state.D_static):
-            centre = state.static_norms[i_exp, si]
-            lo_b = max(0.0, centre - _STATIC_DRIFT_FRAC)
-            hi_b = min(1.0, centre + _STATIC_DRIFT_FRAC)
-            if hi_b <= lo_b:
-                hi_b = min(1.0, lo_b + 1e-6)
-            bounds.append((lo_b, hi_b))
-        # Step 0 free in [0, 1].
-        bounds.extend([(0.0, 1.0)] * state.D_sched)
-        # Offsets for steps 1..L_i-1 in [-δ, +δ].
-        n_free_steps = state.per_exp_L[i_exp] - 1
-        for _k in range(n_free_steps):
-            for dnorm in state.sched_delta_norms:
-                d_eff = dnorm if dnorm > 0 else 1.0
-                bounds.append((-d_eff, d_eff))
-        return bounds
-
-    def _build_schedule_per_exp_init(
-        self,
-        state: _ScheduleState,
-        i_exp: int,
-    ) -> np.ndarray:
-        """Init vector — current static + step 0, with offsets from current trajectory diffs."""
-        L_i = state.per_exp_L[i_exp]
-        n_vars = state.D_static + state.D_sched + (L_i - 1) * state.D_sched
-        init = np.zeros(n_vars)
-        init[:state.D_static] = state.static_norms[i_exp]
-        init[state.D_static:state.D_static + state.D_sched] = state.schedule_norms[i_exp][0]
-        traj_curr = state.schedule_norms[i_exp]
-        for k in range(1, L_i):
-            base = state.D_static + state.D_sched + (k - 1) * state.D_sched
-            init[base:base + state.D_sched] = traj_curr[k] - traj_curr[k - 1]
-        return init
-
-    def _make_schedule_objective(
-        self,
-        state: _ScheduleState,
-        i_exp: int,
-        background: np.ndarray,
-    ) -> Callable[[np.ndarray], float]:
-        """Build the per-experiment DE objective (closure over state + background).
-
-        Strategy D commit 12b: smoothing penalty disabled (``lam_smooth=0``) —
-        the gradient schedule path makes step-to-step smoothness emerge
-        naturally, and the DE baseline schedule is the next migration target.
-        """
-        L_i = state.per_exp_L[i_exp]
-        D_static = state.D_static
-        D_sched = state.D_sched
-        lam_smooth = 0.0
-
-        def objective(x_flat: np.ndarray) -> float:
-            stat = x_flat[:D_static]
-            step0 = x_flat[D_static:D_static + D_sched]
-            # Reconstruct full trajectory by integrating offsets from step 0.
-            traj = np.empty((L_i, D_sched))
-            traj[0] = step0
-            for k in range(1, L_i):
-                base = D_static + D_sched + (k - 1) * D_sched
-                traj[k] = traj[k - 1] + x_flat[base:base + D_sched]
-
-            # Build candidate rows: base row + new static + per-step sched.
-            cand = np.empty((L_i, state.n_dm_cols))
-            for k in range(L_i):
-                cand[k] = state.exp_base_rows[i_exp]
-                for si, col_idx in state.static_col_map:
-                    cand[k, col_idx] = stat[si]
-                for si, col_idx in state.sched_col_map:
-                    cand[k, col_idx] = traj[k, si]
-
-            X_batch = np.concatenate([background, cand], axis=0)
-            neg_score = -self._acquisition(X_batch, kappa=1.0)
-
-            # Trust-region penalty: step-to-step jumps within delta_norm.
-            # Offset bounds enforce this hard, but a soft penalty near the
-            # boundary keeps the search stable.
-            tr_penalty = 0.0
-            for si, dnorm in enumerate(state.sched_delta_norms):
-                if dnorm <= 0:
-                    continue
-                diffs = np.abs(np.diff(traj[:, si]))
-                excess = np.maximum(diffs - dnorm, 0.0)
-                tr_penalty += float((excess * excess).sum())
-
-            # Second-difference smoothness: penalises zigzag, allows steady drift.
-            smooth = 0.0
-            if lam_smooth > 0 and L_i >= 3:
-                sd = traj[2:] - 2.0 * traj[1:-1] + traj[:-2]
-                smooth = float(lam_smooth * (sd * sd).sum())
-
-            return neg_score + tr_penalty * 10.0 + smooth
-
-        return objective
-
-    def _decode_schedule_per_exp_x(
-        self,
-        state: _ScheduleState,
-        x_flat: np.ndarray,
-        i_exp: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Decode an inner-DE result vector into (new_static, new_trajectory)."""
-        L_i = state.per_exp_L[i_exp]
-        new_static = x_flat[:state.D_static].copy()
-        new_traj = np.empty((L_i, state.D_sched))
-        new_traj[0] = x_flat[state.D_static:state.D_static + state.D_sched]
-        for k in range(1, L_i):
-            base = state.D_static + state.D_sched + (k - 1) * state.D_sched
-            new_traj[k] = new_traj[k - 1] + x_flat[base:base + state.D_sched]
-        return new_static, new_traj
 
     def _decode_schedule_specs(
         self,
