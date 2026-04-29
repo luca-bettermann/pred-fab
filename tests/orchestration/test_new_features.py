@@ -22,9 +22,14 @@ def _setup_trained_agent(tmp_path):
 class TestOptimizerConfig:
     """agent.configure_optimizer() sets optimizer parameters."""
 
-    def test_default_optimizer_is_de(self, tmp_path):
+    def test_default_optimizer_is_gradient(self, tmp_path):
+        """Strategy D: GRADIENT is the default optimizer.
+
+        DE remains opt-in for the integer-phase fallback and for users who
+        explicitly configure it via ``configure_optimizer(backend=DE)``.
+        """
         agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.optimizer == Optimizer.DE
+        assert agent.calibration_system.optimizer == Optimizer.GRADIENT
 
     def test_configure_de_maxiter(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)

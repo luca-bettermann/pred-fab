@@ -126,9 +126,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
-        self.optimizer: Optimizer = Optimizer.DE
-        # Strategy D commit 18 (partial): online_optimizer dropped — single
-        # optimisation path now (DE for integer phase, GRADIENT for continuous).
+        # Strategy D final flip: GRADIENT is the default (commit 8).
+        # ``Optimizer.DE`` remains an opt-in for users who explicitly want it
+        # via ``configure_optimizer(backend=Optimizer.DE)``. Internal phase
+        # dispatch automatically falls back to DE for integer-only phases
+        # (Domain) where gradient on cat-index makes no sense.
+        self.optimizer: Optimizer = Optimizer.GRADIENT
 
         # Running min/max of predicted system performance across training data.
         self._perf_range_min: float | None = None
