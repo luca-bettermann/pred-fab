@@ -459,46 +459,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             scores = scores + kappa * evidences
         return -scores
 
-    def _acquisition_objective_vectorized(
-        self,
-        X_DS: np.ndarray,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> np.ndarray:
-        """Vectorised (negated) acquisition for scipy DE ``vectorized=True``.
-
-        scipy passes ``X_DS`` of shape ``(D, S)`` — one column per candidate. Returns
-        a length-S array of negated scores. The performance side runs through
-        ``_per_candidate_perf_batched`` so all S candidates' autoregressive
-        trajectories evaluate in one batched forward pass per cell-step.
-        """
-        with profiler.section("acq._acquisition_objective_vectorized [per gen]"):
-            X_SD = np.ascontiguousarray(X_DS.T)  # (S, D)
-            S = X_SD.shape[0]
-
-            perfs: np.ndarray | None = None
-            if kappa < 1.0:
-                perfs = self._per_candidate_perf_batched(X_SD, perf_range)
-
-            evidences: np.ndarray | None = None
-            if kappa > 0.0:
-                # Evidence per candidate (each treated as single added kernel).
-                # Prefer the batched API: caches old-state work + batched encoder
-                # forward across S. Falls back to S × scalar API if unavailable.
-                if self.evidence.batched is not None:
-                    with profiler.section("acq.delta_integrated_evidence_batched [KDE batch S]"):
-                        evidences = np.asarray(
-                            self.evidence.batched(X_SD), dtype=np.float64,
-                        )
-                elif self.evidence.scalar is not None:
-                    with profiler.section("acq.delta_integrated_evidence [KDE × S]"):
-                        evidences = np.array(
-                            [float(self.evidence.scalar(X_SD[i:i+1])) for i in range(S)],
-                            dtype=np.float64,
-                        )
-
-            return self._kappa_blend(np.zeros(S, dtype=np.float64), perfs, evidences, kappa)
-
     def _per_candidate_perf_tensor(
         self,
         X_SD: torch.Tensor,
@@ -1803,41 +1763,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
         kappa: float,
         perf_range: tuple[float, float] | None,
     ) -> np.ndarray:
-        """Vectorised κ-acquisition over S DE candidates, each adding N×L points jointly.
+        """No-grad numpy shim around :meth:`_acquisition_joint_batched_tensor`.
 
-        ``full_S_NL`` has shape ``(S, N, L, D_global)`` where:
-          - ``S`` = scipy DE candidate batch dim,
-          - ``N`` = proposals per candidate (joint-batch over N points; baseline),
-          - ``L`` = schedule steps per proposal (joint-trajectory),
-          - ``D_global`` = full datamodule input dim.
-
-        Returns ``(S,)`` of negated κ-weighted scores for DE minimisation.
-
-        The (N×L) points per candidate are evaluated jointly under Δ∫E
-        (information gain) and per-row averaged for performance. Reduces to
-        the single-point case when N=L=1.
+        ``full_S_NL`` has shape ``(S, N, L, D_global)``; returns ``(S,)``
+        negated κ-weighted scores for DE minimisation. See the tensor
+        variant for the per-arm semantics.
         """
         with profiler.section("acq._acquisition_joint_batched_objective [per gen]"):
-            S, N, L, D = full_S_NL.shape
-            NL = N * L
-
-            perfs_S: np.ndarray | None = None
-            if kappa < 1.0:
-                flat_rows = full_S_NL.reshape(S * NL, D)
-                with profiler.section("acq.perf_batched [N×L per S]"):
-                    perfs_flat = self._per_candidate_perf_batched(flat_rows, perf_range)
-                perfs_S = perfs_flat.reshape(S, NL).mean(axis=-1)
-
-            evidence_S: np.ndarray | None = None
-            if kappa > 0.0 and self.evidence.joint_batched is not None:
-                flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                with profiler.section("acq.delta_evidence_joint [KDE batch S, joint NL]"):
-                    evidence_S = np.asarray(
-                        self.evidence.joint_batched(flat_per_candidate),
-                        dtype=np.float64,
-                    )
-
-            return self._kappa_blend(np.zeros(S, dtype=np.float64), perfs_S, evidence_S, kappa)
+            with torch.no_grad():
+                out_t = self._acquisition_joint_batched_tensor(
+                    torch.from_numpy(np.ascontiguousarray(full_S_NL)).double(),
+                    kappa, perf_range,
+                )
+            return out_t.detach().cpu().numpy().astype(np.float64)
 
     def _acquisition_joint_batched_tensor(
         self,
