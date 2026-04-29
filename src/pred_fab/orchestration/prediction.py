@@ -1921,27 +1921,23 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return predictions_list
 
-    def _predict_non_recursive_batched(
+    def _build_X_dict_flat(
         self,
-        predictions_list: list[dict[str, np.ndarray]],
+        dm: "DataModule",
         dim_info_list: list[dict[str, Any]],
-        predict_from: int,
-        predict_to: int,
-        model: IPredictionModel,
-    ) -> None:
-        """Non-recursive batched: build (S × n_cells, n_cols) batch, one forward_pass."""
-        S = len(predictions_list)
-        n_cells = predict_to - predict_from
-        shape = dim_info_list[0]['shape']
-        iterator_feats = dim_info_list[0]['iterator_feats']
+        cell_indices: list[tuple[int, ...]] | np.ndarray,
+        iterator_feats: list[tuple[str, int, int]],
+    ) -> dict[str, torch.Tensor]:
+        """Build per-column tensors for the (S × n_cells, n_input_cols) batch.
 
-        cell_indices: list[tuple[int, ...]] = [
-            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
-        ]
-
-        dm = self._assert_trained()
-
-        # pandas-free X build via tensor dict.
+        Each ``dim_info`` in ``dim_info_list`` carries a ``param_base`` dict —
+        the (param_code → value) map for that S-row. ``cell_indices`` lists the
+        cell-index tuples within the dimension. Output is keyed by
+        ``dm.input_columns`` and ready for ``prepare_input_from_tensor_dict``.
+        Categoricals emit cat-index ``int64`` tensors; iterator features emit
+        normalised positions; numeric params/features emit float scalars.
+        """
+        S = len(dim_info_list)
         n_cells = len(cell_indices)
         iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
         X_dict_flat: dict[str, torch.Tensor] = {}
@@ -1970,6 +1966,30 @@ class PredictionSystem(BaseOrchestrationSystem):
                     v = float(param_base.get(col_name, 0.0))
                     num_vals.extend([v] * n_cells)
                 X_dict_flat[col_name] = torch.tensor(num_vals, dtype=torch.float32)
+        return X_dict_flat
+
+    def _predict_non_recursive_batched(
+        self,
+        predictions_list: list[dict[str, np.ndarray]],
+        dim_info_list: list[dict[str, Any]],
+        predict_from: int,
+        predict_to: int,
+        model: IPredictionModel,
+    ) -> None:
+        """Non-recursive batched: build (S × n_cells, n_cols) batch, one forward_pass."""
+        S = len(predictions_list)
+        n_cells = predict_to - predict_from
+        shape = dim_info_list[0]['shape']
+        iterator_feats = dim_info_list[0]['iterator_feats']
+
+        cell_indices: list[tuple[int, ...]] = [
+            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
+        ]
+
+        dm = self._assert_trained()
+
+        # pandas-free X build via tensor dict.
+        X_dict_flat = self._build_X_dict_flat(dm, dim_info_list, cell_indices, iterator_feats)
         X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
 
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
@@ -2030,38 +2050,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         else:
             cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
 
-        # Build (S × n_cells, n_input_cols) tensor — :
-        # pandas-free direct construction via tensor dict + prepare_input_from_tensor_dict.
+        # Build (S × n_cells, n_input_cols) tensor — pandas-free direct
+        # construction via tensor dict + prepare_input_from_tensor_dict.
         with profiler.section("autoreg.build_X_dict [tensor + iter_feats]"):
-            n_total = S * n_cells
-            iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
-            X_dict_flat: dict[str, torch.Tensor] = {}
-            for col_name in dm.input_columns:
-                if col_name in dm.categorical_mappings:
-                    cats = dm.categorical_mappings[col_name]
-                    cat_to_idx = {c: i for i, c in enumerate(cats)}
-                    idx_vals: list[int] = []
-                    for s in range(S):
-                        param_base = dim_info_list[s]['param_base']
-                        v = param_base.get(col_name, cats[0] if cats else None)
-                        cell_val = cat_to_idx.get(v, 0)
-                        idx_vals.extend([cell_val] * n_cells)
-                    X_dict_flat[col_name] = torch.tensor(idx_vals, dtype=torch.long)
-                elif col_name in iter_feat_lookup:
-                    axis_pos, size = iter_feat_lookup[col_name]
-                    vals: list[float] = []
-                    for _s in range(S):
-                        for cell_row in range(n_cells):
-                            idx_arr = cell_indices_arr[cell_row]
-                            vals.append(float(idx_arr[axis_pos]) / max(size - 1, 1))
-                    X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
-                else:
-                    vals = []
-                    for s in range(S):
-                        param_base = dim_info_list[s]['param_base']
-                        v = float(param_base.get(col_name, 0.0))
-                        vals.extend([v] * n_cells)
-                    X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
+            X_dict_flat = self._build_X_dict_flat(dm, dim_info_list, cell_indices_arr, iterator_feats)
         with profiler.section("autoreg.prepare_input_from_tensor_dict [normalize]"):
             X_norm_flat = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
         n_input_cols = X_norm_flat.shape[1]
@@ -2386,27 +2378,11 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         n_cells = predict_to - predict_from
 
-        # pandas-free X build via tensor dict.
+        # pandas-free X build via tensor dict (S=1 wrapper around the helper).
         cell_indices: list[tuple[int, ...]] = [
             tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
         ]
-        param_base = dim_info['param_base']
-        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
-        X_dict_flat: dict[str, torch.Tensor] = {}
-        for col_name in dm.input_columns:
-            if col_name in dm.categorical_mappings:
-                cats = dm.categorical_mappings[col_name]
-                cat_to_idx = {c: i for i, c in enumerate(cats)}
-                v = param_base.get(col_name, cats[0] if cats else None)
-                cell_val = cat_to_idx.get(v, 0)
-                X_dict_flat[col_name] = torch.full((n_cells,), cell_val, dtype=torch.long)
-            elif col_name in iter_feat_lookup:
-                axis_pos, size = iter_feat_lookup[col_name]
-                vals = [float(idx[axis_pos]) / max(size - 1, 1) for idx in cell_indices]
-                X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
-            else:
-                v_f = float(param_base.get(col_name, 0.0))
-                X_dict_flat[col_name] = torch.full((n_cells,), v_f, dtype=torch.float32)
+        X_dict_flat = self._build_X_dict_flat(dm, [dim_info], cell_indices, iterator_feats)
         X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (n_cells, n_input_cols)
 
         # Pre-resolve per-recursive-feature column indices and normalisation
