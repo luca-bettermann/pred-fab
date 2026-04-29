@@ -1920,20 +1920,38 @@ class PredictionSystem(BaseOrchestrationSystem):
             tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
         ]
 
-        # One DataFrame per candidate, then concatenate. prepare_input uses the
-        # categorical mappings learned at fit time, so different candidates can
-        # have different category values without issue.
-        all_rows = []
-        for s in range(S):
-            param_base = dim_info_list[s]['param_base']
-            for idx in cell_indices:
-                row = param_base.copy()
-                for feat_code, axis_pos, size in iterator_feats:
-                    row[feat_code] = float(idx[axis_pos]) / max(size - 1, 1)
-                all_rows.append(row)
-        X_df = pd.DataFrame(all_rows)
         dm = self._assert_trained()
-        X_norm = dm.prepare_input(X_df)  # (S × n_cells, n_input_cols), tensor
+
+        # Strategy D commit 16b: pandas-free X build via tensor dict.
+        n_cells = len(cell_indices)
+        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
+        X_dict_flat: dict[str, torch.Tensor] = {}
+        for col_name in dm.input_columns:
+            if col_name in dm.categorical_mappings:
+                cats = dm.categorical_mappings[col_name]
+                cat_to_idx = {c: i for i, c in enumerate(cats)}
+                idx_vals: list[int] = []
+                for s in range(S):
+                    param_base = dim_info_list[s]['param_base']
+                    v = param_base.get(col_name, cats[0] if cats else None)
+                    cell_val = cat_to_idx.get(v, 0)
+                    idx_vals.extend([cell_val] * n_cells)
+                X_dict_flat[col_name] = torch.tensor(idx_vals, dtype=torch.long)
+            elif col_name in iter_feat_lookup:
+                axis_pos, size = iter_feat_lookup[col_name]
+                vals: list[float] = []
+                for _s in range(S):
+                    for idx in cell_indices:
+                        vals.append(float(idx[axis_pos]) / max(size - 1, 1))
+                X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
+            else:
+                num_vals: list[float] = []
+                for s in range(S):
+                    param_base = dim_info_list[s]['param_base']
+                    v = float(param_base.get(col_name, 0.0))
+                    num_vals.extend([v] * n_cells)
+                X_dict_flat[col_name] = torch.tensor(num_vals, dtype=torch.float32)
+        X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
 
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
