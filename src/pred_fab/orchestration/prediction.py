@@ -1069,29 +1069,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         return u
 
     def predict_for_calibration(self, params: dict[str, Any]) -> tuple[dict[str, np.ndarray], Any]:
-        """Predict feature arrays for all dimensional positions for calibration use.
+        """Single-candidate ``predict_for_calibration_batched``.
 
-        Runs the full dimensional prediction for the given parameter configuration
-        and converts each feature tensor to a tabular array suitable for evaluation
-        models (rows = [dim_iter_vals..., feature_val]).
-
-        Args:
-            params: Raw (denormalized) parameter dict for the virtual experiment.
-
-        Returns:
-            Tuple of:
-                - feature_arrays: Dict mapping feature code to 2-D array
-                  where each row is [dim_iter_1, ..., feature_value].
-                - params_block: A copy of the schema Parameters block with values
-                  set from ``params``.
-
-        Raises:
-            RuntimeError: If the system has not been trained yet.
+        Returns ``(feature_arrays, params_block)`` for ``params``. Thin
+        wrapper — the prediction goes through the same tensor autoreg path
+        as the batched API.
         """
-        self._assert_trained()
-
-        predictions = self._predict_from_params(params=params, batch_size=1000)
-        return self._postprocess_predictions_for_calibration(predictions, params)
+        return self.predict_for_calibration_batched([params])[0]
 
     def predict_for_calibration_batched(
         self,
@@ -1794,88 +1778,32 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_size: int = 1000,
         overlap: int = 0,
     ) -> list[dict[str, np.ndarray]]:
-        """Predict for S candidate parameter sets in parallel.
+        """No-grad numpy shim around :meth:`_predict_from_params_tensor`.
 
-        For each model, we group candidates by their structural shape (typically
-        all S share the same shape during a single acquisition call). Within each
-        shape group, recursive models go through a batched autoreg loop that runs
-        S trajectories in parallel (one forward_pass(S, n_cols) per cell-step
-        instead of S × forward_pass(1, n_cols)). Non-recursive models go through
-        the existing batched path with one big concatenated batch.
-
-        Result: list of S predictions dicts, identical to S separate
-        ``_predict_from_params`` calls but ~4–5× cheaper on the forward_pass side
-        at typical S = popsize × D ≈ 16.
+        Returns ``list[dict[feat, np.ndarray]]`` — the tensor outputs are
+        detached and converted at the API boundary, with each per-feature
+        array allocated to ``np.full(feat_shape, np.nan)`` and then filled
+        from the tensor. Predictions cover the full feature shape; the
+        ``predict_from`` / ``predict_to`` / ``batch_size`` / ``overlap``
+        kwargs are accepted for signature compat with ``_predict_from_params``
+        (chunking happens at the per-experiment loop level).
         """
+        del predict_from, predict_to, batch_size, overlap
         self._assert_trained()
         S = len(params_list)
         if S == 0:
             return []
-        if S == 1:
-            return [self._predict_from_params(
-                params_list[0], predict_from, predict_to, batch_size, overlap,
-            )]
 
-        # Per-candidate dim_info per model (precompute) and per-candidate predictions dict.
-        per_model_dim_info: list[list[dict[str, Any]]] = []  # [model][candidate]
-        for model in self.models:
-            per_model_dim_info.append(
-                [self._get_model_dim_info(model, p) for p in params_list]
-            )
+        with torch.no_grad():
+            preds_t = self._predict_from_params_tensor(params_list)
 
-        predictions_list: list[dict[str, np.ndarray]] = [{} for _ in range(S)]
-
-        for m_idx, model in enumerate(self.models):
-            dim_infos = per_model_dim_info[m_idx]
-
-            # Allocate per-candidate prediction arrays
-            for s, dim_info in enumerate(dim_infos):
-                for feat in model.outputs:
-                    if feat not in predictions_list[s]:
-                        feat_shape = self._get_feature_shape(feat, params_list[s])
-                        predictions_list[s][feat] = np.full(feat_shape, np.nan)
-
-            # Group candidates by shape for batched evaluation. Common case:
-            # all S candidates share the same shape (n_layers / n_segments are
-            # not in the DE search vector), so this becomes one big group.
-            shape_groups: dict[tuple, list[int]] = {}
-            for s, dim_info in enumerate(dim_infos):
-                shape_groups.setdefault(dim_info['shape'], []).append(s)
-
-            recursive_specs_per_candidate = [
-                self._get_recursive_input_specs(model, di) for di in dim_infos
-            ]
-
-            for shape_key, group_indices in shape_groups.items():
-                # Within a group, all candidates share shape + iterator structure;
-                # only param_base differs.
-                group_dim_infos = [dim_infos[i] for i in group_indices]
-                group_recursive_specs = recursive_specs_per_candidate[group_indices[0]]
-                total_positions = group_dim_infos[0]['total_positions']
-
-                p_from = max(0, predict_from)
-                p_to = min(predict_to if predict_to is not None else total_positions, total_positions)
-                if p_from > total_positions:
-                    continue
-
-                if group_recursive_specs:
-                    self._predict_autoregressive_batched(
-                        [predictions_list[i] for i in group_indices],
-                        group_dim_infos,
-                        p_from, p_to,
-                        model,
-                        group_recursive_specs,
-                    )
-                else:
-                    # Non-recursive: stack candidates' rows into one big batch.
-                    self._predict_non_recursive_batched(
-                        [predictions_list[i] for i in group_indices],
-                        group_dim_infos,
-                        p_from, p_to,
-                        model,
-                    )
-
-        return predictions_list
+        out: list[dict[str, np.ndarray]] = []
+        for s_preds in preds_t:
+            out.append({
+                feat: t.detach().cpu().numpy().astype(np.float64)
+                for feat, t in s_preds.items()
+            })
+        return out
 
     def _build_X_dict_flat(
         self,
@@ -1923,106 +1851,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                     num_vals.extend([v] * n_cells)
                 X_dict_flat[col_name] = torch.tensor(num_vals, dtype=torch.float32)
         return X_dict_flat
-
-    def _predict_non_recursive_batched(
-        self,
-        predictions_list: list[dict[str, np.ndarray]],
-        dim_info_list: list[dict[str, Any]],
-        predict_from: int,
-        predict_to: int,
-        model: IPredictionModel,
-    ) -> None:
-        """Non-recursive batched: build (S × n_cells, n_cols) batch, one forward_pass."""
-        S = len(predictions_list)
-        n_cells = predict_to - predict_from
-        shape = dim_info_list[0]['shape']
-        iterator_feats = dim_info_list[0]['iterator_feats']
-
-        cell_indices: list[tuple[int, ...]] = [
-            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
-        ]
-
-        dm = self._assert_trained()
-
-        # pandas-free X build via tensor dict.
-        X_dict_flat = self._build_X_dict_flat(dm, dim_info_list, cell_indices, iterator_feats)
-        X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (S × n_cells, n_input_cols)
-
-        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-        X_model = X_norm.index_select(1, input_indices_t)
-        y_pred_norm = model.forward_pass(X_model)
-        y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
-        y_np = y_pred.detach().cpu().numpy()
-
-        for s in range(S):
-            offset = s * n_cells
-            for i, feat_name in enumerate(model.outputs):
-                if feat_name not in predictions_list[s]:
-                    continue
-                feat_depth = len(predictions_list[s][feat_name].shape)
-                for j, idx in enumerate(cell_indices):
-                    feat_idx = idx[:feat_depth]
-                    predictions_list[s][feat_name][feat_idx] = float(y_np[offset + j, i])
-
-    def _predict_autoregressive_batched(
-        self,
-        predictions_list: list[dict[str, np.ndarray]],
-        dim_info_list: list[dict[str, Any]],
-        predict_from: int,
-        predict_to: int,
-        model: IPredictionModel,
-        recursive_specs: list[tuple[str, str, int, int]],
-    ) -> None:
-        """S-parallel autoregressive prediction → in-place ``predictions_list`` writes.
-
-        Thin no-grad wrapper around ``_predict_autoregressive_batched_tensor``:
-        builds the seed ``x_norm_S = (S, n_input)`` from each candidate's
-        ``param_base``, resolves ``feat_shapes`` from the pre-allocated numpy
-        arrays, runs the tensor autoreg under ``torch.no_grad()`` so no
-        autograd graph is retained, then copies back to numpy at the API
-        boundary preserving the target dtype.
-
-        ``predict_from`` / ``predict_to`` are accepted for signature compat
-        with ``_predict_non_recursive_batched``; the tensor variant covers
-        the full ``shape`` derived from ``dim_info_list`` (callers in
-        ``_predict_with_recursion_groups`` already pass the full range).
-        """
-        del predict_from, predict_to  # tensor variant covers the full shape; chunking happens at the per-experiment loop level
-        S = len(predictions_list)
-        if S == 0:
-            return
-        dm = self._assert_trained()
-
-        # Per-candidate parameter seed: (S, n_input). param_base is
-        # narrowed to this model's declared inputs; missing input_columns
-        # default to 0 in params_to_tensor and get clobbered per cell by
-        # iterator / recursive overrides inside the tensor variant.
-        x_norm_S = torch.stack([
-            dm.params_to_tensor(di['param_base']) for di in dim_info_list
-        ])
-
-        # feat_shapes from the pre-allocated arrays. Within a shape group
-        # (caller's invariant) all candidates share feat_shape.
-        feat_shapes: dict[str, tuple[int, ...]] = {}
-        for feat in model.outputs:
-            if feat in predictions_list[0]:
-                feat_shapes[feat] = tuple(predictions_list[0][feat].shape)
-
-        with torch.no_grad():
-            preds = self._predict_autoregressive_batched_tensor(
-                x_norm_S, dim_info_list, model, recursive_specs, feat_shapes,
-            )
-
-        # API boundary: copy tensor stack into per-candidate numpy arrays.
-        with profiler.section("autoreg.copy_to_numpy [API boundary]"):
-            for feat, stack in preds.items():
-                stack_np = stack.detach().cpu().numpy()
-                for s in range(S):
-                    target = predictions_list[s].get(feat)
-                    if target is None:
-                        continue
-                    predictions_list[s][feat] = stack_np[s].astype(target.dtype, copy=False)
 
     def _predict_from_params(
         self,
