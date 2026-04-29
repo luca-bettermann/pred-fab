@@ -13,10 +13,17 @@ from ...utils import PfabLogger, ProgressBar, profiler
 
 
 class Optimizer(Enum):
-    """Optimization backend for the calibration acquisition function."""
-    LBFGSB   = "lbfgsb"    # gradient-based multi-start, scipy numpy (fast, local)
-    DE       = "de"         # differential evolution, scipy numpy (global, slower)
-    GRADIENT = "gradient"   # autograd multi-start, torch.optim (Strategy D commit 5)
+    """Optimization backend for the calibration acquisition function.
+
+    Strategy D commit 18 (partial): collapsed from {DE, LBFGSB, GRADIENT}
+    to {DE, GRADIENT}. LBFGSB was a thin wrapper around scipy.optimize
+    that became redundant once the gradient path landed (which uses
+    torch.optim.LBFGS directly inside ``run_acquisition_gradient``). DE
+    stays for integer-phase optimisation until the schedule path lands
+    its torch-native enumeration in commit 12.
+    """
+    DE       = "de"         # torch-native differential evolution (integer-aware)
+    GRADIENT = "gradient"   # autograd multi-start, torch.optim Adam/LBFGS
 
 
 @dataclass
@@ -38,32 +45,24 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # ======================================================================
 
 class OptimizationEngine:
-    """Numerical optimization backend: DE and L-BFGS-B with joint schedule support."""
+    """Numerical optimization backend: DE (integer phase) and GRADIENT (continuous)."""
 
     def __init__(self, logger: PfabLogger, random_seed: int | None = None):
         self.logger = logger
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
-        # DE optimizer parameters (global, population-based + L-BFGS-B polish)
+        # DE optimizer parameters (population-based, used for integer phase).
         # Convergence is governed by "no improvement in K generations" via the
-        # callback rather than scipy's std-vs-mean criterion, which misfires
-        # on low-D / integer landscapes by declaring victory after one gen
-        # with a clustered population. Setting scipy's tol to 0 disables that
-        # fragile check; the callback is the authoritative exit signal.
+        # callback heuristic — same as the prior scipy wrapper.
         self.de_maxiter: int = 1000
-        # scipy treats popsize as a *multiplier* of D — total population is
-        # popsize × D individuals per generation. Default 8 (was scipy's 15)
-        # gives sufficient diversity for our smooth-ish acquisition landscapes
-        # while halving evaluations per generation. Tunable via configure_optimizer.
+        # popsize × D individuals per generation. Default 8 gives sufficient
+        # diversity for smooth-ish acquisition landscapes while halving
+        # evaluations per generation. Tunable via configure_optimizer.
         self.de_popsize: int = 8
-        self.de_tol: float = 0.0  # passed to scipy; 0 effectively disables std/mean exit
+        self.de_tol: float = 0.0  # legacy; superseded by no-improvement-window
         self.de_no_improve_window: int = 10  # generations without improvement → halt
         self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
-
-        # L-BFGS-B optimizer parameters (gradient-based, multi-start)
-        self.lbfgsb_maxfun: int | None = None
-        self.lbfgsb_eps: float = 1e-3
 
         # GRADIENT optimizer parameters (autograd multi-start with sigmoid bound reparam)
         self.gradient_n_starts: int = 4
@@ -196,33 +195,19 @@ class OptimizationEngine:
             return step_sum / L
 
         # --- 3. Run optimizer ---
-        if active_optimizer == Optimizer.DE:
-            opt = self._run_de(
-                _objective,
-                all_bounds,
-                init_pop=init_pop,
-                integrality=integrality,
-                label=label,
-                show_progress=show_progress,
-                maxiter=self.smart_maxiter(n_vars),
-            )
-        else:
-            x0_list: list[np.ndarray] = []
-            if x0 is not None:
-                if x0.size == D_static:
-                    x0_list.append(x0)
-                else:
-                    x0_list.append(x0[:n_vars] if x0.size >= n_vars else x0)
-            bounds_arr = np.array(all_bounds)
-            for _ in range(n_restarts):
-                x0_list.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]))
-            if not x0_list:
-                x0_list.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]))
-
-            opt = self._run_lbfgsb(
-                _objective, bounds_arr.tolist(), x0_list=x0_list,
-                label=label, show_progress=show_progress,
-            )
+        # Strategy D commit 18 (partial): LBFGSB branch deleted — gradient
+        # path now lives in run_acquisition_gradient and is dispatched
+        # directly from CalibrationSystem rather than via this enum.
+        del active_optimizer  # no longer used: only DE is reachable here
+        opt = self._run_de(
+            _objective,
+            all_bounds,
+            init_pop=init_pop,
+            integrality=integrality,
+            label=label,
+            show_progress=show_progress,
+            maxiter=self.smart_maxiter(n_vars),
+        )
 
         # --- 4. Decode result ---
         if opt.best_x is not None:
@@ -586,120 +571,6 @@ class OptimizationEngine:
             n_starts=1,
             score=float(-best_val),
             convergence_history=history,
-        )
-
-    def _run_lbfgsb(
-        self,
-        objective: Callable,
-        bounds: list[tuple[float, float]],
-        *,
-        x0_list: list[np.ndarray] | None = None,
-        label: str = "Optimizing",
-        show_progress: bool = False,
-    ) -> _OptResult:
-        """Multi-start L-BFGS optimisation via torch.optim (Strategy D commit 9 step B).
-
-        Replaces ``scipy.optimize.minimize(method='L-BFGS-B')`` with
-        ``torch.optim.LBFGS`` driven by finite-difference gradients on the
-        numpy scalar objective. Bounds enforced via sigmoid reparameterisation
-        (same trick as ``run_acquisition_gradient``); each start runs a
-        single LBFGS solve with strong-Wolfe line search.
-
-        This path will be deleted entirely in Phase 5 commit 18 — the
-        ``Optimizer`` enum collapses to a single ``run_acquisition`` method
-        — but it's functional and scipy-free in the interim.
-        """
-        bounds_arr = np.array(bounds, dtype=np.float64)
-        if x0_list is None or not x0_list:
-            x0_list = [self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1])]
-
-        n_dims = len(bounds)
-        if n_dims == 0:
-            return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
-
-        max_fun = self.lbfgsb_maxfun if self.lbfgsb_maxfun is not None else max(100, 10 * (n_dims + 1))
-        eps = self.lbfgsb_eps
-        total_starts = len(x0_list)
-
-        lo_t = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)
-        hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
-        span_t = hi_t - lo_t
-
-        def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
-            return torch.sigmoid(z_tensor) * span_t + lo_t
-
-        def _eval_fd(x_np: np.ndarray) -> tuple[float, np.ndarray]:
-            """Numpy scalar objective + central finite-difference gradient."""
-            f0 = float(objective(x_np))
-            grad = np.zeros(n_dims, dtype=np.float64)
-            for d in range(n_dims):
-                x_plus = x_np.copy()
-                x_plus[d] += eps
-                x_plus[d] = min(x_plus[d], bounds_arr[d, 1])
-                x_minus = x_np.copy()
-                x_minus[d] -= eps
-                x_minus[d] = max(x_minus[d], bounds_arr[d, 0])
-                f_plus = float(objective(x_plus))
-                f_minus = float(objective(x_minus))
-                grad[d] = (f_plus - f_minus) / (2.0 * eps)
-            return f0, grad
-
-        best_x, best_val = None, np.inf
-        total_nfev = 0
-        bar = ProgressBar(label, max_iter=total_starts) if show_progress else None
-        for i, x0_i in enumerate(x0_list):
-            if bar:
-                bar.step()
-            try:
-                # Map x0 → z via inverse sigmoid (clamped interior to avoid logit blowup).
-                u0 = (np.clip(x0_i, bounds_arr[:, 0], bounds_arr[:, 1]) - bounds_arr[:, 0]) / np.where(
-                    bounds_arr[:, 1] - bounds_arr[:, 0] > 0, bounds_arr[:, 1] - bounds_arr[:, 0], 1.0,
-                )
-                u0 = np.clip(u0, 1e-4, 1.0 - 1e-4)
-                z0 = np.log(u0 / (1.0 - u0))
-                z = torch.tensor(z0, dtype=torch.float64, requires_grad=True)
-                opt = torch.optim.LBFGS(
-                    [z], max_iter=max(int(max_fun // (n_dims * 2 + 1)), 1),
-                    line_search_fn="strong_wolfe",
-                )
-                eval_count = [0]
-
-                def _closure(_z: torch.Tensor = z) -> torch.Tensor:
-                    opt.zero_grad()
-                    x_np = _decode_x(_z).detach().cpu().numpy()
-                    f_val, grad_np = _eval_fd(x_np)
-                    eval_count[0] += 2 * n_dims + 1
-                    # Chain rule through sigmoid: dx/dz = sigmoid * (1 - sigmoid) * span.
-                    sig = torch.sigmoid(_z)
-                    dx_dz = sig * (1.0 - sig) * span_t
-                    grad_t = torch.tensor(grad_np, dtype=torch.float64) * dx_dz
-                    _z.grad = grad_t
-                    return torch.tensor(f_val, dtype=torch.float64)
-
-                opt.step(_closure)
-                with torch.no_grad():
-                    x_final = _decode_x(z).cpu().numpy()
-                    f_final = float(objective(x_final))
-                eval_count[0] += 1
-                total_nfev += eval_count[0]
-                if f_final < best_val:
-                    best_val = f_final
-                    best_x = x_final
-                self.logger.debug(
-                    f"  start {i + 1}/{total_starts}: val={f_final:.6f}, nfev={eval_count[0]}"
-                )
-            except Exception as e:
-                self.logger.warning(f"L-BFGS round {i + 1} failed: {e}")
-
-        if bar:
-            obj_str = f"obj={best_val:.3f}" if best_val < np.inf else "no solution"
-            bar.finish(suffix=obj_str)
-
-        return _OptResult(
-            best_x=best_x,
-            nfev=total_nfev,
-            n_starts=total_starts,
-            score=float(-best_val) if best_val != np.inf else 0.0,
         )
 
     @staticmethod

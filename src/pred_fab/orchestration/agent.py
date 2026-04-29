@@ -633,34 +633,31 @@ class PfabAgent:
         self,
         *,
         backend: Optimizer | None = None,
-        online_backend: Optimizer | None = None,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
         de_tol: float | None = None,
-        lbfgsb_maxfun: int | None = None,
-        lbfgsb_eps: float | None = None,
         gradient_n_starts: int | None = None,
         gradient_n_iters: int | None = None,
         gradient_lr: float | None = None,
         gradient_method: str | None = None,
     ) -> None:
-        """Set optimizer backend and tuning parameters."""
+        """Set optimiser backend and tuning parameters.
+
+        Strategy D commit 18 (partial): ``online_backend`` and the
+        ``lbfgsb_*`` knobs dropped — the LBFGSB enum + scipy L-BFGS-B
+        path were deleted in favour of the gradient path's
+        ``torch.optim.LBFGS`` (used internally by ``run_acquisition_gradient``).
+        """
         self._assert_initialized()
         cal = self.calibration_system
         if backend is not None:
             cal.optimizer = backend
-        if online_backend is not None:
-            cal.online_optimizer = online_backend
         if de_maxiter is not None:
             cal.de_maxiter = de_maxiter
         if de_popsize is not None:
             cal.de_popsize = de_popsize
         if de_tol is not None:
             cal.de_tol = de_tol
-        if lbfgsb_maxfun is not None:
-            cal.lbfgsb_maxfun = lbfgsb_maxfun
-        if lbfgsb_eps is not None:
-            cal.lbfgsb_eps = lbfgsb_eps
         if gradient_n_starts is not None:
             cal.engine.gradient_n_starts = gradient_n_starts
         if gradient_n_iters is not None:

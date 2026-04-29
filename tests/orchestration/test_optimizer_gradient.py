@@ -30,7 +30,8 @@ def engine(tmp_path) -> OptimizationEngine:
 
 def test_optimizer_gradient_enum_present():
     assert Optimizer.GRADIENT.value == "gradient"
-    assert Optimizer.GRADIENT in {Optimizer.LBFGSB, Optimizer.DE, Optimizer.GRADIENT}
+    # Strategy D commit 18 (partial): enum is now {DE, GRADIENT}; LBFGSB dropped.
+    assert Optimizer.GRADIENT in {Optimizer.DE, Optimizer.GRADIENT}
 
 
 # ── Sigmoid bound reparameterisation ──────────────────────────────────────

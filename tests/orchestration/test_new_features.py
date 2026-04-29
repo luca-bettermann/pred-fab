@@ -26,10 +26,6 @@ class TestOptimizerConfig:
         agent, _, _ = _setup_trained_agent(tmp_path)
         assert agent.calibration_system.optimizer == Optimizer.DE
 
-    def test_default_online_optimizer_is_lbfgsb(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.online_optimizer == Optimizer.LBFGSB
-
     def test_configure_de_maxiter(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(de_maxiter=200)
@@ -40,20 +36,17 @@ class TestOptimizerConfig:
         agent.configure_optimizer(de_popsize=20)
         assert agent.calibration_system.de_popsize == 20
 
-    def test_configure_lbfgsb_maxfun(self, tmp_path):
+    def test_configure_gradient_optimizer(self, tmp_path):
+        """Strategy D commit 18 (partial): GRADIENT path is the alternative;
+        LBFGSB enum and online_optimizer were dropped."""
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(lbfgsb_maxfun=500)
-        assert agent.calibration_system.lbfgsb_maxfun == 500
+        agent.configure_optimizer(backend=Optimizer.GRADIENT)
+        assert agent.calibration_system.optimizer == Optimizer.GRADIENT
 
-    def test_configure_lbfgsb_eps(self, tmp_path):
+    def test_configure_gradient_n_starts(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(lbfgsb_eps=0.01)
-        assert agent.calibration_system.lbfgsb_eps == 0.01
-
-    def test_configure_online_optimizer(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(online_backend=Optimizer.DE)
-        assert agent.calibration_system.online_optimizer == Optimizer.DE
+        agent.configure_optimizer(gradient_n_starts=8)
+        assert agent.calibration_system.engine.gradient_n_starts == 8
 
     def test_configure_schedule_smoothing(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)

@@ -127,7 +127,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.parameters = schema.parameters
 
         self.optimizer: Optimizer = Optimizer.DE
-        self.online_optimizer: Optimizer = Optimizer.LBFGSB
+        # Strategy D commit 18 (partial): online_optimizer dropped — single
+        # optimisation path now (DE for integer phase, GRADIENT for continuous).
 
         # Running min/max of predicted system performance across training data.
         self._perf_range_min: float | None = None
@@ -216,22 +217,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
     @de_improvement_eps.setter
     def de_improvement_eps(self, value: float) -> None:
         self.engine.de_improvement_eps = value
-
-    @property
-    def lbfgsb_maxfun(self) -> int | None:
-        return self.engine.lbfgsb_maxfun
-
-    @lbfgsb_maxfun.setter
-    def lbfgsb_maxfun(self, value: int | None) -> None:
-        self.engine.lbfgsb_maxfun = value
-
-    @property
-    def lbfgsb_eps(self) -> float:
-        return self.engine.lbfgsb_eps
-
-    @lbfgsb_eps.setter
-    def lbfgsb_eps(self, value: float) -> None:
-        self.engine.lbfgsb_eps = value
 
     @property
     def schedule_smoothing(self) -> float:
@@ -2397,8 +2382,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 bounds = all_global_bounds
                 n_rounds = n_optimization_rounds
 
-            opt_for_step = self.online_optimizer if is_online else None
-            chosen_opt = opt_for_step or self.optimizer
+            # Strategy D commit 18 (partial): online_optimizer dropped — single
+            # path. Online and offline both use the configured self.optimizer.
+            chosen_opt = self.optimizer
 
             # Vectorised DE path: pass S candidates through the autoreg loop in one
             # go via _acquisition_objective_vectorized, amortising forward_pass
@@ -2520,7 +2506,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 opt, static_out, _sched_out = self.engine.run(
                     acq_single, N=1, D_static=n_input, D_sched=0, L=1,
                     static_bounds=bounds.tolist(), sched_bounds=[], sched_deltas=np.array([]),
-                    optimizer=opt_for_step,
+                    optimizer=chosen_opt,
                     default_optimizer=self.optimizer,
                     x0=datamodule.params_to_array(working_params) if working_params else None,
                     n_restarts=n_rounds,
@@ -2556,9 +2542,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.last_opt_perf = 0.0
                 self.last_opt_unc = 0.0
 
-            active_optimizer = opt_for_step or self.optimizer
             self.logger.info(
-                f"{active_optimizer.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
+                f"{chosen_opt.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
             )
 
             if opt.best_x is None:
