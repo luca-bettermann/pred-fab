@@ -281,7 +281,7 @@ def test_generate_baseline_has_empty_schedules(tmp_path):
 
     results = calibration.run_baseline(n=4)
     for spec in results:
-        assert spec.schedules == {}
+        assert spec.trajectories == {}
 
 
 def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
@@ -385,7 +385,7 @@ def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
     schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
     spec = ExperimentSpec(
         initial_params=ParameterProposal.from_dict({"speed": 100.0}),
-        schedules={"dim_1": schedule},
+        trajectories={"dim_1": schedule},
     )
 
     initial_count = len(exp.parameter_updates)
@@ -429,7 +429,7 @@ def test_run_calibration_with_schedule_returns_experiment_spec(tmp_path):
     # "speed" should be in the initial params
     assert "speed" in result.initial_params
     # At least one schedule should be present (dim_1)
-    assert len(result.schedules) > 0
+    assert len(result.trajectories) > 0
 
 
 # ===== BASELINE: categorical inclusion via DataModule one-hot encoding =====

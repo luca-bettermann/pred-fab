@@ -442,9 +442,9 @@ def test_run_calibration_schedule_respects_delta_constraints_with_fitted_kde(tmp
     assert isinstance(result, ExperimentSpec)
 
     # Schedule should be keyed by the dimension that 'speed' is linked to (n_layers).
-    assert "n_layers" in result.schedules, "Expected schedule for n_layers dimension"
+    assert "n_layers" in result.trajectories, "Expected schedule for n_layers dimension"
 
-    schedule = result.schedules["n_layers"]
+    schedule = result.trajectories["n_layers"]
     seg0 = result.initial_params["speed"]
     waypoints = [proposal["speed"] for _, proposal in schedule.entries]
 

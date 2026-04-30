@@ -25,7 +25,7 @@ def plot_inference_result(
     optimum: dict[str, float] | None = None,
     optimum_score: float | None = None,
     points: list[dict[str, Any]] | None = None,
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -36,7 +36,7 @@ def plot_inference_result(
 
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, pred_grid,
                      cmap_name="performance",
-                     points=points, schedules=schedules, codes=codes,
+                     points=points, trajectories=trajectories, codes=codes,
                      point_size=15, point_alpha=0.6,
                      cbar_label="Predicted Combined Score")
 

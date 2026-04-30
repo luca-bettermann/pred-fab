@@ -128,11 +128,11 @@ class ParameterTrajectory:
 class ExperimentSpec:
     """Initial parameter proposal plus optional per-dimension runtime schedules."""
     initial_params: 'ParameterProposal'
-    schedules: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
+    trajectories: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
 
     def apply_schedules(self, experiment: 'ExperimentData') -> None:
         """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
-        for schedule in self.schedules.values():
+        for schedule in self.trajectories.values():
             schedule.apply(experiment)
 
     # dict-like delegation to initial_params for backward compatibility.

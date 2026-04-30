@@ -79,7 +79,7 @@ def plot_parameter_space(
     true_grid: np.ndarray,
     pred_grid: np.ndarray,
     *,
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -97,7 +97,7 @@ def plot_parameter_space(
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name="performance", label=label,
                          vmin=vmin, vmax=vmax,
-                         points=points, schedules=schedules, codes=codes,
+                         points=points, trajectories=trajectories, codes=codes,
                          point_size=20, point_edge="black")
 
     save_fig(save_path)
@@ -114,7 +114,7 @@ def plot_parameter_space_per_cell(
     pred_grid: np.ndarray,
     *,
     cell_label: str = "",
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -145,7 +145,7 @@ def plot_parameter_space_per_cell(
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name=cmap, label=label,
                          vmin=vmin, vmax=vmax,
-                         points=points, schedules=schedules, codes=codes,
+                         points=points, trajectories=trajectories, codes=codes,
                          point_size=20, point_edge="black")
 
     save_fig(save_path)
@@ -161,7 +161,7 @@ def plot_mean_error_topology(
     mean_diff_grid: np.ndarray,
     *,
     label: str = "Mean |Truth − Pred| (all cells)",
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -178,7 +178,7 @@ def plot_mean_error_topology(
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, mean_diff_grid,
                      cmap_name="Reds", label=label,
                      vmin=0.0, vmax=max(vmax, 1e-9),
-                     points=points, schedules=schedules, codes=codes,
+                     points=points, trajectories=trajectories, codes=codes,
                      point_size=20, point_edge="black")
 
     save_fig(save_path)
@@ -251,7 +251,7 @@ def plot_dimensional_trajectories(
     z_dim: str,
     points: list[dict[str, Any]],
     *,
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     highlight: str | None = None,
     z_label: str = "Layer",

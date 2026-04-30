@@ -142,7 +142,7 @@ class SolutionSpace:
                     bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
             bp = schema_sanitize(bp)
             initial = ParameterProposal.from_dict(bp, source_step=source_step)
-            specs.append(ExperimentSpec(initial_params=initial, schedules={}))
+            specs.append(ExperimentSpec(initial_params=initial, trajectories={}))
         return specs
 
     def decode_optimized_positions(self, x_flat: np.ndarray) -> np.ndarray:

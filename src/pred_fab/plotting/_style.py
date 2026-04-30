@@ -295,7 +295,7 @@ def subplot_topology(
     vmin: float | None = None,
     vmax: float | None = None,
     points: list[dict[str, Any]] | None = None,
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     point_color: str = "white",
     point_edge: str = ZINC_700,
@@ -319,7 +319,7 @@ def subplot_topology(
                    colors="white", linewidths=0.3, alpha=0.5)
 
     if points:
-        _plot_schedule_ranges(ax, points, x_axis, y_axis, schedules, codes,
+        _plot_trajectory_ranges(ax, points, x_axis, y_axis, trajectories, codes,
                               color=point_color, alpha=0.6 * point_alpha)
         px, py = _extract_xy(points, x_axis, y_axis)
         ax.scatter(px, py, s=point_size, c=point_color, edgecolors=point_edge,
@@ -468,12 +468,12 @@ def _add_fixed_subtitle(
     figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=7)
 
 
-def _plot_schedule_ranges(
+def _plot_trajectory_ranges(
     ax: "plt.Axes",  # type: ignore[name-defined]
     points: list[dict[str, Any]],
     x_axis: "AxisSpec",
     y_axis: "AxisSpec",
-    schedules: dict[str, list[dict[str, Any]]] | None,
+    trajectories: dict[str, list[dict[str, Any]]] | None,
     codes: list[str] | None,
     *,
     color: str = ZINC_400,
@@ -484,17 +484,17 @@ def _plot_schedule_ranges(
     step_dot_size: float = 14,
 ) -> None:
     """Draw T-ended range lines + per-step dots for scheduled parameters."""
-    if not schedules or not codes:
+    if not trajectories or not codes:
         return
 
     import matplotlib.pyplot as plt
     cmap = plt.get_cmap(step_dot_cmap)
 
     for i, code in enumerate(codes):
-        if code not in schedules or len(schedules[code]) <= 1:
+        if code not in trajectories or len(trajectories[code]) <= 1:
             continue
 
-        steps = schedules[code]
+        steps = trajectories[code]
         x_vals = [float(s.get(x_axis.key, points[i].get(x_axis.key, 0))) for s in steps]
         y_vals = [float(s.get(y_axis.key, points[i].get(y_axis.key, 0))) for s in steps]
 

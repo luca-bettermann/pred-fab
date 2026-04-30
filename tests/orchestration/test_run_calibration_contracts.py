@@ -82,7 +82,7 @@ class TestOfflineExplorationExperimentLevel:
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,
         )
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_result_contains_all_schema_params(self, tmp_path):
         from pred_fab.core.data_objects import DataDomainAxis
@@ -156,7 +156,7 @@ class TestOfflineInferenceExperimentLevel:
         result = agent.calibration_system.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE,
         )
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_exploration_and_inference_produce_different_source_steps(self, tmp_path):
         agent, exp, datamodule = _setup_real_agent(tmp_path)
@@ -186,8 +186,8 @@ class TestOfflineInferenceExperimentLevel:
         )
         assert isinstance(r_default, ExperimentSpec)
         assert isinstance(r_explicit, ExperimentSpec)
-        assert r_default.schedules == {}
-        assert r_explicit.schedules == {}
+        assert r_default.trajectories == {}
+        assert r_explicit.trajectories == {}
 
 
 # ===========================================================================
@@ -220,7 +220,7 @@ class TestOfflineExplorationDimensionalLevel:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
         # dim_1=2 → 2 steps → 1 transition → schedule populated
-        assert "dim_1" in result.schedules
+        assert "dim_1" in result.trajectories
 
     def test_schedule_is_parameter_schedule_instance(self, tmp_path):
         cs, exp, datamodule = self._configured_cs(tmp_path)
@@ -228,7 +228,7 @@ class TestOfflineExplorationDimensionalLevel:
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
-        for schedule in result.schedules.values():
+        for schedule in result.trajectories.values():
             assert isinstance(schedule, ParameterTrajectory)
 
     def test_schedule_entries_contain_schedule_param(self, tmp_path):
@@ -237,7 +237,7 @@ class TestOfflineExplorationDimensionalLevel:
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
-        schedule = result.schedules["dim_1"]
+        schedule = result.trajectories["dim_1"]
         for _, proposal in schedule.entries:
             assert "speed" in proposal
 
@@ -254,11 +254,11 @@ class TestOfflineExplorationDimensionalLevel:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
 
-        if "dim_1" not in result.schedules:
+        if "dim_1" not in result.trajectories:
             pytest.skip("No schedule produced — dim_1 must have been 1")
 
         seg0 = result.initial_params["speed"]
-        waypoints = [p["speed"] for _, p in result.schedules["dim_1"].entries]
+        waypoints = [p["speed"] for _, p in result.trajectories["dim_1"].entries]
         all_vals = [seg0] + waypoints
         for k in range(len(all_vals) - 1):
             diff = abs(all_vals[k + 1] - all_vals[k])
@@ -298,7 +298,7 @@ class TestOfflineExplorationDimensionalLevel:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=None,
         )
         assert isinstance(result, ExperimentSpec)
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_dim_one_produces_single_step_empty_schedule(self, tmp_path):
         """If current_params['dim_1'] == 1, step grid has 1 step → no schedule transitions."""
@@ -312,7 +312,7 @@ class TestOfflineExplorationDimensionalLevel:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
         # 1 step = no transitions = no schedule entries
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_step_grid_ordering_coarsest_first(self, tmp_path):
         """_build_step_grid must iterate coarsest dimension (level 1) in outer loop."""
@@ -371,7 +371,7 @@ class TestOfflineInferenceDimensionalLevel:
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.INFERENCE, current_params=current_params,
         )
-        assert "dim_1" in result.schedules
+        assert "dim_1" in result.trajectories
 
     def test_inference_schedule_values_within_bounds(self, tmp_path):
         """Schedule proposals under inference mode must still stay within trust region."""
@@ -386,11 +386,11 @@ class TestOfflineInferenceDimensionalLevel:
             datamodule=datamodule, mode=Mode.INFERENCE, current_params=current_params,
         )
 
-        if "dim_1" not in result.schedules:
+        if "dim_1" not in result.trajectories:
             pytest.skip("No schedule — dim_1 must be 1")
 
         seg0 = result.initial_params["speed"]
-        waypoints = [p["speed"] for _, p in result.schedules["dim_1"].entries]
+        waypoints = [p["speed"] for _, p in result.trajectories["dim_1"].entries]
         all_vals = [seg0] + waypoints
         for k in range(len(all_vals) - 1):
             diff = abs(all_vals[k + 1] - all_vals[k])
@@ -437,7 +437,7 @@ class TestStepLoopInternals:
             source_step=SourceStep.EXPLORATION,
         )
         assert isinstance(spec, ExperimentSpec)
-        assert spec.schedules == {}
+        assert spec.trajectories == {}
         assert spec.initial_params.source_step == "exploration_step"
 
     def test_build_experiment_spec_two_steps_produces_schedule(self, tmp_path):
@@ -456,8 +456,8 @@ class TestStepLoopInternals:
         spec = cs._build_experiment_spec(
             proposals=proposals, step_grid=step_grid, source_step=SourceStep.EXPLORATION,
         )
-        assert "dim_1" in spec.schedules
-        entries = spec.schedules["dim_1"].entries
+        assert "dim_1" in spec.trajectories
+        entries = spec.trajectories["dim_1"].entries
         assert len(entries) == 1
         _, prop = entries[0]
         assert prop["speed"] == pytest.approx(130.0)
@@ -478,7 +478,7 @@ class TestExperimentSpecIntegration:
         schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
         spec = ExperimentSpec(
             initial_params=ParameterProposal.from_dict({"speed": 100.0}),
-            schedules={"dim_1": schedule},
+            trajectories={"dim_1": schedule},
         )
 
         initial_events = len(exp.parameter_updates)
@@ -560,7 +560,7 @@ class TestAgentStepMethodContracts:
         result = agent.exploration_step(datamodule=datamodule, current_params=current_params)
 
         assert isinstance(result, ExperimentSpec)
-        assert "dim_1" in result.schedules
+        assert "dim_1" in result.trajectories
 
     def test_inference_step_with_schedule_produces_schedule(self, tmp_path):
         agent, dataset, exp, datamodule = build_runtime_agent_stack(tmp_path)
@@ -578,7 +578,7 @@ class TestAgentStepMethodContracts:
         )
 
         assert isinstance(result, ExperimentSpec)
-        assert "dim_1" in result.schedules
+        assert "dim_1" in result.trajectories
 
     def test_exploration_step_source_step_tag(self, tmp_path):
         agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
@@ -768,14 +768,14 @@ class TestMultiDimMixedScenario:
         assert grid == expected
 
     def test_returns_both_dimension_schedules(self, tmp_path):
-        """Both 'dim_1' and 'dim_2' keys must appear in result.schedules."""
+        """Both 'dim_1' and 'dim_2' keys must appear in result.trajectories."""
         cs, exp, datamodule, current_params = self._configured_cs(tmp_path)
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
         assert isinstance(result, ExperimentSpec)
-        assert "dim_1" in result.schedules, "Expected dim_1 schedule for layer_height"
-        assert "dim_2" in result.schedules, "Expected dim_2 schedule for speed"
+        assert "dim_1" in result.trajectories, "Expected dim_1 schedule for layer_height"
+        assert "dim_2" in result.trajectories, "Expected dim_2 schedule for speed"
 
     def test_dim1_schedule_entries_contain_layer_height(self, tmp_path):
         """Every entry in the dim_1 schedule must carry a layer_height value."""
@@ -783,7 +783,7 @@ class TestMultiDimMixedScenario:
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
-        for step_idx, proposal in result.schedules["dim_1"].entries:
+        for step_idx, proposal in result.trajectories["dim_1"].entries:
             assert "layer_height" in proposal, (
                 f"dim_1 schedule entry at step {step_idx} missing layer_height"
             )
@@ -794,7 +794,7 @@ class TestMultiDimMixedScenario:
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
-        for step_idx, proposal in result.schedules["dim_2"].entries:
+        for step_idx, proposal in result.trajectories["dim_2"].entries:
             assert "speed" in proposal, (
                 f"dim_2 schedule entry at step {step_idx} missing speed"
             )
@@ -813,11 +813,11 @@ class TestMultiDimMixedScenario:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
 
-        if "dim_1" not in result.schedules:
+        if "dim_1" not in result.trajectories:
             pytest.skip("No dim_1 schedule produced")
 
         lh0 = result.initial_params["layer_height"]
-        lh_vals = [lh0] + [p["layer_height"] for _, p in result.schedules["dim_1"].entries]
+        lh_vals = [lh0] + [p["layer_height"] for _, p in result.trajectories["dim_1"].entries]
         for k in range(len(lh_vals) - 1):
             diff = abs(lh_vals[k + 1] - lh_vals[k])
             assert diff <= delta + 1e-4, (
@@ -838,11 +838,11 @@ class TestMultiDimMixedScenario:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
 
-        if "dim_2" not in result.schedules:
+        if "dim_2" not in result.trajectories:
             pytest.skip("No dim_2 schedule produced")
 
         s0 = result.initial_params["speed"]
-        speed_vals = [s0] + [p["speed"] for _, p in result.schedules["dim_2"].entries]
+        speed_vals = [s0] + [p["speed"] for _, p in result.trajectories["dim_2"].entries]
         for k in range(len(speed_vals) - 1):
             diff = abs(speed_vals[k + 1] - speed_vals[k])
             assert diff <= delta + 1e-4, (
@@ -885,17 +885,17 @@ class TestMultiDimMixedScenario:
         assert spec.initial_params["speed"] == pytest.approx(100.0)
 
         # dim_1 schedule: only step 3 transitions dim_1 (0→1)
-        assert "dim_1" in spec.schedules
-        dim1_entries = spec.schedules["dim_1"].entries
+        assert "dim_1" in spec.trajectories
+        dim1_entries = spec.trajectories["dim_1"].entries
         assert len(dim1_entries) == 1
         idx, prop = dim1_entries[0]
         assert idx == 1  # dim_1 index = 1
         assert prop["layer_height"] == pytest.approx(0.25)
 
         # dim_2 schedule: transitions at steps 1,2,3,4,5
-        assert "dim_2" in spec.schedules
-        assert len(spec.schedules["dim_2"].entries) == 5
-        speed_vals = [p["speed"] for _, p in spec.schedules["dim_2"].entries]
+        assert "dim_2" in spec.trajectories
+        assert len(spec.trajectories["dim_2"].entries) == 5
+        speed_vals = [p["speed"] for _, p in spec.trajectories["dim_2"].entries]
         assert speed_vals == pytest.approx([110.0, 120.0, 90.0, 130.0, 140.0])
 
 
@@ -933,7 +933,7 @@ class TestTargetIndices:
             datamodule=datamodule, mode=Mode.EXPLORATION,
             current_params=current_params, target_indices={"dim_1": 0},
         )
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_target_dim1_overrides_full_grid(self, tmp_path):
         """With dim_1=2 × dim_2=3 the full grid has 6 steps, but target_indices
@@ -948,7 +948,7 @@ class TestTargetIndices:
             current_params=current_params, target_indices={"dim_1": 0},
         )
         # Only initial_params, no schedule entries
-        assert result.schedules == {}
+        assert result.trajectories == {}
         assert isinstance(result.initial_params, ParameterProposal)
 
     def test_target_dim1_only_layer_height_can_change(self, tmp_path):
@@ -986,7 +986,7 @@ class TestTargetIndices:
             target_indices={"dim_1": 1, "dim_2": 0},
         )
         assert isinstance(result, ExperimentSpec)
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
     def test_target_indices_source_step_preserved(self, tmp_path):
         cs, exp, datamodule, current_params = self._configured_cs(tmp_path)
@@ -1007,6 +1007,6 @@ class TestTargetIndices:
             target_indices={"dim_1": 0},
         )
         assert isinstance(result, ExperimentSpec)
-        assert result.schedules == {}
+        assert result.trajectories == {}
 
 

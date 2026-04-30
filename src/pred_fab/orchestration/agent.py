@@ -482,7 +482,7 @@ class PfabAgent:
         proposal = ParameterProposal.from_dict(
             result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
         )
-        result = ExperimentSpec(initial_params=proposal, schedules=result.schedules)
+        result = ExperimentSpec(initial_params=proposal, trajectories=result.trajectories)
 
         # Record only if user confirms that proposed changes were applied physically.
         if record:

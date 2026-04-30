@@ -659,7 +659,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Assemble per-step proposals into an ExperimentSpec with initial_params and dimension schedules."""
         initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
 
-        schedules: dict[str, ParameterTrajectory] = {}
+        trajectories: dict[str, ParameterTrajectory] = {}
         if len(proposals) > 1 and step_grid and step_grid[0]:
             dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
             dim_codes = sorted(
@@ -687,11 +687,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     prev_idx = cur_idx
 
                 if entries:
-                    schedules[dim_code] = ParameterTrajectory(
+                    trajectories[dim_code] = ParameterTrajectory(
                         dimension=dim_code, entries=entries,
                     )
 
-        return ExperimentSpec(initial_params=initial, schedules=schedules)
+        return ExperimentSpec(initial_params=initial, trajectories=trajectories)
 
     def _build_schema_datamodule(self) -> DataModule:
         """Build a schema-only DataModule (no training data) for baseline generation.
@@ -940,7 +940,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     params[code] = cat_assignments[i][d_cat]
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
-                flat_specs.append(ExperimentSpec(initial_params=proposal, schedules={}))
+                flat_specs.append(ExperimentSpec(initial_params=proposal, trajectories={}))
 
         # Store phase points for validation plot
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
@@ -1595,13 +1595,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
                 entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
 
-            schedules: dict[str, ParameterTrajectory] = {}
+            trajectories: dict[str, ParameterTrajectory] = {}
             if entries:
-                schedules[state.primary_dim_code] = ParameterTrajectory(
+                trajectories[state.primary_dim_code] = ParameterTrajectory(
                     dimension=state.primary_dim_code, entries=entries
                 )
 
-            specs_out.append(ExperimentSpec(initial_params=initial, schedules=schedules))
+            specs_out.append(ExperimentSpec(initial_params=initial, trajectories=trajectories))
 
         # Per-layer schedule values grouped by param.
         if self.logger._console_output_enabled:

@@ -24,7 +24,7 @@ def plot_acquisition(
     *,
     points: list[dict[str, Any]] | None = None,
     proposed: dict[str, Any] | None = None,
-    schedules: dict[str, list[dict[str, Any]]] | None = None,
+    trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
@@ -41,7 +41,7 @@ def plot_acquisition(
     for ax, grid, label, cmap_name in panels:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name=cmap_name, label=label,
-                         points=points, schedules=schedules, codes=codes,
+                         points=points, trajectories=trajectories, codes=codes,
                          point_size=18)
 
     if proposed is not None:
