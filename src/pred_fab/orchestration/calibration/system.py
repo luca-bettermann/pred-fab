@@ -135,6 +135,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # (Domain) where gradient on cat-index makes no sense.
         self.optimizer: Optimizer = Optimizer.GRADIENT
 
+        # Persistent κ default for acquisition_step / exploration_step. Overridable
+        # per call. inference_step ignores it (κ=0 is the inference semantic).
+        self.kappa_default: float = 0.5
+
         # Running min/max of predicted system performance across training data.
         self._perf_range_min: float | None = None
         self._perf_range_max: float | None = None

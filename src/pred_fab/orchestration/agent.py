@@ -366,12 +366,18 @@ class PfabAgent:
     def acquisition_step(
         self,
         datamodule: DataModule,
-        kappa: float = 0.5,
+        kappa: float | None = None,
         n_optimization_rounds: int = 5,
         current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
-        """Unified proposal step: κ>0 = exploration, κ=0 = inference."""
+        """Unified proposal step: κ>0 = exploration, κ=0 = inference.
+
+        ``kappa=None`` resolves to the persistent default set by
+        ``configure_exploration(kappa=...)`` (initial value 0.5).
+        """
         self._check_systems(StepType.FULL)
+        if kappa is None:
+            kappa = self.calibration_system.kappa_default
 
         mode = Mode.INFERENCE if kappa == 0.0 else Mode.EXPLORATION
         result = self.calibration_system.run_calibration(
@@ -403,10 +409,10 @@ class PfabAgent:
         return result
 
     # Backward-compatible aliases
-    def exploration_step(self, datamodule: DataModule, kappa: float = 0.5,
+    def exploration_step(self, datamodule: DataModule, kappa: float | None = None,
                          n_optimization_rounds: int = 5,
                          current_params: dict[str, Any] | None = None) -> ExperimentSpec:
-        """Alias for acquisition_step with kappa > 0."""
+        """Alias for acquisition_step with kappa > 0; ``None`` uses the configured default."""
         return self.acquisition_step(datamodule, kappa=kappa,
                                      n_optimization_rounds=n_optimization_rounds,
                                      current_params=current_params)
@@ -619,12 +625,21 @@ class PfabAgent:
         self,
         *,
         sigma: float | None = None,
+        kappa: float | None = None,
     ) -> None:
-        """Configure the integrated-evidence objective (σ — kernel bandwidth)."""
+        """Configure the exploration objective.
+
+        ``sigma`` — kernel bandwidth for Δ∫E.
+        ``kappa`` — persistent default κ ∈ [0, 1] for ``acquisition_step`` /
+        ``exploration_step``. ``inference_step`` is unaffected (always κ=0).
+        """
         self._assert_initialized()
-        if sigma is None:
-            return
-        self.pred_system.configure_exploration(sigma=sigma)
+        if sigma is not None:
+            self.pred_system.configure_exploration(sigma=sigma)
+        if kappa is not None:
+            if not 0.0 <= kappa <= 1.0:
+                raise ValueError(f"kappa must be in [0, 1], got {kappa!r}")
+            self.calibration_system.kappa_default = float(kappa)
 
     def configure_optimizer(
         self,
