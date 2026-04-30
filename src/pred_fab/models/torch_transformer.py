@@ -108,48 +108,82 @@ class TorchTransformerModel(IPredictionModel):
     # IPredictionModel contract — sequence-aware
     # ------------------------------------------------------------------
 
-    def predict_sequence(
+    def predict(
         self,
-        x_norm: torch.Tensor,
-        sequence_length: int,
-        gradient_pass: bool = False,
-    ) -> torch.Tensor:
-        """Per-candidate sequence forward → ``(S, L, n_outputs)``.
+        params_list: list[dict[str, Any]],
+        dm: Any,
+        dim_info_list: list[dict[str, Any]],
+        predictions_so_far: dict[str, dict[int, torch.Tensor]],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Per-candidate sequence-batched prediction → ``list[dict[feat, (*feat_shape) tensor]]``.
 
-        ``x_norm`` is the per-candidate static input ``(S, n_input)``;
-        the framework tiles it across L positions and adds a position
-        embedding before the encoder.
+        Builds ``(S, L, n_input)`` via ``dm.build_sequence_batch`` along
+        ``self.sequence_axis_code``, runs the encoder with causal attention,
+        denormalises, and reshapes per-(s, feat) to ``dim_info['shape']``.
 
-        Causal attention enforces the autoregressive contract — output at
-        position k depends only on positions 0..k.
+        ``predictions_so_far`` is unused — causal attention sees prior
+        positions' hidden states natively, so cross-model recursive lookups
+        are handled internally by the encoder, not via column substitution.
         """
-        if not self._is_trained or self._model is None:
-            S = int(x_norm.shape[0])
-            return torch.zeros((S, sequence_length, len(self.outputs)), dtype=torch.float32)
+        del predictions_so_far
+        S = len(params_list)
+        if S == 0:
+            return []
+        if len(dim_info_list) != S:
+            raise ValueError(
+                f"predict: dim_info_list length {len(dim_info_list)} "
+                f"does not match params_list length {S}.",
+            )
 
-        ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
-        with ctx:
-            # Tile static input across L positions: (S, n_input) → (S, L, n_input).
-            S, n_input = x_norm.shape
-            x_seq = x_norm.unsqueeze(1).expand(S, sequence_length, n_input).to(dtype=torch.float32)
-            return self._model(x_seq)
+        X_seq = dm.build_sequence_batch(self, params_list, dim_info_list)
+        if X_seq.shape[1] == 0:
+            return [{feat: torch.zeros(()) for feat in self.outputs} for _ in range(S)]
+
+        input_indices = dm.get_input_indices(self.input_parameters + self.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        X_model = X_seq.index_select(2, input_indices_t)  # (S, L, n_model_input)
+
+        if not self._is_trained or self._model is None:
+            L = X_seq.shape[1]
+            y_norm_seq = torch.zeros((S, L, len(self.outputs)), dtype=torch.float32)
+        else:
+            y_norm_seq = self._model(X_model.to(dtype=torch.float32))
+
+        # Denormalise: (S, L, n_out) → flatten → denorm → reshape back. The
+        # affine norm preserves gradients across the round-trip.
+        L = int(y_norm_seq.shape[1])
+        n_out = int(y_norm_seq.shape[2])
+        y_norm_flat = y_norm_seq.reshape(S * L, n_out)
+        y_denorm_flat = dm.denormalize_values(y_norm_flat, self.outputs)
+        y_denorm_seq = y_denorm_flat.reshape(S, L, n_out)
+
+        out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
+        for s in range(S):
+            feat_shape = dim_info_list[s]['shape']
+            for f_idx, feat in enumerate(self.outputs):
+                t = y_denorm_seq[s, :, f_idx]
+                out[s][feat] = t.reshape(feat_shape) if feat_shape else t.reshape(())
+        return out
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Per-cell forward — calls predict_sequence with L=1.
+        """Per-row forward — calls the encoder with L=1.
 
-        Provided for compatibility with non-sequence call sites (e.g. the
-        evidence encoder). Real sequence prediction goes through
-        ``predict_sequence`` directly.
+        Provided for the non-sequence call sites (KDE encode probe, etc.).
+        Real sequence prediction goes through ``predict``.
         """
-        out = self.predict_sequence(X, sequence_length=1, gradient_pass=gradient_pass)
-        return out[:, 0, :]
+        if not self._is_trained or self._model is None:
+            return torch.zeros((X.shape[0], len(self.outputs)), dtype=torch.float32)
+        ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
+        with ctx:
+            x_seq = X.unsqueeze(1).to(dtype=torch.float32)  # (B, 1, n_input)
+            return self._model(x_seq)[:, 0, :]
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Penultimate-layer activations for KDE.
+        """Penultimate-layer activations for KDE — input projection at position 0.
 
-        For sequence-aware models, "encode" returns the input projection's
-        output at the first sequence position — a static-only embedding
-        suitable for KDE which doesn't see the sequence axis.
+        The transformer doesn't expose a meaningful per-row latent because
+        its hidden states are sequence-positional. We use the input
+        projection's output as a static-only embedding for KDE evidence.
         """
         if not self._is_trained or self._model is None:
             return X
@@ -158,7 +192,7 @@ class TorchTransformerModel(IPredictionModel):
             return self._model.input_proj(X.to(dtype=torch.float32))  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
-    # Training (placeholder — fleshed out in the migration)
+    # Training
     # ------------------------------------------------------------------
 
     def train(
@@ -168,17 +202,89 @@ class TorchTransformerModel(IPredictionModel):
         epoch_callback: Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Train the transformer on sequence-shaped batches.
+        """Train the transformer on sequence-shaped batches: ``(B, L, n_input)`` X / ``(B, L, n_out)`` y.
 
-        Currently a stub — the migration that wires sequence-batch construction
-        through DataModule and PredictionSystem will fill this in. The
-        epoch_callback path matches TorchMLPModel: invoked at SS_N_REFRESHES
-        equally-spaced points; returns refreshed batches with per-step Bernoulli
-        substitution applied (sequence-aware scheduled sampling).
+        Adam + MSE loop. Causal attention enforces the autoregressive
+        contract; no scheduled sampling is required because this encoder
+        does not consume y as input during training — the train and
+        inference forward passes are identical, so there's no exposure-bias
+        train/inference mismatch to correct.
+
+        ``epoch_callback`` is accepted for IPredictionModel-train signature
+        compatibility but not invoked — sequence-form SS would require y to
+        feed back as input, which this encoder design avoids by construction.
         """
-        raise NotImplementedError(
-            "TorchTransformerModel.train is a stub — wire in sequence-batch "
-            "training when migrating PredictionSystem dispatch.",
+        del epoch_callback
+        if not train_batches:
+            return
+
+        X_full = torch.cat([b[0] for b in train_batches], dim=0)
+        y_full = torch.cat([b[1] for b in train_batches], dim=0)
+        if X_full.ndim != 3 or y_full.ndim != 3:
+            raise ValueError(
+                f"TorchTransformerModel.train expects sequence-shaped batches "
+                f"(B, L, n_input)/(B, L, n_output); got X.ndim={X_full.ndim}, "
+                f"y.ndim={y_full.ndim}. PredictionSystem must build sequence "
+                f"batches (not flat batches) for transformer models.",
+            )
+        n_input = int(X_full.shape[-1])
+        n_output = int(y_full.shape[-1])
+
+        torch.manual_seed(self.SEED)
+        self._model = self._build_network(n_input, n_output)
+        optimizer = torch.optim.Adam(
+            self._model.parameters(), lr=self.LR, weight_decay=self.WEIGHT_DECAY,
+        )
+        loss_fn = nn.MSELoss()
+        self._model.train()
+
+        X_full_f = X_full.to(dtype=torch.float32)
+        y_full_f = y_full.to(dtype=torch.float32)
+        for _ in range(self.EPOCHS):
+            optimizer.zero_grad()
+            loss = loss_fn(self._model(X_full_f), y_full_f)
+            loss.backward()
+            optimizer.step()
+
+        self._model.eval()
+        self._is_trained = True
+
+    # ------------------------------------------------------------------
+    # Schema check
+    # ------------------------------------------------------------------
+
+    def _validate_schema_compatibility(self, schema: Any) -> None:
+        """Require ``sequence_axis_code`` to resolve to a real domain axis on the model's outputs.
+
+        Recursive input features are allowed on a transformer (the new design
+        no longer uses explicit prev_x columns; causal attention sees prior
+        positions natively). Override ``IPredictionModel`` default which would
+        reject them.
+        """
+        try:
+            seq_axis_code = self.sequence_axis_code
+        except NotImplementedError as e:
+            raise ValueError(
+                f"{self.__class__.__name__} must implement the `sequence_axis_code` "
+                f"property to declare which schema axis to sequence over.",
+            ) from e
+
+        for feat_code in self.outputs:
+            feat_obj = getattr(schema.features, "data_objects", {}).get(feat_code)
+            if feat_obj is None:
+                continue
+            domain_code = getattr(feat_obj, "domain_code", None)
+            if domain_code is None or not schema.domains.has(domain_code):
+                continue
+            domain = schema.domains.get(domain_code)
+            for ax in domain.axes:
+                if ax.code == seq_axis_code:
+                    return  # found
+
+        raise ValueError(
+            f"{self.__class__.__name__}.sequence_axis_code='{seq_axis_code}' does not "
+            f"resolve to any domain axis on this model's outputs ({list(self.outputs)}). "
+            f"Verify the schema has a Dimension with this code.",
         )
 
 
