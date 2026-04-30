@@ -157,47 +157,11 @@ class PfabAgent:
         )
         self.pred_system.set_ref_objects(schema)
 
-        # Calibration system requires prediction, evaluation and schema to be set.
-        # perf_fn encapsulates predict_for_calibration + _evaluate_feature_dict so
-        # CalibrationSystem never calls internal PM/EM methods directly.
+        # Calibration system needs a perf closure that goes prediction → eval.
+        # _perf_fn_tensor encapsulates that — gradient-traversable, batched.
         _pred = self.pred_system
         _eval = self.eval_system
         _ctx = self._context_snapshot  # mutable dict; closure captures reference
-
-        def _perf_fn(params_dict):
-            try:
-                # Merge current context snapshot so prediction model receives observed covariates.
-                merged = dict(params_dict)
-                if _ctx:
-                    merged.update(_ctx)
-                feature_arrays, params_block = _pred.predict_for_calibration(merged)
-                return _eval._evaluate_feature_dict(feature_arrays, params_block)
-            except Exception:
-                return {}
-
-        def _perf_fn_batched(params_dicts: list[dict[str, Any]]) -> list[dict[str, float | None]]:
-            """No-grad numpy shim around :func:`_perf_fn_tensor`.
-
-            Returns a per-candidate ``list[dict[perf_code, float|None]]`` to
-            keep the caller-facing numpy contract; gradient-traversable use
-            cases call ``_perf_fn_tensor`` directly.
-            """
-            if not params_dicts:
-                return []
-            try:
-                with torch.no_grad():
-                    perf_dict_S = _perf_fn_tensor(params_dicts)
-            except Exception:
-                return [{} for _ in params_dicts]
-
-            S = len(params_dicts)
-            result: list[dict[str, float | None]] = [{} for _ in range(S)]
-            for code, t in perf_dict_S.items():
-                t_cpu = t.detach().cpu()
-                for s in range(S):
-                    v = float(t_cpu[s].item())
-                    result[s][code] = None if v != v else v  # NaN → None
-            return result
 
         def _perf_fn_tensor(
             params_dicts: list[dict[str, Any]],
@@ -234,8 +198,6 @@ class PfabAgent:
         self.calibration_system = CalibrationSystem(
             schema=schema,
             logger=self.logger,
-            perf_fn=_perf_fn,
-            perf_fn_batched=_perf_fn_batched,
             perf_fn_tensor=_perf_fn_tensor,
             uncertainty_fn=_pred.uncertainty,
             evidence=EvidenceBackend(

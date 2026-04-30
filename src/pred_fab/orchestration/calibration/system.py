@@ -85,19 +85,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         schema: DatasetSchema,
         logger: PfabLogger,
-        perf_fn: Callable[[dict[str, Any]], dict[str, float | None]],
         uncertainty_fn: Callable[[np.ndarray], float],
         *,
         evidence: EvidenceBackend | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
-        perf_fn_batched: Callable[[list[dict[str, Any]]], list[dict[str, float | None]]] | None = None,
         perf_fn_tensor: Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]] | None = None,
         random_seed: int | None = None,
     ):
         super().__init__(logger, random_seed=random_seed)
-        self.perf_fn = perf_fn
-        self.perf_fn_batched = perf_fn_batched
         self.perf_fn_tensor = perf_fn_tensor
         self.uncertainty_fn = uncertainty_fn
         self.evidence = evidence if evidence is not None else EvidenceBackend()
@@ -315,24 +311,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # κ=1 baseline drops the perf term; κ=0 inference drops the Δ∫E term.
     # Single-candidate phases pass batch with shape (1, D).
 
-    def _per_candidate_perf(
-        self,
-        x_norm: np.ndarray,
-        perf_range: tuple[float, float] | None,
-    ) -> float:
-        """Weighted performance score for a single normalized parameter vector."""
-        dm = self._active_datamodule
-        if dm is None:
-            return 0.0
+    def _compute_perf_dict_for_params(self, params: dict[str, Any]) -> dict[str, float | None]:
+        """Compute a single-candidate ``{perf_code: float}`` via the tensor perf closure."""
+        if self.perf_fn_tensor is None:
+            return {}
         try:
-            params_dict = dm.array_to_params(x_norm.reshape(-1))
-        except (ValueError, KeyError):
-            return 0.0
-        try:
-            perf_dict = self.perf_fn(params_dict)
+            with torch.no_grad():
+                t_out = self.perf_fn_tensor([params])
         except Exception:
-            return 0.0
-        return self._normalize_perf_dict(perf_dict, perf_range)
+            return {}
+        out: dict[str, float | None] = {}
+        for code, t in t_out.items():
+            v = float(t[0].item())
+            out[code] = None if v != v else v  # NaN → None
+        return out
 
     def _per_candidate_perf_batched(
         self,
@@ -382,7 +374,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         score = 0.0
         if kappa < 1.0:
-            perfs = [self._per_candidate_perf(batch_norm[k], perf_range) for k in range(L)]
+            perfs = self._per_candidate_perf_batched(batch_norm, perf_range)
             score += (1.0 - kappa) * float(np.mean(perfs))
 
         if kappa > 0.0 and self.evidence.scalar is not None:
@@ -437,13 +429,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if dm is None:
             return torch.zeros(S, dtype=X_SD.dtype)
         if self.perf_fn_tensor is None:
-            # Scalar fallback when no tensor closure is registered (test path).
-            X_np = X_SD.detach().cpu().numpy()
-            out_np = np.array(
-                [self._per_candidate_perf(X_np[i], perf_range) for i in range(S)],
-                dtype=np.float64,
-            )
-            return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
+            # No perf closure registered → 0 perf for all candidates.
+            return torch.zeros(S, dtype=X_SD.dtype)
 
         # Build per-candidate params dicts. Continuous values stay as 0-D
         # tensors for autograd; categorical / int / domain values resolve
@@ -470,13 +457,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 [params_list[i] for i in valid_idx]  # type: ignore[index]
             )
         except Exception:
-            # Scalar fallback if the tensor closure raises.
-            X_np = X_SD.detach().cpu().numpy()
-            out_np = np.array(
-                [self._per_candidate_perf(X_np[i], perf_range) for i in range(S)],
-                dtype=np.float64,
-            )
-            return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
+            return torch.zeros(S, dtype=X_SD.dtype)
 
         # System-perf aggregation: weighted sum across perf codes, normalised by perf_range.
         out_valid = torch.zeros(len(valid_idx), dtype=X_SD.dtype)
@@ -600,7 +581,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             exp = datamodule.dataset.get_experiment(code)
             params_dict = exp.parameters.get_values_dict()
             try:
-                perf_dict = self.perf_fn(params_dict)
+                perf_dict = self._compute_perf_dict_for_params(params_dict)
                 pv = [
                     float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
                     for name in self.perf_names_order if name in perf_dict
@@ -2179,7 +2160,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         pts0 = opt.best_x.reshape(L, D_sched)[0]
                         x0_step = _pts_row_to_dm(pts0)
                         _params = datamodule.array_to_params(x0_step)
-                        _perf_dict = self.perf_fn(_params)
+                        _perf_dict = self._compute_perf_dict_for_params(_params)
                         _pv = [
                             float(v) if (v := _perf_dict.get(n)) is not None else 0.0
                             for n in self.perf_names_order if n in _perf_dict
@@ -2227,7 +2208,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 try:
                     _params = datamodule.array_to_params(flat_x)
-                    _perf_dict = self.perf_fn(_params)
+                    _perf_dict = self._compute_perf_dict_for_params(_params)
                     _pv = [
                         float(v) if (v := _perf_dict.get(n)) is not None else 0.0
                         for n in self.perf_names_order if n in _perf_dict
@@ -2272,7 +2253,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             use_vectorized = (
                 chosen_opt == Optimizer.DE
                 and not mpc_active
-                and self.perf_fn_batched is not None
+                and self.perf_fn_tensor is not None
             )
 
             if use_vectorized:
@@ -2394,7 +2375,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if best_x is not None:
                 try:
                     _params = datamodule.array_to_params(best_x)
-                    _perf_dict = self.perf_fn(_params)
+                    _perf_dict = self._compute_perf_dict_for_params(_params)
                     _perf_values = [
                         float(v) if (v := _perf_dict.get(n)) is not None else 0.0
                         for n in self.perf_names_order if n in _perf_dict

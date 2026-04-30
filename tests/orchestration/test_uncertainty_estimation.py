@@ -175,8 +175,8 @@ def test_uncertainty_returns_one_for_single_training_config(tmp_path):
 # predict_for_calibration()
 # ===========================================================================
 
-def test_predict_for_calibration_raises_before_training(tmp_path):
-    """predict_for_calibration() must raise RuntimeError if system is untrained."""
+def test_predict_for_calibration_tensor_raises_before_training(tmp_path):
+    """predict_for_calibration_tensor() must raise RuntimeError before training."""
     dataset = build_dataset_with_single_experiment(tmp_path)
     logger = build_test_logger(tmp_path)
     pred = PredictionSystem(logger=logger, schema=dataset.schema, local_data=LocalData(str(tmp_path)))
@@ -184,48 +184,29 @@ def test_predict_for_calibration_raises_before_training(tmp_path):
     pred.models.append(MixedPredictionModelGrid(logger))
 
     with pytest.raises(RuntimeError, match="train"):
-        pred.predict_for_calibration({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
+        pred.predict_for_calibration_tensor([{"param_1": 2.5, "dim_1": 2, "dim_2": 3}])
 
 
-def test_predict_for_calibration_returns_feature_arrays_and_params_block(tmp_path):
-    """After training, predict_for_calibration() returns correct feature arrays and params."""
+def test_predict_for_calibration_tensor_per_feature_shapes(tmp_path):
+    """Each output feature's tensor shape matches its dimensional depth."""
     agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
     pred = agent.pred_system
     params = exp.parameters.get_values_dict()
 
-    feature_arrays, params_block = pred.predict_for_calibration(params)
-
-    # feature_arrays should contain all model outputs
+    out = pred.predict_for_calibration_tensor([params])
+    assert len(out) == 1
+    feat_dict = out[0]
     for feature_code in pred.get_system_outputs():
-        assert feature_code in feature_arrays, f"Missing feature: {feature_code}"
-        arr = feature_arrays[feature_code]
-        # Each row: [dim_iter_0..., feature_val] — depth-0 features get shape (1, 1)
-        assert arr.ndim == 2
-        assert arr.shape[1] >= 1  # at least the feature value column
+        assert feature_code in feat_dict, f"Missing feature: {feature_code}"
 
-    # params_block should have all schema parameters
-    for code in params:
-        if code in params_block.data_objects:
-            assert params_block.get_value(code) == pytest.approx(params[code], rel=1e-4) or \
-                   params_block.get_value(code) == params[code]
-
-
-def test_predict_for_calibration_feature_array_row_count(tmp_path):
-    """Feature array row count matches each feature's own dimensional depth."""
-    agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
-    pred = agent.pred_system
-    params = exp.parameters.get_values_dict()
-
-    feature_arrays, _ = pred.predict_for_calibration(params)
     dim_1 = int(params["dim_1"])
     dim_2 = int(params["dim_2"])
-
-    # feature_grid: depth 2 → dim_1 * dim_2 rows
-    assert feature_arrays["feature_grid"].shape[0] == dim_1 * dim_2
-    # feature_d1: depth 1 → dim_1 rows
-    assert feature_arrays["feature_d1"].shape[0] == dim_1
-    # feature_scalar: depth 0 → 1 row
-    assert feature_arrays["feature_scalar"].shape[0] == 1
+    # feature_grid: depth 2 → (dim_1, dim_2)
+    assert feat_dict["feature_grid"].shape == (dim_1, dim_2)
+    # feature_d1: depth 1 → (dim_1,)
+    assert feat_dict["feature_d1"].shape == (dim_1,)
+    # feature_scalar: depth 0 → scalar
+    assert feat_dict["feature_scalar"].numel() == 1
 
 
 # ===========================================================================
@@ -398,19 +379,22 @@ def test_run_calibration_without_similarity_fn_still_works(tmp_path):
 # ===========================================================================
 
 def test_agent_perf_fn_closure_returns_performance_dict(tmp_path):
-    """The perf_fn closure created in agent.initialize_systems should work end-to-end."""
+    """The perf closure created in agent.initialize_systems should work end-to-end."""
+    import torch
     agent, exp, datamodule = _trained_agent_and_datamodule(tmp_path)
 
     params = exp.parameters.get_values_dict()
-    perf_dict = agent.calibration_system.perf_fn(params)
+    assert agent.calibration_system.perf_fn_tensor is not None
+    perf_tensor_dict = agent.calibration_system.perf_fn_tensor([params])
 
-    assert isinstance(perf_dict, dict)
-    # Should contain at least one performance key
-    assert len(perf_dict) > 0
-    for v in perf_dict.values():
-        if v is not None:
-            assert isinstance(v, float)
-            assert 0.0 <= v <= 1.0
+    assert isinstance(perf_tensor_dict, dict)
+    assert len(perf_tensor_dict) > 0
+    for v in perf_tensor_dict.values():
+        assert isinstance(v, torch.Tensor)
+        assert v.shape == (1,)
+        # Performance values are clamped to [0, 1] by IEvaluationModel.
+        finite = v[torch.isfinite(v)]
+        assert ((finite >= 0.0) & (finite <= 1.0)).all()
 
 
 def test_calibration_system_get_models_returns_empty_list(tmp_path):

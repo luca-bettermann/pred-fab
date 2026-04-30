@@ -222,19 +222,20 @@ def test_predict_returns_correct_shape_per_feature(tmp_path):
     assert predictions["feature_scalar"].shape == ()       # depth 0
 
 
-def test_predict_calibration_feature_arrays_match_depth(tmp_path):
-    """predict_for_calibration returns tabular arrays sized by feature depth."""
+def test_predict_calibration_feature_tensor_shapes_match_depth(tmp_path):
+    """predict_for_calibration_tensor returns per-feature tensors sized by feature depth."""
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     params = exp.parameters.get_values_dict()
-    feature_arrays, _ = agent.pred_system.predict_for_calibration(params)
+    out = agent.pred_system.predict_for_calibration_tensor([params])
+    feat = out[0]
 
-    # feature_grid: depth 2 → 6 rows, each [d1, d2, value]
-    assert feature_arrays["feature_grid"].shape == (6, 3)
-    # feature_d1: depth 1 → 2 rows, each [d1, value]
-    assert feature_arrays["feature_d1"].shape == (2, 2)
-    # feature_scalar: depth 0 → 1 row, each [value]
-    assert feature_arrays["feature_scalar"].shape == (1, 1)
+    # feature_grid: depth 2 → (2, 3)
+    assert feat["feature_grid"].shape == (2, 3)
+    # feature_d1: depth 1 → (2,)
+    assert feat["feature_d1"].shape == (2,)
+    # feature_scalar: depth 0 → 1 element
+    assert feat["feature_scalar"].numel() == 1

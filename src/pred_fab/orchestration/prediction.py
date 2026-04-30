@@ -1050,41 +1050,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.logger.debug(f"uncertainty (aggregated): u={u:.4f}")
         return u
 
-    def predict_for_calibration(self, params: dict[str, Any]) -> tuple[dict[str, np.ndarray], Any]:
-        """Single-candidate ``predict_for_calibration_batched``.
-
-        Returns ``(feature_arrays, params_block)`` for ``params``. Thin
-        wrapper — the prediction goes through the same tensor autoreg path
-        as the batched API.
-        """
-        return self.predict_for_calibration_batched([params])[0]
-
-    def predict_for_calibration_batched(
-        self,
-        params_list: list[dict[str, Any]],
-    ) -> list[tuple[dict[str, np.ndarray], Any]]:
-        """Predict for S candidate parameter sets in parallel.
-
-        S separate ``predict_for_calibration`` outputs, returned as a list. The
-        batched autoreg loop runs the S trajectories simultaneously, amortising
-        forward_pass overhead across the candidate batch dim. Result format
-        matches the single-candidate API: one ``(feature_arrays, params_block)``
-        tuple per input.
-        """
-        self._assert_trained()
-        if not params_list:
-            return []
-
-        with profiler.section("predict.predict_for_calibration_batched"):
-            with profiler.section("predict._predict_from_params_batched"):
-                predictions_list = self._predict_from_params_batched(params_list, batch_size=1000)
-            with profiler.section("predict._postprocess_predictions [tabular convert]"):
-                out = [
-                    self._postprocess_predictions_for_calibration(preds, p)
-                    for preds, p in zip(predictions_list, params_list)
-                ]
-        return out
-
     def predict_for_calibration_tensor(
         self,
         params_list: list[dict[str, Any]],
@@ -1327,32 +1292,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                 predictions_stack[feat] = slots[0]
 
         return predictions_stack
-
-    def _postprocess_predictions_for_calibration(
-        self,
-        predictions: dict[str, np.ndarray],
-        params: dict[str, Any],
-    ) -> tuple[dict[str, np.ndarray], Any]:
-        """Tensor → tabular [dim_iter..., feat_val] conversion + params_block build."""
-        feature_arrays: dict[str, np.ndarray] = {}
-        for feat_name, tensor in predictions.items():
-            feat_shape = tensor.shape
-            flat = tensor.reshape(-1, 1).astype(np.float64)
-            if feat_shape:
-                indices = np.indices(feat_shape).reshape(len(feat_shape), -1).T.astype(np.float64)
-                feature_arrays[feat_name] = np.hstack([indices, flat])
-            else:
-                feature_arrays[feat_name] = flat
-
-        params_block = copy.deepcopy(self.schema.parameters)
-        for code, val in params.items():
-            if code in params_block.data_objects:
-                try:
-                    params_block.set_value(code, val)
-                except Exception:
-                    pass
-
-        return feature_arrays, params_block
 
     def tune(
             self,
@@ -1719,41 +1658,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             'iterator_feats': iterator_feats,
             'total_positions': total_positions,
         }
-
-    def _predict_from_params_batched(
-        self,
-        params_list: list[dict[str, Any]],
-        predict_from: int = 0,
-        predict_to: int | None = None,
-        batch_size: int = 1000,
-        overlap: int = 0,
-    ) -> list[dict[str, np.ndarray]]:
-        """No-grad numpy shim around :meth:`_predict_from_params_tensor`.
-
-        Returns ``list[dict[feat, np.ndarray]]`` — the tensor outputs are
-        detached and converted at the API boundary, with each per-feature
-        array allocated to ``np.full(feat_shape, np.nan)`` and then filled
-        from the tensor. Predictions cover the full feature shape; the
-        ``predict_from`` / ``predict_to`` / ``batch_size`` / ``overlap``
-        kwargs are accepted for signature compat with ``_predict_from_params``
-        (chunking happens at the per-experiment loop level).
-        """
-        del predict_from, predict_to, batch_size, overlap
-        self._assert_trained()
-        S = len(params_list)
-        if S == 0:
-            return []
-
-        with torch.no_grad():
-            preds_t = self._predict_from_params_tensor(params_list)
-
-        out: list[dict[str, np.ndarray]] = []
-        for s_preds in preds_t:
-            out.append({
-                feat: t.detach().cpu().numpy().astype(np.float64)
-                for feat, t in s_preds.items()
-            })
-        return out
 
     def _build_X_dict_flat(
         self,

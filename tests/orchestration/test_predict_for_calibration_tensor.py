@@ -1,15 +1,11 @@
 """Tests for predict_for_calibration_tensor.
 
-Three guarantees this commit promises:
-  1. Numerical equivalence with predict_for_calibration_batched (numpy
-     version) at ~1e-5 — the autoreg + denormalisation chain runs in
-     tensor land identically.
-  2. Output type: dict[feat, torch.Tensor] per candidate, never numpy.
+Two guarantees:
+  1. Output type — list of dict[feat, torch.Tensor] per candidate.
      Per-feat tensor shape matches feat_shape from _get_feature_shape.
-  3. Gradient flow: with continuous param values as torch.Tensors with
+  2. Gradient flow — with continuous param values as torch.Tensors with
      requires_grad=True, gradients flow through params_to_tensor +
-     autoreg loop (forward_pass(gradient_pass=True)) back into the
-     leaf tensors. backward() succeeds; gradients are finite.
+     autoreg loop back into the leaf tensors.
 """
 
 import numpy as np
@@ -26,66 +22,6 @@ def _trained_agent(tmp_path):
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
     return agent, exp
-
-
-# ── Numerical equivalence with the numpy batched API ──────────────────────
-
-
-def _values_only(feat_b: np.ndarray) -> np.ndarray:
-    """Extract the last column (feat_val) from the tabular numpy output.
-
-    ``predict_for_calibration_batched`` post-processes predictions to
-    tabular form ``[iter_idx_0, ..., iter_idx_n, feat_val]`` per cell row.
-    The tensor variant returns the raw ``(S, *feat_shape)`` tensor without
-    iterator-index decoration (indices are non-differentiable metadata).
-    For comparison, take the last column.
-    """
-    if feat_b.ndim == 1:
-        return feat_b
-    return feat_b[..., -1]
-
-
-def test_tensor_matches_batched_single_candidate(tmp_path):
-    agent, exp = _trained_agent(tmp_path)
-    p = exp.parameters.get_values_dict()
-
-    batched_out = agent.pred_system.predict_for_calibration_batched([p])
-    tensor_out = agent.pred_system.predict_for_calibration_tensor([p])
-
-    assert len(tensor_out) == 1
-    feat_b, _ = batched_out[0]
-    feat_t = tensor_out[0]
-    assert set(feat_b.keys()) == set(feat_t.keys())
-    for k in feat_b:
-        np.testing.assert_allclose(
-            feat_t[k].detach().cpu().numpy().reshape(-1),
-            _values_only(feat_b[k]).reshape(-1),
-            atol=1e-5, rtol=1e-5,
-            err_msg=f"feature {k}",
-        )
-
-
-def test_tensor_matches_batched_multi_candidate(tmp_path):
-    agent, exp = _trained_agent(tmp_path)
-    base = exp.parameters.get_values_dict()
-    params_list = [
-        dict(base),
-        {**base, "param_1": float(base.get("param_1", 1.0)) + 0.5},
-        {**base, "param_1": float(base.get("param_1", 1.0)) + 1.0},
-    ]
-
-    batched_out = agent.pred_system.predict_for_calibration_batched(params_list)
-    tensor_out = agent.pred_system.predict_for_calibration_tensor(params_list)
-
-    assert len(tensor_out) == len(params_list)
-    for s, ((feat_b, _), feat_t) in enumerate(zip(batched_out, tensor_out)):
-        for k in feat_b:
-            np.testing.assert_allclose(
-                feat_t[k].detach().cpu().numpy().reshape(-1),
-                _values_only(feat_b[k]).reshape(-1),
-                atol=1e-5, rtol=1e-5,
-                err_msg=f"candidate {s} feature {k}",
-            )
 
 
 def test_tensor_empty_list_returns_empty(tmp_path):

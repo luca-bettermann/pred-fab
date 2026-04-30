@@ -252,7 +252,12 @@ def build_calibration_system(
     uncertainty_fn: Optional[Callable] = None,
     delta_integrated_evidence_fn: Optional[Callable] = None,
 ) -> CalibrationSystem:
-    """Build a CalibrationSystem with lightweight no-op callables for unit tests."""
+    """Build a CalibrationSystem with lightweight no-op callables for unit tests.
+
+    ``perf_fn`` is the user-friendly per-candidate ``dict → dict`` form;
+    we wrap it into the tensor closure CalibrationSystem expects.
+    """
+    import torch
     logger = build_test_logger(tmp_path)
     schema = dataset.schema
     perf_names = list(schema.performance_attrs.keys())
@@ -260,12 +265,25 @@ def build_calibration_system(
     def _default_perf_fn(params_dict):
         return {name: 0.5 for name in perf_names}
 
+    user_perf_fn = perf_fn or _default_perf_fn
+
+    def _perf_fn_tensor(params_list):
+        out: dict[str, torch.Tensor] = {}
+        results = [user_perf_fn(p) for p in params_list]
+        for code in perf_names:
+            vals = [
+                float(r.get(code)) if r.get(code) is not None else float("nan")
+                for r in results
+            ]
+            out[code] = torch.tensor(vals, dtype=torch.float32)
+        return out
+
     cal = CalibrationSystem(
         schema=schema,
         logger=logger,
-        perf_fn=perf_fn or _default_perf_fn,  # type: ignore[arg-type]
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
         evidence=EvidenceBackend(scalar=delta_integrated_evidence_fn),
+        perf_fn_tensor=_perf_fn_tensor,
     )
     # Fast DE settings for tests (production uses scipy defaults: 1000/15)
     cal.de_maxiter = 5
