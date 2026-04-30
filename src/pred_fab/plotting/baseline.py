@@ -260,8 +260,8 @@ def plot_dimensional_trajectories(
     """3D trajectories along a dimensional axis (e.g., per-layer parameter values).
 
     z-axis = iterator of z_dim (0, 1, ..., n_steps-1).
-    Without schedules: straight vertical lines (constant params per step).
-    With schedules: tilted/curved trajectories (params vary per step).
+    Without trajectories: straight vertical lines (constant params per step).
+    With trajectories: tilted/curved trajectories (params vary per step).
     """
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
@@ -278,8 +278,8 @@ def plot_dimensional_trajectories(
             x = float(params.get(x_axis.key, 0))
             y = float(params.get(y_axis.key, 0))
             # Override from schedule if available
-            if code and schedules and code in schedules and k < len(schedules[code]):
-                step = schedules[code][k]
+            if code and trajectories and code in trajectories and k < len(trajectories[code]):
+                step = trajectories[code][k]
                 x = float(step.get(x_axis.key, x))
                 y = float(step.get(y_axis.key, y))
             xs.append(x)

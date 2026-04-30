@@ -13,6 +13,7 @@ src/pred_fab/core/data_blocks.py
 src/pred_fab/core/data_objects.py
 src/pred_fab/core/datamodule.py
 src/pred_fab/core/dataset.py
+src/pred_fab/core/normalisers.py
 src/pred_fab/core/schema.py
 src/pred_fab/interfaces/__init__.py
 src/pred_fab/interfaces/base_interface.py
@@ -22,7 +23,8 @@ src/pred_fab/interfaces/features.py
 src/pred_fab/interfaces/prediction.py
 src/pred_fab/interfaces/tuning.py
 src/pred_fab/models/__init__.py
-src/pred_fab/models/torch_mlp.py
+src/pred_fab/models/mlp.py
+src/pred_fab/models/transformer.py
 src/pred_fab/orchestration/__init__.py
 src/pred_fab/orchestration/agent.py
 src/pred_fab/orchestration/base_system.py
@@ -53,3 +55,4 @@ src/pred_fab/utils/enum.py
 src/pred_fab/utils/local_data.py
 src/pred_fab/utils/logger.py
 src/pred_fab/utils/metrics.py
+src/pred_fab/utils/profiler.py
