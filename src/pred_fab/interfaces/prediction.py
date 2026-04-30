@@ -18,7 +18,22 @@ class IPredictionModel(BaseInterface):
     Domain is derived from the schema during PredictionSystem initialization; all outputs must
     share the same domain_code and feature_depth. Do not declare input_domain — it is inferred
     from the output features registered in the schema.
+
+    ``HAS_NATIVE_SEQUENCE`` (class attr) tells PredictionSystem which prediction
+    contract this model honours:
+
+    - ``False`` (default — feed-forward / MLP / deterministic): per-cell ``forward_pass``.
+      The framework iterates over cells and (when recursive features are declared
+      on the schema) handles autoregression via a cell loop with a predictions
+      cache. Suitable for non-sequential or simple per-cell mappings.
+    - ``True`` (transformer / sequence-aware): the model's ``predict_sequence``
+      returns ``(S, L, n_outputs)`` directly. Causal attention internal to the
+      model handles the autoregressive contract; no external cell loop or
+      recursive cache. Required for any model with recursive inputs once the
+      sequence-prediction migration lands.
     """
+
+    HAS_NATIVE_SEQUENCE: bool = False
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)

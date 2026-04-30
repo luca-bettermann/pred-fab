@@ -1,16 +1,20 @@
 """Convenience prediction-model bases.
 
-These are opinionated implementations that satisfy the ``IPredictionModel``
-contract and let user code stop at "set HIDDEN + the three properties".
-Each base brings its own optional dependency:
+Three classes cover the dominant fab modelling architectures:
 
-- ``TorchMLPModel`` requires ``torch`` (install via ``pred-fab[torch]``).
+- ``IDeterministicModel`` (in ``pred_fab.interfaces.prediction``) — closed-form
+  formulas. No training, no autoreg.
+- ``TorchMLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
+  Per-cell forward; ``HAS_NATIVE_SEQUENCE = False``.
+- ``TorchTransformerModel`` — encoder-only transformer with causal attention
+  for sequential / autoregressive mappings. Sequence-aware forward;
+  ``HAS_NATIVE_SEQUENCE = True``.
 
-Users who need bespoke architectures (RF, GP, transformer, …) should
-implement ``IPredictionModel`` directly — this module is a shortcut, not
-a contract.
+Users plug one model per domain; ``PredictionSystem`` orchestrates the mix
+via topological sort over cross-model dependencies.
 """
 
 from .torch_mlp import TorchMLPModel
+from .torch_transformer import TorchTransformerModel
 
-__all__ = ["TorchMLPModel"]
+__all__ = ["TorchMLPModel", "TorchTransformerModel"]
