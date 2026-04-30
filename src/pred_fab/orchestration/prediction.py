@@ -298,7 +298,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
 
         for model in self.models:
+            # Two-step validation: universal domain/depth coherence (final on
+            # the base) followed by type-specific schema rules (overridden per
+            # model class — MLP/Deterministic reject recursive features;
+            # Transformer requires sequence_axis_code).
             domain_code = model.validate_dimensional_coherence(self.schema)
+            model._validate_schema_compatibility(self.schema)
             self._model_domain_map[id(model)] = domain_code
 
         self.logger.info("Starting prediction model training...")

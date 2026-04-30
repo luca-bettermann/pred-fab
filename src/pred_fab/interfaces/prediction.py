@@ -50,6 +50,7 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
+    @final
     def validate_dimensional_coherence(self, schema: Any) -> str | None:
         """Enforce structural rules on the model's domain declarations and derive the domain code.
 
@@ -60,6 +61,10 @@ class IPredictionModel(BaseInterface):
         3. Input features may not exceed the model's operational depth (error).
 
         Returns the derived domain code (single named domain, or None for scalar models).
+
+        ``@final`` — every prediction model goes through this same domain/depth check.
+        Type-specific checks (e.g. "transformer requires a sequence axis", "MLP rejects
+        recursive features") live on ``_validate_schema_compatibility`` instead.
         """
         name = self.__class__.__name__
         op_depth = self.depth
@@ -143,6 +148,59 @@ class IPredictionModel(BaseInterface):
     ) -> None:
         """Train the model on (X, y) tensor batch tuples."""
         pass
+
+    # === POLYMORPHIC PREDICT + TYPE-SPECIFIC SCHEMA CHECK ===
+    #
+    # The framework dispatches per-candidate prediction by calling ``predict``
+    # on each model in topological order; each model class (MLP, Transformer,
+    # Deterministic) owns its own implementation. This replaces the framework-
+    # side cell loop / sequence dispatch branching.
+    #
+    # ``_validate_schema_compatibility`` is the type-specific complement to
+    # ``validate_dimensional_coherence`` — the latter is universal and ``@final``;
+    # this one each subclass overrides to enforce its own rules (e.g. MLP
+    # rejects recursive features; Transformer requires ``sequence_axis_code``
+    # to resolve to a real domain axis).
+
+    def predict(
+        self,
+        params_list: list[dict[str, Any]],
+        dm: Any,
+        dim_info_list: list[dict[str, Any]],
+        predictions_so_far: dict[str, dict[int, torch.Tensor]],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Per-candidate prediction → ``list[dict[feat_code, (*feat_shape) tensor]]``.
+
+        Concrete model classes (``TorchMLPModel``, ``TorchTransformerModel``,
+        ``IDeterministicModel``) override with their own dispatch (flat-batched
+        for MLP/Deterministic, sequence for Transformer). The framework calls
+        this once per model in topo order, threading ``predictions_so_far``
+        through so downstream models can read upstream outputs.
+
+        ``predictions_so_far[feat][s]`` holds the per-candidate tensor for
+        feature ``feat`` produced by an upstream model. Empty dict for the
+        first model in the topo order.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement predict(). Subclass "
+            f"TorchMLPModel, TorchTransformerModel, or IDeterministicModel "
+            f"(which provide concrete implementations) instead of IPredictionModel."
+        )
+
+    def _validate_schema_compatibility(self, schema: Any) -> None:
+        """Type-specific schema check, run after ``validate_dimensional_coherence``.
+
+        Default: no-op. Subclasses override to enforce class-specific rules:
+
+        - ``TorchMLPModel`` / ``IDeterministicModel``: reject recursive input features.
+        - ``TorchTransformerModel``: require ``sequence_axis_code`` to resolve to a
+          real domain axis; recursive input features are allowed only if their axis
+          matches ``sequence_axis_code``.
+
+        Raise ``ValueError`` with a clear message if the schema can't be served
+        by this model class.
+        """
+        del schema  # default no-op
 
     # === LATENT ENCODING ===
 
