@@ -24,6 +24,7 @@ subclasses can override.
 
 from typing import Any, Callable
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -324,3 +325,88 @@ class TorchMLPModel(IPredictionModel):
             prev = h
         layers.append(nn.Linear(prev, n_outputs))
         return nn.Sequential(*layers)
+
+    # === Polymorphic predict + schema check ===
+
+    def predict(
+        self,
+        params_list: list[dict[str, Any]],
+        dm: Any,
+        dim_info_list: list[dict[str, Any]],
+        predictions_so_far: dict[str, dict[int, torch.Tensor]],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Per-candidate flat-batched prediction → ``list[dict[feat, (*feat_shape) tensor]]``.
+
+        Single forward pass over all (candidate, cell) rows; outputs
+        de-multiplexed via the row map from ``build_flat_batch``. All outputs
+        of an MLP share the same iterator depth (enforced by
+        ``validate_dimensional_coherence``), so each output's per-candidate
+        shape equals ``dim_info['shape']``.
+
+        ``predictions_so_far`` is accepted for interface conformance; the MLP
+        path does not yet consume cross-model predicted features (today's
+        gradient acquisition has the same limitation). Recursive features are
+        rejected upstream by ``_validate_schema_compatibility``.
+        """
+        del predictions_so_far  # cross-model deps not consumed here yet
+        S = len(params_list)
+        if S == 0:
+            return []
+        if len(dim_info_list) != S:
+            raise ValueError(
+                f"predict: dim_info_list length {len(dim_info_list)} "
+                f"does not match params_list length {S}.",
+            )
+
+        X_flat, row_map = dm.build_flat_batch(params_list, dim_info_list)
+        if X_flat.shape[0] == 0:
+            return [{feat: torch.zeros(()) for feat in self.outputs} for _ in range(S)]
+
+        input_indices = dm.get_input_indices(self.input_parameters + self.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        X_model = X_flat.index_select(1, input_indices_t)
+
+        y_norm = self.forward_pass(X_model, gradient_pass=True)
+        y_denorm = dm.denormalize_values(y_norm, self.outputs)
+        # y_denorm: (n_rows, n_outputs)
+
+        # Per-(s, feat) accumulator: cell_flat → tensor (autograd-clean via
+        # torch.stack on the slot list at the end).
+        accum: list[dict[str, dict[int, torch.Tensor]]] = [
+            {feat: {} for feat in self.outputs} for _ in range(S)
+        ]
+        for row_idx, (s, cell_flat) in enumerate(row_map):
+            for f_idx, feat in enumerate(self.outputs):
+                accum[s][feat][cell_flat] = y_denorm[row_idx, f_idx]
+
+        out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
+        for s in range(S):
+            feat_shape = dim_info_list[s]['shape']
+            n_cells_s = int(np.prod(feat_shape)) if feat_shape else 1
+            for feat in self.outputs:
+                slots = [accum[s][feat][c] for c in range(n_cells_s)]
+                if feat_shape:
+                    out[s][feat] = torch.stack(slots, dim=0).reshape(feat_shape)
+                else:
+                    out[s][feat] = slots[0]
+
+        return out
+
+    def _validate_schema_compatibility(self, schema: Any) -> None:
+        """Reject recursive input features — those belong to ``TorchTransformerModel``.
+
+        Today's recursive-feature schema declarations are slated for deletion
+        once the migration is complete; until then, any model declared on a
+        schema with recursive inputs must be a transformer.
+        """
+        for feat_code in self.input_features:
+            feat_obj = getattr(schema.features, "data_objects", {}).get(feat_code)
+            if feat_obj is None:
+                continue
+            if getattr(feat_obj, "is_recursive", False):
+                raise ValueError(
+                    f"{self.__class__.__name__} declares recursive input feature "
+                    f"'{feat_code}'. MLP models cannot consume recursive features; "
+                    f"subclass TorchTransformerModel for sequence-aware prediction "
+                    f"with causal attention along the recursion axis.",
+                )
