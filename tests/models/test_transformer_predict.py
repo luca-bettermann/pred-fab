@@ -1,4 +1,4 @@
-"""TorchTransformerModel.predict + train — sequence-aware contract.
+"""TransformerModel.predict + train — sequence-aware contract.
 
 These tests exercise the sequence dispatch that replaces the cell-loop
 autoreg path: builds (S, L, n_input), runs the encoder with causal
@@ -19,12 +19,12 @@ from pred_fab.core.data_blocks import (
 from pred_fab.core.data_objects import (
     Dimension, Domain, Feature, Parameter, PerformanceAttribute,
 )
-from pred_fab.models import TorchTransformerModel
+from pred_fab.models import TransformerModel
 from pred_fab.utils import SplitType
 from tests.utils.builders import build_test_logger
 
 
-class _LayerTransformer(TorchTransformerModel):
+class _LayerTransformer(TransformerModel):
     """Sequence axis = n_layers; single output predicting per-layer values."""
     D_MODEL = 8
     N_HEADS = 2
@@ -207,10 +207,10 @@ def test_validate_schema_compatibility_rejects_unknown_axis(tmp_path):
 def test_validate_schema_compatibility_rejects_missing_property(tmp_path):
     _, schema = _build_dm(tmp_path, n_layers=4)
 
-    # Bare TorchTransformerModel with no sequence_axis_code override raises
+    # Bare TransformerModel with no sequence_axis_code override raises
     # NotImplementedError on access; _validate_schema_compatibility wraps this
     # into a ValueError telling the user to declare the axis.
-    class _NoAxis(TorchTransformerModel):
+    class _NoAxis(TransformerModel):
         @property
         def input_parameters(self): return ["p1", "n_layers", "n_segments"]
         @property

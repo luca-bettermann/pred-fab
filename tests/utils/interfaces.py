@@ -14,7 +14,7 @@ from pred_fab.interfaces import (
     IEvaluationModel,
     IFeatureModel,
     IPredictionModel,
-    IDeterministicModel,
+    DeterministicModel,
     IResidualModel,
 )
 
@@ -507,7 +507,7 @@ class ContractPredictionModelDefaults(IPredictionModel):
         return None
 
 
-class ContractDeterministicModel(IDeterministicModel):
+class ContractDeterministicModel(DeterministicModel):
     """Deterministic model for contract tests: formula = X[:, 0] * 2."""
 
     @property

@@ -1,4 +1,4 @@
-"""TorchMLPModel contract tests.
+"""MLPModel contract tests.
 
 The base provides train / forward_pass / encode on top of IPredictionModel.
 Subclasses define HIDDEN + the three abstract properties.
@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 import torch
 
-from pred_fab.models import TorchMLPModel
+from pred_fab.models import MLPModel
 from tests.utils.builders import build_test_logger
 
 
 # ─── Concrete subclasses for tests ────────────────────────────────────────
 
-class _SingleOutMLP(TorchMLPModel):
+class _SingleOutMLP(MLPModel):
     HIDDEN = (16, 8)
     EPOCHS = 300
 
@@ -31,7 +31,7 @@ class _SingleOutMLP(TorchMLPModel):
         return ["y"]
 
 
-class _MultiOutMLP(TorchMLPModel):
+class _MultiOutMLP(MLPModel):
     HIDDEN = (12, 6)
     EPOCHS = 300
 

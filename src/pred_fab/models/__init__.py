@@ -2,11 +2,11 @@
 
 Three classes cover the dominant fab modelling architectures:
 
-- ``IDeterministicModel`` (in ``pred_fab.interfaces.prediction``) — closed-form
+- ``DeterministicModel`` (in ``pred_fab.interfaces.prediction``) — closed-form
   formulas. No training. Inherits the flat-batched ``predict`` default.
-- ``TorchMLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
+- ``MLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
   Inherits the flat-batched ``predict`` default.
-- ``TorchTransformerModel`` — encoder-only transformer with causal attention
+- ``TransformerModel`` — encoder-only transformer with causal attention
   for sequential / autoregressive mappings. Overrides ``predict`` with
   sequence dispatch.
 
@@ -15,7 +15,7 @@ via polymorphic ``model.predict`` calls in topological order over cross-model
 dependencies.
 """
 
-from .torch_mlp import TorchMLPModel
-from .torch_transformer import TorchTransformerModel
+from .mlp import MLPModel
+from .transformer import TransformerModel
 
-__all__ = ["TorchMLPModel", "TorchTransformerModel"]
+__all__ = ["MLPModel", "TransformerModel"]

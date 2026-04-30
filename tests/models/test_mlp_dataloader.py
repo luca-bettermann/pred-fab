@@ -1,4 +1,4 @@
-"""Tests for scale-aware DataLoader in TorchMLPModel.train.
+"""Tests for scale-aware DataLoader in MLPModel.train.
 
 Two guarantees this commit promises:
   1. Below ``MINIBATCH_THRESHOLD`` (1000 rows), single-batch full-GD path
@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import torch
 
-from pred_fab.models.torch_mlp import TorchMLPModel
+from pred_fab.models.mlp import MLPModel
 from pred_fab.utils import PfabLogger
 
 
-class _SmallMLP(TorchMLPModel):
+class _SmallMLP(MLPModel):
     """Tiny model for fast-test training. Linear regression-ish."""
     HIDDEN = (8, 4)
     EPOCHS = 50

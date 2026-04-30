@@ -1,7 +1,7 @@
 """Convenience base for sequence-aware (transformer) prediction models.
 
 Usage:
-    class MyRecursiveModel(TorchTransformerModel):
+    class MyRecursiveModel(TransformerModel):
         D_MODEL = 64
         N_HEADS = 4
         N_LAYERS = 2
@@ -36,7 +36,7 @@ from ..interfaces import IPredictionModel
 from ..utils import PfabLogger
 
 
-class TorchTransformerModel(IPredictionModel):
+class TransformerModel(IPredictionModel):
     """Sequence-aware encoder-only transformer with causal attention.
 
     Subclasses set ``D_MODEL``, ``N_HEADS``, ``N_LAYERS``, plus the standard
@@ -214,7 +214,7 @@ class TorchTransformerModel(IPredictionModel):
         y_full = torch.cat([b[1] for b in train_batches], dim=0)
         if X_full.ndim != 3 or y_full.ndim != 3:
             raise ValueError(
-                f"TorchTransformerModel.train expects sequence-shaped batches "
+                f"TransformerModel.train expects sequence-shaped batches "
                 f"(B, L, n_input)/(B, L, n_output); got X.ndim={X_full.ndim}, "
                 f"y.ndim={y_full.ndim}. PredictionSystem must build sequence "
                 f"batches (not flat batches) for transformer models.",

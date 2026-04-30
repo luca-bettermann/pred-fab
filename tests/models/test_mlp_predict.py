@@ -1,8 +1,8 @@
-"""TorchMLPModel.predict — flat-batched per-candidate dispatch.
+"""MLPModel.predict — flat-batched per-candidate dispatch.
 
 These tests exercise the new ``predict`` contract that replaces the
 framework-side cell-loop autoreg dispatch (commits 6-7 swap and delete).
-``TorchMLPModel.predict`` builds a flat batch via DataModule, forwards
+``MLPModel.predict`` builds a flat batch via DataModule, forwards
 once, and de-multiplexes per-(s, cell) into per-feature tensors.
 """
 
@@ -19,12 +19,12 @@ from pred_fab.core.data_blocks import (
 from pred_fab.core.data_objects import (
     Dimension, Domain, Feature, Parameter, PerformanceAttribute,
 )
-from pred_fab.models import TorchMLPModel
+from pred_fab.models import MLPModel
 from pred_fab.utils import SplitType
 from tests.utils.builders import build_test_logger
 
 
-class _GridMLP(TorchMLPModel):
+class _GridMLP(MLPModel):
     HIDDEN = (8,)
     EPOCHS = 50
     COMPILE = False  # Avoid compile probe noise in unit test.
@@ -192,7 +192,7 @@ def test_validate_schema_compatibility_default_is_noop(tmp_path):
     """The IPredictionModel default _validate_schema_compatibility is a no-op.
 
     Schema-level recursive features were removed alongside the cell-loop autoreg
-    machinery — recursion is now exclusively a TorchTransformerModel concern via
+    machinery — recursion is now exclusively a TransformerModel concern via
     causal attention. There's no rejected case left for MLPs to guard against.
     """
     schema = _build_2d_schema(tmp_path)

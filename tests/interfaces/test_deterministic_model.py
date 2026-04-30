@@ -1,5 +1,5 @@
 """
-Tests for IDeterministicModel contract:
+Tests for DeterministicModel contract:
   - train() is a no-op
   - encode() returns identity
   - forward_pass() is final: denormalize → formula → renormalize
@@ -10,7 +10,7 @@ import pytest
 import numpy as np
 import torch
 
-from pred_fab.interfaces import IDeterministicModel
+from pred_fab.interfaces import DeterministicModel
 from tests.utils.builders import build_test_logger
 from tests.utils.interfaces import ContractDeterministicModel
 
@@ -20,7 +20,7 @@ from tests.utils.interfaces import ContractDeterministicModel
 # ===========================================================================
 
 class TestDeterministicModelContract:
-    """Core IDeterministicModel interface guarantees."""
+    """Core DeterministicModel interface guarantees."""
 
     def test_train_is_noop(self, tmp_path):
         model = ContractDeterministicModel(build_test_logger(tmp_path))

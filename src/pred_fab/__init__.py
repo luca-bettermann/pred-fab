@@ -1,4 +1,4 @@
-from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, IDeterministicModel
+from .interfaces import IExternalData, IFeatureModel, IEvaluationModel, IPredictionModel, DeterministicModel
 from .orchestration import PfabAgent, InferenceBundle
 from .utils.metrics import combined_score
 
@@ -9,5 +9,5 @@ __all__ = [
     "IFeatureModel",
     "IEvaluationModel",
     "IPredictionModel",
-    "IDeterministicModel",
+    "DeterministicModel",
 ]

@@ -15,7 +15,7 @@ import pickle
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
-from ..interfaces.prediction import IPredictionModel, IDeterministicModel
+from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score, profiler
 from ..utils.enum import BlockType
@@ -250,7 +250,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self.datamodule.fit_normalization(SplitType.TRAIN)
 
         for model in self.models:
-            if isinstance(model, IDeterministicModel):
+            if isinstance(model, DeterministicModel):
                 norm_state = self.datamodule.get_normalization_state()
                 model.set_normalization_context(
                     parameter_stats=norm_state.get('parameter_stats', {}),
@@ -307,7 +307,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         sum grows with data; uncertainty u = 1/(1+E) shrinks accordingly.
         """
         self._model_kdes = {}
-        kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
+        kde_models = [m for m in self.models if not isinstance(m, DeterministicModel)]
         if not kde_models:
             self.logger.info("All models are deterministic — uncertainty defaults to 0.0.")
             return
@@ -405,7 +405,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """
         self._model_kdes = {}
         self.datamodule = datamodule
-        kde_models = [m for m in self.models if not isinstance(m, IDeterministicModel)]
+        kde_models = [m for m in self.models if not isinstance(m, DeterministicModel)]
         if not kde_models:
             self.logger.info("All models are deterministic — empty evidence not needed.")
             return
@@ -804,7 +804,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         best: IPredictionModel | None = None
         best_w = -1.0
         for m in self.models:
-            if isinstance(m, IDeterministicModel):
+            if isinstance(m, DeterministicModel):
                 continue
             w = self._get_model_weight(m)
             if w > best_w:
@@ -1406,7 +1406,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         ``model`` (optional) restricts prediction to that model's outputs.
         Recursive autoreg dispatch was removed alongside the cell-loop
         machinery — sequence-aware prediction now lives in
-        ``TorchTransformerModel.predict``; this helper feeds the numpy /
+        ``TransformerModel.predict``; this helper feeds the numpy /
         non-recursive path only.
         """
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")

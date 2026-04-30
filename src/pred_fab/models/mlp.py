@@ -12,7 +12,7 @@ Inputs are assumed to arrive normalised from ``DataModule`` — no internal scal
 The framework's contract is tensor-native: ``forward_pass`` and ``encode`` take
 and return ``torch.Tensor`` directly; no numpy↔tensor conversion happens here.
 
-Other model shapes (transformer, GNN, LSTM) should subclass ``TorchMLPModel``
+Other model shapes (transformer, GNN, LSTM) should subclass ``MLPModel``
 and override ``_build_network`` to return a different ``nn.Module``.
 
 **Scale-aware training:** at ``n_rows > MINIBATCH_THRESHOLD``
@@ -41,7 +41,7 @@ def _embedding_dim(cardinality: int) -> int:
     return min(50, (cardinality + 1) // 2)
 
 
-class TorchMLPModel(IPredictionModel):
+class MLPModel(IPredictionModel):
     """Feed-forward MLP base. Subclasses set ``HIDDEN`` and the IPredictionModel properties."""
 
     HIDDEN: tuple[int, ...] = (32, 16)
@@ -164,7 +164,7 @@ class TorchMLPModel(IPredictionModel):
             if logger is not None:
                 logger.warning(
                     f"torch.compile unavailable in this runtime; falling back "
-                    f"to eager forward for all TorchMLPModel subclasses. "
+                    f"to eager forward for all MLPModel subclasses. "
                     f"Reason: {e!r}"
                 )
         return cls._compile_available
@@ -294,4 +294,4 @@ class TorchMLPModel(IPredictionModel):
     # predict and _validate_schema_compatibility inherit from IPredictionModel:
     # the default flat-batched dispatch (build_flat_batch + forward_pass +
     # de-multiplex) and the recursive-feature rejection are exactly what an
-    # MLP needs. TorchTransformerModel overrides both.
+    # MLP needs. TransformerModel overrides both.

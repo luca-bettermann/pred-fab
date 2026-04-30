@@ -21,9 +21,9 @@ class IPredictionModel(BaseInterface):
 
     Three concrete subclasses cover the dominant fab modelling architectures:
 
-    - ``IDeterministicModel`` — closed-form formulas (no training).
-    - ``TorchMLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
-    - ``TorchTransformerModel`` — encoder-only transformer with causal attention
+    - ``DeterministicModel`` — closed-form formulas (no training).
+    - ``MLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
+    - ``TransformerModel`` — encoder-only transformer with causal attention
       for sequential / autoregressive mappings.
 
     Each subclass implements its own ``predict`` (the interface defaults to flat-
@@ -175,7 +175,7 @@ class IPredictionModel(BaseInterface):
         tensors via ``torch.stack`` so the autograd graph stays connected.
 
         Suitable for any per-cell-independent mapping (MLP, deterministic
-        formula). ``TorchTransformerModel`` overrides with sequence dispatch.
+        formula). ``TransformerModel`` overrides with sequence dispatch.
 
         All outputs of a flat-batched model share the same iterator depth
         (rule 1 of ``validate_dimensional_coherence``), so each output's
@@ -231,7 +231,7 @@ class IPredictionModel(BaseInterface):
         """Type-specific schema check, run after ``validate_dimensional_coherence``.
 
         Default: no-op. Concrete model classes override to enforce class-
-        specific rules (e.g. ``TorchTransformerModel`` requires
+        specific rules (e.g. ``TransformerModel`` requires
         ``sequence_axis_code`` to resolve to a real domain axis).
         """
         del schema
@@ -258,7 +258,7 @@ class IPredictionModel(BaseInterface):
         (after column selection in ``_filter_batches_for_model``).
 
         Default: no-op. Override in models that consume categorical inputs
-        (typically ``TorchMLPModel`` subclasses use this to size internal
+        (typically ``MLPModel`` subclasses use this to size internal
         ``F.one_hot`` / ``nn.Embedding`` expansion).
         """
         del col_to_cardinality  # base impl ignores
@@ -289,7 +289,7 @@ class IPredictionModel(BaseInterface):
         )
 
 
-class IDeterministicModel(IPredictionModel):
+class DeterministicModel(IPredictionModel):
     """Prediction model backed by a known analytical formula, not learned from data.
 
     Subclasses implement ``formula(X_raw)`` which receives denormalized inputs

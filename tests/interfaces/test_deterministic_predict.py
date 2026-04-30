@@ -1,4 +1,4 @@
-"""IDeterministicModel.predict — flat-batched dispatch via inherited default.
+"""DeterministicModel.predict — flat-batched dispatch via inherited default.
 
 The deterministic base inherits ``predict`` from ``IPredictionModel`` (the
 flat-batched default that builds a flat batch, runs forward_pass, and
@@ -19,12 +19,12 @@ from pred_fab.core.data_blocks import (
 from pred_fab.core.data_objects import (
     Dimension, Domain, Feature, Parameter, PerformanceAttribute,
 )
-from pred_fab.interfaces import IDeterministicModel
+from pred_fab.interfaces import DeterministicModel
 from pred_fab.utils import SplitType
 from tests.utils.builders import build_test_logger
 
 
-class _DoublingModel(IDeterministicModel):
+class _DoublingModel(DeterministicModel):
     """formula(X) → 2 * p1 (scalar output, no domain)."""
 
     @property
@@ -91,7 +91,7 @@ def _dim_info(shape: tuple = ()) -> dict:
 
 
 def test_predict_inherits_flat_batch_default(tmp_path):
-    """IDeterministicModel inherits the flat-batched predict from IPredictionModel."""
+    """DeterministicModel inherits the flat-batched predict from IPredictionModel."""
     dm, model = _build_dm(tmp_path)
     params_list = [{"p1": 0.25}, {"p1": 0.75}]
     out = model.predict(params_list, dm, [_dim_info(), _dim_info()], {})
