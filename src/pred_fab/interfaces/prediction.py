@@ -171,36 +171,86 @@ class IPredictionModel(BaseInterface):
     ) -> list[dict[str, torch.Tensor]]:
         """Per-candidate prediction → ``list[dict[feat_code, (*feat_shape) tensor]]``.
 
-        Concrete model classes (``TorchMLPModel``, ``TorchTransformerModel``,
-        ``IDeterministicModel``) override with their own dispatch (flat-batched
-        for MLP/Deterministic, sequence for Transformer). The framework calls
-        this once per model in topo order, threading ``predictions_so_far``
-        through so downstream models can read upstream outputs.
+        Default: flat-batched dispatch. Builds ``(sum_s n_cells_s, n_input)``
+        via ``dm.build_flat_batch``, runs one ``forward_pass``, and
+        de-multiplexes per-(s, cell) into per-feature ``(*feat_shape)``
+        tensors via ``torch.stack`` so the autograd graph stays connected.
 
-        ``predictions_so_far[feat][s]`` holds the per-candidate tensor for
-        feature ``feat`` produced by an upstream model. Empty dict for the
-        first model in the topo order.
+        Suitable for any per-cell-independent mapping (MLP, deterministic
+        formula). ``TorchTransformerModel`` overrides with sequence dispatch.
+
+        All outputs of a flat-batched model share the same iterator depth
+        (rule 1 of ``validate_dimensional_coherence``), so each output's
+        per-candidate ``feat_shape`` equals ``dim_info['shape']``.
+
+        ``predictions_so_far`` is accepted for interface conformance but
+        not consumed yet — cross-model predicted features aren't supported
+        on the gradient path today either.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement predict(). Subclass "
-            f"TorchMLPModel, TorchTransformerModel, or IDeterministicModel "
-            f"(which provide concrete implementations) instead of IPredictionModel."
-        )
+        del predictions_so_far  # cross-model deps not consumed here yet
+        S = len(params_list)
+        if S == 0:
+            return []
+        if len(dim_info_list) != S:
+            raise ValueError(
+                f"predict: dim_info_list length {len(dim_info_list)} "
+                f"does not match params_list length {S}.",
+            )
+
+        X_flat, row_map = dm.build_flat_batch(params_list, dim_info_list)
+        if X_flat.shape[0] == 0:
+            return [{feat: torch.zeros(()) for feat in self.outputs} for _ in range(S)]
+
+        input_indices = dm.get_input_indices(self.input_parameters + self.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        X_model = X_flat.index_select(1, input_indices_t)
+
+        y_norm = self.forward_pass(X_model, gradient_pass=True)
+        y_denorm = dm.denormalize_values(y_norm, self.outputs)
+        # y_denorm: (n_rows, n_outputs)
+
+        accum: list[dict[str, dict[int, torch.Tensor]]] = [
+            {feat: {} for feat in self.outputs} for _ in range(S)
+        ]
+        for row_idx, (s, cell_flat) in enumerate(row_map):
+            for f_idx, feat in enumerate(self.outputs):
+                accum[s][feat][cell_flat] = y_denorm[row_idx, f_idx]
+
+        out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
+        for s in range(S):
+            feat_shape = dim_info_list[s]['shape']
+            n_cells_s = int(np.prod(feat_shape)) if feat_shape else 1
+            for feat in self.outputs:
+                slots = [accum[s][feat][c] for c in range(n_cells_s)]
+                if feat_shape:
+                    out[s][feat] = torch.stack(slots, dim=0).reshape(feat_shape)
+                else:
+                    out[s][feat] = slots[0]
+
+        return out
 
     def _validate_schema_compatibility(self, schema: Any) -> None:
         """Type-specific schema check, run after ``validate_dimensional_coherence``.
 
-        Default: no-op. Subclasses override to enforce class-specific rules:
+        Default: reject recursive input features. Suitable for MLP and
+        Deterministic models — neither can consume recursive features under
+        the new architecture; they belong to ``TorchTransformerModel``.
 
-        - ``TorchMLPModel`` / ``IDeterministicModel``: reject recursive input features.
-        - ``TorchTransformerModel``: require ``sequence_axis_code`` to resolve to a
-          real domain axis; recursive input features are allowed only if their axis
-          matches ``sequence_axis_code``.
-
-        Raise ``ValueError`` with a clear message if the schema can't be served
-        by this model class.
+        ``TorchTransformerModel`` overrides this to (a) require
+        ``sequence_axis_code`` to resolve to a real domain axis, and
+        (b) allow recursive features whose axis matches the sequence axis.
         """
-        del schema  # default no-op
+        for feat_code in self.input_features:
+            feat_obj = getattr(schema.features, "data_objects", {}).get(feat_code)
+            if feat_obj is None:
+                continue
+            if getattr(feat_obj, "is_recursive", False):
+                raise ValueError(
+                    f"{self.__class__.__name__} declares recursive input feature "
+                    f"'{feat_code}'. MLP / Deterministic models cannot consume "
+                    f"recursive features; subclass TorchTransformerModel for "
+                    f"sequence-aware prediction with causal attention.",
+                )
 
     # === LATENT ENCODING ===
 
