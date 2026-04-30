@@ -326,6 +326,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
             out[code] = None if v != v else v  # NaN → None
         return out
 
+    def _compute_normalised_perf_for_params(
+        self,
+        params: dict[str, Any],
+        perf_range: tuple[float, float] | None = None,
+    ) -> float:
+        """Predict + evaluate single-candidate weighted system perf; normalise into ``[0, 1]`` if ``perf_range`` is given."""
+        perf_dict = self._compute_perf_dict_for_params(params)
+        return self._normalize_perf_dict(perf_dict, perf_range)
+
+    @property
+    def _perf_range(self) -> tuple[float, float] | None:
+        """Tuple form of ``(_perf_range_min, _perf_range_max)`` if both are set, else None."""
+        if self._perf_range_min is None or self._perf_range_max is None:
+            return None
+        return (self._perf_range_min, self._perf_range_max)
+
     def _per_candidate_perf_batched(
         self,
         X_SD: np.ndarray,
@@ -556,12 +572,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             exp = datamodule.dataset.get_experiment(code)
             params_dict = exp.parameters.get_values_dict()
             try:
-                perf_dict = self._compute_perf_dict_for_params(params_dict)
-                pv = [
-                    float(perf_dict[name]) if perf_dict.get(name) is not None else 0.0  # type: ignore
-                    for name in self.perf_names_order if name in perf_dict
-                ]
-                sys_perf = self._compute_system_performance(pv) if pv else 0.0
+                sys_perf = self._compute_normalised_perf_for_params(params_dict)
             except Exception:
                 continue
 
@@ -2081,17 +2092,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         pts0 = opt.best_x.reshape(L, D_sched)[0]
                         x0_step = _pts_row_to_dm(pts0)
                         _params = datamodule.array_to_params(x0_step)
-                        _perf_dict = self._compute_perf_dict_for_params(_params)
-                        _pv = [
-                            float(v) if (v := _perf_dict.get(n)) is not None else 0.0
-                            for n in self.perf_names_order if n in _perf_dict
-                        ]
-                        raw_perf = self._compute_system_performance(_pv) if _pv else 0.0
-                        if self._perf_range_min is not None and self._perf_range_max is not None:
-                            span = self._perf_range_max - self._perf_range_min
-                            self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
-                        else:
-                            self.last_opt_perf = raw_perf
+                        self.last_opt_perf = self._compute_normalised_perf_for_params(
+                            _params, self._perf_range,
+                        )
                         self.last_opt_unc = float(self.uncertainty_fn(x0_step))
                     except Exception:
                         self.last_opt_perf = 0.0
@@ -2129,17 +2132,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 try:
                     _params = datamodule.array_to_params(flat_x)
-                    _perf_dict = self._compute_perf_dict_for_params(_params)
-                    _pv = [
-                        float(v) if (v := _perf_dict.get(n)) is not None else 0.0
-                        for n in self.perf_names_order if n in _perf_dict
-                    ]
-                    raw_perf = self._compute_system_performance(_pv) if _pv else 0.0
-                    if self._perf_range_min is not None and self._perf_range_max is not None:
-                        span = self._perf_range_max - self._perf_range_min
-                        self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
-                    else:
-                        self.last_opt_perf = raw_perf
+                    self.last_opt_perf = self._compute_normalised_perf_for_params(
+                        _params, self._perf_range,
+                    )
                     self.last_opt_unc = float(self.uncertainty_fn(flat_x))
                 except Exception:
                     self.last_opt_perf = 0.0
@@ -2296,17 +2291,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if best_x is not None:
                 try:
                     _params = datamodule.array_to_params(best_x)
-                    _perf_dict = self._compute_perf_dict_for_params(_params)
-                    _perf_values = [
-                        float(v) if (v := _perf_dict.get(n)) is not None else 0.0
-                        for n in self.perf_names_order if n in _perf_dict
-                    ]
-                    raw_perf = self._compute_system_performance(_perf_values) if _perf_values else 0.0
-                    if self._perf_range_min is not None and self._perf_range_max is not None:
-                        span = self._perf_range_max - self._perf_range_min
-                        self.last_opt_perf = (raw_perf - self._perf_range_min) / span if span > 1e-10 else 0.5
-                    else:
-                        self.last_opt_perf = raw_perf
+                    self.last_opt_perf = self._compute_normalised_perf_for_params(
+                        _params, self._perf_range,
+                    )
                     self.last_opt_unc = float(self.uncertainty_fn(best_x))
                 except Exception:
                     self.last_opt_perf = 0.0
