@@ -18,7 +18,6 @@ from ..orchestration import (
     PredictionSystem,
     CalibrationSystem,
     EvidenceBackend,
-    Optimizer,
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
@@ -644,31 +643,32 @@ class PfabAgent:
     def configure_optimizer(
         self,
         *,
-        backend: Optimizer | None = None,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
-        gradient_n_starts: int | None = None,
-        gradient_n_iters: int | None = None,
-        gradient_lr: float | None = None,
-        gradient_method: str | None = None,
+        n_starts: int | None = None,
+        n_iters: int | None = None,
+        lr: float | None = None,
     ) -> None:
-        """Set optimiser backend and tuning parameters."""
+        """Set optimiser tuning parameters.
+
+        ``de_maxiter`` / ``de_popsize`` control the joint global DE phase
+        (Phase 1, mixed-integer); ``n_starts`` / ``n_iters`` / ``lr`` control
+        the LBFGS multi-start phases (Phase 2 continuous refine when no
+        trajectory; Phase 3 trajectory). Backend dispatch is internal —
+        users do not pick DE vs gradient.
+        """
         self._assert_initialized()
         cal = self.calibration_system
-        if backend is not None:
-            cal.optimizer = backend
         if de_maxiter is not None:
             cal.de_maxiter = de_maxiter
         if de_popsize is not None:
             cal.de_popsize = de_popsize
-        if gradient_n_starts is not None:
-            cal.engine.gradient_n_starts = gradient_n_starts
-        if gradient_n_iters is not None:
-            cal.engine.gradient_n_iters = gradient_n_iters
-        if gradient_lr is not None:
-            cal.engine.gradient_lr = gradient_lr
-        if gradient_method is not None:
-            cal.engine.gradient_method = gradient_method
+        if n_starts is not None:
+            cal.engine.gradient_n_starts = n_starts
+        if n_iters is not None:
+            cal.engine.gradient_n_iters = n_iters
+        if lr is not None:
+            cal.engine.gradient_lr = lr
 
     def configure_trajectory(
         self,

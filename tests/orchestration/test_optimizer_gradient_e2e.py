@@ -25,14 +25,10 @@ from tests.utils.builders import build_real_agent_stack
 
 
 def test_baseline_with_gradient_optimizer(tmp_path):
-    """Baseline step with GRADIENT optimiser produces valid ExperimentSpecs."""
+    """Baseline step produces valid ExperimentSpecs (gradient is the default refine path)."""
     agent, _, _, _ = build_real_agent_stack(tmp_path)
-    # Switch to gradient. Keep iters low for test speed.
-    agent.configure_optimizer(
-        backend=Optimizer.GRADIENT,
-        gradient_n_starts=2,
-        gradient_n_iters=20,
-    )
+    # Keep iters low for test speed.
+    agent.configure_optimizer(n_starts=2, n_iters=20)
 
     sampled = agent.baseline_step(n=3)
 
@@ -42,18 +38,14 @@ def test_baseline_with_gradient_optimizer(tmp_path):
     assert all(p.initial_params.source_step == "baseline_step" for p in sampled)
 
 
-def test_baseline_with_gradient_falls_back_when_integer_present(tmp_path):
-    """Gradient path falls back to DE when integer params are in scope.
+def test_baseline_with_integer_params_runs(tmp_path):
+    """Baseline runs cleanly when integer / domain dims are in scope.
 
-    The mixed-feature schema has integer / domain dims that must be rounded;
-    differentiating through them isn't well-defined. The dispatcher in
-    ``_run_acquisition_phase`` detects this via ``space.integrality`` and
-    falls back to DE silently — verified by the run still succeeding (DE
-    fallback) without exception when GRADIENT is requested.
+    The mixed-feature schema has integer dims that DE rounds via the
+    integrality_mask. Verified by the run completing without exception.
     """
     agent, _, _, _ = build_real_agent_stack(tmp_path)
-    agent.configure_optimizer(backend=Optimizer.GRADIENT, de_maxiter=5, de_popsize=2)
+    agent.configure_optimizer(de_maxiter=5, de_popsize=2)
 
-    # Should not raise even though integer/domain params force DE fallback.
     sampled = agent.baseline_step(n=2)
     assert len(sampled) == 2

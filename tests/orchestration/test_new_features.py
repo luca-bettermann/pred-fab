@@ -22,15 +22,6 @@ def _setup_trained_agent(tmp_path):
 class TestOptimizerConfig:
     """agent.configure_optimizer() sets optimizer parameters."""
 
-    def test_default_optimizer_is_gradient(self, tmp_path):
-        """GRADIENT is the default optimizer.
-
-        DE remains opt-in for the integer-phase fallback and for users who
-        explicitly configure it via ``configure_optimizer(backend=DE)``.
-        """
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        assert agent.calibration_system.optimizer == Optimizer.GRADIENT
-
     def test_configure_de_maxiter(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(de_maxiter=200)
@@ -41,15 +32,9 @@ class TestOptimizerConfig:
         agent.configure_optimizer(de_popsize=20)
         assert agent.calibration_system.de_popsize == 20
 
-    def test_configure_gradient_optimizer(self, tmp_path):
-        """GRADIENT backend can be selected via configure_optimizer."""
+    def test_configure_n_starts(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(backend=Optimizer.GRADIENT)
-        assert agent.calibration_system.optimizer == Optimizer.GRADIENT
-
-    def test_configure_gradient_n_starts(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(gradient_n_starts=8)
+        agent.configure_optimizer(n_starts=8)
         assert agent.calibration_system.engine.gradient_n_starts == 8
 
 # ===========================================================================
