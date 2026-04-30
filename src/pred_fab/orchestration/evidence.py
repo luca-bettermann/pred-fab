@@ -44,32 +44,54 @@ DEFAULT_ANGULAR_GAP_DEG: float = 45.0
 # Scale-aware regime dispatcher
 # ---------------------------------------------------------------------------
 
+# Thresholds for regime selection. The right metric is the expected number of
+# kernels contributing to a typical probe's density — n_active = N · V(5σ-ball)
+# capped at the unit cube — not n_kernels alone. The dense regime is always
+# correct; knn / cluster are approximations that pay off only at scale.
+_REGIME_DENSE_FLOOR = 100        # below: dense; KNN overhead doesn't pay
+_REGIME_CLUSTER_N_ACTIVE = 10000  # above n_active: cluster
+_REGIME_CLUSTER_N_KERNELS = 100000  # above n_kernels: cluster
+_REGIME_KNN_N_ACTIVE = 50         # below n_active: KNN
+_REGIME_KNN_ACTIVE_FRAC = 0.5     # n_active < frac · n_kernels: KNN
+
+# knn / cluster are not yet implemented — when selected, the dispatcher logs
+# at INFO and returns "dense" so the caller's code stays simple.
+_IMPLEMENTED_REGIMES: frozenset[str] = frozenset({"dense"})
+
+
 def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
-    """Select KDE evaluation regime based on `(n_kernels, sigma, D)`.
+    """Ideal KDE regime for the given ``(n_kernels, sigma, D)``.
 
-    The right metric is **expected number of kernels contributing to a
-    typical probe's density** — not n_kernels alone. Computed as
-    ``n_kernels × V(5σ-ball in D dims) / V_unit_cube``. When ``n_active ≪
-    n_kernels``, most kernels contribute negligibly and a sparse top-K
-    gather wins. When ``n_active ≈ n_kernels``, dense is correct.
-
-    Regimes:
-      ``"dense"``   — sum over all N kernels (always correct; only viable for small N).
-      ``"knn"``     — sparse top-K gather (currently stubbed → falls back to dense).
-      ``"cluster"`` — c-component summarisation (currently stubbed → falls back to dense).
+    Pure threshold logic — returns the regime label the dispatcher *would
+    pick*, ignoring whether it's implemented. Use ``_resolve_kde_regime``
+    to get the regime that will actually run.
     """
-    # 5σ ball volume in D dims, capped to unit cube domain.
-    v_5sigma = (pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1)
-    v_5sigma = min(v_5sigma, 1.0)
+    v_5sigma = min((pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1), 1.0)
     n_active = n_kernels * v_5sigma
 
-    if n_kernels < 100:
-        return "dense"  # too small for KNN overhead to pay
-    if n_active > 10000 or n_kernels > 100000:
+    if n_kernels < _REGIME_DENSE_FLOOR:
+        return "dense"
+    if n_active > _REGIME_CLUSTER_N_ACTIVE or n_kernels > _REGIME_CLUSTER_N_KERNELS:
         return "cluster"
-    if n_active < 50 or n_active < n_kernels * 0.5:
+    if n_active < _REGIME_KNN_N_ACTIVE or n_active < n_kernels * _REGIME_KNN_ACTIVE_FRAC:
         return "knn"
     return "dense"
+
+
+def _resolve_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
+    """Regime to actually execute — falls back to "dense" for unimplemented choices.
+
+    Logs at INFO when the ideal regime is not yet implemented.
+    """
+    ideal = _choose_kde_regime(n_kernels, sigma, D)
+    if ideal not in _IMPLEMENTED_REGIMES:
+        _logger.info(
+            "KDE regime %r preferred (n_kernels=%d, σ=%.4f, D=%d) — not yet "
+            "implemented; falling back to dense.",
+            ideal, n_kernels, sigma, D,
+        )
+        return "dense"
+    return ideal
 
 
 # ---------------------------------------------------------------------------
@@ -667,22 +689,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         sigma = index_old.sigma
         n_old = len(index_old.centers) if not index_old.is_empty else 0
 
-        regime = _choose_kde_regime(n_old, sigma, D)
-        if regime == "knn":
-            _logger.info(
-                "KDE regime 'knn' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
-                "implemented. Falling back to dense.",
-                n_old, sigma, D,
-            )
-            regime = "dense"
-        elif regime == "cluster":
-            _logger.info(
-                "KDE regime 'cluster' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
-                "implemented. Falling back to dense.",
-                n_old, sigma, D,
-            )
-            regime = "dense"
-
+        # Resolve the regime (logs + falls back to dense for unimplemented choices).
+        # Only "dense" is implemented today; the call still routes correctly when
+        # knn / cluster land.
+        _resolve_kde_regime(n_old, sigma, D)
         return self._integrated_evidence_joint_dense_torch(
             index_old, new_centers_SL, new_weights_SL,
         )
