@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Callable
 import warnings
 
@@ -8,12 +7,6 @@ import torch
 
 from ...core import DataModule
 from ...utils import PfabLogger, ProgressBar, profiler
-
-
-class Optimizer(Enum):
-    """Optimization backend for the calibration acquisition function."""
-    DE       = "de"         # torch-native differential evolution (integer-aware)
-    GRADIENT = "gradient"   # autograd multi-start, torch.optim Adam/LBFGS
 
 
 @dataclass
@@ -108,66 +101,6 @@ class OptimizationEngine:
             maxiter=self.smart_maxiter(len(bounds)),
             vectorized=True,
         )
-
-    def run(
-        self,
-        objective: Callable[[np.ndarray], float],
-        N: int,
-        D_static: int,
-        static_bounds: list[tuple[float, float]],
-        *,
-        init_pop: np.ndarray | None = None,
-        integrality_static: list[bool] | None = None,
-        x0: np.ndarray | None = None,
-        n_restarts: int = 0,
-        label: str = "Optimizing",
-        show_progress: bool = False,
-    ) -> tuple[_OptResult, np.ndarray]:
-        """DE optimization engine for the static-acquisition path.
-
-        Vector layout per unit: ``[static]`` (no schedule offsets — the
-        gradient backend owns the schedule path via ``run_acquisition_gradient``
-        plus ``_optimise_schedule_for_experiment`` with absolute-step encoding).
-
-        Returns ``(opt_result, static_out[N, D_static])``.
-        """
-        D_unit = D_static
-        n_vars = N * D_unit
-
-        # --- 1. Build bounds ---
-        all_bounds: list[tuple[float, float]] = []
-        integrality: list[bool] | None = None
-        if integrality_static is not None and any(integrality_static):
-            integrality = []
-
-        for _u in range(N):
-            for d in range(D_static):
-                all_bounds.append(static_bounds[d])
-                if integrality is not None:
-                    integrality.append(integrality_static[d])  # type: ignore[index]
-
-        # --- 2. Build objective wrapper ---
-        def _objective(x_flat: np.ndarray) -> float:
-            return objective(x_flat.reshape(N, D_unit))
-
-        # --- 3. Run DE ---
-        opt = self._run_de(
-            _objective,
-            all_bounds,
-            init_pop=init_pop,
-            integrality=integrality,
-            label=label,
-            show_progress=show_progress,
-            maxiter=self.smart_maxiter(n_vars),
-        )
-
-        # --- 4. Decode result ---
-        if opt.best_x is not None:
-            static_out = opt.best_x.reshape(N, D_unit)
-        else:
-            static_out = np.full((N, D_unit), 0.5)
-
-        return opt, static_out
 
     def run_acquisition_gradient(
         self,

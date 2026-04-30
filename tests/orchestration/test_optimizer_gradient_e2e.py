@@ -1,16 +1,10 @@
-"""End-to-end smoke for Optimizer.GRADIENT routed through baseline_step.
+"""End-to-end smoke for the gradient acquisition path through baseline_step.
 
-Goal: confirm that selecting ``Optimizer.GRADIENT`` actually exercises the
-tensor acquisition path (``run_acquisition_gradient`` in OptimizationEngine,
-``_acquisition_objective_tensor`` in CalibrationSystem, and the tensor
-``delta_integrated_evidence_*`` closures in PredictionSystem) without
-crashing or producing nonsense, and that returned ExperimentSpec values land
-inside the schema bounds.
-
-Numerical equivalence with the DE path is NOT promised — gradient solves a
-smooth non-convex problem with 4 random starts and ~60 iterations, while DE
-runs a population search; they generally find similar but not identical
-optima. What must hold: bounds respected, output shape correct, no NaNs.
+Confirms that the tensor acquisition path (``run_acquisition_gradient``
+in OptimizationEngine, ``_acquisition_objective_tensor`` in
+CalibrationSystem, and the tensor ``delta_integrated_evidence_*``
+closures in PredictionSystem) runs end-to-end without crashing and
+returns ExperimentSpec values inside the schema bounds.
 """
 
 from __future__ import annotations
@@ -19,7 +13,6 @@ import numpy as np
 import pytest
 
 from pred_fab.core import ExperimentSpec
-from pred_fab.orchestration import Optimizer
 
 from tests.utils.builders import build_real_agent_stack
 

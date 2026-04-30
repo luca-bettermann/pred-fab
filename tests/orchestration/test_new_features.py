@@ -3,7 +3,6 @@
 import pytest
 import numpy as np
 
-from pred_fab.orchestration.calibration import Optimizer
 from tests.utils.builders import build_real_agent_stack
 
 

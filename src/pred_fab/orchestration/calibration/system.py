@@ -10,7 +10,7 @@ from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAx
 from ...core import ParameterProposal, ParameterTrajectory, ExperimentSpec
 from ...utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ..base_system import BaseOrchestrationSystem
-from .engine import OptimizationEngine, Optimizer, _OptResult
+from .engine import OptimizationEngine, _OptResult
 from .bounds import BoundsManager
 from .space import SolutionSpace
 
@@ -124,12 +124,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
-        # GRADIENT is the default.
-        # ``Optimizer.DE`` remains an opt-in for users who explicitly want it
-        # via ``configure_optimizer(backend=Optimizer.DE)``. Internal phase
-        # dispatch automatically falls back to DE for integer-only phases
-        # (Domain) where gradient on cat-index makes no sense.
-        self.optimizer: Optimizer = Optimizer.GRADIENT
+        # Backend is phase-deterministic — no user-facing optimizer choice:
+        # Phase 1 (Domain → Process discrete commit) = DE (handles
+        # integers/cats natively). Phase 2 (continuous refine) and Phase 3
+        # (trajectory) = LBFGS multi-start. The Domain → Process split inside
+        # Phase 1 keeps each DE call small (joint over all dims at full DE
+        # budget timed out at >5 min for N=5 + ~3 numeric params).
 
         # Persistent κ default for acquisition_step / exploration_step. Overridable
         # per call. inference_step ignores it (κ=0 is the inference semantic).
@@ -141,15 +141,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
-
-        # Baseline phase strategy. True (default) = Domain phase first
-        # (DataDomainAxis only), then Process phase with domain values held
-        # fixed. False = single Process phase over all numeric params jointly.
-        # Empirically the joint regime is intractable at typical baseline
-        # sizes: N=5 with 3 numeric params (incl. domain axes) timed out at
-        # 5+ minutes per call. Split keeps each per-phase DE small enough
-        # to converge in seconds.
-        self.split_domain_phase: bool = True
 
     # ------------------------------------------------------------------
     # Proxy properties for backward compatibility
@@ -851,9 +842,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             code for code, _, _ in numeric_params
             if code in self.data_objects and isinstance(self.data_objects[code], DataDomainAxis)
         }
-        do_split = (
-            self.split_domain_phase and bool(domain_axis_codes) and n_numeric > 0
-        )
+        do_split = bool(domain_axis_codes) and n_numeric > 0
 
         # --- Phase: Domain (only when split is on and domain axes exist) ---
         structural_values: list[dict[str, int]] | None = None
@@ -1154,12 +1143,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"D_sched=0, total_vars={space.total_vars}, maxiter={smart_maxiter}"
         )
 
-        # gradient path when configured + tensor APIs wired
-        # + no integer params (rounded variables aren't differentiable; DE
-        # remains the right tool for them).
+        # Gradient path when the tensor evidence backend is wired + no integer
+        # dims in scope (DE remains correct for integer/categorical phases —
+        # rounded variables aren't differentiable).
         use_gradient = (
-            self.optimizer == Optimizer.GRADIENT
-            and self.evidence.joint_batched_tensor is not None
+            self.evidence.joint_batched_tensor is not None
             and not (space.integrality is not None and any(space.integrality))
         )
 
@@ -2156,132 +2144,82 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 bounds = all_global_bounds
                 n_rounds = n_optimization_rounds
 
-            chosen_opt = self.optimizer
+            _eff_kappa = 0.0 if mode == Mode.INFERENCE else kappa
+            _perf_range, _ = self._get_acquisition_ranges()
 
-            # Vectorised DE path: pass S candidates through the autoreg loop in one
-            # go via _acquisition_objective_vectorized, amortising forward_pass
-            # overhead. Only available for DE (not L-BFGS-B), and only when MPC
-            # lookahead isn't wrapping the objective (MPC builds a sequential
-            # rollout per candidate, so it stays scalar).
-            mpc_active = (
-                is_online and mpc_lookahead is not None and mpc_lookahead > 0
-            )
-            use_vectorized = (
-                chosen_opt == Optimizer.DE
-                and not mpc_active
-                and self.perf_fn_tensor is not None
+            # Phase-decomposed acquisition (Domain → Process). Splitting bounds
+            # the per-phase DE budget at O(D_domain²) + O(D_process²) instead
+            # of O(D_total²) under smart_maxiter, which empirically times out
+            # at >5 minutes for joint regimes at typical N. Codes whose bounds
+            # collapse (trust-region pin, fixed_params, schema constants) drop
+            # out of both buckets; either bucket may be empty without breaking
+            # the flow.
+            phase_codes = self._classify_phase_codes(
+                datamodule, fixed_for_step, bounds=bounds,
             )
 
-            if use_vectorized:
-                _eff_kappa = 0.0 if mode == Mode.INFERENCE else kappa
-                _perf_range, _ = self._get_acquisition_ranges()
+            fixed_for_next: dict[str, float] = {}
+            domain_opt: _OptResult | None = None
+            process_opt: _OptResult | None = None
 
-                # Phase-decomposed acquisition (Domain → Process), mirroring
-                # baseline's structure. Reduces per-call DE budget by O(D²) →
-                # O(D_domain²) + O(D_process²) under smart_maxiter, and keeps
-                # the per-evidence-call cost lower at smaller D.
-                #
-                # General-cased: codes whose active bounds are degenerate
-                # (lo == hi — trust-region pinning, fixed_params, schema
-                # constants) drop out of both buckets via the bounds-aware
-                # classifier. Either bucket may be empty (pure-Domain,
-                # pure-Process, or all-fixed) and the path collapses
-                # gracefully — no fallback needed.
-                phase_codes = self._classify_phase_codes(
-                    datamodule, fixed_for_step, bounds=bounds,
+            if phase_codes["domain"]:
+                domain_results, domain_opt = self._run_phase(
+                    phase_codes["domain"],
+                    [fixed_for_next],
+                    datamodule=datamodule,
+                    full_bounds=bounds,
+                    kappa=_eff_kappa,
+                    perf_range=_perf_range,
+                    label=f"Domain (D={len(phase_codes['domain'])})",
+                    show_progress=console,
+                    n_proposals=1,
+                    n_schedule_steps=1,
                 )
+                fixed_for_next.update(domain_results[0][0])
 
-                fixed_for_next: dict[str, float] = {}
-                domain_opt: _OptResult | None = None
-                process_opt: _OptResult | None = None
-
-                # Phase 1: Domain (only when split is enabled and the bucket
-                # has free codes). When split is disabled, both buckets fold
-                # into Phase 2 below — the legacy single-shot behaviour.
-                if self.split_domain_phase and phase_codes["domain"]:
-                    domain_results, domain_opt = self._run_phase(
-                        phase_codes["domain"],
-                        [fixed_for_next],
-                        datamodule=datamodule,
-                        full_bounds=bounds,
-                        kappa=_eff_kappa,
-                        perf_range=_perf_range,
-                        label=f"Domain (D={len(phase_codes['domain'])})",
-                        show_progress=console,
-                        n_proposals=1,
-                        n_schedule_steps=1,
-                    )
-                    fixed_for_next.update(domain_results[0][0])
-
-                # Phase 2: Process (split=on) or merged Domain+Process (split=off).
-                p2_codes = (
-                    phase_codes["process"]
-                    if self.split_domain_phase
-                    else phase_codes["domain"] + phase_codes["process"]
+            if phase_codes["process"]:
+                process_results, process_opt = self._run_phase(
+                    phase_codes["process"],
+                    [fixed_for_next],
+                    datamodule=datamodule,
+                    full_bounds=bounds,
+                    kappa=_eff_kappa,
+                    perf_range=_perf_range,
+                    label=f"Process (D={len(phase_codes['process'])})",
+                    show_progress=console,
+                    n_proposals=1,
+                    n_schedule_steps=1,
                 )
-                if p2_codes:
-                    p2_label = (
-                        f"Process (D={len(p2_codes)})"
-                        if self.split_domain_phase and phase_codes["domain"]
-                        else "Optimizing"
-                    )
-                    process_results, process_opt = self._run_phase(
-                        p2_codes,
-                        [fixed_for_next],
-                        datamodule=datamodule,
-                        full_bounds=bounds,
-                        kappa=_eff_kappa,
-                        perf_range=_perf_range,
-                        label=p2_label,
-                        show_progress=console,
-                        n_proposals=1,
-                        n_schedule_steps=1,
-                    )
-                    fixed_for_next.update(process_results[0][0])
+                fixed_for_next.update(process_results[0][0])
 
-                # Build full-D static_out from per-phase results. Codes still
-                # absent from fixed_for_next (e.g. all-fixed-params case) keep
-                # the 0.5 default; the downstream ``proposed_params.update(
-                # fixed_for_step)`` overlay then pins them to their actual
-                # design-intent values, completing the result.
-                static_out = np.full((1, n_input), 0.5)
-                code_to_idx_full = {c: i for i, c in enumerate(datamodule.input_columns)}
-                for code, val in fixed_for_next.items():
-                    if code in code_to_idx_full:
-                        static_out[0, code_to_idx_full[code]] = val
+            # Reassemble the per-experiment output vector. Codes absent from
+            # any phase (all-fixed case) keep 0.5; the downstream overlay
+            # ``proposed_params.update(fixed_for_step)`` pins them to their
+            # actual design-intent values.
+            static_out = np.full((1, n_input), 0.5)
+            code_to_idx_full = {c: i for i, c in enumerate(datamodule.input_columns)}
+            for code, val in fixed_for_next.items():
+                if code in code_to_idx_full:
+                    static_out[0, code_to_idx_full[code]] = val
 
-                # Synthesise a single canonical _OptResult — always non-None
-                # best_x so downstream "optimization failed" branches are not
-                # triggered for the degenerate (no-free-codes) case.
-                last_opt = process_opt if process_opt is not None else domain_opt
-                total_nfev = (
-                    (domain_opt.nfev if domain_opt is not None else 0)
-                    + (process_opt.nfev if process_opt is not None else 0)
-                )
-                history: list[float] = []
-                if domain_opt is not None:
-                    history.extend(domain_opt.convergence_history)
-                if process_opt is not None:
-                    history.extend(process_opt.convergence_history)
-                opt = _OptResult(
-                    best_x=static_out[0].copy(),
-                    nfev=total_nfev,
-                    n_starts=last_opt.n_starts if last_opt is not None else 1,
-                    score=last_opt.score if last_opt is not None else 0.0,
-                    convergence_history=history,
-                )
-            else:
-                def acq_single(pts: np.ndarray) -> float:
-                    """Evaluate acquisition/inference at a single point."""
-                    return objective(pts[0])
-
-                opt, static_out = self.engine.run(
-                    acq_single, N=1, D_static=n_input,
-                    static_bounds=bounds.tolist(),
-                    x0=datamodule.params_to_array(working_params) if working_params else None,
-                    n_restarts=n_rounds,
-                    label="Optimizing", show_progress=console,
-                )
+            # Single canonical _OptResult.
+            last_opt = process_opt if process_opt is not None else domain_opt
+            total_nfev = (
+                (domain_opt.nfev if domain_opt is not None else 0)
+                + (process_opt.nfev if process_opt is not None else 0)
+            )
+            history: list[float] = []
+            if domain_opt is not None:
+                history.extend(domain_opt.convergence_history)
+            if process_opt is not None:
+                history.extend(process_opt.convergence_history)
+            opt = _OptResult(
+                best_x=static_out[0].copy(),
+                nfev=total_nfev,
+                n_starts=last_opt.n_starts if last_opt is not None else 1,
+                score=last_opt.score if last_opt is not None else 0.0,
+                convergence_history=history,
+            )
 
             self.last_opt_nfev = opt.nfev
             self.last_opt_n_starts = opt.n_starts
@@ -2303,7 +2241,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.last_opt_unc = 0.0
 
             self.logger.info(
-                f"{chosen_opt.value}: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
+                f"acq: {opt.n_starts} start(s), {opt.nfev} evals, score={opt.score:.6f}"
             )
 
             if opt.best_x is None:

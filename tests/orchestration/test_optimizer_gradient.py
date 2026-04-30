@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import torch
 
-from pred_fab.orchestration.calibration.engine import OptimizationEngine, Optimizer
+from pred_fab.orchestration.calibration.engine import OptimizationEngine
 from pred_fab.utils import PfabLogger
 
 
@@ -23,14 +23,6 @@ def engine(tmp_path) -> OptimizationEngine:
         logger=PfabLogger.get_logger(str(tmp_path / "log")),
         random_seed=0,
     )
-
-
-# ── Optimizer enum ────────────────────────────────────────────────────────
-
-
-def test_optimizer_gradient_enum_present():
-    assert Optimizer.GRADIENT.value == "gradient"
-    assert Optimizer.GRADIENT in {Optimizer.DE, Optimizer.GRADIENT}
 
 
 # ── Sigmoid bound reparameterisation ──────────────────────────────────────

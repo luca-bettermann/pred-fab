@@ -2,7 +2,7 @@ from .base_system import BaseOrchestrationSystem
 from .features import FeatureSystem
 from .evaluation import EvaluationSystem
 from .prediction import PredictionSystem
-from .calibration import CalibrationSystem, EvidenceBackend, Optimizer
+from .calibration import CalibrationSystem, EvidenceBackend
 from .agent import PfabAgent
 from .inference_bundle import InferenceBundle
 
@@ -13,7 +13,6 @@ __all__ = [
     "PredictionSystem",
     "CalibrationSystem",
     "EvidenceBackend",
-    "Optimizer",
     "PfabAgent",
     "InferenceBundle"
 ]
