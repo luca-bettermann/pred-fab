@@ -398,9 +398,9 @@ class PfabAgent:
             params = dict(result.initial_params) if result.initial_params else {}
             tunable = {k: v for k, v in params.items() if k in tunable_codes}
 
-            if cal.last_schedule and len(cal.last_schedule) > 1:
-                self._console.print_schedule_table(
-                    cal.last_schedule, tunable_codes, cal.schedule_configs,
+            if cal.last_trajectory and len(cal.last_trajectory) > 1:
+                self._console.print_trajectory_table(
+                    cal.last_trajectory, tunable_codes, cal.trajectory_configs,
                 )
             else:
                 self._console.print_params_line(tunable)
@@ -670,7 +670,7 @@ class PfabAgent:
         if gradient_method is not None:
             cal.engine.gradient_method = gradient_method
 
-    def configure_schedule(
+    def configure_trajectory(
         self,
         parameter: str,
         dimension: str,
@@ -687,7 +687,7 @@ class PfabAgent:
         """
         self._assert_initialized()
         cal = self.calibration_system
-        cal.configure_schedule_parameter(parameter, dimension, force=force)
+        cal.configure_trajectory_parameter(parameter, dimension, force=force)
         if delta is not None:
             cal.configure_adaptation_delta({parameter: delta}, force=force)
 

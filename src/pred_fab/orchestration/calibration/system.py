@@ -7,7 +7,7 @@ import torch
 
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
-from ...core import ParameterProposal, ParameterSchedule, ExperimentSpec
+from ...core import ParameterProposal, ParameterTrajectory, ExperimentSpec
 from ...utils import PfabLogger, Mode, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ..base_system import BaseOrchestrationSystem
 from .engine import OptimizationEngine, Optimizer, _OptResult
@@ -114,13 +114,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_score: float = 0.0
         self.last_opt_perf: float = 0.0
         self.last_opt_unc: float = 0.0
-        self.last_schedule: list[dict[str, Any]] | None = None
+        self.last_trajectory: list[dict[str, Any]] | None = None
         self.convergence_history: dict[str, list[float]] = {}  # label → per-iteration convergence
         # Phase data for validation plots
         self.last_domain_values: list[dict[str, int]] | None = None
         self.last_process_points: list[dict[str, Any]] | None = None
-        self.last_schedule_points: np.ndarray | None = None
-        self.last_schedule_exp_ids: list[int] | None = None
+        self.last_trajectory_points: np.ndarray | None = None
+        self.last_trajectory_exp_ids: list[int] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -180,8 +180,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self.bounds.trust_regions
 
     @property
-    def schedule_configs(self) -> dict[str, str]:
-        return self.bounds.schedule_configs
+    def trajectory_configs(self) -> dict[str, str]:
+        return self.bounds.trajectory_configs
 
     # ------------------------------------------------------------------
     # Proxy properties for engine config (used by agent.py)
@@ -251,9 +251,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Configure trust region deltas for online calibration."""
         self.bounds.configure_adaptation_delta(deltas, force=force)
 
-    def configure_schedule_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
+    def configure_trajectory_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
         """Declare that a runtime-adjustable parameter should be re-optimised at each step of the given dimension."""
-        self.bounds.configure_schedule_parameter(code, dimension_code, force=force)
+        self.bounds.configure_trajectory_parameter(code, dimension_code, force=force)
 
     def get_tunable_params(self, datamodule: DataModule) -> list[str]:
         """Return codes of parameters the optimizer can actually vary."""
@@ -638,7 +638,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         dim_key_order = {code: i for i, code in enumerate(self.data_objects.keys())}
         dim_codes = sorted(
-            {dc for dc in self.schedule_configs.values()},
+            {dc for dc in self.trajectory_configs.values()},
             key=lambda dc: dim_key_order.get(dc, 999),
         )
         if not dim_codes:
@@ -659,16 +659,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Assemble per-step proposals into an ExperimentSpec with initial_params and dimension schedules."""
         initial = ParameterProposal.from_dict(proposals[0], source_step=source_step)
 
-        schedules: dict[str, ParameterSchedule] = {}
+        schedules: dict[str, ParameterTrajectory] = {}
         if len(proposals) > 1 and step_grid and step_grid[0]:
             dim_key_order_spec = {code: i for i, code in enumerate(self.data_objects.keys())}
             dim_codes = sorted(
-                {dc for dc in self.schedule_configs.values()},
+                {dc for dc in self.trajectory_configs.values()},
                 key=lambda dc: dim_key_order_spec.get(dc, 999),
             )
             for dim_code in dim_codes:
                 sched_codes = [
-                    c for c, dc in self.schedule_configs.items() if dc == dim_code
+                    c for c, dc in self.trajectory_configs.items() if dc == dim_code
                 ]
                 entries: list[tuple[int, ParameterProposal]] = []
                 prev_idx: int | None = None
@@ -687,7 +687,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     prev_idx = cur_idx
 
                 if entries:
-                    schedules[dim_code] = ParameterSchedule(
+                    schedules[dim_code] = ParameterTrajectory(
                         dimension=dim_code, entries=entries,
                     )
 
@@ -840,11 +840,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 init_norm = np.clip(init_norm + jitter, 0.01, 0.99)
 
         # --- Detect schedule config ---
-        sched_set = set(self.schedule_configs.keys())
+        sched_set = set(self.trajectory_configs.keys())
         domain_axis_sched_dims: set[str] = set()
 
-        if self.schedule_configs:
-            sched_dims = set(self.schedule_configs.values())
+        if self.trajectory_configs:
+            sched_dims = set(self.trajectory_configs.values())
             unfixed = [d for d in sched_dims if d not in self.fixed_params]
             if unfixed:
                 domain_axis_sched_dims = {
@@ -861,7 +861,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 if not domain_axis_sched_dims:
                     sched_set = {
                         code for code in sched_set
-                        if self.schedule_configs[code] in self.fixed_params
+                        if self.trajectory_configs[code] in self.fixed_params
                     }
 
         # --- Detect domain axes among unfixed numeric params ---
@@ -973,7 +973,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 per_exp_L.append(max(int(p.get(c, 1)) for c in group_key_codes))
         elif sched_set:
             # Fixed dimension schedule case
-            fixed_sched = [d for d in set(self.schedule_configs.values()) if d in self.fixed_params]
+            fixed_sched = [d for d in set(self.trajectory_configs.values()) if d in self.fixed_params]
             if fixed_sched:
                 L = max(int(self.fixed_params[d]) for d in fixed_sched)
                 per_exp_L = [L] * n
@@ -983,12 +983,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # Determine primary dimension code: prefer an unfixed domain-axis
             # sched dim; fall back to a fixed-dim sched when --design-intent
             # pins the dimension (e.g. n_layers=4).
-            dim_codes_for_sched = sorted(set(self.schedule_configs.values()) & domain_axis_sched_dims)
+            dim_codes_for_sched = sorted(set(self.trajectory_configs.values()) & domain_axis_sched_dims)
             if dim_codes_for_sched:
                 primary_dim_code = dim_codes_for_sched[0]
             else:
                 fixed_dim_codes = sorted(
-                    d for d in set(self.schedule_configs.values()) if d in self.fixed_params
+                    d for d in set(self.trajectory_configs.values()) if d in self.fixed_params
                 )
                 primary_dim_code = fixed_dim_codes[0] if fixed_dim_codes else ""
 
@@ -1006,7 +1006,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     (code, lo, hi) for code, lo, hi in continuous_params
                     if code not in sched_set
                 ]
-                specs = self._phase3_schedule(
+                specs = self._phase3_trajectory(
                     n, flat_specs, sched_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
                     None,
@@ -1232,7 +1232,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         optimized = space.decode_optimized_positions(best_x)
         return specs, best_x, optimized
 
-    def _phase3_schedule(
+    def _phase3_trajectory(
         self,
         n: int,
         flat_specs: list[ExperimentSpec],
@@ -1369,7 +1369,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         console = self.logger._console_output_enabled
         if console:
             sched_info = ", ".join(
-                f"{code} over {self.schedule_configs.get(code, '?')}"
+                f"{code} over {self.trajectory_configs.get(code, '?')}"
                 for code, _, _ in state.sched_params
             )
             header_suffix = f": {sched_info}" if sched_info else ""
@@ -1565,11 +1565,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> list[ExperimentSpec]:
         """Decode final state into a list of ExperimentSpec + emit per-layer console summary."""
         # Cache for plot validation.
-        self.last_schedule_points = np.concatenate(state.schedule_norms, axis=0)
+        self.last_trajectory_points = np.concatenate(state.schedule_norms, axis=0)
         exp_ids: list[int] = []
         for i in range(state.n):
             exp_ids.extend([i] * state.per_exp_L[i])
-        self.last_schedule_exp_ids = exp_ids
+        self.last_trajectory_exp_ids = exp_ids
 
         specs_out: list[ExperimentSpec] = []
         for i in range(state.n):
@@ -1595,9 +1595,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
                 entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
 
-            schedules: dict[str, ParameterSchedule] = {}
+            schedules: dict[str, ParameterTrajectory] = {}
             if entries:
-                schedules[state.primary_dim_code] = ParameterSchedule(
+                schedules[state.primary_dim_code] = ParameterTrajectory(
                     dimension=state.primary_dim_code, entries=entries
                 )
 
@@ -1936,7 +1936,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         if len(step_grid) > 1:
             sched_without_delta = [
-                c for c in self.schedule_configs if c not in self.trust_regions
+                c for c in self.trajectory_configs if c not in self.trust_regions
             ]
             if sched_without_delta:
                 raise RuntimeError(
@@ -1971,7 +1971,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # and behave as static (integer) params in the schedule split.
             cat_codes = set(datamodule.categorical_mappings.keys())
             context_codes = set(datamodule.context_feature_codes)
-            sched_set = set(self.schedule_configs.keys())
+            sched_set = set(self.trajectory_configs.keys())
             static_codes: list[str] = []
             sched_codes: list[str] = []
 
@@ -2132,7 +2132,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.convergence_history["Schedule"] = opt.convergence_history
 
                 dm_input_set = set(datamodule.input_columns)
-                non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}
+                non_dm_sched = {c for c in self.trajectory_configs if c not in dm_input_set}
 
                 proposals: list[dict[str, Any]] = []
                 if opt.best_x is not None:
@@ -2157,7 +2157,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         fallback.update(current_params)
                     proposals = [fallback] * L
 
-                self.last_schedule = list(proposals)
+                self.last_trajectory = list(proposals)
 
                 if opt.best_x is not None:
                     try:
@@ -2192,7 +2192,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # D_sched == 0: sched params not in datamodule input_columns.
                 # Replicate flat result across all steps via non-DM sched param handling.
                 dm_input_set = set(datamodule.input_columns)
-                non_dm_sched = {c for c in self.schedule_configs if c not in dm_input_set}
+                non_dm_sched = {c for c in self.trajectory_configs if c not in dm_input_set}
 
                 proposals = []
                 for k in range(L):
@@ -2208,7 +2208,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                                 step_params[k_p] = v_p
                     proposals.append(self.schema.parameters.sanitize_values(step_params, ignore_unknown=True))
 
-                self.last_schedule = list(proposals)
+                self.last_trajectory = list(proposals)
 
                 try:
                     _params = datamodule.array_to_params(flat_x)
@@ -2421,7 +2421,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
                 proposals = [proposed_params]
 
-            self.last_schedule = None
+            self.last_trajectory = None
 
         proposal_summary = {k: round(v, 4) if isinstance(v, float) else v for k, v in proposals[0].items()}
         self.logger.info(f"Calibration proposal: {proposal_summary}")

@@ -248,17 +248,17 @@ class ConsoleReporter:
         if self._logger._console_output_enabled:
             print("", flush=True)
 
-    def print_schedule_table(
+    def print_trajectory_table(
         self,
         proposals: list[dict[str, Any]],
         tunable_codes: set[str],
-        schedule_configs: dict[str, str],
+        trajectory_configs: dict[str, str],
     ) -> None:
         """Print per-step parameter schedule as a vertical table."""
         if not self.enabled or not proposals:
             return
         # Identify which params vary per layer vs fixed across layers
-        sched_params = set(schedule_configs.keys())
+        sched_params = set(trajectory_configs.keys())
         fixed_params: dict[str, str] = {}
         for code in tunable_codes:
             if code not in sched_params:

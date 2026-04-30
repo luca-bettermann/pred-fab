@@ -7,7 +7,7 @@ and _get_online_bounds trust-region semantics.
 import pytest
 import numpy as np
 
-from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
+from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterTrajectory
 from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
     build_calibration_system,
@@ -305,36 +305,36 @@ def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
     assert "param_1" in set(spec.keys())
 
 
-# ===== configure_schedule_parameter() =====
+# ===== configure_trajectory_parameter() =====
 
 def test_configure_schedule_parameter_sets_config(tmp_path):
-    """configure_schedule_parameter() stores the dimension code for the given runtime param."""
+    """configure_trajectory_parameter() stores the dimension code for the given runtime param."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_schedule_parameter("speed", "n_layers")
-    assert calibration.schedule_configs["speed"] == "n_layers"
+    calibration.configure_trajectory_parameter("speed", "n_layers")
+    assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
 def test_configure_schedule_parameter_raises_for_non_runtime_param(tmp_path):
-    """configure_schedule_parameter() raises ValueError when the parameter is not runtime-adjustable."""
+    """configure_trajectory_parameter() raises ValueError when the parameter is not runtime-adjustable."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
     with pytest.raises(ValueError, match="not runtime-adjustable"):
-        calibration.configure_schedule_parameter("param_1", "n_layers")
+        calibration.configure_trajectory_parameter("param_1", "n_layers")
 
 
 def test_configure_schedule_parameter_blocked_without_force(tmp_path):
-    """Calling configure_schedule_parameter twice without force is silently blocked."""
+    """Calling configure_trajectory_parameter twice without force is silently blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_schedule_parameter("speed", "n_layers")
-    calibration.configure_schedule_parameter("speed", "n_segments")  # blocked without force
+    calibration.configure_trajectory_parameter("speed", "n_layers")
+    calibration.configure_trajectory_parameter("speed", "n_segments")  # blocked without force
 
     # Dimension code should remain n_layers, not overwritten by n_segments
-    assert calibration.schedule_configs["speed"] == "n_layers"
+    assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
 def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
@@ -342,30 +342,30 @@ def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_schedule_parameter("speed", "n_layers")
-    calibration.configure_schedule_parameter("speed", "n_segments", force=True)
+    calibration.configure_trajectory_parameter("speed", "n_layers")
+    calibration.configure_trajectory_parameter("speed", "n_segments", force=True)
 
-    assert calibration.schedule_configs["speed"] == "n_segments"
+    assert calibration.trajectory_configs["speed"] == "n_segments"
 
 
 def test_configure_schedule_parameter_ignores_unknown_param(tmp_path):
-    """configure_schedule_parameter() silently skips params not in the schema."""
+    """configure_trajectory_parameter() silently skips params not in the schema."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    calibration.configure_schedule_parameter("nonexistent", "n_layers")
-    assert "nonexistent" not in calibration.schedule_configs
+    calibration.configure_trajectory_parameter("nonexistent", "n_layers")
+    assert "nonexistent" not in calibration.trajectory_configs
 
 
-# ===== ParameterSchedule.apply() =====
+# ===== ParameterTrajectory.apply() =====
 
 def test_parameter_schedule_apply_records_update_events(tmp_path):
-    """ParameterSchedule.apply() records each entry as a ParameterUpdateEvent."""
+    """ParameterTrajectory.apply() records each entry as a ParameterUpdateEvent."""
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     # "speed" initial = 100.0; change to 150.0 at step 1 of dim_1.
     proposal = ParameterProposal.from_dict({"speed": 150.0})
-    schedule = ParameterSchedule(dimension="dim_1", entries=[(1, proposal)])
+    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
 
     initial_count = len(exp.parameter_updates)
     schedule.apply(exp)
@@ -382,7 +382,7 @@ def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     proposal = ParameterProposal.from_dict({"speed": 180.0})
-    schedule = ParameterSchedule(dimension="dim_1", entries=[(1, proposal)])
+    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
     spec = ExperimentSpec(
         initial_params=ParameterProposal.from_dict({"speed": 100.0}),
         schedules={"dim_1": schedule},
@@ -397,12 +397,12 @@ def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
 # ===== run_calibration() with schedule configs =====
 
 def test_configure_schedule_parameter_sets_auto_delta(tmp_path):
-    """configure_schedule_parameter() auto-sets trust region to 1/10 of param range."""
+    """configure_trajectory_parameter() auto-sets trust region to 1/10 of param range."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
     assert "speed" not in calibration.trust_regions
-    calibration.configure_schedule_parameter("speed", "n_layers")
+    calibration.configure_trajectory_parameter("speed", "n_layers")
     # speed bounds are [0, 200], so auto-delta = (200 - 0) / 10 = 20.0
     assert calibration.trust_regions["speed"] == pytest.approx(20.0)
 
@@ -415,7 +415,7 @@ def test_run_calibration_with_schedule_returns_experiment_spec(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.configure_schedule_parameter("speed", "dim_1")
+    cs.configure_trajectory_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
     current_params = exp.parameters.get_values_dict()

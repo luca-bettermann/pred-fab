@@ -15,7 +15,7 @@ Online (domain=ONLINE) is covered separately in test_calibration_sampling.py.
 import pytest
 import numpy as np
 
-from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterSchedule
+from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterTrajectory
 from pred_fab.utils.enum import Mode
 from tests.utils.builders import (
     build_calibration_system,
@@ -201,7 +201,7 @@ class TestOfflineExplorationDimensionalLevel:
         """Return (cs, exp, datamodule) with speed configured for dim_1 schedule."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         return cs, exp, datamodule
 
@@ -229,7 +229,7 @@ class TestOfflineExplorationDimensionalLevel:
             datamodule=datamodule, mode=Mode.EXPLORATION, current_params=current_params,
         )
         for schedule in result.schedules.values():
-            assert isinstance(schedule, ParameterSchedule)
+            assert isinstance(schedule, ParameterTrajectory)
 
     def test_schedule_entries_contain_schedule_param(self, tmp_path):
         cs, exp, datamodule = self._configured_cs(tmp_path)
@@ -246,7 +246,7 @@ class TestOfflineExplorationDimensionalLevel:
         delta = 30.0
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": delta})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -269,7 +269,7 @@ class TestOfflineExplorationDimensionalLevel:
     def test_initial_params_source_step_is_exploration(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -279,11 +279,11 @@ class TestOfflineExplorationDimensionalLevel:
         assert result.initial_params.source_step == "exploration_step"
 
     def test_auto_delta_set_by_configure_schedule_parameter(self, tmp_path):
-        """configure_schedule_parameter() auto-sets trust region to 1/10 of range."""
+        """configure_trajectory_parameter() auto-sets trust region to 1/10 of range."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
         assert "speed" not in cs.trust_regions
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         # speed bounds [0, 200] → auto-delta = 20.0
         assert cs.trust_regions["speed"] == pytest.approx(20.0)
 
@@ -291,7 +291,7 @@ class TestOfflineExplorationDimensionalLevel:
         """Without current_params, step grid defaults to single step → empty schedules."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
 
         result = cs.run_calibration(
@@ -304,7 +304,7 @@ class TestOfflineExplorationDimensionalLevel:
         """If current_params['dim_1'] == 1, step grid has 1 step → no schedule transitions."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0, "dim_1": 1}
@@ -323,7 +323,7 @@ class TestOfflineExplorationDimensionalLevel:
         current_params["dim_2"] = 3
 
         # Manually test grid ordering
-        # schedule_configs must include both dims to be non-trivial
+        # trajectory_configs must include both dims to be non-trivial
         # We only configure speed→dim_1 here; just validate the grid structure
         grid = cs._build_step_grid(current_params)
         # No schedule configs → single-step grid
@@ -340,7 +340,7 @@ class TestOfflineInferenceDimensionalLevel:
     def test_returns_experiment_spec(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -352,7 +352,7 @@ class TestOfflineInferenceDimensionalLevel:
     def test_source_step_is_inference(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -364,7 +364,7 @@ class TestOfflineInferenceDimensionalLevel:
     def test_schedule_produced_for_configured_dimension(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -378,7 +378,7 @@ class TestOfflineInferenceDimensionalLevel:
         delta = 25.0
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": delta})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
 
@@ -415,7 +415,7 @@ class TestStepLoopInternals:
     def test_build_step_grid_with_dim1_size2(self, tmp_path):
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         cs.configure_adaptation_delta({"speed": 50.0})
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
         current_params["dim_1"] = 2
@@ -444,7 +444,7 @@ class TestStepLoopInternals:
         """Two proposals with a dim transition → schedule populated."""
         agent, exp, datamodule = _setup_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("speed", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_1")
         from pred_fab.utils.enum import SourceStep
 
         proposals = [
@@ -475,7 +475,7 @@ class TestExperimentSpecIntegration:
         agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
         proposal = ParameterProposal.from_dict({"speed": 150.0})
-        schedule = ParameterSchedule(dimension="dim_1", entries=[(1, proposal)])
+        schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
         spec = ExperimentSpec(
             initial_params=ParameterProposal.from_dict({"speed": 100.0}),
             schedules={"dim_1": schedule},
@@ -553,7 +553,7 @@ class TestAgentStepMethodContracts:
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
         agent.train(datamodule=datamodule, validate=False, test=False)
 
-        agent.calibration_system.configure_schedule_parameter("speed", "dim_1")
+        agent.calibration_system.configure_trajectory_parameter("speed", "dim_1")
         agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
@@ -568,7 +568,7 @@ class TestAgentStepMethodContracts:
         datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
         agent.train(datamodule=datamodule, validate=False, test=False)
 
-        agent.calibration_system.configure_schedule_parameter("speed", "dim_1")
+        agent.calibration_system.configure_trajectory_parameter("speed", "dim_1")
         agent.calibration_system.configure_adaptation_delta({"speed": 50.0})
 
         current_params = {**exp.parameters.get_values_dict(), "speed": 100.0}
@@ -740,8 +740,8 @@ class TestMultiDimMixedScenario:
     def _configured_cs(self, tmp_path):
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
         return cs, exp, datamodule, current_params
@@ -750,8 +750,8 @@ class TestMultiDimMixedScenario:
         """dim_1=2 × dim_2=3 → 6 steps, dim_1 (level 1) varies in outer loop."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
         current_params = {**exp.parameters.get_values_dict()}
 
         grid = cs._build_step_grid(current_params)
@@ -804,8 +804,8 @@ class TestMultiDimMixedScenario:
         delta = 0.1
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": delta, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
 
@@ -829,8 +829,8 @@ class TestMultiDimMixedScenario:
         delta = 50.0
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": delta})
         current_params = {**exp.parameters.get_values_dict()}
 
@@ -855,8 +855,8 @@ class TestMultiDimMixedScenario:
 
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
 
         # Simulate 6 optimization results
         proposals = [
@@ -912,8 +912,8 @@ class TestTargetIndices:
     def _configured_cs(self, tmp_path):
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        cs.configure_schedule_parameter("layer_height", "dim_1")
-        cs.configure_schedule_parameter("speed", "dim_2")
+        cs.configure_trajectory_parameter("layer_height", "dim_1")
+        cs.configure_trajectory_parameter("speed", "dim_2")
         cs.configure_adaptation_delta({"layer_height": 0.1, "speed": 50.0})
         current_params = {**exp.parameters.get_values_dict()}
         return cs, exp, datamodule, current_params
@@ -1000,7 +1000,7 @@ class TestTargetIndices:
         """target_indices with no schedule configs → experiment-level step (all params eligible)."""
         agent, exp, datamodule = _setup_two_runtime_agent(tmp_path)
         cs = agent.calibration_system
-        # No configure_schedule_parameter calls
+        # No configure_trajectory_parameter calls
 
         result = cs.run_calibration(
             datamodule=datamodule, mode=Mode.EXPLORATION,

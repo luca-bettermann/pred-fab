@@ -23,7 +23,7 @@ class BoundsManager:
         self.param_bounds: dict[str, tuple[float, float]] = {}
         self.fixed_params: dict[str, Any] = {}
         self.trust_regions: dict[str, float] = {}
-        self.schedule_configs: dict[str, str] = {}  # param_code -> dimension_code
+        self.trajectory_configs: dict[str, str] = {}  # param_code -> dimension_code
 
         self._set_param_constraints_from_schema(schema)
 
@@ -89,11 +89,11 @@ class BoundsManager:
 
             self.trust_regions[code] = delta
 
-    def configure_schedule_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
+    def configure_trajectory_parameter(self, code: str, dimension_code: str, force: bool = False) -> None:
         """Declare that a runtime-adjustable parameter should be re-optimised at each step of the given dimension."""
         if code not in self.data_objects:
             self.logger.console_warning(
-                f"Object '{code}' not found in schema; ignoring configure_schedule_parameter."
+                f"Object '{code}' not found in schema; ignoring configure_trajectory_parameter."
             )
             return
 
@@ -101,7 +101,7 @@ class BoundsManager:
 
         if not obj.runtime_adjustable:
             raise ValueError(
-                f"Parameter '{code}' is not runtime-adjustable. configure_schedule_parameter() "
+                f"Parameter '{code}' is not runtime-adjustable. configure_trajectory_parameter() "
                 f"requires a parameter declared with runtime=True in the schema."
             )
 
@@ -122,14 +122,14 @@ class BoundsManager:
                 f"(got {type(dim_obj).__name__})."
             )
 
-        if code in self.schedule_configs and not force:
+        if code in self.trajectory_configs and not force:
             self.logger.console_warning(
                 f"Parameter '{code}' already has a schedule configuration for "
-                f"'{self.schedule_configs[code]}'; ignoring. Use force=True to overwrite."
+                f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
             )
             return
 
-        self.schedule_configs[code] = dimension_code
+        self.trajectory_configs[code] = dimension_code
         if code not in self.trust_regions:
             lo, hi = self.schema_bounds.get(code, (0.0, 1.0))
             if lo != -np.inf and hi != np.inf:

@@ -111,7 +111,7 @@ class ParameterUpdateEvent:
         )
 
 @dataclass
-class ParameterSchedule:
+class ParameterTrajectory:
     """Sparse ordered schedule of runtime parameter changes for one dimension level."""
     dimension: str
     entries: list[tuple[int, 'ParameterProposal']] = field(default_factory=list)
@@ -128,7 +128,7 @@ class ParameterSchedule:
 class ExperimentSpec:
     """Initial parameter proposal plus optional per-dimension runtime schedules."""
     initial_params: 'ParameterProposal'
-    schedules: dict[str, 'ParameterSchedule'] = field(default_factory=dict)
+    schedules: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
 
     def apply_schedules(self, experiment: 'ExperimentData') -> None:
         """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
