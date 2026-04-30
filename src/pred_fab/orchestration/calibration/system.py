@@ -1422,11 +1422,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
                 base_row_i = base_rows_t[i]                                              # (n_dm_cols,)
                 cand_i = base_row_i.unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone()
+                # x_S arrives as float64 from the LBFGS optimiser; cand_i is
+                # float32 to match the framework's hot-path dtype. Coerce at
+                # the boundary so the in-place assignment doesn't choke.
                 if D_static > 0:
-                    stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static)
+                    stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static).to(dtype=cand_i.dtype)
                     cand_i[:, :, static_col_idxs] = stat_per_step
                 if D_sched > 0:
-                    cand_i[:, :, sched_col_idxs] = traj
+                    cand_i[:, :, sched_col_idxs] = traj.to(dtype=cand_i.dtype)
                 cand_blocks.append(cand_i)
                 traj_blocks.append(traj)
 
