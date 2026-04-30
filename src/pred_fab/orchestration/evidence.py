@@ -822,9 +822,14 @@ class KernelFieldEstimator(EvidenceEstimator):
 class SobolLocalEstimator(EvidenceEstimator):
     """Volume-weighted QMC in a [center ± box·σ]^D cube.
 
-    `n_samples=None` (default) ties the Sobol probe count to the KernelField
-    probe count at the same `D` — gives matched compute and matched extent
-    (with `box=2.0`) for fair comparison. Set an explicit integer to override.
+    Probe count is fixed at ``n_samples`` regardless of D — the high-D
+    escape hatch when KernelField's probe count (which grows like
+    ``D · π^((D−1)/2)``) becomes intractable. Accuracy degrades with D
+    at fixed ``n_samples``, but the compute stays bounded.
+
+    ``n_samples=None`` ties the count to KernelField's probe count at
+    the same D — gives matched compute and matched extent (with
+    ``box=2.0``) for fair comparison.
     """
 
     box: float = 2.0
@@ -836,6 +841,24 @@ class SobolLocalEstimator(EvidenceEstimator):
             return int(self.n_samples)
         return kernel_field_probe_count(D)
 
+    def _sobol_offsets_torch(
+        self,
+        D: int,
+        sigma: float,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Sobol-distributed offsets in ``[-box·σ, +box·σ]^D``."""
+        n = self._resolve_n_samples(D)
+        box_side = 2.0 * self.box * sigma
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            engine = torch.quasirandom.SobolEngine(
+                dimension=D, scramble=True, seed=self.seed,
+            )
+            unit = engine.draw(n).to(dtype=dtype, device=device)
+        return box_side * (unit - 0.5)  # (n, D)
+
     def self_integral(
         self, center: np.ndarray, index: KernelIndex, kernel_idx: int | None = None,
     ) -> float:
@@ -846,9 +869,6 @@ class SobolLocalEstimator(EvidenceEstimator):
         volume = box_side ** D
         n = self._resolve_n_samples(D)
 
-        # Torch-native QMC. draw() returns (n, D)
-        # in the unit cube; SobolEngine wants log2(n) for power-of-2 lengths
-        # but accepts arbitrary n via .draw(n). Scrambled for sample diversity.
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             engine = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=self.seed)
@@ -865,6 +885,110 @@ class SobolLocalEstimator(EvidenceEstimator):
         # ∫ρⱼ/(1+D) dz ≈ volume · mean[ρⱼ/(1+D) · 1_cube]
         integrand = rho_j / (1.0 + D_vals) * in_domain
         return volume * float(integrand.mean())
+
+    def integrated_evidence_perturbed_batched_joint_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-candidate joint Δ∫E ``(S,)``, gradient-traversable through ``new_centers_SL``.
+
+        Sobol-cube self-integral per kernel; old kernels are constants from
+        ``index_old`` (numpy → tensor at call entry, no grad). New kernels'
+        Gaussian probes are placed as ``new_centers_SL[s, l] + offsets``,
+        so gradient flows through the centre into both the probe positions
+        and the per-probe density evaluations.
+        """
+        S = int(new_centers_SL.shape[0])
+        if S == 0 or new_centers_SL.numel() == 0:
+            return torch.zeros(0, dtype=new_centers_SL.dtype, device=new_centers_SL.device)
+        L = int(new_centers_SL.shape[1])
+        D = int(new_centers_SL.shape[2])
+        dtype = new_centers_SL.dtype
+        device = new_centers_SL.device
+
+        sigma = index_old.sigma
+        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
+        box_side = 2.0 * self.box * sigma
+        volume = box_side ** D
+
+        offsets = self._sobol_offsets_torch(D, sigma, dtype, device)  # (n, D)
+        n = offsets.shape[0]
+
+        # Peak-1 Gaussian density at offset distance — same for every kernel
+        # since rho_j(z_j + offset) = exp(-||offset||²/2σ²) is centre-invariant.
+        rho = torch.exp(-(offsets ** 2).sum(dim=-1) * inv_2sig2)  # (n,)
+
+        # Old kernels as torch tensors (constants).
+        if index_old.is_empty:
+            old_centers = torch.zeros((0, D), dtype=dtype, device=device)
+            old_weights = torch.zeros(0, dtype=dtype, device=device)
+        else:
+            old_centers = torch.from_numpy(index_old.centers).to(dtype=dtype, device=device)
+            old_weights = torch.from_numpy(index_old.weights).to(dtype=dtype, device=device)
+        n_old = old_centers.shape[0]
+
+        # ---------- self-integrals for OLD kernels (per S) ----------
+        if n_old > 0:
+            probes_old = old_centers[:, None, :] + offsets[None, :, :]      # (n_old, n, D)
+
+            # D contribution from old kernels at old probes (S-independent).
+            diff_oo = probes_old.unsqueeze(2) - old_centers[None, None, :, :]  # (n_old, n, n_old, D)
+            d2_oo = (diff_oo ** 2).sum(dim=-1)
+            D_old_at_old = (
+                torch.exp(-d2_oo * inv_2sig2) * old_weights[None, None, :]
+            ).sum(dim=-1)                                                      # (n_old, n)
+
+            # D contribution from new kernels at old probes (per S).
+            diff_on = probes_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]  # (n_old, n, S, L, D)
+            d2_on = (diff_on ** 2).sum(dim=-1)
+            D_new_at_old = (
+                torch.exp(-d2_on * inv_2sig2) * new_weights_SL[None, None, :, :]
+            ).sum(dim=-1)                                                      # (n_old, n, S)
+
+            D_total_at_old = D_old_at_old.unsqueeze(-1) + D_new_at_old        # (n_old, n, S)
+            in_cube_old = _in_unit_cube_torch(
+                probes_old.reshape(-1, D),
+            ).reshape(n_old, n).to(dtype=dtype)                               # (n_old, n)
+
+            integrand_old = (
+                rho[None, :, None] / (1.0 + D_total_at_old)
+                * in_cube_old[:, :, None]
+            )                                                                  # (n_old, n, S)
+            self_int_old = volume * integrand_old.mean(dim=1)                 # (n_old, S)
+            E_old_contrib = (old_weights[:, None] * self_int_old).sum(dim=0)  # (S,)
+        else:
+            E_old_contrib = torch.zeros(S, dtype=dtype, device=device)
+
+        # ---------- self-integrals for NEW kernels (per S) ----------
+        probes_new = new_centers_SL[:, :, None, :] + offsets[None, None, :, :]  # (S, L, n, D)
+
+        if n_old > 0:
+            diff_no = probes_new.unsqueeze(3) - old_centers[None, None, None, :, :]  # (S, L, n, n_old, D)
+            d2_no = (diff_no ** 2).sum(dim=-1)
+            D_old_at_new = (
+                torch.exp(-d2_no * inv_2sig2) * old_weights[None, None, None, :]
+            ).sum(dim=-1)                                                      # (S, L, n)
+        else:
+            D_old_at_new = torch.zeros((S, L, n), dtype=dtype, device=device)
+
+        diff_nn = probes_new.unsqueeze(3) - new_centers_SL[:, None, None, :, :]  # (S, L, n, L, D)
+        d2_nn = (diff_nn ** 2).sum(dim=-1)
+        D_new_at_new = (
+            torch.exp(-d2_nn * inv_2sig2) * new_weights_SL[:, None, None, :]
+        ).sum(dim=-1)                                                          # (S, L, n)
+
+        D_total_at_new = D_old_at_new + D_new_at_new                          # (S, L, n)
+        in_cube_new = _in_unit_cube_torch(
+            probes_new.reshape(-1, D),
+        ).reshape(S, L, n).to(dtype=dtype)                                     # (S, L, n)
+
+        integrand_new = rho[None, None, :] / (1.0 + D_total_at_new) * in_cube_new  # (S, L, n)
+        self_int_new = volume * integrand_new.mean(dim=-1)                    # (S, L)
+        E_new_contrib = (new_weights_SL * self_int_new).sum(dim=-1)           # (S,)
+
+        return E_old_contrib + E_new_contrib
 
 
 # ---------------------------------------------------------------------------

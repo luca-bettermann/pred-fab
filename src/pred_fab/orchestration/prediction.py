@@ -877,7 +877,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         with ``L=1`` (each candidate is a single added kernel). Non-KernelField
         estimators fall back to the numpy path + detach (gradient lost there).
         """
-        from .evidence import KernelFieldEstimator
         S = int(new_norm_batch_S.shape[0])
         dtype = new_norm_batch_S.dtype
         if not self._model_kdes or S == 0:
@@ -899,14 +898,17 @@ class PredictionSystem(BaseOrchestrationSystem):
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
             E_old = self._estimator.integrated_evidence(index_old)
 
-            if isinstance(self._estimator, KernelFieldEstimator):
-                E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+            torch_fn = getattr(
+                self._estimator, "integrated_evidence_perturbed_batched_joint_torch", None,
+            )
+            if torch_fn is not None:
+                E_new_per_s = torch_fn(
                     index_old,
                     new_centers_z_active.unsqueeze(1),  # (S, 1, n_active)
                     weights_S.unsqueeze(1),             # (S, 1)
                 )
             else:
-                # Fall back to numpy — gradient lost for non-KernelField estimators.
+                # Fall back to numpy — gradient lost when the estimator has no torch path.
                 E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched(
                     index_old,
                     new_centers_z_active.detach().cpu().numpy(),
@@ -925,7 +927,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         new_weights_SL: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Per-candidate joint Δ∫E (each adds L kernels jointly), gradient-traversable."""
-        from .evidence import KernelFieldEstimator
         S = int(new_norm_batch_SL.shape[0])
         if S == 0 or new_norm_batch_SL.numel() == 0:
             return torch.zeros(S, dtype=new_norm_batch_SL.dtype)
@@ -953,10 +954,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
             E_old = self._estimator.integrated_evidence(index_old)
 
-            if isinstance(self._estimator, KernelFieldEstimator):
-                E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
-                    index_old, new_centers_SL, weights_SL,
-                )
+            torch_fn = getattr(
+                self._estimator, "integrated_evidence_perturbed_batched_joint_torch", None,
+            )
+            if torch_fn is not None:
+                E_new_per_s = torch_fn(index_old, new_centers_SL, weights_SL)
             else:
                 E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched_joint(
                     index_old,

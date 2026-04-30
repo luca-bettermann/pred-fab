@@ -638,3 +638,80 @@ def test_integrated_evidence_prefers_interior_over_corner():
 # The workflow-stack fixture here does not wire 'speed' into any model input, so the
 # exploration Schedule DE branch is not exercised (D_sched=0 fallback). Validation of
 # the rename is performed via the mock integration, not a unit test.
+
+
+# ===========================================================================
+# SobolLocal torch path — gradient-traversable joint-batched
+# ===========================================================================
+
+def test_sobol_local_torch_returns_finite_S_tensor():
+    """integrated_evidence_perturbed_batched_joint_torch returns finite (S,) values."""
+    import torch
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    rng = np.random.default_rng(0)
+    D = 3
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=64)
+
+    old_centers = rng.uniform(0.2, 0.8, size=(3, D))
+    old_weights = np.ones(3)
+    index_old = KernelIndex(old_centers, old_weights, sigma)
+
+    new_centers_SL = torch.tensor(rng.uniform(0.2, 0.8, size=(4, 2, D)), dtype=torch.float64)
+    new_weights_SL = torch.ones((4, 2), dtype=torch.float64)
+
+    E = estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, new_centers_SL, new_weights_SL,
+    )
+    assert E.shape == (4,)
+    assert torch.isfinite(E).all()
+
+
+def test_sobol_local_torch_grad_flows_through_new_centers():
+    """new_centers_SL.requires_grad=True → backward produces finite gradients."""
+    import torch
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    rng = np.random.default_rng(0)
+    D = 3
+    sigma = 0.15 * float(np.sqrt(D))
+    estimator = SobolLocalEstimator(box=3.0, n_samples=64)
+
+    old_centers = rng.uniform(0.2, 0.8, size=(2, D))
+    old_weights = np.ones(2)
+    index_old = KernelIndex(old_centers, old_weights, sigma)
+
+    new_centers_SL = torch.tensor(
+        rng.uniform(0.2, 0.8, size=(3, 2, D)),
+        requires_grad=True, dtype=torch.float64,
+    )
+    new_weights_SL = torch.ones((3, 2), dtype=torch.float64)
+
+    E = estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, new_centers_SL, new_weights_SL,
+    )
+    E.sum().backward()
+
+    assert new_centers_SL.grad is not None
+    assert torch.isfinite(new_centers_SL.grad).all()
+
+
+def test_sobol_local_torch_handles_empty_old_index():
+    """Empty old index — only new kernels contribute."""
+    import torch
+    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    D = 3
+    sigma = 0.075
+    estimator = SobolLocalEstimator(box=3.0, n_samples=64)
+
+    index_old = KernelIndex(np.zeros((0, D)), np.zeros(0), sigma)
+    new_centers_SL = torch.tensor(
+        np.random.default_rng(0).uniform(0.2, 0.8, size=(2, 1, D)),
+        dtype=torch.float64,
+    )
+    new_weights_SL = torch.ones((2, 1), dtype=torch.float64)
+
+    E = estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, new_centers_SL, new_weights_SL,
+    )
+    assert E.shape == (2,)
+    assert (E > 0).all()
