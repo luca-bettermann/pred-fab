@@ -1016,7 +1016,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         params_list: list[dict[str, Any]],
     ) -> list[dict[str, torch.Tensor]]:
-        """Per-candidate gradient-traversable autoreg → list of ``dict[feat, (*feat_shape) tensor]``."""
+        """Per-candidate gradient-traversable prediction via polymorphic ``model.predict``.
+
+        Topologically orders models so each call sees its upstream dependencies'
+        outputs through ``predictions_so_far``. Each concrete model class
+        (MLP/Deterministic flat-batched, Transformer sequence-batched) owns its
+        own dispatch — the framework just plumbs ``params_list``, ``dm``,
+        per-candidate ``dim_info_list``, and the accumulated upstream outputs.
+        """
         self._assert_trained()
         S = len(params_list)
         if S == 0:
@@ -1025,54 +1032,23 @@ class PredictionSystem(BaseOrchestrationSystem):
         dm = self.datamodule
         assert dm is not None  # _assert_trained guarantees
 
-        # Pre-encode candidates: (S, n_input). Gradient flows through
-        # params_to_tensor for any tensor-valued continuous params.
-        x_norm_S = torch.stack([dm.params_to_tensor(p) for p in params_list])
+        # Per-feature → per-candidate accumulator threaded into model.predict
+        # so downstream models can read upstream outputs (cross-model deps).
+        accumulated: dict[str, dict[int, torch.Tensor]] = {}
 
-        # Per-candidate dim_info per model.
-        per_model_dim_info: list[list[dict[str, Any]]] = []
-        for model in self.models:
-            per_model_dim_info.append(
-                [self._get_model_dim_info(model, p) for p in params_list]
-            )
+        for model in self._topo_sort_models():
+            dim_info_list = [self._get_model_dim_info(model, p) for p in params_list]
+            per_s = model.predict(params_list, dm, dim_info_list, accumulated)
+            for s, feat_dict in enumerate(per_s):
+                for feat, t in feat_dict.items():
+                    accumulated.setdefault(feat, {})[s] = t
 
-        predictions_per_s: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
-
-        for m_idx, model in enumerate(self.models):
-            dim_infos = per_model_dim_info[m_idx]
-
-            # Group candidates by shape (same as numpy path)
-            shape_groups: dict[tuple, list[int]] = {}
-            for s, di in enumerate(dim_infos):
-                shape_groups.setdefault(di['shape'], []).append(s)
-
-            recursive_specs_per_candidate = [
-                self._get_recursive_input_specs(model, di) for di in dim_infos
-            ]
-
-            for shape_key, group_indices in shape_groups.items():
-                group_dim_infos = [dim_infos[i] for i in group_indices]
-                group_x_norm = x_norm_S[group_indices]
-                group_recursive_specs = recursive_specs_per_candidate[group_indices[0]]
-
-                # Per-feature shape for allocations: same within a shape group
-                # because feat_shape only depends on iterator-axis params.
-                feat_shapes: dict[str, tuple[int, ...]] = {}
-                for feat in model.outputs:
-                    feat_shapes[feat] = self._get_feature_shape(
-                        feat, params_list[group_indices[0]],
-                    )
-
-                preds_group = self._predict_autoregressive_batched_tensor(
-                    group_x_norm, group_dim_infos, model,
-                    group_recursive_specs, feat_shapes,
-                )
-                # preds_group: dict[feat, tensor (S_g, *feat_shape)]
-                for k, s in enumerate(group_indices):
-                    for feat, t_S_g in preds_group.items():
-                        predictions_per_s[s][feat] = t_S_g[k]
-
-        return predictions_per_s
+        # Repackage feature → s-dict into per-candidate dicts of feature tensors.
+        out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
+        for feat, per_s_dict in accumulated.items():
+            for s, t in per_s_dict.items():
+                out[s][feat] = t
+        return out
 
     def _predict_autoregressive_batched_tensor(
         self,
