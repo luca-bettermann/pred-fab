@@ -5,8 +5,6 @@ import warnings
 
 import numpy as np
 import torch
-# scipy.optimize fully replaced — torch DE for global,
-# torch.optim.LBFGS for local. Module is scipy-free.
 
 from ...core import DataModule
 from ...utils import PfabLogger, ProgressBar, profiler

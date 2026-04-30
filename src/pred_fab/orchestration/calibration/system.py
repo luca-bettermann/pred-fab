@@ -331,7 +331,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         X_SD: np.ndarray,
         perf_range: tuple[float, float] | None,
     ) -> np.ndarray:
-        """No-grad numpy shim around :meth:`_per_candidate_perf_tensor`."""
+        """No-grad numpy shim around `_per_candidate_perf_tensor`."""
         S = X_SD.shape[0]
         if S == 0:
             return np.empty((0,), dtype=np.float64)
@@ -1710,7 +1710,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         kappa: float,
         perf_range: tuple[float, float] | None,
     ) -> np.ndarray:
-        """No-grad numpy shim around :meth:`_acquisition_joint_batched_tensor`.
+        """No-grad numpy shim around `_acquisition_joint_batched_tensor`.
 
         ``full_S_NL`` has shape ``(S, N, L, D_global)``; returns ``(S,)``
         negated κ-weighted scores for DE minimisation. See the tensor

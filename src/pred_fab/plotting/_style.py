@@ -158,7 +158,7 @@ def figure_subtitle(
 ) -> None:
     """Figure-level subtitle (info common to all subplots), top-center.
 
-    Sits *above* subplot titles. Marks the figure so :func:`save_fig`
+    Sits *above* subplot titles. Marks the figure so `save_fig`
     reserves top room — preventing subplot titles from colliding with this
     band.
     """
@@ -434,7 +434,7 @@ def save_fig(path: str, dpi: int = 150) -> None:
     """Save current figure and close.
 
     If the active figure carries a PFAB subtitle (set by
-    :func:`figure_subtitle`), reserves the top band so subplot titles do not
+    `figure_subtitle`), reserves the top band so subplot titles do not
     collide with it.
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)

@@ -1,18 +1,12 @@
-"""nn.Module-based normalisers.
+"""nn.Module-based normalisers (StandardScaler, MinMax, Robust, Identity).
 
-Replaces the legacy dict-of-stats representation
-(``{"method": NormMethod.STANDARD, "mean": 0.5, "std": 0.2}``) with proper
-``nn.Module`` instances. Stats live in ``state_dict()`` so models serialise
-via ``torch.save`` for free, and the affine transform composes cleanly with
-autograd when applied to tensor inputs.
+Stats live in ``state_dict()`` so models serialise via ``torch.save`` for
+free, and the affine transform composes cleanly with autograd when applied
+to tensor inputs.
 
-Each module supports both ``module(x)`` (forward) and ``module.reverse(x)``
-APIs, plus dict-like ``module["mean"]`` / ``module.get("min")`` access for
-backwards-compat readers that previously consumed the stat dict.
-
-Mock-scale users get the same dict-like ergonomics; production-scale users
-get gradient-traversable normalisation, GPU support via ``module.to('cuda')``,
-and free serialisation.
+Each module supports ``module(x)`` (forward), ``module.reverse(x)``
+(inverse), plus dict-like ``module["mean"]`` / ``module.get("min")`` access
+so callers can read out individual stats.
 """
 
 from __future__ import annotations

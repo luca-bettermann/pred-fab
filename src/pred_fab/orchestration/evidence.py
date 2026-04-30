@@ -79,12 +79,9 @@ def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 class KernelIndex:
     """Spatial index over Gaussian kernel centres for fast D(z) evaluation.
 
-    replaced ``scipy.spatial.cKDTree`` neighbour
-    lookup with batched ``torch.cdist`` distance computation. For
-    n_kernels < ``truncation_threshold`` (default 10), full distance is
-    computed directly (correct + cheap). Above the threshold a 5σ-radius
-    mask is applied via ``torch.where`` — same semantics as the old
-    cKDTree query_ball_point cutoff, but without scipy.
+    For n_kernels < ``truncation_threshold`` (default 10), the full distance
+    is summed directly. Above the threshold, a 5σ-radius mask via
+    ``torch.cdist + torch.where`` keeps the contributing kernels only.
     """
 
     def __init__(
@@ -171,7 +168,7 @@ def _gaussian_radial_pdf(r: float, sigma: float, D: int) -> float:
     """Peak-1 Gaussian density at radius r — ρ(0) = 1.
 
     Used as the integration measure for radial shell quadrature, kept
-    consistent with the peak-1 kernel definition in :class:`KernelIndex`.
+    consistent with the peak-1 kernel definition in `KernelIndex`.
     """
     del D  # peak-1 normalization is dimension-agnostic
     return float(np.exp(-r * r / (2.0 * sigma * sigma)))
@@ -293,7 +290,7 @@ class EvidenceEstimator(ABC):
 
         Default implementation loops ``integrated_evidence`` per candidate,
         rebuilding ``index_new[s]`` each time. Subclasses override for
-        vectorised perf — see :meth:`KernelFieldEstimator.integrated_evidence_perturbed_batched`.
+        vectorised perf — see `KernelFieldEstimator.integrated_evidence_perturbed_batched`.
         """
         S = int(new_centers_S.shape[0])
         if S == 0:
@@ -339,7 +336,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         """Probe offsets, quadrature weights, and self-density at each probe.
 
         Self-density `ρ_self[k] = exp(−‖offsets[k]‖²/2σ²)` is peak-1 at the
-        kernel centre, matching :meth:`KernelIndex.density_at`. Same constant
+        kernel centre, matching `KernelIndex.density_at`. Same constant
         for every kernel of weight 1 — cached once per (D, σ) and scaled by
         the kernel's weight at use-time.
         """
@@ -514,7 +511,7 @@ class KernelFieldEstimator(EvidenceEstimator):
     ) -> np.ndarray:
         """Joint-batched ``E(old ∪ {L kernels of candidate s})`` per s. Returns ``(S,)``.
 
-        Like :meth:`integrated_evidence_perturbed_batched` but each candidate
+        Like `integrated_evidence_perturbed_batched` but each candidate
         adds **L kernels jointly** (a schedule trajectory) instead of one. Used
         by schedule-mode acquisition where each DE candidate decodes to an
         L-step trajectory that's evaluated as a joint Δ∫E.

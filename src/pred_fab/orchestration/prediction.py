@@ -649,7 +649,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     @staticmethod
     def _gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-        """Peak-1 Gaussian density ``(M, D) × (N, D) → (M, N)`` matching :class:`KernelIndex`.
+        """Peak-1 Gaussian density ``(M, D) × (N, D) → (M, N)`` matching `KernelIndex`.
 
         KDE prediction uses ratios of weighted densities so the chosen
         normalisation cancels; the peak-1 form keeps the kernel definition
@@ -767,7 +767,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Per-candidate joint Δ∫E for S candidates, each adding L kernels jointly.
 
         No-grad numpy shim around
-        :meth:`delta_integrated_evidence_joint_batched_tensor`.
+        `delta_integrated_evidence_joint_batched_tensor`.
 
         Shapes:
           - ``new_norm_batch_SL``: ``(S, L, D_global)`` — S candidates × L points each.
@@ -795,7 +795,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _encode_batch_from_norm_for_model(
         self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
     ) -> np.ndarray:
-        """No-grad numpy shim around :meth:`_encode_batch_from_norm_for_model_tensor`.
+        """No-grad numpy shim around `_encode_batch_from_norm_for_model_tensor`.
 
         Returns ``(S, n_active)`` — the active-mask-filtered latent activations.
         """
@@ -1896,16 +1896,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         model: IPredictionModel,
         recursive_specs: list[tuple[str, str, int, int]],
     ) -> None:
-        """Cell-by-cell prediction in C-order. Each cell's row carries the
-        previously predicted source value at (idx[axis] - depth) for each
-        recursive input. Boundary cells (out-of-bounds prior) get raw 0,
-        matching training-time boundary semantics from ``_one_hot_encode``'s
-        ``nan_to_num``.
+        """Cell-by-cell prediction in C-order, autoregressive on recursive inputs.
 
-        Tensor-native: the X buffer lives as a single torch.Tensor across the
-        whole loop; recursive-feature substitution is in-place on the tensor;
-        per-cell forward_pass receives a tensor view directly with no
-        per-cell numpy↔tensor conversion.
+        At each cell, the recursive-input columns hold the source feature's
+        prediction at (idx[axis] - depth). Boundary cells (prior idx < 0)
+        substitute zero. The X buffer is a single tensor across the whole
+        loop; per-cell forward_pass receives a tensor view directly.
         """
         shape = dim_info['shape']
         iterator_feats = dim_info['iterator_feats']
