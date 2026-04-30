@@ -598,11 +598,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         sigma: float | None = None,
     ) -> None:
-        """Configure σ (kernel bandwidth for the evidence objective).
-
-        ``estimator`` knob dropped —
-        ``KernelFieldEstimator`` is the canonical path.
-        """
+        """Configure σ (kernel bandwidth) for the evidence objective."""
         if sigma is not None:
             self._sigma = float(sigma)
 
@@ -614,6 +610,51 @@ class PredictionSystem(BaseOrchestrationSystem):
                 f"Evidence model updated: σ={self._sigma}, "
                 f"{len(self._model_kdes)} models."
             )
+
+    def configure_evidence(
+        self,
+        *,
+        estimator: str | None = None,
+        radii: tuple[float, ...] | None = None,
+        angular_gap_deg: float | None = None,
+        box: float | None = None,
+        n_samples: int | None = None,
+        seed: int | None = None,
+        cutoff_sigmas: float | None = None,
+        truncation_threshold: int | None = None,
+    ) -> None:
+        """Configure the evidence estimator and its tuning knobs.
+
+        ``estimator``: ``"kernel_field"`` (deterministic shells, gradient-traversable;
+        probe count grows with D) or ``"sobol_local"`` (QMC cube, fixed
+        ``n_samples`` per kernel — the high-D escape hatch).
+
+        Per-estimator knobs that don't apply to the chosen estimator are
+        accepted but ignored. Rebuilds the internal estimator from the
+        updated config and rebinds ``self._estimator``.
+        """
+        from .evidence import EstimatorConfig, make_estimator
+        cur = self._estimator_config
+        if estimator is not None and estimator not in ("kernel_field", "sobol_local"):
+            raise ValueError(
+                f"unknown estimator {estimator!r}; expected 'kernel_field' or 'sobol_local'"
+            )
+        new_cfg = EstimatorConfig(
+            type=estimator if estimator is not None else cur.type,
+            radii=radii if radii is not None else cur.radii,
+            angular_gap_deg=angular_gap_deg if angular_gap_deg is not None else cur.angular_gap_deg,
+            box=box if box is not None else cur.box,
+            n_samples=n_samples if n_samples is not None else cur.n_samples,
+            seed=seed if seed is not None else cur.seed,
+            cutoff_sigmas=cutoff_sigmas if cutoff_sigmas is not None else cur.cutoff_sigmas,
+            truncation_threshold=truncation_threshold if truncation_threshold is not None else cur.truncation_threshold,
+        )
+        self._estimator_config = new_cfg
+        self._estimator = make_estimator(new_cfg)
+        self.logger.info(
+            f"Evidence estimator: {new_cfg.type} "
+            f"({'radii=' + str(new_cfg.radii) if new_cfg.type == 'kernel_field' else 'box=' + str(new_cfg.box) + ', n_samples=' + str(new_cfg.n_samples)})"
+        )
 
     def _encode_params_for_model(
         self, model: IPredictionModel, params: dict[str, Any], datamodule: DataModule,

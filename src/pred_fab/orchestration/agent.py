@@ -640,6 +640,43 @@ class PfabAgent:
                 raise ValueError(f"kappa must be in [0, 1], got {kappa!r}")
             self.calibration_system.kappa_default = float(kappa)
 
+    def configure_evidence(
+        self,
+        *,
+        estimator: str | None = None,
+        radii: tuple[float, ...] | None = None,
+        angular_gap_deg: float | None = None,
+        box: float | None = None,
+        n_samples: int | None = None,
+        seed: int | None = None,
+        cutoff_sigmas: float | None = None,
+        truncation_threshold: int | None = None,
+    ) -> None:
+        """Configure the evidence estimator and its tuning knobs.
+
+        ``estimator``: ``"kernel_field"`` (deterministic shell quadrature;
+        probe count grows with D) or ``"sobol_local"`` (QMC cube with
+        fixed ``n_samples`` per kernel — the high-D escape hatch).
+
+        Per-estimator knobs:
+          KernelField — ``radii``, ``angular_gap_deg``
+          SobolLocal  — ``box``, ``n_samples``, ``seed``
+        Shared — ``cutoff_sigmas``, ``truncation_threshold``.
+
+        Per-estimator-irrelevant knobs are accepted but ignored.
+        """
+        self._assert_initialized()
+        self.pred_system.configure_evidence(
+            estimator=estimator,
+            radii=radii,
+            angular_gap_deg=angular_gap_deg,
+            box=box,
+            n_samples=n_samples,
+            seed=seed,
+            cutoff_sigmas=cutoff_sigmas,
+            truncation_threshold=truncation_threshold,
+        )
+
     def configure_optimizer(
         self,
         *,

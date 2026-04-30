@@ -37,6 +37,40 @@ class TestOptimizerConfig:
         agent.configure_optimizer(n_starts=8)
         assert agent.calibration_system.engine.gradient_n_starts == 8
 
+
+# ===========================================================================
+# Evidence backend configuration
+# ===========================================================================
+
+
+class TestConfigureEvidence:
+    """agent.configure_evidence() switches estimator and tunes knobs."""
+
+    def test_default_estimator_is_kernel_field(self, tmp_path):
+        agent, _, _ = _setup_trained_agent(tmp_path)
+        assert agent.pred_system._estimator_config.type == "kernel_field"
+        from pred_fab.orchestration.evidence import KernelFieldEstimator
+        assert isinstance(agent.pred_system._estimator, KernelFieldEstimator)
+
+    def test_switch_to_sobol_local(self, tmp_path):
+        agent, _, _ = _setup_trained_agent(tmp_path)
+        agent.configure_evidence(estimator="sobol_local", n_samples=128)
+        from pred_fab.orchestration.evidence import SobolLocalEstimator
+        assert agent.pred_system._estimator_config.type == "sobol_local"
+        assert agent.pred_system._estimator_config.n_samples == 128
+        assert isinstance(agent.pred_system._estimator, SobolLocalEstimator)
+
+    def test_kernel_field_radii_override(self, tmp_path):
+        agent, _, _ = _setup_trained_agent(tmp_path)
+        agent.configure_evidence(radii=(1.0, 2.0))
+        assert agent.pred_system._estimator_config.radii == (1.0, 2.0)
+
+    def test_unknown_estimator_raises(self, tmp_path):
+        agent, _, _ = _setup_trained_agent(tmp_path)
+        with pytest.raises(ValueError, match="unknown estimator"):
+            agent.configure_evidence(estimator="invalid")
+
+
 # ===========================================================================
 # Performance range tracking
 # ===========================================================================
