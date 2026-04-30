@@ -200,7 +200,6 @@ class PfabAgent:
             perf_fn_tensor=_perf_fn_tensor,
             uncertainty_fn=_pred.uncertainty,
             evidence=EvidenceBackend(
-                scalar=_pred.delta_integrated_evidence_aggregated,
                 batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
                 joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
             ),

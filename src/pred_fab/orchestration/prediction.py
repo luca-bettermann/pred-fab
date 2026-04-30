@@ -716,49 +716,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             truncation_threshold=self._estimator_config.truncation_threshold,
         )
 
-    def delta_integrated_evidence_aggregated(
-        self,
-        new_norm_batch: np.ndarray,
-        new_weights: np.ndarray | None = None,
-    ) -> float:
-        """Δ∫E = I(old ∪ new) − I(old), aggregated across per-model KDEs.
-
-        new_norm_batch: (L, D_global) normalized parameter vectors (L candidates).
-        new_weights:    (L,) per-candidate mass. Defaults to ones.
-        """
-        if not self._model_kdes or new_norm_batch.size == 0:
-            return 0.0
-
-        L = new_norm_batch.shape[0]
-        weights = np.ones(L) if new_weights is None else np.asarray(new_weights, dtype=float)
-
-        total_w = 0.0
-        weighted_de = 0.0
-        for kde in self._model_kdes.values():
-            new_centers_z = np.stack([
-                self._encode_from_norm_array_for_model(kde.model, new_norm_batch[k])[kde.active_mask]
-                for k in range(L)
-            ])
-
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
-            all_centers = (
-                np.vstack([kde.latent_points, new_centers_z])
-                if len(kde.latent_points) > 0 else new_centers_z
-            )
-            all_weights = (
-                np.concatenate([kde.point_weights, weights])
-                if len(kde.point_weights) > 0 else weights
-            )
-            index_new = self._kernel_index(all_centers, all_weights, kde.sigma)
-
-            E_old = self._estimator.integrated_evidence(index_old)
-            E_new = self._estimator.integrated_evidence(index_new)
-            de = E_new - E_old
-            weighted_de += kde.weight * de
-            total_w += kde.weight
-
-        return weighted_de / total_w if total_w > 0 else 0.0
-
     def _encode_batch_from_norm_for_model(
         self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
     ) -> np.ndarray:

@@ -278,11 +278,36 @@ def build_calibration_system(
             out[code] = torch.tensor(vals, dtype=torch.float32)
         return out
 
+    # Wrap the test-provided dict-typed Δ∫E callable into the tensor variants
+    # CalibrationSystem expects. `delta_integrated_evidence_fn` (when given)
+    # takes a numpy ``(L, D)`` batch and returns a float — wrap as a per-S
+    # loop on the joint-batched-tensor side; pass batched_tensor as a
+    # single-row joint call.
+    if delta_integrated_evidence_fn is not None:
+        user_de_fn = delta_integrated_evidence_fn
+
+        def _de_joint_batched_tensor(batch_SLD, weights_SL=None):
+            S = int(batch_SLD.shape[0])
+            if S == 0:
+                return torch.zeros(0, dtype=batch_SLD.dtype)
+            out = [float(user_de_fn(batch_SLD[s].detach().cpu().numpy())) for s in range(S)]
+            return torch.tensor(out, dtype=batch_SLD.dtype)
+
+        def _de_batched_tensor(batch_SD, weights_S=None):
+            return _de_joint_batched_tensor(batch_SD.unsqueeze(1))
+
+        evidence = EvidenceBackend(
+            batched_tensor=_de_batched_tensor,
+            joint_batched_tensor=_de_joint_batched_tensor,
+        )
+    else:
+        evidence = EvidenceBackend()
+
     cal = CalibrationSystem(
         schema=schema,
         logger=logger,
         uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
-        evidence=EvidenceBackend(scalar=delta_integrated_evidence_fn),
+        evidence=evidence,
         perf_fn_tensor=_perf_fn_tensor,
     )
     # Fast DE settings for tests (production uses scipy defaults: 1000/15)

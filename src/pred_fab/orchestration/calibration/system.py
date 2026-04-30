@@ -27,13 +27,11 @@ _STATIC_DRIFT_FRAC = 0.2
 class EvidenceBackend:
     """Δ∫E callbacks the acquisition objective dispatches to.
 
-    Each entry may be ``None`` when that variant isn't available — the
-    κ-blend skips its arm. ``scalar`` is the single-row Δ∫E used by the
-    DE κ-blend; ``batched_tensor`` and ``joint_batched_tensor`` are the
-    gradient-traversable batched variants used by the gradient acquisition
-    and trajectory optimisation respectively.
+    ``batched_tensor`` covers per-candidate single-point Δ∫E; ``joint_batched_tensor``
+    covers per-candidate joint multi-point (trajectory / N-batch) Δ∫E. Both
+    are gradient-traversable. Either may be ``None`` when unavailable —
+    the κ-blend skips that arm.
     """
-    scalar: Callable[[np.ndarray], float] | None = None
     batched_tensor: Callable[..., torch.Tensor] | None = None
     joint_batched_tensor: Callable[..., torch.Tensor] | None = None
 
@@ -361,30 +359,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
         return float(sys_perf)
 
-    def _acquisition(
-        self,
-        batch_norm: np.ndarray,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> float:
-        """Unified acquisition score (higher is better). batch_norm: (L, D_dm)."""
-        if batch_norm.ndim != 2:
-            batch_norm = batch_norm.reshape(1, -1)
-        L = batch_norm.shape[0]
-        if L == 0:
-            return 0.0
-
-        score = 0.0
-        if kappa < 1.0:
-            perfs = self._per_candidate_perf_batched(batch_norm, perf_range)
-            score += (1.0 - kappa) * float(np.mean(perfs))
-
-        if kappa > 0.0 and self.evidence.scalar is not None:
-            de = float(self.evidence.scalar(batch_norm))
-            score += kappa * de
-
-        return score
-
     def _acquisition_objective(
         self,
         x_flat: np.ndarray,
@@ -393,9 +367,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> float:
         """DE-compatible (negated) acquisition for single-candidate phases.
 
-        x_flat: 1-D normalized parameter vector. Inference and exploration use this path.
+        Thin no-grad numpy shim around `_acquisition_objective_tensor` —
+        wraps the 1-D x_flat as a (1, D) batch and pulls out the scalar.
         """
-        return -self._acquisition(x_flat.reshape(1, -1), kappa, perf_range)
+        with torch.no_grad():
+            X_SD = torch.from_numpy(np.atleast_2d(x_flat)).double()
+            out = self._acquisition_objective_tensor(X_SD, kappa, perf_range)
+        return float(out[0].item())
 
     @staticmethod
     def _kappa_blend(scores, perfs, evidences, kappa: float):
@@ -1143,7 +1121,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             for si, col_idx in phase_col_map:
                 for i in range(n):
                     X_batch[i, col_idx] = pts[i, si]
-            return -self._acquisition(X_batch, kappa=1.0)
+            # Route via the tensor variant (S=1, N=n, L=1) — single source of truth
+            # for the κ-blend math, no parallel numpy implementation.
+            full_S_NL = torch.from_numpy(X_batch).double().unsqueeze(0).unsqueeze(2)
+            with torch.no_grad():
+                scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None)
+            return float(scores_neg[0].item())
 
         # Build init_norm for the phase-local space (remap original indices)
         merged_init = np.zeros((n, len(all_phase_params)))
