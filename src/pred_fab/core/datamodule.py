@@ -900,6 +900,204 @@ class DataModule:
             np.asarray(y_rows, dtype=np.float64),
         )
 
+    # ------------------------------------------------------------------
+    # Per-model batch construction
+    # ------------------------------------------------------------------
+    #
+    # ``build_flat_batch`` and ``build_sequence_batch`` are the two batch
+    # builders concrete prediction models call from their ``predict``
+    # method. The framework owns shape construction (iterator overrides,
+    # tiling); the model owns the forward pass.
+    #
+    # Flat batch is for MLP / Deterministic — one input row per (candidate,
+    # cell). Sequence batch is for Transformer — one row per candidate,
+    # with the sequence axis as the second dim and causal attention seeing
+    # prior positions internally.
+
+    def build_flat_batch(
+        self,
+        params_list: list[dict[str, Any]],
+        dim_info_list: list[dict[str, Any]],
+    ) -> tuple[torch.Tensor, list[tuple[int, int]]]:
+        """Build (sum_s n_cells_s, n_input_cols) flat batch + per-row (s, cell_flat) map.
+
+        Per cell: clone the per-candidate (S, n_input) tensor, override
+        iterator-feature columns with the cell's normalised position. Static
+        parameters and context features are tiled across cells via
+        ``params_to_tensor``. Recursive features are not supported on this
+        path — they belong to ``TransformerModel`` (which uses
+        ``build_sequence_batch``); the model's ``_validate_schema_compatibility``
+        rejects them at training time.
+
+        Gradient flow: continuous values in ``params_list`` propagate through
+        ``params_to_tensor``'s affine normalisation into ``X_flat``; the row map
+        is plain Python ints (no autograd implications).
+
+        Candidates are grouped by ``dim_info['shape']`` to share the cell
+        loop within each shape group. The resulting row order is
+        ``[group_0_cell_0_s0, group_0_cell_0_s1, ..., group_0_cell_1_s0, ...]``.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+        S = len(params_list)
+        n_cols = len(self.input_columns)
+        if S == 0:
+            return torch.zeros((0, n_cols), dtype=torch.float32), []
+        if len(dim_info_list) != S:
+            raise ValueError(
+                f"build_flat_batch: dim_info_list length {len(dim_info_list)} "
+                f"does not match params_list length {S}."
+            )
+
+        x_norm_S = torch.stack([self.params_to_tensor(p) for p in params_list])
+        code_to_idx = {c: i for i, c in enumerate(self.input_columns)}
+
+        # Group candidates by shape — within a group, all candidates share the
+        # iterator-override layout, so we batch across S inside the cell loop.
+        shape_groups: dict[tuple, list[int]] = {}
+        for s, di in enumerate(dim_info_list):
+            shape_groups.setdefault(di['shape'], []).append(s)
+
+        X_parts: list[torch.Tensor] = []
+        row_map: list[tuple[int, int]] = []
+
+        for shape, group_indices in shape_groups.items():
+            n_cells = int(np.prod(shape)) if shape else 1
+            x_group = x_norm_S[group_indices]
+            di = dim_info_list[group_indices[0]]
+            iterator_feats = di['iterator_feats']
+
+            if shape:
+                cell_indices_arr = np.empty((n_cells, len(shape)), dtype=np.int64)
+                for cell_row in range(n_cells):
+                    cell_indices_arr[cell_row] = np.unravel_index(cell_row, shape)
+            else:
+                cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
+
+            # Pre-compute per-cell iterator-feature normalised values.
+            iter_overrides_per_cell: list[list[tuple[int, float]]] = []
+            for cell_row in range(n_cells):
+                overrides: list[tuple[int, float]] = []
+                for feat_code, axis_pos, size in iterator_feats:
+                    if feat_code not in code_to_idx:
+                        continue
+                    col_idx = code_to_idx[feat_code]
+                    stats = self._parameter_stats.get(feat_code)
+                    raw_val = float(cell_indices_arr[cell_row, axis_pos]) / max(size - 1, 1)
+                    if stats is not None:
+                        normed = float(self._apply_normalization_tensor(
+                            torch.tensor(raw_val, dtype=x_group.dtype), stats,
+                        ).item())
+                    else:
+                        normed = raw_val
+                    overrides.append((col_idx, normed))
+                iter_overrides_per_cell.append(overrides)
+
+            # Per cell: clone (S_g, n_input), apply iterator overrides, append.
+            for cell_row in range(n_cells):
+                x_cell = x_group.clone()
+                for col_idx, normed_val in iter_overrides_per_cell[cell_row]:
+                    x_cell[:, col_idx] = normed_val
+                X_parts.append(x_cell)
+                for s in group_indices:
+                    row_map.append((s, cell_row))
+
+        X_flat = (
+            torch.cat(X_parts, dim=0)
+            if X_parts else torch.zeros((0, n_cols), dtype=torch.float32)
+        )
+        return X_flat, row_map
+
+    def build_sequence_batch(
+        self,
+        model: Any,
+        params_list: list[dict[str, Any]],
+        dim_info_list: list[dict[str, Any]],
+    ) -> torch.Tensor:
+        """Build (S, L, n_input_cols) sequence batch along ``model.sequence_axis_code``.
+
+        Static inputs tiled across L positions via ``params_to_tensor``.
+        Iterator-feature columns filled per position: for the sequence axis,
+        value = pos / (L − 1); for non-sequence axes (must be size 1 today),
+        value = 0.
+
+        The transformer's position embedding handles per-position context
+        internally — iterator-feature columns for the sequence axis are
+        redundant but tolerated. Causal attention sees prior positions'
+        outputs natively; no recursive-feature columns required.
+
+        Multi-axis grids (sequence axis + other axes of size > 1) are not
+        yet supported; callers should split into per-segment sequences and
+        call ``build_sequence_batch`` per segment.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("DataModule not fitted.")
+        S = len(params_list)
+        n_cols = len(self.input_columns)
+        if S == 0:
+            return torch.zeros((0, 0, n_cols), dtype=torch.float32)
+        if len(dim_info_list) != S:
+            raise ValueError(
+                f"build_sequence_batch: dim_info_list length {len(dim_info_list)} "
+                f"does not match params_list length {S}."
+            )
+
+        seq_axis_code = getattr(model, "sequence_axis_code", None)
+        if seq_axis_code is None:
+            raise ValueError(
+                f"build_sequence_batch requires the model to declare "
+                f"`sequence_axis_code`; {model.__class__.__name__} does not."
+            )
+
+        di_first = dim_info_list[0]
+        dim_codes = di_first.get('dim_codes_ordered', [])
+        if seq_axis_code not in dim_codes:
+            raise ValueError(
+                f"sequence_axis_code='{seq_axis_code}' is not in this model's "
+                f"domain axes {dim_codes}."
+            )
+        seq_axis_idx = dim_codes.index(seq_axis_code)
+
+        shape = di_first['shape']
+        L = shape[seq_axis_idx]
+        other_sizes = [s for i, s in enumerate(shape) if i != seq_axis_idx]
+        if any(sz > 1 for sz in other_sizes):
+            raise NotImplementedError(
+                f"build_sequence_batch: multi-axis grids not yet supported "
+                f"(shape={shape}, sequence axis at idx={seq_axis_idx}). Caller "
+                f"should split into per-segment sequences."
+            )
+
+        x_norm_S = torch.stack([self.params_to_tensor(p) for p in params_list])
+        code_to_idx = {c: i for i, c in enumerate(self.input_columns)}
+
+        # Tile static inputs across L: (S, n_input) → (S, L, n_input). Clone so
+        # in-place column overrides don't leak across positions in expand().
+        X_seq = x_norm_S.unsqueeze(1).expand(S, L, n_cols).clone()
+
+        # Per-position iterator-feature overrides.
+        iterator_feats = di_first['iterator_feats']
+        for feat_code, axis_pos, size in iterator_feats:
+            if feat_code not in code_to_idx:
+                continue
+            col_idx = code_to_idx[feat_code]
+            stats = self._parameter_stats.get(feat_code)
+            if axis_pos == seq_axis_idx:
+                for pos in range(L):
+                    raw_val = float(pos) / max(L - 1, 1)
+                    if stats is not None:
+                        normed = float(self._apply_normalization_tensor(
+                            torch.tensor(raw_val, dtype=X_seq.dtype), stats,
+                        ).item())
+                    else:
+                        normed = raw_val
+                    X_seq[:, pos, col_idx] = normed
+            else:
+                # Other axis (size 1 enforced above): iterator value = 0.
+                X_seq[:, :, col_idx] = 0.0
+
+        return X_seq
+
     def copy(self) -> 'DataModule':
         """Create a deep copy of this DataModule."""
         return copy.deepcopy(self)
