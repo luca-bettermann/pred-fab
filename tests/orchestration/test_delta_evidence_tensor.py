@@ -45,44 +45,6 @@ def _build_pred_system(tmp_path) -> PredictionSystem:
     return PredictionSystem(logger=logger, schema=schema, local_data=LocalData(str(tmp_path)))
 
 
-# ── Numerical equivalence with the numpy variant ──────────────────────────
-
-
-def test_delta_evidence_batched_tensor_matches_numpy(tmp_path):
-    """Tensor batched returns same values as numpy batched at 1e-5."""
-    sys = _build_pred_system(tmp_path)
-    sys.models.append(_IdentityModel(logger=sys.logger))
-
-    # No KDEs registered yet → both paths return zeros of shape (S,).
-    rng = np.random.default_rng(0)
-    new_norm_batch = rng.uniform(0, 1, size=(3, 2)).astype(np.float64)
-    out_torch = sys.delta_integrated_evidence_batched_tensor(
-        torch.from_numpy(new_norm_batch).double(),
-    )
-    out_np = sys.delta_integrated_evidence_batched(new_norm_batch)
-    assert out_torch.shape == (3,)
-    assert out_np.shape == (3,)
-    np.testing.assert_allclose(
-        out_torch.detach().cpu().numpy(), out_np, atol=1e-6,
-    )
-
-
-def test_delta_evidence_joint_batched_tensor_matches_numpy(tmp_path):
-    """Joint tensor variant matches joint numpy at 1e-5 with no KDEs."""
-    sys = _build_pred_system(tmp_path)
-    sys.models.append(_IdentityModel(logger=sys.logger))
-
-    rng = np.random.default_rng(1)
-    new_norm_batch_SL = rng.uniform(0, 1, size=(3, 2, 2)).astype(np.float64)
-    out_torch = sys.delta_integrated_evidence_joint_batched_tensor(
-        torch.from_numpy(new_norm_batch_SL).double(),
-    )
-    out_np = sys.delta_integrated_evidence_joint_batched(new_norm_batch_SL)
-    np.testing.assert_allclose(
-        out_torch.detach().cpu().numpy(), out_np, atol=1e-6,
-    )
-
-
 # ── Edge cases ────────────────────────────────────────────────────────────
 
 

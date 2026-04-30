@@ -27,15 +27,13 @@ _STATIC_DRIFT_FRAC = 0.2
 class EvidenceBackend:
     """Δ∫E callbacks the acquisition objective dispatches to.
 
-    Each entry is independent and may be ``None`` when that variant isn't
-    available — the κ-blend skips its arm. Five variants because the
-    acquisition path needs both single-point and joint (S × N × L) call
-    shapes, both numpy (DE) and torch (gradient), and a scalar fallback for
-    environments without a batched evidence implementation.
+    Each entry may be ``None`` when that variant isn't available — the
+    κ-blend skips its arm. ``scalar`` is the single-row Δ∫E used by the
+    DE κ-blend; ``batched_tensor`` and ``joint_batched_tensor`` are the
+    gradient-traversable batched variants used by the gradient acquisition
+    and trajectory optimisation respectively.
     """
     scalar: Callable[[np.ndarray], float] | None = None
-    batched: Callable[[np.ndarray], np.ndarray] | None = None
-    joint_batched: Callable[[np.ndarray], np.ndarray] | None = None
     batched_tensor: Callable[..., torch.Tensor] | None = None
     joint_batched_tensor: Callable[..., torch.Tensor] | None = None
 
@@ -544,13 +542,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
 
             evidences: torch.Tensor | None = None
-            if kappa > 0.0:
-                if self.evidence.batched_tensor is not None:
-                    evidences = self.evidence.batched_tensor(X_SD).to(dtype=X_SD.dtype)
-                elif self.evidence.batched is not None:
-                    # Fallback: numpy. Gradient lost.
-                    de_np = self.evidence.batched(X_SD.detach().cpu().numpy())
-                    evidences = torch.from_numpy(de_np).to(dtype=X_SD.dtype)
+            if kappa > 0.0 and self.evidence.batched_tensor is not None:
+                evidences = self.evidence.batched_tensor(X_SD).to(dtype=X_SD.dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
 
