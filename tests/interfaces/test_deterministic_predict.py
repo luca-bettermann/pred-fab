@@ -108,34 +108,3 @@ def test_predict_empty_returns_empty(tmp_path):
     assert out == []
 
 
-def test_validate_schema_compatibility_inherited_rejects_recursive(tmp_path):
-    """IDeterministicModel inherits the recursive-rejection check."""
-    spatial = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 4)])
-    layer_dim = spatial.axes[0]
-    src_feat = Feature.array("src", domain=spatial)
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="det_reject_schema",
-        parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
-        features=Features.from_list([
-            src_feat,
-            *Feature.recursive("prev_src", source=src_feat, dimensions=(layer_dim,), max_depth=1),
-        ]),
-        performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
-        domains=Domains([spatial]),
-    )
-
-    class _RecDet(IDeterministicModel):
-        @property
-        def input_parameters(self): return ["p1"]
-        @property
-        def input_features(self): return ["prev_src_1"]
-        @property
-        def outputs(self): return ["src"]
-        def formula(self, X): return np.zeros((X.shape[0], 1))
-
-    model = _RecDet(build_test_logger(tmp_path))
-    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="recursive input feature"):
-        model._validate_schema_compatibility(schema)

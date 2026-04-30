@@ -92,14 +92,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
         self._uncertainty_weights: dict[str, float] = {}
 
-        # Scheduled-sampling configuration. Triggered
-        # automatically for any model with recursive input features. Cadence
-        # is now per-epoch (refresh every model.EPOCHS / n_ss_refreshes
-        # epochs) instead of K-refit. p_student annealed linearly from
-        # ss_schedule_floor → 1.0 across the training run.
-        self.n_ss_refreshes: int = 4
-        self.ss_schedule_floor: float = 0.0
-
     def _assert_trained(self) -> DataModule:
         """Raise if the system has not been trained yet; return the active DataModule."""
         if self.datamodule is None or not self.datamodule._is_fitted:
@@ -161,13 +153,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         deps: dict[int, set[int]] = {id(m): set() for m in self.models}
         for m in self.models:
             for feat_code in m.input_features:
-                if feat_code not in self.schema.features.data_objects:
-                    continue
-                feat_obj = self.schema.features.get(feat_code)
-                if not getattr(feat_obj, "is_recursive", False):
-                    continue
-                source = feat_obj.recursive_source
-                producer = output_to_model.get(source) if source is not None else None
+                producer = output_to_model.get(feat_code)
                 if producer is not None and producer is not m:
                     deps[id(m)].add(id(producer))
         return deps
@@ -194,48 +180,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                 "have mutually-dependent recursive inputs (no DAG topology)."
             )
         return sorted_list
-
-    def _model_has_recursive_inputs(self, model: IPredictionModel) -> bool:
-        """True iff any of the model's input_features is a recursive feature."""
-        for feat_code in model.input_features:
-            if feat_code in self.schema.features.data_objects:
-                feat_obj = self.schema.features.get(feat_code)
-                if getattr(feat_obj, "is_recursive", False):
-                    return True
-        return False
-
-    def _ss_p_for_progress(self, progress: float) -> float:
-        """Linear schedule: 0.0 → 1.0 over [0, 1] training progress.
-
-        replaces ``_ss_p_for_round`` (K-refit cadence)
-        with continuous progress, queried inside ``model.train``'s epoch loop.
-        """
-        progress = max(0.0, min(1.0, progress))
-        return self.ss_schedule_floor + (1.0 - self.ss_schedule_floor) * progress
-
-    def _autoreg_predict_training_data(
-        self,
-    ) -> dict[str, dict[str, torch.Tensor]]:
-        """Predict full feature tensors for every training experiment using
-        the current state of all (already-trained) models. Used as the
-        source of student predictions for scheduled sampling.
-
-        returns torch tensors (was np.ndarray) so
-        ``DataModule.substitute_recursive_features`` can consume directly.
-        """
-        if self.datamodule is None:
-            return {}
-        out: dict[str, dict[str, torch.Tensor]] = {}
-        train_codes = self.datamodule._split_codes.get(SplitType.TRAIN, [])
-        for exp_code in train_codes:
-            exp = self.datamodule.dataset.get_experiment(exp_code)
-            params = exp.get_effective_parameters_for_row(0)
-            tensors_np = self._predict_from_params(params=params, batch_size=1000)
-            out[exp_code] = {
-                feat: torch.from_numpy(np.asarray(arr, dtype=np.float32))
-                for feat, arr in tensors_np.items()
-            }
-        return out
 
     def _fit_single_round(
         self,
@@ -277,16 +221,11 @@ class PredictionSystem(BaseOrchestrationSystem):
     def train(self, datamodule: DataModule, **kwargs) -> None:
         """Train all prediction models using DataModule configuration.
 
-        Phase C absorbed — per-epoch refresh inside
-        each model's ``train()`` replaces the K-refit loop. For models with
-        recursive input features, an ``epoch_callback`` is supplied; the
-        model invokes it periodically to refresh SS predictions and update
-        ``p_student`` from the schedule. Models without recursive features
-        receive ``epoch_callback=None`` and train normally.
-
-        Cross-model recursive dependencies are honoured by topologically
-        sorting models so source-producing models train (and are
-        predict-cached) before their consumers.
+        Models train in topological order so any model whose ``input_features``
+        reference another model's outputs trains after that producer. Each
+        model's ``train()`` runs to completion before the next; cross-model
+        outputs are surfaced at prediction time via ``predictions_so_far`` in
+        ``model.predict``.
         """
         self.datamodule = datamodule
 
@@ -319,83 +258,19 @@ class PredictionSystem(BaseOrchestrationSystem):
                     categorical_mappings=norm_state.get('categorical_mappings', {}),
                 )
 
-        # Topological order: models producing recursive sources train first so
-        # downstream models' SS predictions are available.
         ordered_models = self._topo_sort_models()
         total = len(ordered_models)
         trained_count = 0
 
         for model in ordered_models:
-            has_recursive = self._model_has_recursive_inputs(model)
-            kwargs_with_ss = dict(kwargs)
-            if has_recursive and self.n_ss_refreshes > 0:
-                kwargs_with_ss["epoch_callback"] = self._build_ss_epoch_callback(model)
-
             train_batches = self.datamodule.get_batches(SplitType.TRAIN)
             val_batches = self.datamodule.get_batches(SplitType.VAL)
-            self._fit_single_round(model, train_batches, val_batches, **kwargs_with_ss)
+            self._fit_single_round(model, train_batches, val_batches, **kwargs)
             trained_count += 1
 
         self.logger.info(f"Training complete: {trained_count}/{total} models trained")
         self._fit_kde(datamodule)
 
-    def _build_ss_epoch_callback(
-        self, model: IPredictionModel,
-    ) -> Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None]:
-        """Return the per-epoch SS refresh callable for ``model.train``.
-
-        . Given training progress in ``[0, 1]``, the
-        callable: (1) computes current-network predictions on training
-        experiments, (2) fetches clean training batches + cell_meta via
-        ``Dataset.export_to_tensor_dict``, (3) calls
-        ``DataModule.substitute_recursive_features`` to apply SS
-        substitution row-wise using cell_meta lookups, (4) filters the
-        result to this model's input columns.
-
-        Returns ``None`` early when ``p_student == 0`` (no substitution
-        needed — model.train will keep its current batches).
-
-        No DM state — substitution is stateless via the substitute method.
-        """
-        def _refresh(progress: float) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
-            if self.datamodule is None:
-                return None
-            p = self._ss_p_for_progress(progress)
-            if p <= 0.0:
-                return None
-
-            preds_by_exp = self._autoreg_predict_training_data()
-            dm = self.datamodule
-
-            # Fetch fresh batches + cell_meta from the canonical tensor source.
-            train_codes = dm._split_codes.get(SplitType.TRAIN, [])
-            if not train_codes:
-                return None
-            exported = dm.dataset.export_to_tensor_dict(
-                train_codes,
-                x_columns=dm.input_columns,
-                y_columns=dm.output_columns,
-                categorical_mappings=dm.categorical_mappings,
-            )
-            if exported.is_empty():
-                return None
-            X = dm.prepare_input_from_tensor_dict(exported.X)
-            y = torch.stack(
-                [exported.y.get(c, torch.zeros(exported.n_rows)) for c in dm.output_columns],
-                dim=-1,
-            )
-            cell_meta = exported.cell_meta
-
-            # Stateless substitution at the right boundary (DataModule).
-            torch_rng = torch.Generator()
-            torch_rng.manual_seed(int(self.rng.randint(0, 2**31 - 1)))
-            X_sub = dm.substitute_recursive_features(
-                X, cell_meta, train_codes, preds_by_exp, p_student=p, rng=torch_rng,
-            )
-
-            return self._filter_batches_for_model([(X_sub, y)], model)
-        return _refresh
-    
     # === EVIDENCE MODEL (integrated objective) ===
     #
     # ρ_j(z)  = w_j · N(z; z_j, σ²I)      normalized Gaussian density, mass w_j in ℝ^D
@@ -1050,156 +925,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                 out[s][feat] = t
         return out
 
-    def _predict_autoregressive_batched_tensor(
-        self,
-        x_norm_S: torch.Tensor,
-        dim_info_list: list[dict[str, Any]],
-        model: IPredictionModel,
-        recursive_specs: list[tuple[str, str, int, int]],
-        feat_shapes: dict[str, tuple[int, ...]],
-    ) -> dict[str, torch.Tensor]:
-        """S-parallel autoreg → ``dict[feat, (S, *feat_shape) tensor]`` with autograd preserved.
-
-        Per cell: clone x_norm_S, override iterator + recursive columns
-        out-of-place, ``forward_pass(gradient_pass=True)``, store the (S,)
-        prediction tensor under its cell flat-index. Final feature tensors
-        are assembled via ``torch.stack`` so the autograd graph stays
-        connected across the whole trajectory.
-        Within a shape group all candidates share ``feat_shape`` — caller's
-        contract (typically enforced by shape-group dispatch upstream).
-        """
-        S, n_input = x_norm_S.shape
-        shape = dim_info_list[0]['shape']
-        iterator_feats = dim_info_list[0]['iterator_feats']
-        dm = self._assert_trained()
-        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-        code_to_idx = {c: i for i, c in enumerate(dm.input_columns)}
-
-        n_cells = int(np.prod(shape)) if shape else 1
-        if shape:
-            cell_indices_arr = np.empty((n_cells, len(shape)), dtype=np.int64)
-            for cell_row, pos in enumerate(range(n_cells)):
-                cell_indices_arr[cell_row] = np.unravel_index(pos, shape)
-        else:
-            cell_indices_arr = np.zeros((n_cells, 0), dtype=np.int64)
-
-        # Pre-compute per-cell iterator-feature normalised values (constants;
-        # no autograd implications). Layout: list[cell_row] of list[(col_idx, val)].
-        iter_overrides: list[list[tuple[int, float]]] = []
-        for cell_row in range(n_cells):
-            overrides: list[tuple[int, float]] = []
-            for feat_code, axis_pos, size in iterator_feats:
-                if feat_code not in code_to_idx:
-                    continue
-                col_idx = code_to_idx[feat_code]
-                stats = dm._parameter_stats.get(feat_code)
-                raw_val = float(cell_indices_arr[cell_row, axis_pos]) / max(size - 1, 1)
-                if stats is not None:
-                    normed = float(dm._apply_normalization_tensor(
-                        torch.tensor(raw_val, dtype=x_norm_S.dtype), stats,
-                    ).item())
-                else:
-                    normed = raw_val
-                overrides.append((col_idx, normed))
-            iter_overrides.append(overrides)
-
-        # Per-feat per-cell prediction storage. Tensors retain grad_fn from
-        # their forward_pass output; assembling the final (S, *feat_shape)
-        # tensor via torch.stack at the end keeps the autograd graph intact.
-        predictions_per_feat_per_cell: dict[str, dict[int, torch.Tensor]] = {
-            feat: {} for feat in model.outputs
-        }
-
-        # Per-feat per-cell flat index (in feat's own ravel space).
-        feat_flat_per_cell: dict[str, np.ndarray] = {}
-        for feat in model.outputs:
-            feat_shape = feat_shapes.get(feat, ())
-            feat_depth = len(feat_shape)
-            if feat_depth == 0:
-                feat_flat_per_cell[feat] = np.zeros(n_cells, dtype=np.int64)
-            else:
-                sub_idx = cell_indices_arr[:, :feat_depth]
-                feat_flat_per_cell[feat] = np.ravel_multi_index(
-                    sub_idx.T, feat_shape,
-                ).astype(np.int64)
-
-        # Recursive plan: per-spec prior-cell flat index + validity mask + col + stats.
-        recursive_plan: list[tuple[str, np.ndarray, np.ndarray, int, dict | None]] = []
-        for input_code, source_code, axis_idx, depth in recursive_specs:
-            if input_code not in code_to_idx:
-                continue
-            if source_code not in predictions_per_feat_per_cell:
-                continue
-            col_idx = code_to_idx[input_code]
-            stats = dm._parameter_stats.get(input_code)
-            source_shape = feat_shapes.get(source_code, ())
-            source_depth = len(source_shape)
-
-            prior_idx_arr = cell_indices_arr.copy()
-            if axis_idx < prior_idx_arr.shape[1]:
-                prior_idx_arr[:, axis_idx] -= depth
-                valid = prior_idx_arr[:, axis_idx] >= 0
-            else:
-                valid = np.ones(n_cells, dtype=bool)
-
-            if source_depth:
-                prior_sub = prior_idx_arr[:, :source_depth].copy()
-                prior_sub[~valid] = 0
-                flat_np = np.ravel_multi_index(prior_sub.T, source_shape).astype(np.int64)
-            else:
-                flat_np = np.zeros(n_cells, dtype=np.int64)
-            recursive_plan.append((source_code, flat_np, valid, col_idx, stats))
-
-        # Cell loop: per-cell clone of x_norm_S, override columns, forward, store.
-        for cell_row in range(n_cells):
-            x_cell = x_norm_S.clone()  # (S, n_input) — fresh tensor, in-place writes safe
-
-            # Iterator-feature overrides (constant per cell, no autograd impact).
-            for col_idx, normed_val in iter_overrides[cell_row]:
-                x_cell[:, col_idx] = normed_val
-
-            # Recursive feature substitution (gradient-traversable via the prediction dict).
-            for source_code, prior_flat_arr, valid_arr, col_idx, stats in recursive_plan:
-                prior_cell_flat = int(prior_flat_arr[cell_row])
-                is_valid = bool(valid_arr[cell_row])
-                source_dict = predictions_per_feat_per_cell.get(source_code, {})
-                if not is_valid or prior_cell_flat not in source_dict:
-                    raw_S = torch.zeros(S, dtype=x_cell.dtype)
-                else:
-                    raw_S = source_dict[prior_cell_flat]
-                norm_S = (
-                    dm._apply_normalization_tensor(raw_S, stats)
-                    if stats is not None else raw_S
-                )
-                x_cell[:, col_idx] = norm_S.to(x_cell.dtype)
-
-            X_model = x_cell.index_select(1, input_indices_t)
-            y_pred_norm = model.forward_pass(X_model, gradient_pass=True)
-            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
-
-            for i, feat in enumerate(model.outputs):
-                feat_flat_idx = int(feat_flat_per_cell[feat][cell_row])
-                predictions_per_feat_per_cell[feat][feat_flat_idx] = y_pred[:, i]
-
-        # Assemble output tensors via torch.stack (out-of-place, autograd-clean).
-        predictions_stack: dict[str, torch.Tensor] = {}
-        for feat in model.outputs:
-            feat_shape = feat_shapes.get(feat, ())
-            n_total = int(np.prod(feat_shape)) if feat_shape else 1
-            zero_S = torch.zeros(S, dtype=x_norm_S.dtype)
-            slots: list[torch.Tensor] = [
-                predictions_per_feat_per_cell[feat].get(idx, zero_S)
-                for idx in range(n_total)
-            ]
-            if feat_shape:
-                out_flat = torch.stack(slots, dim=1)  # (S, n_total)
-                predictions_stack[feat] = out_flat.view(S, *feat_shape)
-            else:
-                predictions_stack[feat] = slots[0]
-
-        return predictions_stack
-
     def tune(
             self,
             exp_data: ExperimentData,
@@ -1666,38 +1391,6 @@ class PredictionSystem(BaseOrchestrationSystem):
     #             exp_data.predicted_features.add(feature_name, arr)
     #         exp_data.predicted_features.set_value(feature_name, pred_array)
     
-    def _get_recursive_input_specs(
-        self,
-        model: IPredictionModel,
-        dim_info: dict[str, Any],
-    ) -> list[tuple[str, str, int, int]]:
-        """For each recursive input feature on this model, return
-        (input_code, source_feature_code, axis_idx, depth).
-
-        ``axis_idx`` is the position of the recursive shift dimension within
-        this model's domain axes — used to decrement the per-cell index when
-        looking up the prior value during autoregressive prediction.
-        """
-        specs: list[tuple[str, str, int, int]] = []
-        iter_codes = dim_info.get('dim_iterators', [])
-        for feat_code in model.input_features:
-            if feat_code not in self.schema.features.data_objects:
-                continue
-            feat_obj = self.schema.features.get(feat_code)
-            if not getattr(feat_obj, "is_recursive", False):
-                continue
-            source = feat_obj.recursive_source
-            depth = feat_obj.recursive_depth or 1
-            rec_dims = feat_obj.recursive_dimensions or ()
-            if source is None:
-                continue
-            for iter_code in rec_dims:
-                for axis_idx, ic in enumerate(iter_codes):
-                    if ic == iter_code:
-                        specs.append((feat_code, source, axis_idx, depth))
-                        break
-        return specs
-
     def _execute_batched_predictions_to_dict(
         self,
         predictions: dict[str, np.ndarray],
@@ -1708,19 +1401,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         overlap: int = 0,
         model: IPredictionModel | None = None,
     ) -> None:
-        """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap."""
-        # Models with recursive input features must be predicted cell-by-cell
-        # so each cell sees the (just-computed) source value for the prior
-        # cell along the recursive axis. Drift compounds along the chain;
-        # we accept that for now (see PFAB - Inference notes).
-        if model is not None:
-            recursive_specs = self._get_recursive_input_specs(model, dim_info)
-            if recursive_specs:
-                self._predict_autoregressive(
-                    predictions, dim_info, predict_from, predict_to, model, recursive_specs
-                )
-                return
+        """Process positions in batches: build X, predict, denormalize, store in prediction dict. Supports overlap.
 
+        ``model`` (optional) restricts prediction to that model's outputs.
+        Recursive autoreg dispatch was removed alongside the cell-loop
+        machinery — sequence-aware prediction now lives in
+        ``TorchTransformerModel.predict``; this helper feeds the numpy /
+        non-recursive path only.
+        """
         self.logger.info(f"Predicting positions {predict_from} to {predict_to} in batches of {batch_size} (overlap={overlap})...")
         if overlap < 0:
             raise ValueError("overlap must be >= 0")
@@ -1793,78 +1481,6 @@ class PredictionSystem(BaseOrchestrationSystem):
                 X_dict[col_name] = torch.full((n_cells,), v_f, dtype=torch.float32)
 
         return X_dict, batch_indices
-
-    def _predict_autoregressive(
-        self,
-        predictions: dict[str, np.ndarray],
-        dim_info: dict[str, Any],
-        predict_from: int,
-        predict_to: int,
-        model: IPredictionModel,
-        recursive_specs: list[tuple[str, str, int, int]],
-    ) -> None:
-        """Cell-by-cell prediction in C-order, autoregressive on recursive inputs.
-
-        At each cell, the recursive-input columns hold the source feature's
-        prediction at (idx[axis] - depth). Boundary cells (prior idx < 0)
-        substitute zero. The X buffer is a single tensor across the whole
-        loop; per-cell forward_pass receives a tensor view directly.
-        """
-        shape = dim_info['shape']
-        iterator_feats = dim_info['iterator_feats']
-        dm = self._assert_trained()
-        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-
-        n_cells = predict_to - predict_from
-
-        # pandas-free X build via tensor dict (S=1 wrapper around the helper).
-        cell_indices: list[tuple[int, ...]] = [
-            tuple(np.unravel_index(pos, shape)) for pos in range(predict_from, predict_to)
-        ]
-        X_dict_flat = self._build_X_dict_flat(dm, [dim_info], cell_indices, iterator_feats)
-        X_norm = dm.prepare_input_from_tensor_dict(X_dict_flat)  # (n_cells, n_input_cols)
-
-        # Pre-resolve per-recursive-feature column indices and normalisation
-        # stats so the inner loop is just tensor writes + forward_pass.
-        recursive_plan: list[tuple[str, int, int, int, dict | None]] = []
-        for input_code, source_code, axis_idx, depth in recursive_specs:
-            if input_code not in dm.input_columns:
-                continue
-            col_idx = dm.input_columns.index(input_code)
-            stats = dm._parameter_stats.get(input_code)
-            recursive_plan.append((source_code, axis_idx, depth, col_idx, stats))
-
-        def _normalize_scalar(raw_val: float, stats: dict | None) -> float:
-            if stats is None:
-                return raw_val
-            arr = np.array([raw_val], dtype=np.float32)
-            return float(dm._apply_normalization(arr, stats)[0])
-
-        for cell_row in range(n_cells):
-            idx = cell_indices[cell_row]
-
-            for source_code, axis_idx, depth, col_idx, stats in recursive_plan:
-                prior = list(idx)
-                prior[axis_idx] -= depth
-                if prior[axis_idx] < 0 or source_code not in predictions:
-                    raw_val = 0.0
-                else:
-                    val = predictions[source_code][tuple(prior)]
-                    raw_val = 0.0 if np.isnan(val) else float(val)
-                X_norm[cell_row, col_idx] = _normalize_scalar(raw_val, stats)
-
-            X_model = X_norm[cell_row:cell_row + 1].index_select(1, input_indices_t)
-            y_pred_norm = model.forward_pass(X_model)
-            y_pred = dm.denormalize_values(y_pred_norm, model.outputs)
-
-            for i, feature_name in enumerate(model.outputs):
-                if feature_name not in predictions:
-                    continue
-                value = float(y_pred[0, i])
-                feat_depth = len(predictions[feature_name].shape)
-                feat_idx = idx[:feat_depth]
-                predictions[feature_name][feat_idx] = value
 
     def _predict_and_store_batch_to_dict(
         self,

@@ -1,9 +1,9 @@
 """Tests for DataModule.build_flat_batch and build_sequence_batch.
 
-These helpers replace the cell-loop input construction in
-``_predict_autoregressive_batched_tensor``: framework-side shape building
-that concrete model classes (``MLPModel`` flat, ``TransformerModel`` sequence)
-will call from their ``predict`` method.
+Framework-side shape builders that concrete model classes (``TorchMLPModel``
+flat, ``TorchTransformerModel`` sequence) call from their ``predict``
+method. They replace the cell-loop input construction that lived inside
+``PredictionSystem`` before the polymorphic-model migration.
 """
 
 from __future__ import annotations

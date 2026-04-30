@@ -1,7 +1,14 @@
-"""Tests for scheduled-sampling orchestration in PredictionSystem.train()."""
+"""Tests for cross-model dependency ordering in PredictionSystem.
+
+Replaces the previous SS-orchestration tests after the migration deleted
+the cell-loop autoreg / per-row Bernoulli scheduled-sampling machinery.
+The topo-sort logic that was load-bearing for ordering recursive sources
+before their consumers is preserved here under its more general framing:
+plain cross-model dependencies (model B's input_features overlap model
+A's outputs → A precedes B).
+"""
 
 from typing import Any
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -19,7 +26,7 @@ from pred_fab.utils import LocalData, PfabLogger, SplitType
 
 
 class _SourceModel(IPredictionModel):
-    """Model whose output 'src' feeds another model's recursive input."""
+    """Produces 'src'; consumed by _ConsumerModel as a plain cross-model input."""
 
     @property
     def input_parameters(self) -> list[str]:
@@ -36,15 +43,13 @@ class _SourceModel(IPredictionModel):
     def train(self, train_batches, val_batches, **kwargs) -> None:
         self._is_trained = True
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        return np.zeros((X.shape[0], 1), dtype=np.float32)
-
-    def encode(self, X: np.ndarray, **kwargs) -> np.ndarray:
-        return X
+    def forward_pass(self, X, gradient_pass: bool = False):
+        import torch
+        return torch.zeros((X.shape[0], 1), dtype=torch.float32)
 
 
-class _RecursiveModel(IPredictionModel):
-    """Model that consumes 'prev_src_1' (recursive feature on src)."""
+class _ConsumerModel(IPredictionModel):
+    """Consumes 'src' as a plain (non-recursive) input feature."""
 
     @property
     def input_parameters(self) -> list[str]:
@@ -52,7 +57,7 @@ class _RecursiveModel(IPredictionModel):
 
     @property
     def input_features(self) -> list[str]:
-        return ["prev_src_1"]
+        return ["src"]
 
     @property
     def outputs(self) -> list[str]:
@@ -61,35 +66,39 @@ class _RecursiveModel(IPredictionModel):
     def train(self, train_batches, val_batches, **kwargs) -> None:
         self._is_trained = True
 
-    def forward_pass(self, X: np.ndarray) -> np.ndarray:
-        return np.zeros((X.shape[0], 1), dtype=np.float32)
-
-    def encode(self, X: np.ndarray, **kwargs) -> np.ndarray:
-        return X
+    def forward_pass(self, X, gradient_pass: bool = False):
+        import torch
+        return torch.zeros((X.shape[0], 1), dtype=torch.float32)
 
 
 class _CycleModelA(IPredictionModel):
+    """Consumes 'b'; produces 'a' — half of a cycle with _CycleModelB."""
+
     @property
     def input_parameters(self) -> list[str]: return []
     @property
-    def input_features(self) -> list[str]: return ["prev_b_1"]
+    def input_features(self) -> list[str]: return ["b"]
     @property
     def outputs(self) -> list[str]: return ["a"]
     def train(self, *_, **__) -> None: ...
-    def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-    def encode(self, X, **kwargs): return X
+    def forward_pass(self, X, gradient_pass: bool = False):
+        import torch
+        return torch.zeros((X.shape[0], 1))
 
 
 class _CycleModelB(IPredictionModel):
+    """Consumes 'a'; produces 'b' — half of a cycle with _CycleModelA."""
+
     @property
     def input_parameters(self) -> list[str]: return []
     @property
-    def input_features(self) -> list[str]: return ["prev_a_1"]
+    def input_features(self) -> list[str]: return ["a"]
     @property
     def outputs(self) -> list[str]: return ["b"]
     def train(self, *_, **__) -> None: ...
-    def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-    def encode(self, X, **kwargs): return X
+    def forward_pass(self, X, gradient_pass: bool = False):
+        import torch
+        return torch.zeros((X.shape[0], 1))
 
 
 def _build_schema(tmp_path) -> DatasetSchema:
@@ -97,138 +106,62 @@ def _build_schema(tmp_path) -> DatasetSchema:
         Dimension("n_layers", "layer_idx", 1, 4),
         Dimension("n_segments", "segment_idx", 1, 3),
     ])
-    layer_dim, _ = spatial.axes
     src = Feature.array("src", domain=spatial)
     consumer_out = Feature.array("consumer_out", domain=spatial)
     return DatasetSchema(
         root_folder=str(tmp_path),
-        name="ss_orch_schema",
+        name="cross_model_schema",
         parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
-        features=Features.from_list([
-            src,
-            consumer_out,
-            *Feature.recursive("prev_src", source=src, dimensions=(layer_dim,), max_depth=1),
-        ]),
+        features=Features.from_list([src, consumer_out]),
         performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
         domains=Domains([spatial]),
     )
 
 
-def _build_pred_system(tmp_path, models: list[IPredictionModel]) -> tuple[PredictionSystem, DataModule]:
+def _build_pred_system(tmp_path, models: list[IPredictionModel]) -> PredictionSystem:
     schema = _build_schema(tmp_path)
-    dataset = Dataset(schema=schema, debug_flag=True)
-    dataset.create_experiment(
-        "exp_001", parameters={"p1": 0.5, "n_layers": 4, "n_segments": 3},
-    )
-    exp = dataset.get_experiment("exp_001")
-    grid_rows = []
-    for k in range(4):
-        for s in range(3):
-            grid_rows.append([k, s, k * 10.0 + s])
-    grid = np.array(grid_rows, dtype=np.float64)
-    src_tensor = exp.features.table_to_tensor("src", grid, exp.parameters)
-    exp.features.set_value("src", src_tensor)
-    exp.features.set_value("consumer_out", src_tensor)
-    prev = np.full_like(src_tensor, np.nan)
-    prev[1:, :] = src_tensor[:-1, :]
-    exp.features.set_value("prev_src_1", prev)
-
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     local_data = LocalData(root_folder=str(tmp_path))
     pred = PredictionSystem(logger=logger, schema=schema, local_data=local_data)
     for m in models:
         pred.models.append(m)
-
-    dm = DataModule(dataset=dataset)
-    dm.initialize(
-        input_parameters=["p1", "n_layers", "n_segments"],
-        input_features=["prev_src_1"],
-        output_columns=["src", "consumer_out"],
-    )
-    dm._split_codes[SplitType.TRAIN] = ["exp_001"]
-    return pred, dm
+    return pred
 
 
-# ── Topological sort ──
+# === Topological sort over cross-model deps ==============================
 
-def test_topo_sort_self_recursion_only(tmp_path):
-    """A single model that's its own recursive source has no cross-model deps."""
+
+def test_topo_sort_no_deps_returns_input_order(tmp_path):
+    """A single model with no cross-model inputs has no deps."""
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
+    pred = _build_pred_system(tmp_path, [_SourceModel(logger=logger)])
     sorted_models = pred._topo_sort_models()
     assert len(sorted_models) == 1
 
 
 def test_topo_sort_orders_source_before_consumer(tmp_path):
-    """SourceModel produces 'src'; RecursiveModel's prev_src_1 references it."""
+    """ConsumerModel reads 'src' produced by SourceModel; topo sort puts source first."""
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     src = _SourceModel(logger=logger)
-    cons = _RecursiveModel(logger=logger)
-    pred, _ = _build_pred_system(tmp_path, [cons, src])  # registered backwards
+    cons = _ConsumerModel(logger=logger)
+    pred = _build_pred_system(tmp_path, [cons, src])  # registered backwards
     sorted_models = pred._topo_sort_models()
     assert sorted_models[0] is src
     assert sorted_models[1] is cons
 
 
 def test_topo_sort_raises_on_cycle(tmp_path):
-    schema = _build_schema(tmp_path)
-    # Manually add a recursive feature pointing the other way to make a cycle
-    a_feat = Feature.array("a")
-    b_feat = Feature.array("b")
-    cycle_schema = DatasetSchema(
+    """A reads B's output and B reads A's output → no DAG, raises."""
+    schema_with_ab = DatasetSchema(
         root_folder=str(tmp_path),
         name="cycle_schema",
         parameters=Parameters.from_list([Parameter.real("p", 0.0, 1.0)]),
-        features=Features.from_list([
-            a_feat, b_feat,
-            *Feature.recursive("prev_a", source=a_feat, dimensions=(), max_depth=1),
-            *Feature.recursive("prev_b", source=b_feat, dimensions=(), max_depth=1),
-        ]),
+        features=Features.from_list([Feature.array("a"), Feature.array("b")]),
         performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf")]),
     )
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
     local_data = LocalData(root_folder=str(tmp_path))
-    pred = PredictionSystem(logger=logger, schema=cycle_schema, local_data=local_data)
+    pred = PredictionSystem(logger=logger, schema=schema_with_ab, local_data=local_data)
     pred.models.extend([_CycleModelA(logger=logger), _CycleModelB(logger=logger)])
     with pytest.raises(ValueError, match="cycle"):
         pred._topo_sort_models()
-
-
-# ── Recursive-input detection ──
-
-def test_model_has_recursive_inputs_true(tmp_path):
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    assert pred._model_has_recursive_inputs(pred.models[0]) is True
-
-
-def test_model_has_recursive_inputs_false(tmp_path):
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_SourceModel(logger=logger)])
-    assert pred._model_has_recursive_inputs(pred.models[0]) is False
-
-
-# ── Schedule (per-epoch progress in [0, 1]) ──
-
-def test_ss_schedule_progress_zero_is_teacher_forced(tmp_path):
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    pred.n_ss_refreshes = 4
-    assert pred._ss_p_for_progress(0.0) == 0.0
-
-
-def test_ss_schedule_progress_one_is_full_student(tmp_path):
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    pred.n_ss_refreshes = 4
-    assert pred._ss_p_for_progress(1.0) == 1.0
-
-
-def test_ss_schedule_floor_lifts_early_progress(tmp_path):
-    logger = PfabLogger.get_logger(str(tmp_path / "logs"))
-    pred, _ = _build_pred_system(tmp_path, [_RecursiveModel(logger=logger)])
-    pred.ss_schedule_floor = 0.2
-    # At progress=0.25 (early), p_student should be ≥ 0.2 (the floor) per the
-    # linear schedule: p = floor + (1 - floor) * progress.
-    p_early = pred._ss_p_for_progress(0.25)
-    assert p_early > 0.2

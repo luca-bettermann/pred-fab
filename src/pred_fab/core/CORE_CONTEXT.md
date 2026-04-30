@@ -11,7 +11,7 @@ Canonical data model and ML data-prep layer. All other packages depend on core; 
 | `data_blocks.py` | Typed containers: `Parameters`, `Features`, `PerformanceAttributes`, `Domains` |
 | `schema.py` | `DatasetSchema` (owns parameters + features + performance + domains) + `SchemaRegistry` |
 | `dataset.py` | `ExperimentData` (one experiment's live data), `Dataset` (collection + persistence). `export_to_tensor_dict(codes, x_columns, y_columns, …)` is the canonical batch-export — returns `(X, y, cell_meta)` per-column tensors. |
-| `datamodule.py` | ML data-prep: `nn.Module` normalisers, categorical-index encoding, batching, splits, stateless `substitute_recursive_features` for scheduled sampling |
+| `datamodule.py` | ML data-prep: `nn.Module` normalisers, categorical-index encoding, batching, splits. `build_flat_batch` / `build_sequence_batch` are the per-model batch builders called from concrete `model.predict` (flat for MLP/Deterministic, sequence for Transformer). |
 | `normalisers.py` | `nn.Module` normalisers (`StandardScalerModule` / `MinMaxScalerModule` / `RobustScalerModule` / `IdentityNormaliser`); stats live in `state_dict()` |
 
 ## Data Flow

@@ -115,12 +115,7 @@ class DatasetSchema:
         # Features
         lines.append(f"\n  {_D}Features{_R}")
         for code, obj in self.features.items():
-            if hasattr(obj, 'is_recursive') and obj.is_recursive:
-                ftype = "recursive"
-            elif hasattr(obj, 'context') and obj.context:
-                ftype = "context"
-            else:
-                ftype = ""
+            ftype = "context" if hasattr(obj, 'context') and obj.context else ""
             lines.append(f"    {code:<20s} {_D}{ftype}{_R}")
 
         # Performance attributes
@@ -168,17 +163,8 @@ class DatasetSchema:
         return hashlib.sha256(hash_str.encode()).hexdigest()
 
     def _block_to_hash_structure(self, block: DataBlock) -> dict[str, Any]:
-        """Convert DataBlock to hashable structure using to_hash_dict() (excludes operational metadata).
-
-        Recursive features are excluded — they derive from existing tensors and
-        don't change storage structure.
-        """
-        result: dict[str, Any] = {}
-        for name, obj in block.items():
-            if isinstance(obj, DataArray) and obj.is_recursive:
-                continue
-            result[name] = obj.to_hash_dict()
-        return result
+        """Convert DataBlock to hashable structure using to_hash_dict() (excludes operational metadata)."""
+        return {name: obj.to_hash_dict() for name, obj in block.items()}
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize schema to dictionary for storage."""

@@ -18,7 +18,6 @@ class FeatureSystem(BaseOrchestrationSystem):
         self.models: list[IFeatureModel] = []
         self._schema: DatasetSchema | None = None
         self._model_domain_map: dict[int, tuple[Domain | None, int | None]] = {}
-        self._recursive_features: list[DataArray] = []
 
     def _set_feature_column_names(self, schema: DatasetSchema) -> None:
         """Derive and validate domain+depth from schema outputs, then set column names on DataArrays.
@@ -83,11 +82,6 @@ class FeatureSystem(BaseOrchestrationSystem):
                         col_names = [ax.iterator_code for ax in axes] + [output_code]
                         data_array.set_columns(col_names)  # type: ignore[union-attr]
 
-        # Collect recursive features from the schema for post-hoc tensor derivation.
-        self._recursive_features = []
-        for feat_code, feat_obj in schema.features.items():
-            if isinstance(feat_obj, DataArray) and feat_obj.is_recursive:
-                self._recursive_features.append(feat_obj)
 
     # === FEATURE EXTRACTION ===
 
@@ -185,73 +179,5 @@ class FeatureSystem(BaseOrchestrationSystem):
                 # Convert to canonical tensor via shared Features transformation.
                 feature_dict[code] = features.table_to_tensor(code, table, parameters)
 
-        # Derive recursive features by shifting source tensors.
-        for rec_feat in self._recursive_features:
-            source_code = rec_feat.recursive_source
-            if source_code is None or rec_feat.recursive_dimensions is None:
-                continue
-            if source_code not in feature_dict:
-                # Source may already be stored on the Features block (e.g. partial eval).
-                if features.has_value(source_code):
-                    source_tensor = features.get_value(source_code)
-                else:
-                    self.logger.warning(
-                        f"Recursive feature '{rec_feat.code}' references source '{source_code}' "
-                        f"which has not been computed."
-                    )
-                    continue
-            else:
-                source_tensor = feature_dict[source_code]
-
-            shifted = self._shift_tensor(
-                source_tensor,
-                rec_feat.recursive_dimensions,
-                rec_feat.recursive_depth or 1,
-                features,
-                parameters,
-            )
-            feature_dict[rec_feat.code] = shifted
-
         return feature_dict
 
-    def _shift_tensor(
-        self,
-        tensor: np.ndarray,
-        dimension_iterator_codes: tuple[str, ...],
-        step: int,
-        features: Features,
-        parameters: 'Parameters',
-    ) -> np.ndarray:
-        """Shift a source tensor backward along specified dimensions, padding boundaries with NaN."""
-        result = tensor.copy()
-        for iter_code in dimension_iterator_codes:
-            axis = self._resolve_axis_index(iter_code, features, parameters)
-            if axis is None:
-                continue
-            result = self._shift_along_axis(result, axis, step)
-        return result
-
-    def _resolve_axis_index(
-        self,
-        iterator_code: str,
-        features: Features,
-        parameters: 'Parameters',
-    ) -> int | None:
-        """Map a dimension iterator code (e.g. 'layer_idx') to a tensor axis index."""
-        dim_objs = parameters._get_domain_axis_objects()
-        iterator_codes = [d.iterator_code for d in dim_objs]
-        if iterator_code in iterator_codes:
-            return iterator_codes.index(iterator_code)
-        self.logger.warning(f"Iterator code '{iterator_code}' not found in domain axes.")
-        return None
-
-    @staticmethod
-    def _shift_along_axis(tensor: np.ndarray, axis: int, step: int) -> np.ndarray:
-        """Shift tensor values backward along an axis by ``step``, padding leading positions with NaN."""
-        result = np.full_like(tensor, np.nan)
-        src = [slice(None)] * tensor.ndim
-        dst = [slice(None)] * tensor.ndim
-        src[axis] = slice(None, tensor.shape[axis] - step)
-        dst[axis] = slice(step, None)
-        result[tuple(dst)] = tensor[tuple(src)]
-        return result

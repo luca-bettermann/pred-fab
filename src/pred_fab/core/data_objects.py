@@ -332,9 +332,6 @@ class DataArray(DataObject):
     def __init__(self, code: str, role: Roles, dtype: str | type | np.dtype = np.float64,
                  domain_code: str | None = None, feature_depth: int | None = None,
                  context: bool = False,
-                 recursive_source: str | None = None,
-                 recursive_dimensions: tuple[str, ...] | None = None,
-                 recursive_depth: int | None = None,
                  iterator_axis_code: str | None = None):
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
@@ -342,9 +339,6 @@ class DataArray(DataObject):
         self.domain_code: str | None = domain_code
         self.feature_depth: int | None = feature_depth
         self.context: bool = context  # Observable but uncontrollable covariate; input-only, never optimized.
-        self.recursive_source: str | None = recursive_source
-        self.recursive_dimensions: tuple[str, ...] | None = recursive_dimensions
-        self.recursive_depth: int | None = recursive_depth
         # Iterator-derived feature: value at row k = k / (L-1) along this axis,
         # where L is the experiment's value of the iterator's parent Dimension.
         self.iterator_axis_code: str | None = iterator_axis_code
@@ -359,21 +353,10 @@ class DataArray(DataObject):
             constraints["feature_depth"] = feature_depth
         if context:
             constraints["context"] = True
-        if recursive_source is not None:
-            constraints["recursive_source"] = recursive_source
-        if recursive_dimensions is not None:
-            constraints["recursive_dimensions"] = list(recursive_dimensions)
-        if recursive_depth is not None:
-            constraints["recursive_depth"] = recursive_depth
         if iterator_axis_code is not None:
             constraints["iterator_axis_code"] = iterator_axis_code
 
         super().__init__(code, np.ndarray, role, constraints)
-
-    @property
-    def is_recursive(self) -> bool:
-        """Whether this feature is derived by shifting a source feature tensor."""
-        return self.recursive_source is not None
 
     @property
     def is_iterator(self) -> bool:
@@ -411,16 +394,12 @@ class DataArray(DataObject):
     def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any],
                        round_digits: int | None = None) -> 'DataArray':
         """Reconstruct DataArray from serialized constraints."""
-        rec_dims = constraints.get("recursive_dimensions")
         obj = cls(
             code, role,
             dtype=constraints.get("dtype", np.float64),
             domain_code=constraints.get("domain_code"),
             feature_depth=constraints.get("feature_depth"),
             context=constraints.get("context", False),
-            recursive_source=constraints.get("recursive_source"),
-            recursive_dimensions=tuple(rec_dims) if rec_dims is not None else None,
-            recursive_depth=constraints.get("recursive_depth"),
             iterator_axis_code=constraints.get("iterator_axis_code"),
         )
         obj.round_digits = round_digits
@@ -506,57 +485,6 @@ class Feature:
             context=True,
             iterator_axis_code=dim.iterator_code,
         )
-
-    @overload
-    @staticmethod
-    def recursive(
-        code: str, source: 'DataArray', dimensions: Sequence['Dimension'],
-        depth: int = 1, *, max_depth: int,
-    ) -> list['DataArray']: ...
-
-    @overload
-    @staticmethod
-    def recursive(
-        code: str, source: 'DataArray', dimensions: Sequence['Dimension'],
-        depth: int = 1, max_depth: None = None,
-    ) -> 'DataArray': ...
-
-    @staticmethod  # type: ignore[misc]
-    def recursive(
-        code: str,
-        source: 'DataArray',
-        dimensions: Sequence['Dimension'],
-        depth: int = 1,
-        max_depth: int | None = None,
-    ) -> 'DataArray | list[DataArray]':
-        """Derive recursive feature(s) from a source feature by shifting along domain dimensions.
-
-        With ``depth`` only (default 1), returns a single DataArray referencing the source
-        tensor shifted by ``depth`` steps along each listed dimension.  Boundary positions
-        are filled with NaN (converted to 0 at DataModule batch time).
-
-        With ``max_depth``, returns a list of DataArrays for steps 1..max_depth, suitable
-        for ``*``-unpacking into a Features block.
-        """
-        rec_dims = tuple(d.iterator_code for d in dimensions)
-        domain_code = source.domain_code
-
-        def _make(suffix_depth: int) -> DataArray:
-            arr_code = f"{code}_{suffix_depth}" if max_depth is not None else code
-            return DataArray(
-                code=arr_code,
-                role=Roles.FEATURE,
-                domain_code=domain_code,
-                feature_depth=source.feature_depth,
-                context=True,  # recursive features are not optimised
-                recursive_source=source.code,
-                recursive_dimensions=rec_dims,
-                recursive_depth=suffix_depth,
-            )
-
-        if max_depth is not None:
-            return [_make(d) for d in range(1, max_depth + 1)]
-        return _make(depth)
 
 
 class PerformanceAttribute:

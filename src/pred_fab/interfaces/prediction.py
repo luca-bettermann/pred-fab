@@ -19,21 +19,19 @@ class IPredictionModel(BaseInterface):
     share the same domain_code and feature_depth. Do not declare input_domain — it is inferred
     from the output features registered in the schema.
 
-    ``HAS_NATIVE_SEQUENCE`` (class attr) tells PredictionSystem which prediction
-    contract this model honours:
+    Three concrete subclasses cover the dominant fab modelling architectures:
 
-    - ``False`` (default — feed-forward / MLP / deterministic): per-cell ``forward_pass``.
-      The framework iterates over cells and (when recursive features are declared
-      on the schema) handles autoregression via a cell loop with a predictions
-      cache. Suitable for non-sequential or simple per-cell mappings.
-    - ``True`` (transformer / sequence-aware): the model's ``predict_sequence``
-      returns ``(S, L, n_outputs)`` directly. Causal attention internal to the
-      model handles the autoregressive contract; no external cell loop or
-      recursive cache. Required for any model with recursive inputs once the
-      sequence-prediction migration lands.
+    - ``IDeterministicModel`` — closed-form formulas (no training).
+    - ``TorchMLPModel`` — feed-forward MLP for tabular / non-sequential mappings.
+    - ``TorchTransformerModel`` — encoder-only transformer with causal attention
+      for sequential / autoregressive mappings.
+
+    Each subclass implements its own ``predict`` (the interface defaults to flat-
+    batched dispatch, suitable for MLP/Deterministic; Transformer overrides with
+    sequence dispatch). End users plug one concrete model per domain;
+    ``PredictionSystem`` orchestrates the mix via topological sort over
+    cross-model dependencies.
     """
-
-    HAS_NATIVE_SEQUENCE: bool = False
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
@@ -232,25 +230,11 @@ class IPredictionModel(BaseInterface):
     def _validate_schema_compatibility(self, schema: Any) -> None:
         """Type-specific schema check, run after ``validate_dimensional_coherence``.
 
-        Default: reject recursive input features. Suitable for MLP and
-        Deterministic models — neither can consume recursive features under
-        the new architecture; they belong to ``TorchTransformerModel``.
-
-        ``TorchTransformerModel`` overrides this to (a) require
-        ``sequence_axis_code`` to resolve to a real domain axis, and
-        (b) allow recursive features whose axis matches the sequence axis.
+        Default: no-op. Concrete model classes override to enforce class-
+        specific rules (e.g. ``TorchTransformerModel`` requires
+        ``sequence_axis_code`` to resolve to a real domain axis).
         """
-        for feat_code in self.input_features:
-            feat_obj = getattr(schema.features, "data_objects", {}).get(feat_code)
-            if feat_obj is None:
-                continue
-            if getattr(feat_obj, "is_recursive", False):
-                raise ValueError(
-                    f"{self.__class__.__name__} declares recursive input feature "
-                    f"'{feat_code}'. MLP / Deterministic models cannot consume "
-                    f"recursive features; subclass TorchTransformerModel for "
-                    f"sequence-aware prediction with causal attention.",
-                )
+        del schema
 
     # === LATENT ENCODING ===
 

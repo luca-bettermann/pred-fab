@@ -505,27 +505,15 @@ class Dataset:
     def get_populated_experiment_codes(self) -> list[str]:
         """Get list of experiments that have all *measured* features populated.
 
-        Two classes of features are excluded from this check because they are
-        derived rather than measured:
-
-        - **Iterator features** (``Feature.iterator``): no stored tensor, computed
-          at export time from row position.
-        - **Recursive features** (``Feature.recursive``): tensor is derived by
-          shifting the source feature along recursive dimensions; populated by
-          ``FeatureSystem`` during ``agent.evaluate(...)``. If a recursive feature
-          is missing on disk (stale data from before it was added to the schema,
-          partial save, etc.) the experiment is still considered populated for
-          training-readiness — recursive cols will fall back to the boundary
-          value (0 after ``nan_to_num`` in ``_one_hot_encode``).
-
-        Without these skips, any schema using ``Feature.iterator(...)`` or
-        ``Feature.recursive(...)`` would block training entirely whenever the
-        derived tensor isn't currently on disk.
+        Iterator features (``Feature.iterator``) are excluded — no stored
+        tensor, computed at export time from row position. Without this skip,
+        any schema using ``Feature.iterator(...)`` would block training
+        whenever the derived tensor isn't on disk.
         """
         from pred_fab.core.data_objects import DataArray
         feature_names = [
             name for name, obj in self.schema.features.items()
-            if not (isinstance(obj, DataArray) and (obj.is_iterator or obj.is_recursive))
+            if not (isinstance(obj, DataArray) and obj.is_iterator)
         ]
         return [
             code for code in self.get_experiment_codes()

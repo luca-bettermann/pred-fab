@@ -1,10 +1,6 @@
 """Convenience base for sequence-aware (transformer) prediction models.
 
-DRAFT — not yet wired into PredictionSystem dispatch. The contract is
-captured here; the migration that drops the cell-loop autoreg path and
-routes recursive problems through `predict_sequence` is the next step.
-
-Usage (post-migration):
+Usage:
     class MyRecursiveModel(TorchTransformerModel):
         D_MODEL = 64
         N_HEADS = 4
@@ -13,7 +9,7 @@ Usage (post-migration):
         @property
         def input_parameters(self) -> list[str]: return ["param_1", ...]
         @property
-        def input_features(self) -> list[str]: return []   # no explicit prev_x cols
+        def input_features(self) -> list[str]: return []
         @property
         def outputs(self) -> list[str]: return ["feat_a"]
         @property
@@ -23,10 +19,10 @@ The transformer sees the full sequence (all positions along ``sequence_axis_code
 in one forward; causal attention enforces the autoregressive prediction
 contract — position k can attend to positions 0..k-1 but not k+1..L-1.
 
-Recursion is **structural**, not column-by-column. The schema's
-`Feature.recursive(...)` declarations describe which axis is the
-sequence axis (consumed by the framework when building per-candidate
-sequences); the model itself does not see explicit `prev_x` columns.
+Recursion is **structural**, not column-by-column. The user declares which
+schema axis is the sequence axis via ``sequence_axis_code``; causal
+attention sees prior positions' hidden states natively, so no explicit
+prev-position columns are required (and none are supported).
 """
 
 from typing import Any, Callable
@@ -48,8 +44,6 @@ class TorchTransformerModel(IPredictionModel):
     ``sequence_axis_code`` property naming the schema axis to sequence over.
     """
 
-    HAS_NATIVE_SEQUENCE = True
-
     D_MODEL: int = 64
     N_HEADS: int = 4
     N_LAYERS: int = 2
@@ -61,8 +55,6 @@ class TorchTransformerModel(IPredictionModel):
     LR: float = 5e-4
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
-
-    SS_N_REFRESHES: int = 4
 
     @property
     def sequence_axis_code(self) -> str:

@@ -188,41 +188,13 @@ def test_predict_empty_candidates_returns_empty(tmp_path):
     assert out == []
 
 
-def test_validate_schema_compatibility_rejects_recursive(tmp_path):
-    """An MLP with a recursive input feature on the schema raises ValueError."""
-    spatial = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 8)])
-    layer_dim = spatial.axes[0]
-    src_feat = Feature.array("src", domain=spatial)
-    schema = DatasetSchema(
-        root_folder=str(tmp_path),
-        name="mlp_reject_schema",
-        parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
-        features=Features.from_list([
-            src_feat,
-            *Feature.recursive("prev_src", source=src_feat, dimensions=(layer_dim,), max_depth=1),
-        ]),
-        performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
-        domains=Domains([spatial]),
-    )
+def test_validate_schema_compatibility_default_is_noop(tmp_path):
+    """The IPredictionModel default _validate_schema_compatibility is a no-op.
 
-    class _RecMLP(TorchMLPModel):
-        HIDDEN = (4,)
-        @property
-        def input_parameters(self): return ["p1"]
-        @property
-        def input_features(self): return ["prev_src_1"]
-        @property
-        def outputs(self): return ["src"]
-
-    mlp = _RecMLP(build_test_logger(tmp_path))
-    mlp.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="recursive input feature"):
-        mlp._validate_schema_compatibility(schema)
-
-
-def test_validate_schema_compatibility_accepts_non_recursive(tmp_path):
-    """An MLP with no recursive inputs passes the type-specific check."""
+    Schema-level recursive features were removed alongside the cell-loop autoreg
+    machinery — recursion is now exclusively a TorchTransformerModel concern via
+    causal attention. There's no rejected case left for MLPs to guard against.
+    """
     schema = _build_2d_schema(tmp_path)
     mlp = _GridMLP(build_test_logger(tmp_path))
     mlp.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]

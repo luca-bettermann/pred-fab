@@ -22,7 +22,7 @@ isn't justified at mock-scale (~50-200 rows). Threshold is class-level so
 subclasses can override.
 """
 
-from typing import Any, Callable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -58,12 +58,6 @@ class TorchMLPModel(IPredictionModel):
     # ``EPOCHS`` is reinterpreted as "passes over the dataset" in either case.
     MINIBATCH_THRESHOLD: int = 1000
     MINIBATCH_SIZE: int = 256
-
-    # number of equally-spaced SS refresh checkpoints
-    # during a training run. Effective only when train() is called with an
-    # ``epoch_callback``; otherwise ignored. Default 4 matches the legacy
-    # K-refit cadence of 4 rounds.
-    SS_N_REFRESHES: int = 4
 
     # If True (default), the trained net is wrapped with torch.compile after
     # training so ``forward_pass`` calls go through a JIT-traced graph. Falls
@@ -179,18 +173,9 @@ class TorchMLPModel(IPredictionModel):
         self,
         train_batches: list[tuple[torch.Tensor, torch.Tensor]],
         val_batches: list[tuple[torch.Tensor, torch.Tensor]],
-        *,
-        epoch_callback: Callable[[float], list[tuple[torch.Tensor, torch.Tensor]] | None] | None = None,
         **kwargs: Any,
     ) -> None:
-        """Train the network. Optional ``epoch_callback`` enables per-epoch SS refresh.
-
-        When ``epoch_callback`` is provided, it is invoked at
-        ``SS_N_REFRESHES`` equally-spaced points during training. The
-        callback receives the current progress in ``[0, 1]`` and returns
-        fresh ``train_batches`` with updated SS substitution applied (or
-        ``None`` to keep the current batches).
-        """
+        """Train the network on flat (X, y) batches with Adam + MSE."""
         if not train_batches:
             return
         n_outputs = len(self.outputs)
@@ -215,14 +200,6 @@ class TorchMLPModel(IPredictionModel):
         net.train()
         self._cat_embeddings.train()
 
-        # per-epoch SS refresh (replaces K-refit). Refresh
-        # at SS_N_REFRESHES equally-spaced checkpoints during training; at each,
-        # the callback returns fresh batches with current SS state.
-        refresh_period = (
-            max(self.EPOCHS // max(self.SS_N_REFRESHES, 1), 1)
-            if epoch_callback else self.EPOCHS + 1
-        )
-
         # Scale-aware loop: above the threshold, shuffle into minibatches per
         # epoch via DataLoader; otherwise full-batch GD (mock-scale path).
         # NOTE: must recompute _embed_cats per step — embeddings are learning,
@@ -235,18 +212,7 @@ class TorchMLPModel(IPredictionModel):
                 TensorDataset(X, y), batch_size=batch_size, shuffle=True,
             )
 
-        for epoch in range(self.EPOCHS):
-            if epoch_callback is not None and epoch > 0 and epoch % refresh_period == 0:
-                new_batches = epoch_callback(epoch / max(self.EPOCHS - 1, 1))
-                if new_batches:
-                    X = torch.cat([b[0] for b in new_batches], dim=0)
-                    y = torch.cat([b[1] for b in new_batches], dim=0)
-                    if y.ndim == 1:
-                        y = y.reshape(-1, 1)
-                    if use_minibatch:
-                        loader = DataLoader(
-                            TensorDataset(X, y), batch_size=batch_size, shuffle=True,
-                        )
+        for _ in range(self.EPOCHS):
             if use_minibatch:
                 for X_b, y_b in loader:
                     optimizer.zero_grad()
