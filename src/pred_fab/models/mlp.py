@@ -48,8 +48,15 @@ class MLPModel(IPredictionModel):
 
     EPOCHS: int = 1500
     LR: float = 5e-3
-    WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
+
+    # Regularisation knobs — override in subclasses to tame overfitting.
+    # WEIGHT_DECAY: L2 penalty on Adam. 1e-3 is a mild default; bump to
+    # 1e-2..5e-2 for small datasets relative to network capacity.
+    # DROPOUT: rate applied between hidden layers (and after the input
+    # projection). 0.0 = off. 0.1..0.3 typical when overfitting is visible.
+    WEIGHT_DECAY: float = 1e-3
+    DROPOUT: float = 0.0
 
     # Scale-aware minibatching threshold. At or below
     # this many training rows, the train loop uses single full-batch GD —
@@ -287,6 +294,8 @@ class MLPModel(IPredictionModel):
         for h in self.HIDDEN:
             layers.append(nn.Linear(prev, h))
             layers.append(nn.ReLU())
+            if self.DROPOUT > 0.0:
+                layers.append(nn.Dropout(self.DROPOUT))
             prev = h
         layers.append(nn.Linear(prev, n_outputs))
         return nn.Sequential(*layers)
