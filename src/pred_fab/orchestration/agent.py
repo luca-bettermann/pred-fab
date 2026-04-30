@@ -756,7 +756,14 @@ class PfabAgent:
         Requires the agent to be trained (pred_system must have a fitted model).
         """
         self._assert_initialized()
-        return self.calibration_system.perf_fn(params)
+        # The scalar perf_fn was collapsed into perf_fn_tensor during the
+        # tensor-only migration — wrap a single dict in/out around the
+        # batched tensor call site to preserve this method's contract.
+        perf_fn_tensor = self.calibration_system.perf_fn_tensor
+        if perf_fn_tensor is None:
+            raise RuntimeError("Agent has no perf_fn_tensor configured.")
+        out = perf_fn_tensor([params])
+        return {code: float(t[0].item()) for code, t in out.items()}
 
     def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
         """Return the predicted uncertainty (0–1) at params.
