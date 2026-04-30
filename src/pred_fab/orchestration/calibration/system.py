@@ -2027,7 +2027,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     full_S_NL = flat_x_t.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
                         S, 1, L, n_input,
                     ).clone()
-                    full_S_NL[:, 0, :, sched_col_indices] = steps_SLD
+                    full_S_NL[:, 0, :, sched_col_indices] = steps_SLD.to(dtype=full_S_NL.dtype)
                     scores_neg = self._acquisition_joint_batched_tensor(
                         full_S_NL, kappa, sched_perf_range,
                     )
