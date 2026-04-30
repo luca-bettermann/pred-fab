@@ -211,7 +211,7 @@ class OptimizationEngine:
         if D == 0:
             return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
 
-        # Optional torch.compile wrap of the objective (commit 20).
+        # Optional torch.compile wrap of the objective.
         if compile_objective:
             try:
                 objective_tensor = torch.compile(objective_tensor, dynamic=True)  # type: ignore[assignment]

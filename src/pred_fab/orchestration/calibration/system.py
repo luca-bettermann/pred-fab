@@ -132,7 +132,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
-        # GRADIENT is the default (commit 8).
+        # GRADIENT is the default.
         # ``Optimizer.DE`` remains an opt-in for users who explicitly want it
         # via ``configure_optimizer(backend=Optimizer.DE)``. Internal phase
         # dispatch automatically falls back to DE for integer-only phases
@@ -424,11 +424,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         X_SD: torch.Tensor,
         perf_range: tuple[float, float] | None,
     ) -> torch.Tensor:
-        """Tensor mirror of ``_per_candidate_perf_batched``: returns ``(S,)``.
+        """Per-candidate weighted performance ``(S,)``, gradient-traversable.
 
-        Routes through ``perf_fn_tensor`` (autograd-traversable). When the
-        tensor closure is unavailable, falls back to numpy scalar perf
-        (gradient lost).
+        Routes through ``perf_fn_tensor`` for autograd. When the tensor closure
+        is unavailable (test fixtures) or raises, falls back to a scalar loop
+        — gradient is lost on that path.
         """
         S = int(X_SD.shape[0])
         if S == 0:
@@ -478,8 +478,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
             return torch.from_numpy(out_np).to(dtype=X_SD.dtype)
 
-        # System-perf aggregation: weighted sum across perf codes, normalised
-        # by perf_range. Mirrors ``_normalize_perf_dict``.
+        # System-perf aggregation: weighted sum across perf codes, normalised by perf_range.
         out_valid = torch.zeros(len(valid_idx), dtype=X_SD.dtype)
         weight_sum = sum(self.performance_weights.get(name, 1.0) for name in self.perf_names_order)
         for name in self.perf_names_order:
@@ -1750,13 +1749,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         kappa: float,
         perf_range: tuple[float, float] | None,
     ) -> torch.Tensor:
-        """Tensor mirror of ``_acquisition_joint_batched_objective`` (commit 12).
-
-        Returns ``(S,)`` torch tensor of negated κ-weighted scores for the
-        gradient optimiser. Gradient flows from each candidate's score back
-        through the (S, N, L, D) input tensor — used by the schedule path's
-        gradient migration.
-        """
+        """Negated κ-weighted joint acquisition ``(S,)``, gradient-traversable through ``full_S_NL``."""
         with profiler.section("acq._acquisition_joint_batched_tensor"):
             S, N, L, D = full_S_NL.shape
             NL = N * L

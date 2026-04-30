@@ -243,7 +243,7 @@ class DataModule:
         X_dict: dict[str, torch.Tensor],
         y_dict: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Tensor-native equivalent of ``_inject_context_features`` (commit 16)."""
+        """Inject context-feature columns into a tensor-dict batch."""
         if not self._context_feature_codes:
             return X_dict
         out = dict(X_dict)
@@ -261,36 +261,13 @@ class DataModule:
         p_student: float,
         rng: torch.Generator | None = None,
     ) -> torch.Tensor:
-        """Replace recursive-feature column values with predictions at prior cells.
+        """Replace recursive-feature columns with predictions at prior cells (out-of-place).
 
-        stateless, tensor-typed, no DM SS state. Pure
-        gather/scatter using ``cell_meta`` and the schema's recursive-feature
-        metadata. The caller (typically PredictionSystem) is responsible for
-        producing fresh ``predictions_by_exp`` from the current network state.
-
-        Args:
-            X: ``(n_rows, n_input_cols)`` normalised input batch.
-            cell_meta: ``(n_rows, 2)`` long tensor with ``[exp_idx, cell_idx]``
-                per row (from ``Dataset.export_to_tensor_dict``).
-            experiment_codes: list whose ``[exp_idx]`` indexing matches
-                ``cell_meta[:, 0]``. Used to fetch each experiment's
-                ``dim_sizes`` (for unravel/ravel) and to key into
-                ``predictions_by_exp``.
-            predictions_by_exp: ``{exp_code: {source_feat: predictions_tensor}}``.
-                Each predictions_tensor matches the schema's domain shape
-                for that feature (e.g. ``(n_layers, n_segments)``).
-            p_student: per-row substitution probability. ``0`` → no substitution
-                (return X unchanged). ``1`` → substitute every row's recursive
-                feature columns.
-            rng: optional torch RNG for deterministic per-row Bernoulli draws.
-
-        Returns:
-            New tensor of shape ``(n_rows, n_input_cols)``. Original X
-            unmodified. Boundary cells (prior < 0) substitute with NaN —
-            matches the legacy ``_perturb_recursive_features`` semantics.
-
-        No-op fast paths: ``p_student <= 0``, no recursive features in
-        schema, empty batch.
+        Stateless gather/scatter keyed by ``cell_meta`` ``[exp_idx, cell_idx]``
+        and the schema's recursive-feature metadata; the caller supplies
+        ``predictions_by_exp`` from the current network state. Per-row Bernoulli
+        substitution at probability ``p_student``; boundary cells (prior < 0)
+        substitute with NaN.
         """
         if p_student <= 0.0 or X.numel() == 0:
             return X
@@ -402,7 +379,7 @@ class DataModule:
 
         X_dict = self._inject_context_features_tensor(exported.X, exported.y)
 
-        # Fit X — skip categorical columns (cat-index passed through unnormalised; commit 14).
+        # Fit X — skip categorical columns (cat-index passed through unnormalised).
         self._parameter_stats = {}
         for col in self.input_columns:
             method = self._col_norm_methods.get(col, NormMethod.NONE)
@@ -680,11 +657,11 @@ class DataModule:
         return make_normaliser(method, data)
 
     def _apply_normalization(self, data: np.ndarray, stats: NormaliserModule) -> np.ndarray:
-        """Apply normalisation by delegating to the NormaliserModule (commit 13)."""
+        """Apply normalisation via the NormaliserModule."""
         return stats(data)  # type: ignore[return-value]
 
     def _apply_normalization_tensor(self, data: torch.Tensor, stats: NormaliserModule) -> torch.Tensor:
-        """Tensor-native equivalent — same module dispatch."""
+        """Apply normalisation via the NormaliserModule (tensor-typed)."""
         return stats(data)
 
     def normalize_parameter_bounds(self, col: str, low: float, high: float) -> tuple[float, float]:
@@ -697,11 +674,11 @@ class DataModule:
         return (min(n_low, n_high), max(n_low, n_high))
     
     def _reverse_normalization(self, data_norm: np.ndarray, stats: NormaliserModule) -> np.ndarray:
-        """Reverse normalisation by delegating to the NormaliserModule (commit 13)."""
+        """Reverse normalisation via the NormaliserModule."""
         return stats.reverse(data_norm)  # type: ignore[return-value]
 
     def _reverse_normalization_tensor(self, data_norm: torch.Tensor, stats: NormaliserModule) -> torch.Tensor:
-        """Tensor-native equivalent — same module dispatch."""
+        """Reverse normalisation via the NormaliserModule (tensor-typed)."""
         return stats.reverse(data_norm)
 
     def _normalize_batch(self, data: np.ndarray, columns: list[str], stats: dict[str, NormaliserModule]) -> None:
@@ -747,7 +724,7 @@ class DataModule:
         """Convert a parameter dict to a normalized 1D input array (numpy, calibration-side use).
 
         thin wrapper around the tensor-native
-        ``params_to_tensor`` (commit 1) — no pandas roundtrip.
+        ``params_to_tensor`` — no pandas roundtrip.
         """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -838,7 +815,7 @@ class DataModule:
         return torch.stack(out)
 
     def tensor_to_params(self, tensor: torch.Tensor) -> dict[str, Any]:
-        """Tensor-typed inverse of ``array_to_params`` (commit 14).
+        """Tensor-typed inverse of ``array_to_params``.
 
         Categoricals at column j are decoded by rounding the (denormalised)
         cat-index float to nearest int and looking up

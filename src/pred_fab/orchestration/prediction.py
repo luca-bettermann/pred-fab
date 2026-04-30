@@ -649,16 +649,11 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     @staticmethod
     def _gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-        """Peak-1 Gaussian density ρ(z; z_j, σ²I) — ρ(z_j; z_j) = 1.
+        """Peak-1 Gaussian density ``(M, D) × (N, D) → (M, N)`` matching :class:`KernelIndex`.
 
-        Matches the kernel definition used by :class:`KernelIndex`. KDE
-        prediction uses ratios of weighted densities, so the chosen
-        normalization cancels and the prediction is invariant; this just
-        keeps the shared kernel definition consistent across the package.
-
-        z:       (M, D)
-        centers: (N, D)
-        Returns: (M, N) — each column is one centre's density at M points.
+        KDE prediction uses ratios of weighted densities so the chosen
+        normalisation cancels; the peak-1 form keeps the kernel definition
+        consistent across the package.
         """
         d2 = np.sum((z[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
         return np.exp(-d2 / (2.0 * sigma ** 2))
@@ -815,11 +810,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     def _encode_batch_from_norm_for_model_tensor(
         self, model: IPredictionModel, X_norm_batch: torch.Tensor, active_mask: np.ndarray,
     ) -> torch.Tensor:
-        """Tensor mirror of :meth:`_encode_batch_from_norm_for_model`.
-
-        Keeps grad through ``model.encode`` so that downstream Δ∫E backprops
-        all the way to ``X_norm_batch``.
-        """
+        """Encode ``(S, D_global) → (S, n_active)`` keeping grad through ``model.encode``."""
         active_idx = torch.from_numpy(np.flatnonzero(active_mask)).long()
         if self.datamodule is None:
             return X_norm_batch.index_select(-1, active_idx)
@@ -839,15 +830,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         new_norm_batch_S: torch.Tensor,
         new_weights_S: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Tensor mirror of :meth:`delta_integrated_evidence_batched`.
-
-        Returns ``(S,)`` torch tensor; gradient flows from each Δ∫E[s] back
-        through the encoder into ``new_norm_batch_S``.
+        """Per-candidate Δ∫E with gradient flowing back into ``new_norm_batch_S``.
 
         Routes through ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint_torch``
-        with ``L=1`` (each candidate is a single added kernel). Other
-        estimator types fall back to the numpy path with a detach — gradient
-        is then unavailable for that estimator.
+        with ``L=1`` (each candidate is a single added kernel). Non-KernelField
+        estimators fall back to the numpy path + detach (gradient lost there).
         """
         from .evidence import KernelFieldEstimator
         S = int(new_norm_batch_S.shape[0])
@@ -896,12 +883,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         new_norm_batch_SL: torch.Tensor,
         new_weights_SL: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Tensor mirror of :meth:`delta_integrated_evidence_joint_batched`.
-
-        Returns ``(S,)`` torch tensor; each candidate adds L kernels jointly.
-        Gradient flows from each Δ∫E[s] back through the encoder into the
-        per-candidate ``new_norm_batch_SL[s]`` tensors.
-        """
+        """Per-candidate joint Δ∫E (each adds L kernels jointly), gradient-traversable."""
         from .evidence import KernelFieldEstimator
         S = int(new_norm_batch_SL.shape[0])
         if S == 0 or new_norm_batch_SL.numel() == 0:
@@ -1138,11 +1120,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         params_list: list[dict[str, Any]],
     ) -> list[dict[str, torch.Tensor]]:
-        """Tensor-output predict-from-params: gradient-traversable autoreg.
-
-        Mirrors ``_predict_from_params_batched`` (shape-grouped dispatch,
-        per-model autoreg) but operates in tensor land throughout.
-        """
+        """Per-candidate gradient-traversable autoreg → list of ``dict[feat, (*feat_shape) tensor]``."""
         self._assert_trained()
         S = len(params_list)
         if S == 0:
@@ -1208,22 +1186,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         recursive_specs: list[tuple[str, str, int, int]],
         feat_shapes: dict[str, tuple[int, ...]],
     ) -> dict[str, torch.Tensor]:
-        """Tensor-typed autoreg returning predictions per output feature.
+        """S-parallel autoreg → ``dict[feat, (S, *feat_shape) tensor]`` with autograd preserved.
 
-        Mirrors ``_predict_autoregressive_batched`` but autograd-friendly:
-          - **No long-lived in-place mutations.** Each cell builds its X via
-            ``x_norm_S.clone()`` + column overrides on the fresh clone — the
-            clone is independent of x_norm_S, so per-column writes don't
-            invalidate the autograd graph.
-          - **Per-cell predictions stored in a dict-of-dicts**
-            (``feat → {cell_flat → (S,) tensor}``). The output ``(S, *feat_shape)``
-            tensor is assembled via ``torch.stack`` at the end (out-of-place).
-          - Calls ``forward_pass(gradient_pass=True)`` so autograd flows
-            through the network.
-
-        Returns ``dict[feat, torch.Tensor (S, *feat_shape)]`` — no numpy
-        conversion at the API boundary. Within a shape group all candidates
-        share the same feat_shape (caller's contract).
+        Per cell: clone x_norm_S, override iterator + recursive columns
+        out-of-place, ``forward_pass(gradient_pass=True)``, store the (S,)
+        prediction tensor under its cell flat-index. Final feature tensors
+        are assembled via ``torch.stack`` so the autograd graph stays
+        connected across the whole trajectory.
+        Within a shape group all candidates share ``feat_shape`` — caller's
+        contract (typically enforced by shape-group dispatch upstream).
         """
         S, n_input = x_norm_S.shape
         shape = dim_info_list[0]['shape']
@@ -1391,21 +1362,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             batch_size: int | None = None,
             **kwargs
             ) -> DataModule:
-        """
-        Fine-tune models with new data (online learning mode).
-        
-        Uses existing normalization fit from training - does NOT refit normalization.
-        Only normalizes the new tuning data and calls model.tuning() for adaptation.
-        
-        Args:
-            exp_data: ExperimentData containing tuning data
-            start: Start index of new data
-            end: End index of new data
-            **kwargs: Additional tuning parameters passed to model.tuning()
-        
-        Returns:
-            Temporary DataModule used for tuning
-        """
+        """Fine-tune models on a slice of new experimental data, reusing the training-time normalisation."""
         dm = self._assert_trained()
 
         # Create a temporary Dataset with only the tuning experiment
@@ -1579,7 +1536,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
 
-        # Concatenate batches (commit 16b: now (X, y, cell_meta) 3-tuples — drop meta).
+        # Concatenate batches; drop cell_meta (third tuple element).
         X_list = [b[0] for b in batches]
         y_list = [b[1] for b in batches]
         X_split = torch.cat(X_list, dim=0)
@@ -1650,17 +1607,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_size: int = 1000,
         overlap: int = 0
     ) -> dict[str, np.ndarray]:
-        """
-        Predict dimensional features and populate exp_data.predicted_metric_arrays.
-        
-        Args:
-            exp_data: ExperimentData with parameters set (predicted_metric_arrays populated)
-            predict_from: Start position index for prediction (default: 0)
-            predict_to: End position index for prediction (default: None = predict all)
-            batch_size: Number of dimensional positions per batch (default: 1000)
-            overlap: Number of positions to overlap between consecutive batches (default: 0).
-                     Useful for context-aware models (e.g., transformers) that need continuity
-                     across batch boundaries. Must be < batch_size.
+        """Predict dimensional features for ``exp_data`` over a position-index range.
+
+        ``overlap`` lets context-aware models (e.g. transformers) carry continuity
+        across consecutive batches; must be < ``batch_size``.
         """
         # Extract parameters from exp_data
         params = exp_data.parameters.get_values_dict()
@@ -1998,12 +1948,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         batch_end: int,
         dim_info: dict[str, Any]
     ) -> tuple[dict[str, torch.Tensor], list[tuple[int, ...]]]:
-        """Build a tensor-dict feature batch (commit 16b: pandas-free).
+        """Build a per-column tensor-dict feature batch for ``prepare_input_from_tensor_dict``.
 
-        Mirrors ``Dataset.export_to_tensor_dict`` semantics: per-column
-        tensor with categoricals as long-index, numerics + iterator-derived
-        features as float. Caller (``_predict_and_store_batch_to_dict``)
-        passes the dict to ``DataModule.prepare_input_from_tensor_dict``.
+        Categoricals are emitted as long-index, numerics + iterator-derived
+        features as float — same semantics as ``Dataset.export_to_tensor_dict``.
         """
         shape = dim_info['shape']
         param_base = dim_info['param_base']

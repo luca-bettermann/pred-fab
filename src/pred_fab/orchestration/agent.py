@@ -202,12 +202,7 @@ class PfabAgent:
         def _perf_fn_tensor(
             params_dicts: list[dict[str, Any]],
         ) -> dict[str, torch.Tensor]:
-            """Tensor mirror of ``_perf_fn_batched``: returns ``dict[perf_code, (S,) tensor]``.
-
-            Gradient flows from each perf score back through
-            ``predict_for_calibration_tensor`` into any tensor-valued continuous
-            parameters in ``params_dicts``.
-            """
+            """Batched perf evaluation, gradient flowing back into any tensor-valued continuous params."""
             if not params_dicts:
                 return {}
             merged_list: list[dict[str, Any]] = []

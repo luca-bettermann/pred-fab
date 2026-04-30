@@ -53,12 +53,10 @@ def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
     n_kernels``, most kernels contribute negligibly and a sparse top-K
     gather wins. When ``n_active ≈ n_kernels``, dense is correct.
 
-    Returns:
-      ``"dense"``   — sum over all N kernels (regimes 1+2 from plan).
-      ``"knn"``     — sparse top-K gather (regime 3, stubbed in commit 4).
-      ``"cluster"`` — c-component summarisation (regime 4, stubbed in commit 4).
-
-    See ``IMPLEMENTATION_PLAN.md`` for the full table of `(D, σ, n)` cases.
+    Regimes:
+      ``"dense"``   — sum over all N kernels (always correct; only viable for small N).
+      ``"knn"``     — sparse top-K gather (currently stubbed → falls back to dense).
+      ``"cluster"`` — c-component summarisation (currently stubbed → falls back to dense).
     """
     # 5σ ball volume in D dims, capped to unit cube domain.
     v_5sigma = (pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1)
@@ -655,29 +653,14 @@ class KernelFieldEstimator(EvidenceEstimator):
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Tensor-typed mirror of ``integrated_evidence_perturbed_batched_joint``.
+        """Per-candidate joint Δ∫E ``(S,)`` with autograd flowing through ``new_centers_SL``.
 
-        Returns ``(S,)`` torch tensor with autograd flowing from each
-        candidate's ``E_new[s]`` back through ``new_centers_SL`` (and
-        ``new_weights_SL`` if ``requires_grad=True``). Used by 's
-        gradient-based acquisition optimiser (commit 5).
-
-        ``index_old.centers`` / ``.weights`` arrive as numpy from the (still
-        numpy-typed) ``KernelIndex``; converted to torch at call entry. Old
-        kernels don't typically need gradients (they're frozen training-data
-        encodings). New candidates may need grad — caller's choice.
-
-        **Regime dispatch** (σ/D-aware): ``_choose_kde_regime(n_kernels, σ, D)``
-        selects between dense / knn / cluster algorithms. Commit 4 ships the
-        dense regime only; knn / cluster raise ``NotImplementedError`` with
-        a pointer to the follow-up commits. Logged at INFO when a non-dense
-        regime would be selected — gives empirical signal on when to ship
-        commit 4b.
-
-        Math is identical to the numpy variant
-        ``integrated_evidence_perturbed_batched_joint``; the difference is
-        op set (``torch.exp`` / ``torch.where`` / etc.) and the autograd
-        graph it produces.
+        ``index_old.centers`` / ``.weights`` come from the numpy-typed
+        ``KernelIndex`` and are converted at call entry; old kernels are
+        treated as constants (no grad), new candidates carry whatever
+        ``requires_grad`` they were given. Regime dispatch via
+        ``_choose_kde_regime`` selects dense / knn / cluster; only dense is
+        implemented — knn / cluster log at INFO and fall back.
         """
         S = int(new_centers_SL.shape[0])
         if S == 0:
@@ -691,14 +674,14 @@ class KernelFieldEstimator(EvidenceEstimator):
         if regime == "knn":
             _logger.info(
                 "KDE regime 'knn' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
-                "implemented; ship commit 4b. Falling back to dense.",
+                "implemented. Falling back to dense.",
                 n_old, sigma, D,
             )
             regime = "dense"
         elif regime == "cluster":
             _logger.info(
                 "KDE regime 'cluster' selected (n_kernels=%d, σ=%.4f, D=%d) — not yet "
-                "implemented; ship commit 4c. Falling back to dense.",
+                "implemented. Falling back to dense.",
                 n_old, sigma, D,
             )
             regime = "dense"
@@ -713,12 +696,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Dense-regime implementation: sum over all old kernels per probe.
+        """Dense-regime per-candidate joint Δ∫E: sum over all old kernels per probe.
 
-        Mirrors the numpy ``integrated_evidence_perturbed_batched_joint``
-        body in torch ops. All tensor moves target ``new_centers_SL.device``
-        — when the caller has placed inputs on GPU, the entire dense KDE
-        compute runs there end-to-end.
+        All tensor moves target ``new_centers_SL.device`` — when the caller
+        has placed inputs on GPU, the entire compute runs there end-to-end.
         """
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])

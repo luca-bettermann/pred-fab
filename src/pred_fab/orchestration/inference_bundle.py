@@ -33,14 +33,7 @@ class InferenceBundle:
         normalization_state: dict[str, Any],
         schema_dict: dict[str, Any]
     ):
-        """
-        Initialize bundle with models and metadata.
-        
-        Args:
-            prediction_models: List of trained prediction model instances
-            normalization_state: Normalization parameters from DataModule
-            schema_dict: Dataset schema for input validation
-        """
+        """Bundle trained models with the normalisation state and schema needed for inference."""
         self.prediction_models = prediction_models
         self.normalization_state = normalization_state
         self.schema = schema_dict

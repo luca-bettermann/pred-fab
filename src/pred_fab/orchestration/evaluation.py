@@ -92,24 +92,12 @@ class EvaluationSystem(BaseOrchestrationSystem):
         features_dicts_S: list[dict[str, torch.Tensor]],
         parameters_list: list[Parameters],
     ) -> dict[str, torch.Tensor]:
-        """Tensor-typed batched eval. Returns ``{perf_code: torch.Tensor (S,)}``.
+        """Batched tensor eval over S candidates → ``{perf_code: (S,) tensor}``.
 
-        Mirrors ``_evaluate_feature_dict_batched`` but routes per eval_model
-        through ``compute_performance_tensor`` (gradient-traversable) instead
-        of ``compute_performance_batched`` (numpy). Returns a flat dict
-        keyed by performance code (not a per-candidate list of dicts), since
-        gradient acquisition treats the per-candidate axis as the batch dim
-        and reduces over it via mean/sum elsewhere.
-
-        Each ``features_dicts_S[s][feat_code]`` is the per-candidate
-        per-cell prediction tensor of shape ``(*feat_shape,)``. Internally
-        flattened to ``(S, n_rows)`` for the eval model. Gradient flows
-        from the output back through the per-feat tensor inputs to whatever
-        leaf produced them (typically a params tensor in ).
-
-        Candidates missing a required feature are excluded from that
-        eval_model's batch — their entry in the output is filled with NaN
-        (the gradient-aware equivalent of "no perf score").
+        Per-candidate per-cell prediction tensors are flattened to ``(S, n_rows)``
+        for ``compute_performance_tensor``; gradient flows from the perf scores
+        back through the prediction tensors. Candidates missing a required
+        feature get NaN at their slot in the output.
         """
         S = len(features_dicts_S)
         result: dict[str, torch.Tensor] = {}
