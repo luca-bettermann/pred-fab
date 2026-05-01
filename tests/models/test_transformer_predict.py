@@ -33,8 +33,8 @@ class _LayerTransformer(TransformerModel):
     EPOCHS = 30  # keep fast for unit test
 
     @property
-    def sequence_axis_code(self) -> str:
-        return "n_layers"
+    def sequence_axis_code(self) -> tuple[str, ...]:
+        return ("n_layers",)
 
     @property
     def input_parameters(self):
@@ -194,13 +194,13 @@ def test_validate_schema_compatibility_rejects_unknown_axis(tmp_path):
 
     class _BadAxis(_LayerTransformer):
         @property
-        def sequence_axis_code(self) -> str:
-            return "not_a_real_axis"
+        def sequence_axis_code(self) -> tuple[str, ...]:
+            return ("not_a_real_axis",)
 
     model = _BadAxis(build_test_logger(tmp_path))
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="does not resolve"):
+    with pytest.raises(ValueError, match="do not resolve"):
         model._validate_schema_compatibility(schema)
 
 
@@ -223,3 +223,134 @@ def test_validate_schema_compatibility_rejects_missing_property(tmp_path):
 
     with pytest.raises(ValueError, match="must implement the `sequence_axis_code`"):
         model._validate_schema_compatibility(schema)
+
+
+# === multi-axis encoder ===================================================
+
+
+def test_transformer_net_forward_multi_axis_shapes_match():
+    """``_TransformerNet`` with ``n_axes=2`` accepts (L, 2) axis_indices and produces (B, L, n_output)."""
+    from pred_fab.models.transformer import _TransformerNet
+
+    torch.manual_seed(0)
+    net = _TransformerNet(
+        n_input=3, n_output=2, d_model=8, n_heads=2, n_layers=1,
+        dim_ff=16, dropout=0.0, max_seq_len=16, n_axes=2,
+    )
+    net.eval()
+
+    # 2-axis grid (3, 2) → L = 6 flat positions, axis_indices = unravel(k, (3, 2)).
+    L, n_axes = 6, 2
+    axis_indices = torch.tensor(
+        [list(np.unravel_index(k, (3, 2))) for k in range(L)], dtype=torch.long,
+    )
+    x = torch.randn(2, L, 3)  # (B=2, L=6, n_input=3)
+    out = net(x, axis_indices)
+    assert out.shape == (2, L, 2)
+    assert torch.isfinite(out).all()
+
+
+def test_transformer_net_forward_multi_axis_requires_axis_indices():
+    """``_TransformerNet`` with ``n_axes>=2`` raises if axis_indices is None."""
+    from pred_fab.models.transformer import _TransformerNet
+
+    net = _TransformerNet(
+        n_input=3, n_output=1, d_model=8, n_heads=2, n_layers=1,
+        dim_ff=16, dropout=0.0, max_seq_len=16, n_axes=2,
+    )
+    net.eval()
+    x = torch.randn(1, 4, 3)
+    with pytest.raises(ValueError, match="axis_indices required for multi-axis"):
+        net(x)
+
+
+# === multi-axis training =================================================
+
+
+class _GridTransformer(_LayerTransformer):
+    """Multi-axis transformer over (n_layers, n_segments) — flattened grid."""
+
+    @property
+    def sequence_axis_code(self) -> tuple[str, ...]:
+        return ("n_layers", "n_segments")
+
+
+def test_train_multi_axis_with_seq_axis_sizes(tmp_path):
+    """Multi-axis training succeeds when seq_axis_sizes kwarg is provided."""
+    model = _GridTransformer(build_test_logger(tmp_path))
+    n_layers, n_segments = 3, 2
+    L = n_layers * n_segments
+    n_input = 5
+    X_seq = torch.randn(2, L, n_input)
+    y_seq = torch.randn(2, L, 1)
+    model.train([(X_seq, y_seq)], [], seq_axis_sizes=(n_layers, n_segments))
+    assert model._is_trained
+
+
+def test_train_multi_axis_without_seq_axis_sizes_raises(tmp_path):
+    """Multi-axis training without seq_axis_sizes kwarg raises a clear error."""
+    model = _GridTransformer(build_test_logger(tmp_path))
+    X_seq = torch.randn(1, 6, 4)
+    y_seq = torch.randn(1, 6, 1)
+    with pytest.raises(ValueError, match="requires `seq_axis_sizes`"):
+        model.train([(X_seq, y_seq)], [])
+
+
+def test_train_multi_axis_seq_axis_sizes_mismatch_raises(tmp_path):
+    """Multi-axis training raises when prod(seq_axis_sizes) != L."""
+    model = _GridTransformer(build_test_logger(tmp_path))
+    X_seq = torch.randn(1, 6, 4)  # L=6
+    y_seq = torch.randn(1, 6, 1)
+    with pytest.raises(ValueError, match=r"product != batch L"):
+        model.train([(X_seq, y_seq)], [], seq_axis_sizes=(3, 3))  # prod=9 != 6
+
+
+def test_train_multi_axis_then_predict_grid_shape(tmp_path):
+    """After multi-axis training, predict reshapes back to (n_layers, n_segments) per output."""
+    dm, schema = _build_dm(tmp_path, n_layers=3)
+
+    # Reframe schema: same _build_dm fixture provides ('n_layers', 'n_segments') domain
+    # but n_segments=1; we need n_segments>=2. Synthesize a multi-axis dim_info manually.
+    n_layers, n_segments = 3, 2
+    L = n_layers * n_segments
+    grid_di = {
+        'shape': (n_layers, n_segments),
+        'dim_iterators': ['layer_idx', 'segment_idx'],
+        'dim_codes_ordered': ['n_layers', 'n_segments'],
+        'param_base': {},
+        'iterator_feats': [],
+        'total_positions': L,
+    }
+
+    model = _GridTransformer(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    n_input = len(dm.input_columns)
+    X_seq = torch.randn(2, L, n_input)
+    y_seq = torch.randn(2, L, 1)
+    model.train([(X_seq, y_seq)], [], seq_axis_sizes=(n_layers, n_segments))
+
+    params_list = [{"p1": 0.4, "n_layers": n_layers, "n_segments": n_segments}]
+    out = model.predict(params_list, dm, [grid_di], {})
+    assert out[0]["src"].shape == (n_layers, n_segments)
+    assert torch.isfinite(out[0]["src"]).all()
+
+
+def test_build_transformer_train_batches_returns_tuple(tmp_path):
+    """``_build_transformer_train_batches`` returns ``(batches, seq_axis_sizes)`` — empty-split smoke check."""
+    from pred_fab.orchestration.prediction import PredictionSystem
+    from pred_fab.utils import LocalData
+
+    dm, schema = _build_dm(tmp_path, n_layers=4)
+    dm._split_codes[SplitType.VAL] = []  # empty split → early return path
+    psys = PredictionSystem(
+        logger=build_test_logger(tmp_path),
+        schema=schema,
+        local_data=LocalData(str(tmp_path)),
+    )
+    psys.datamodule = dm
+
+    model = _GridTransformer(build_test_logger(tmp_path))
+    batches, seq_axis_sizes = psys._build_transformer_train_batches(model, SplitType.VAL)
+    assert batches == []
+    assert seq_axis_sizes == ()

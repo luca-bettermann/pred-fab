@@ -940,8 +940,8 @@ class DataModule:
                 f"does not match params_list length {S}."
             )
 
-        seq_axis_code = getattr(model, "sequence_axis_code", None)
-        if seq_axis_code is None:
+        seq_axis_codes = getattr(model, "sequence_axis_code", None)
+        if seq_axis_codes is None:
             raise ValueError(
                 f"build_sequence_batch requires the model to declare "
                 f"`sequence_axis_code`; {model.__class__.__name__} does not."
@@ -949,21 +949,31 @@ class DataModule:
 
         di_first = dim_info_list[0]
         dim_codes = di_first.get('dim_codes_ordered', [])
-        if seq_axis_code not in dim_codes:
+        unresolved = [c for c in seq_axis_codes if c not in dim_codes]
+        if unresolved:
             raise ValueError(
-                f"sequence_axis_code='{seq_axis_code}' is not in this model's "
+                f"sequence_axis_code entries {unresolved} not in this model's "
                 f"domain axes {dim_codes}."
             )
-        seq_axis_idx = dim_codes.index(seq_axis_code)
+        seq_axis_indices = [dim_codes.index(c) for c in seq_axis_codes]
+        seq_axis_idx_set = set(seq_axis_indices)
 
         shape = di_first['shape']
-        L = shape[seq_axis_idx]
-        other_axis_indices = [i for i in range(len(shape)) if i != seq_axis_idx]
+        seq_axis_sizes = [shape[i] for i in seq_axis_indices]
+        L = int(np.prod(seq_axis_sizes)) if seq_axis_sizes else 1
+        other_axis_indices = [i for i in range(len(shape)) if i not in seq_axis_idx_set]
         other_sizes = [shape[i] for i in other_axis_indices]
         n_other = int(np.prod(other_sizes)) if other_sizes else 1
         S_eff = S * n_other
 
-        # Pre-compute per-other-coord indices in original-axis ordering.
+        # Pre-compute per-position seq coords (L, n_seq_axes) and per-other-coord
+        # indices (n_other, n_other_axes).
+        if seq_axis_sizes:
+            seq_coords_arr = np.empty((L, len(seq_axis_sizes)), dtype=np.int64)
+            for k in range(L):
+                seq_coords_arr[k] = np.unravel_index(k, seq_axis_sizes)
+        else:
+            seq_coords_arr = np.zeros((1, 0), dtype=np.int64)
         if other_sizes:
             other_coords_arr = np.empty((n_other, len(other_sizes)), dtype=np.int64)
             for j in range(n_other):
@@ -985,10 +995,12 @@ class DataModule:
                 continue
             col_idx = code_to_idx[feat_code]
             stats = self._parameter_stats.get(feat_code)
-            if axis_pos == seq_axis_idx:
-                # Sequence axis: per-position pos / (L-1).
+            if axis_pos in seq_axis_idx_set:
+                # Sequence axis: per-position value depends on the seq_coord
+                # at this axis_pos — find which seq-axis position it is.
+                p_seq = seq_axis_indices.index(axis_pos)
                 for pos in range(L):
-                    raw_val = float(pos) / max(L - 1, 1)
+                    raw_val = float(seq_coords_arr[pos, p_seq]) / max(size - 1, 1)
                     if stats is not None:
                         normed = float(self._apply_normalization_tensor(
                             torch.tensor(raw_val, dtype=X_seq.dtype), stats,

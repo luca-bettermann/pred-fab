@@ -231,7 +231,7 @@ def test_sequence_batch_shape(tmp_path):
         dim_iters=["layer_idx", "segment_idx"],
     )
 
-    model = SimpleNamespace(sequence_axis_code="n_layers")
+    model = SimpleNamespace(sequence_axis_code=("n_layers",))
     X_seq = dm.build_sequence_batch(model, params_list, [di, di])
 
     assert X_seq.shape == (2, 4, len(dm.input_columns))
@@ -247,7 +247,7 @@ def test_sequence_batch_position_encoding(tmp_path):
         dim_codes=["n_layers", "n_segments"],
         dim_iters=["layer_idx", "segment_idx"],
     )
-    model = SimpleNamespace(sequence_axis_code="n_layers")
+    model = SimpleNamespace(sequence_axis_code=("n_layers",))
     X_seq = dm.build_sequence_batch(model, params_list, [di])
 
     layer_col = dm.input_columns.index("layer_idx_pos")
@@ -273,7 +273,7 @@ def test_sequence_batch_rejects_missing_axis(tmp_path):
         dim_codes=["n_layers", "n_segments"],
         dim_iters=["layer_idx", "segment_idx"],
     )
-    bad_model = SimpleNamespace(sequence_axis_code="not_a_real_axis")
+    bad_model = SimpleNamespace(sequence_axis_code=("not_a_real_axis",))
     with pytest.raises(ValueError, match="not in this model's domain axes"):
         dm.build_sequence_batch(bad_model, params_list, [di])
 
@@ -295,7 +295,7 @@ def test_sequence_batch_multi_axis_segments_become_parallel_sequences(tmp_path):
         dim_codes=["n_layers", "n_segments"],
         dim_iters=["layer_idx", "segment_idx"],
     )
-    model = SimpleNamespace(sequence_axis_code="n_layers")
+    model = SimpleNamespace(sequence_axis_code=("n_layers",))
     X_seq = dm.build_sequence_batch(model, params_list, [di, di])
 
     # 2 candidates × 3 segments = 6 batch rows; L = 4 layers.
@@ -314,6 +314,53 @@ def test_sequence_batch_multi_axis_segments_become_parallel_sequences(tmp_path):
 def test_sequence_batch_empty_inputs(tmp_path):
     """Empty params_list returns a (0, 0, n_input) tensor."""
     dm = _build_dm(tmp_path)
-    model = SimpleNamespace(sequence_axis_code="n_layers")
+    model = SimpleNamespace(sequence_axis_code=("n_layers",))
     X_seq = dm.build_sequence_batch(model, [], [])
     assert X_seq.shape == (0, 0, len(dm.input_columns))
+
+
+def test_sequence_batch_multi_axis_flattens_listed_axes(tmp_path):
+    """Multi-axis ``sequence_axis_code`` flattens listed axes into one sequence.
+
+    For shape (n_layers=4, n_segments=3) with ``sequence_axis_code=("n_layers","n_segments")``,
+    output shape is (S, L=12, n_input) — no parallel dim. Iterator columns at
+    flat pos k carry the per-axis coord (unravel(k, (4,3))) normalised by axis size.
+    """
+    dm = _build_dm(tmp_path, n_layers=4, n_segments=3)
+    params_list = [{"p1": 0.5, "n_layers": 4, "n_segments": 3}]
+    di = _dim_info(
+        shape=(4, 3),
+        iterator_feats=[("layer_idx_pos", 0, 4), ("segment_idx_pos", 1, 3)],
+        dim_codes=["n_layers", "n_segments"],
+        dim_iters=["layer_idx", "segment_idx"],
+    )
+    model = SimpleNamespace(sequence_axis_code=("n_layers", "n_segments"))
+    X_seq = dm.build_sequence_batch(model, params_list, [di])
+
+    # Both axes flattened → L = 4 * 3 = 12, S = 1, no parallel dim.
+    assert X_seq.shape == (1, 12, len(dm.input_columns))
+
+    layer_col = dm.input_columns.index("layer_idx_pos")
+    segment_col = dm.input_columns.index("segment_idx_pos")
+    layer_stats = dm._parameter_stats.get("layer_idx_pos")
+    segment_stats = dm._parameter_stats.get("segment_idx_pos")
+
+    # At flat pos k, coord = unravel(k, (4, 3)). Spot-check pos 0, 5, 11.
+    for k in (0, 5, 11):
+        layer_coord, segment_coord = np.unravel_index(k, (4, 3))
+        layer_raw = float(layer_coord) / 3.0
+        segment_raw = float(segment_coord) / 2.0
+        if layer_stats is not None:
+            expected_layer = float(dm._apply_normalization_tensor(
+                torch.tensor(layer_raw, dtype=torch.float32), layer_stats,
+            ).item())
+        else:
+            expected_layer = layer_raw
+        if segment_stats is not None:
+            expected_segment = float(dm._apply_normalization_tensor(
+                torch.tensor(segment_raw, dtype=torch.float32), segment_stats,
+            ).item())
+        else:
+            expected_segment = segment_raw
+        assert X_seq[0, k, layer_col].item() == pytest.approx(expected_layer, abs=1e-6)
+        assert X_seq[0, k, segment_col].item() == pytest.approx(expected_segment, abs=1e-6)

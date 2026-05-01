@@ -199,8 +199,12 @@ class PredictionSystem(BaseOrchestrationSystem):
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
 
         if isinstance(model, TransformerModel):
-            model_train_batches = self._build_transformer_train_batches(model, SplitType.TRAIN)
-            model_val_batches = self._build_transformer_train_batches(model, SplitType.VAL)
+            model_train_batches, seq_axis_sizes = self._build_transformer_train_batches(
+                model, SplitType.TRAIN,
+            )
+            model_val_batches, _ = self._build_transformer_train_batches(model, SplitType.VAL)
+            if seq_axis_sizes:
+                kwargs["seq_axis_sizes"] = seq_axis_sizes
         else:
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
@@ -214,7 +218,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         model: IPredictionModel,
         split: SplitType,
-    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    ) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], tuple[int, ...]]:
         """Build (B, L, n_input) / (B, L, n_output) batches per training experiment.
 
         For each experiment in the split:
@@ -225,18 +229,23 @@ class PredictionSystem(BaseOrchestrationSystem):
              tensor export, reshape to ``(n_other, L, n_output)``.
         Each experiment becomes one ``(X_seq, y_seq)`` batch entry; the
         concatenation across experiments happens inside ``model.train``.
+
+        Returns ``(batches, seq_axis_sizes)``. ``seq_axis_sizes`` is the per-
+        sequence-axis size tuple shared across experiments (uniform L is
+        already required for cat). Empty tuple when no batches.
         """
         dm = self._assert_trained()
         codes = dm.get_split_codes(split)
         if not codes:
-            return []
+            return [], ()
 
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
         output_indices = [dm.output_columns.index(f) for f in model.outputs]
         output_indices_t = torch.as_tensor(output_indices, dtype=torch.long)
 
-        seq_axis_code = model.sequence_axis_code  # type: ignore[attr-defined]
+        seq_codes: tuple[str, ...] = model.sequence_axis_code  # type: ignore[attr-defined]
+        first_seq_axis_sizes: tuple[int, ...] | None = None
 
         out: list[tuple[torch.Tensor, torch.Tensor]] = []
         for code in codes:
@@ -245,11 +254,23 @@ class PredictionSystem(BaseOrchestrationSystem):
             dim_info = self._get_model_dim_info(model, params)
             dim_codes = dim_info['dim_codes_ordered']
             shape = dim_info['shape']
-            if not shape or seq_axis_code not in dim_codes:
+            if not shape or any(c not in dim_codes for c in seq_codes):
                 continue
-            seq_axis_idx = dim_codes.index(seq_axis_code)
-            L = shape[seq_axis_idx]
-            other_axis_indices = [i for i in range(len(shape)) if i != seq_axis_idx]
+
+            seq_axis_indices = [dim_codes.index(c) for c in seq_codes]
+            seq_axis_idx_set = set(seq_axis_indices)
+            seq_axis_sizes = [shape[i] for i in seq_axis_indices]
+            seq_axis_sizes_t = tuple(int(s) for s in seq_axis_sizes)
+            if first_seq_axis_sizes is None:
+                first_seq_axis_sizes = seq_axis_sizes_t
+            elif seq_axis_sizes_t != first_seq_axis_sizes:
+                raise ValueError(
+                    f"_build_transformer_train_batches: experiments in the "
+                    f"same split must share seq_axis_sizes; got "
+                    f"{seq_axis_sizes_t} vs {first_seq_axis_sizes}.",
+                )
+            L = int(np.prod(seq_axis_sizes)) if seq_axis_sizes else 1
+            other_axis_indices = [i for i in range(len(shape)) if i not in seq_axis_idx_set]
             other_sizes = [shape[i] for i in other_axis_indices]
             n_other = int(np.prod(other_sizes)) if other_sizes else 1
 
@@ -269,20 +290,19 @@ class PredictionSystem(BaseOrchestrationSystem):
             # cell_meta rows are in C-order over `shape` (dim_codes_ordered).
             n_rows = exported.n_rows
             y_cols: list[torch.Tensor] = []
-            for f_idx, feat in enumerate(model.outputs):
+            for feat in model.outputs:
                 col_t = exported.y.get(feat, torch.zeros(n_rows, dtype=torch.float32))
                 stats = dm._feature_stats.get(feat)
                 if stats is not None:
                     col_t = dm._apply_normalization_tensor(col_t.to(dtype=torch.float32), stats)
                 y_cols.append(col_t.to(dtype=torch.float32))
-            # Stack into (n_rows, n_out), reshape to canonical shape, then permute
-            # to (n_other, L, n_out): for each cell (coord), find seq_pos, other_idx.
             y_flat = torch.stack(y_cols, dim=-1)  # (n_rows, n_out)
             n_out = y_flat.shape[-1]
             y_seq = torch.zeros((n_other, L, n_out), dtype=torch.float32)
             for cell_flat in range(n_rows):
                 coord = np.unravel_index(cell_flat, shape)
-                seq_pos = int(coord[seq_axis_idx])
+                seq_coord = tuple(int(coord[i]) for i in seq_axis_indices)
+                seq_pos = int(np.ravel_multi_index(seq_coord, seq_axis_sizes)) if seq_axis_sizes else 0
                 if other_sizes:
                     other_coord = tuple(int(coord[i]) for i in other_axis_indices)
                     other_idx = int(np.ravel_multi_index(other_coord, other_sizes))
@@ -291,7 +311,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 y_seq[other_idx, seq_pos, :] = y_flat[cell_flat]
 
             out.append((X_seq, y_seq))
-        return out
+        return out, (first_seq_axis_sizes or ())
 
     def _compute_model_cat_cardinalities(self, model: IPredictionModel) -> dict[int, int]:
         """Translate DataModule cat cardinalities into model-relative col indices.

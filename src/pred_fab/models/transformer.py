@@ -7,20 +7,36 @@ Usage:
         N_LAYERS = 2
 
         @property
+        def sequence_axis_code(self) -> tuple[str, ...]:
+            return ("n_layers",)               # single-axis (length-1 tuple)
+            # return ("n_layers", "n_segments")  # multi-axis flattened sequence
+
+        @property
         def input_parameters(self) -> list[str]: return ["param_1", ...]
         @property
         def input_features(self) -> list[str]: return []
         @property
         def outputs(self) -> list[str]: return ["feat_a"]
-        @property
-        def sequence_axis_code(self) -> str: return "n_layers"
 
-The transformer sees the full sequence (all positions along ``sequence_axis_code``)
-in one forward; causal attention enforces the autoregressive prediction
-contract — position k can attend to positions 0..k-1 but not k+1..L-1.
+Single-axis vs multi-axis trade-off:
+
+- **Single axis** ``("n_layers",)``: non-listed axes (segments) become parallel
+  batches. Sequence length L = n_layers; attention cost O(L²) per parallel
+  batch. Causal attention propagates only along the listed axis. Cross-axis
+  dependencies are NOT seen by attention.
+- **Multi-axis** ``("n_layers", "n_segments")``: listed axes flatten into one
+  sequence in declared order (C-order). L_total = product of axis sizes;
+  attention cost O(L_total²) per candidate. Cross-axis dependencies ARE seen
+  — every cell can attend to any prior cell across all listed axes. Per-axis
+  additive position embeddings.
+
+Pick multi-axis when grid-wide attention is wanted and the total cell
+count is manageable. Pick single-axis when one axis is the dominant
+recursion direction and cross-axis cells are expected to be roughly
+independent (cheaper, more data-efficient under that assumption).
 
 Recursion is **structural**, not column-by-column. The user declares which
-schema axis is the sequence axis via ``sequence_axis_code``; causal
+schema axes are the sequence axes via ``sequence_axis_code``; causal
 attention sees prior positions' hidden states natively, so no explicit
 prev-position columns are required (and none are supported).
 """
@@ -58,15 +74,18 @@ class TransformerModel(IPredictionModel):
     SEED: int = 0
 
     @property
-    def sequence_axis_code(self) -> str:
-        """Schema axis name to sequence over (e.g. ``"n_layers"``).
+    def sequence_axis_code(self) -> tuple[str, ...]:
+        """Schema axes to sequence over, in flatten order (C-order).
 
-        Subclasses must override. The framework uses this to build per-candidate
-        ``(L, n_input)`` sequences along the named axis when calling
-        ``predict_sequence``.
+        Length-1 tuple = single-axis sequence (non-listed axes become parallel
+        batches). Length-N tuple = multi-axis flattened sequence; listed axes
+        join into one sequence of length ``prod(axis_sizes)`` with per-axis
+        additive position embeddings; remaining axes (if any) remain parallel.
+
+        Subclasses must override.
         """
         raise NotImplementedError(
-            "Subclasses must declare the sequence axis via the "
+            "Subclasses must declare the sequence axes via the "
             "sequence_axis_code property.",
         )
 
@@ -95,6 +114,7 @@ class TransformerModel(IPredictionModel):
             dim_ff=self.DIM_FEEDFORWARD,
             dropout=self.DROPOUT,
             max_seq_len=self.MAX_SEQ_LEN,
+            n_axes=len(self.sequence_axis_code),
         )
 
     # ------------------------------------------------------------------
@@ -110,11 +130,14 @@ class TransformerModel(IPredictionModel):
     ) -> list[dict[str, torch.Tensor]]:
         """Per-candidate sequence-batched prediction → ``list[dict[feat, (*feat_shape) tensor]]``.
 
-        Builds ``(S × n_other, L, n_input)`` via ``dm.build_sequence_batch``
-        — each non-sequence axis becomes a parallel sequence in the batch
-        dim. After the encoder forward, we reshape per-(s, feat) to the
-        full ``dim_info['shape']`` (with the sequence axis in the position
-        ``dim_codes_ordered.index(sequence_axis_code)``).
+        Single-axis: ``dm.build_sequence_batch`` produces ``(S × n_other, L, n_input)``
+        where ``n_other`` is the product of non-sequence-axis sizes. Multi-axis:
+        all listed axes are flattened into ``L = product(seq_axis_sizes)``;
+        non-listed axes (if any) remain parallel-batched as ``n_other``.
+
+        Per-axis additive position embeddings encode each cell's coord along
+        every listed sequence axis; causal attention propagates across the
+        joint flattened sequence.
 
         ``predictions_so_far`` is unused — causal attention sees prior
         positions' hidden states natively.
@@ -137,12 +160,29 @@ class TransformerModel(IPredictionModel):
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
         X_model = X_seq.index_select(2, input_indices_t)  # (S_eff, L, n_model_input)
 
+        # Compute per-position axis indices (L, n_seq_axes) — same for all
+        # batch rows since all candidates in a calibration call share shape.
+        di_first = dim_info_list[0]
+        dim_codes = di_first['dim_codes_ordered']
+        shape = di_first['shape']
+        seq_axis_codes = self.sequence_axis_code
+        seq_axis_indices = [dim_codes.index(c) for c in seq_axis_codes if c in dim_codes]
+        seq_axis_sizes = [shape[i] for i in seq_axis_indices]
+        L = int(np.prod(seq_axis_sizes)) if seq_axis_sizes else 1
+        if seq_axis_sizes:
+            axis_indices = torch.empty((L, len(seq_axis_sizes)), dtype=torch.long)
+            for k in range(L):
+                coord = np.unravel_index(k, seq_axis_sizes)
+                for i in range(len(seq_axis_sizes)):
+                    axis_indices[k, i] = int(coord[i])
+        else:
+            axis_indices = torch.zeros((1, 1), dtype=torch.long)
+
         if not self._is_trained or self._model is None:
             S_eff = int(X_seq.shape[0])
-            L = int(X_seq.shape[1])
             y_norm_seq = torch.zeros((S_eff, L, len(self.outputs)), dtype=torch.float32)
         else:
-            y_norm_seq = self._model(X_model.to(dtype=torch.float32))
+            y_norm_seq = self._model(X_model.to(dtype=torch.float32), axis_indices)
 
         # Denormalise via flatten/reshape — affine, gradient-clean.
         S_eff = int(y_norm_seq.shape[0])
@@ -152,12 +192,11 @@ class TransformerModel(IPredictionModel):
         y_denorm_flat = dm.denormalize_values(y_norm_flat, self.outputs)
         y_denorm_seq = y_denorm_flat.reshape(S_eff, L, n_out)
 
-        # Reshape per-(s, feat) to feat_shape. n_other = S_eff / S; non-sequence
-        # axes are in the same order as dim_codes_ordered (minus seq_axis).
-        di_first = dim_info_list[0]
-        dim_codes = di_first['dim_codes_ordered']
-        seq_axis_code = self.sequence_axis_code
-        seq_axis_idx = dim_codes.index(seq_axis_code) if seq_axis_code in dim_codes else 0
+        # Reshape per-(s, feat) → feat_shape. Cell (multi-axis coord) maps to
+        # (batch_row=s*n_other+other_idx, seq_pos=ravel(seq_coords)).
+        other_axis_indices = [i for i in range(len(shape)) if i not in seq_axis_indices]
+        other_sizes = [shape[i] for i in other_axis_indices]
+        n_other = int(np.prod(other_sizes)) if other_sizes else 1
 
         out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
         for s in range(S):
@@ -167,22 +206,19 @@ class TransformerModel(IPredictionModel):
                     out[s][feat] = y_denorm_seq[s, 0, f_idx].reshape(())
                 continue
 
-            other_axis_indices = [i for i in range(len(feat_shape)) if i != seq_axis_idx]
-            other_sizes_s = [feat_shape[i] for i in other_axis_indices]
-            n_other_s = int(np.prod(other_sizes_s)) if other_sizes_s else 1
             n_total = int(np.prod(feat_shape))
-
             for f_idx, feat in enumerate(self.outputs):
                 slots: list[torch.Tensor] = []
                 for cell_flat in range(n_total):
                     coord = np.unravel_index(cell_flat, feat_shape)
-                    seq_pos = int(coord[seq_axis_idx])
-                    if other_sizes_s:
+                    seq_coord = tuple(int(coord[i]) for i in seq_axis_indices)
+                    seq_pos = int(np.ravel_multi_index(seq_coord, seq_axis_sizes)) if seq_axis_sizes else 0
+                    if other_sizes:
                         other_coord = tuple(int(coord[i]) for i in other_axis_indices)
-                        other_idx = int(np.ravel_multi_index(other_coord, other_sizes_s))
+                        other_idx = int(np.ravel_multi_index(other_coord, other_sizes))
                     else:
                         other_idx = 0
-                    batch_idx = s * n_other_s + other_idx
+                    batch_idx = s * n_other + other_idx
                     slots.append(y_denorm_seq[batch_idx, seq_pos, f_idx])
                 out[s][feat] = torch.stack(slots, dim=0).reshape(feat_shape)
         return out
@@ -191,14 +227,17 @@ class TransformerModel(IPredictionModel):
         """Per-row forward — calls the encoder with L=1.
 
         Provided for the non-sequence call sites (KDE encode probe, etc.).
-        Real sequence prediction goes through ``predict``.
+        Real sequence prediction goes through ``predict``. With L=1 we use
+        position-0 embeddings on every axis (axis_indices = zeros).
         """
         if not self._is_trained or self._model is None:
             return torch.zeros((X.shape[0], len(self.outputs)), dtype=torch.float32)
         ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
         with ctx:
             x_seq = X.unsqueeze(1).to(dtype=torch.float32)  # (B, 1, n_input)
-            return self._model(x_seq)[:, 0, :]
+            n_axes = len(self.sequence_axis_code)
+            axis_indices = torch.zeros((1, n_axes), dtype=torch.long)
+            return self._model(x_seq, axis_indices)[:, 0, :]
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         """Penultimate-layer activations for KDE — input projection at position 0.
@@ -232,6 +271,10 @@ class TransformerModel(IPredictionModel):
         inference forward passes are identical, so there's no exposure-bias
         train/inference mismatch to correct.
 
+        ``seq_axis_sizes`` (kwarg) is the per-axis decomposition of L —
+        required for multi-axis (``n_axes >= 2``) so axis_indices can be
+        computed unambiguously; defaults to ``(L,)`` for single-axis.
+
         ``epoch_callback`` is accepted for IPredictionModel-train signature
         compatibility but not invoked — sequence-form SS would require y to
         feed back as input, which this encoder design avoids by construction.
@@ -251,6 +294,36 @@ class TransformerModel(IPredictionModel):
             )
         n_input = int(X_full.shape[-1])
         n_output = int(y_full.shape[-1])
+        L = int(X_full.shape[1])
+        n_axes = len(self.sequence_axis_code)
+
+        seq_axis_sizes = kwargs.get("seq_axis_sizes")
+        if seq_axis_sizes is None:
+            if n_axes == 1:
+                seq_axis_sizes = (L,)
+            else:
+                raise ValueError(
+                    f"TransformerModel.train: multi-axis transformer "
+                    f"(n_axes={n_axes}) requires `seq_axis_sizes` kwarg "
+                    f"so axis_indices can be unambiguously decomposed.",
+                )
+        seq_axis_sizes = tuple(int(s) for s in seq_axis_sizes)
+        if len(seq_axis_sizes) != n_axes:
+            raise ValueError(
+                f"seq_axis_sizes length {len(seq_axis_sizes)} does not "
+                f"match sequence_axis_code length {n_axes}.",
+            )
+        if int(np.prod(seq_axis_sizes)) != L:
+            raise ValueError(
+                f"seq_axis_sizes {seq_axis_sizes} product != batch L={L}.",
+            )
+
+        # Per-position axis coords: (L, n_axes), shared across all rows.
+        axis_indices = torch.empty((L, n_axes), dtype=torch.long)
+        for k in range(L):
+            coord = np.unravel_index(k, seq_axis_sizes)
+            for i in range(n_axes):
+                axis_indices[k, i] = int(coord[i])
 
         torch.manual_seed(self.SEED)
         self._model = self._build_network(n_input, n_output)
@@ -264,7 +337,7 @@ class TransformerModel(IPredictionModel):
         y_full_f = y_full.to(dtype=torch.float32)
         for _ in range(self.EPOCHS):
             optimizer.zero_grad()
-            loss = loss_fn(self._model(X_full_f), y_full_f)
+            loss = loss_fn(self._model(X_full_f, axis_indices), y_full_f)
             loss.backward()
             optimizer.step()
 
@@ -276,21 +349,17 @@ class TransformerModel(IPredictionModel):
     # ------------------------------------------------------------------
 
     def _validate_schema_compatibility(self, schema: Any) -> None:
-        """Require ``sequence_axis_code`` to resolve to a real domain axis on the model's outputs.
-
-        Recursive input features are allowed on a transformer (the new design
-        no longer uses explicit prev_x columns; causal attention sees prior
-        positions natively). Override ``IPredictionModel`` default which would
-        reject them.
-        """
+        """Require every ``sequence_axis_code`` entry to resolve to a real domain axis."""
         try:
-            seq_axis_code = self.sequence_axis_code
+            seq_axis_codes = self.sequence_axis_code
         except NotImplementedError as e:
             raise ValueError(
                 f"{self.__class__.__name__} must implement the `sequence_axis_code` "
-                f"property to declare which schema axis to sequence over.",
+                f"property to declare which schema axes to sequence over.",
             ) from e
 
+        # Collect all axis codes available across the model's outputs' domains.
+        available_axes: set[str] = set()
         for feat_code in self.outputs:
             feat_obj = getattr(schema.features, "data_objects", {}).get(feat_code)
             if feat_obj is None:
@@ -300,14 +369,15 @@ class TransformerModel(IPredictionModel):
                 continue
             domain = schema.domains.get(domain_code)
             for ax in domain.axes:
-                if ax.code == seq_axis_code:
-                    return  # found
+                available_axes.add(ax.code)
 
-        raise ValueError(
-            f"{self.__class__.__name__}.sequence_axis_code='{seq_axis_code}' does not "
-            f"resolve to any domain axis on this model's outputs ({list(self.outputs)}). "
-            f"Verify the schema has a Dimension with this code.",
-        )
+        unresolved = [c for c in seq_axis_codes if c not in available_axes]
+        if unresolved:
+            raise ValueError(
+                f"{self.__class__.__name__}.sequence_axis_code entries {unresolved} "
+                f"do not resolve to any domain axis on this model's outputs "
+                f"({list(self.outputs)}). Available axes: {sorted(available_axes)}.",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +386,12 @@ class TransformerModel(IPredictionModel):
 
 
 class _TransformerNet(nn.Module):
-    """Encoder-only transformer with causal mask + learned position embedding."""
+    """Encoder-only transformer with causal mask + per-axis additive position embeddings.
+
+    For an N-axis flattened sequence, one ``nn.Embedding(max_seq_len, d_model)``
+    table per axis; per-position vectors are summed before the encoder. Single-
+    axis case (``n_axes=1``) is recovered with one embedding table.
+    """
 
     def __init__(
         self,
@@ -328,10 +403,15 @@ class _TransformerNet(nn.Module):
         dim_ff: int,
         dropout: float,
         max_seq_len: int,
+        n_axes: int = 1,
     ):
         super().__init__()
         self.input_proj = nn.Linear(n_input, d_model)
-        self.pos_embed = nn.Embedding(max_seq_len, d_model)
+        # One embedding table per sequence axis. All sized at max_seq_len —
+        # subclasses bump the class attribute if any single axis exceeds it.
+        self.pos_embeds = nn.ModuleList([
+            nn.Embedding(max_seq_len, d_model) for _ in range(n_axes)
+        ])
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -343,18 +423,43 @@ class _TransformerNet(nn.Module):
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.output_proj = nn.Linear(d_model, n_output)
         self._max_seq_len = max_seq_len
+        self._n_axes = n_axes
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """``(S, L, n_input)`` → ``(S, L, n_output)`` with causal attention."""
-        S, L, _ = x.shape
-        if L > self._max_seq_len:
+    def forward(
+        self,
+        x: torch.Tensor,
+        axis_indices: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """``(B, L, n_input)`` → ``(B, L, n_output)`` with causal attention.
+
+        ``axis_indices`` is ``(L, n_axes)`` long-tensor of per-position per-axis
+        coords. When ``n_axes == 1`` and ``axis_indices`` is ``None``, defaults
+        to ``arange(L)`` (single-axis case, back-compat).
+        """
+        B, L, _ = x.shape
+        if axis_indices is None:
+            if self._n_axes != 1:
+                raise ValueError(
+                    f"axis_indices required for multi-axis transformer "
+                    f"(n_axes={self._n_axes}).",
+                )
+            axis_indices = torch.arange(L, device=x.device).unsqueeze(1)
+        if axis_indices.shape != (L, self._n_axes):
             raise ValueError(
-                f"sequence length {L} exceeds MAX_SEQ_LEN={self._max_seq_len}; "
+                f"axis_indices shape {tuple(axis_indices.shape)} does not match "
+                f"(L={L}, n_axes={self._n_axes}).",
+            )
+        if int(axis_indices.max().item()) >= self._max_seq_len:
+            raise ValueError(
+                f"per-axis position index {int(axis_indices.max().item())} "
+                f"exceeds MAX_SEQ_LEN={self._max_seq_len}; "
                 f"increase the class attribute on the model.",
             )
+
         h = self.input_proj(x)
-        positions = torch.arange(L, device=x.device)
-        h = h + self.pos_embed(positions)[None, :, :]
+        # Sum per-axis positional embeddings.
+        for i, embed in enumerate(self.pos_embeds):
+            h = h + embed(axis_indices[:, i])[None, :, :]
         causal_mask = torch.triu(
             torch.full((L, L), float("-inf"), device=x.device), diagonal=1,
         )
