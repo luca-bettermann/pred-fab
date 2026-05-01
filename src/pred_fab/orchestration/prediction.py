@@ -1268,17 +1268,19 @@ class PredictionSystem(BaseOrchestrationSystem):
         declared_features = set(model.input_features)
         param_base = {k: v for k, v in params.items() if k in declared_params}
 
-        # Iterator-derived features: only those declared by this model. At
-        # row-build time they evaluate to idx[axis_pos] / (size - 1).
+        # Iterator-derived features: any input_features entry of the form
+        # f"{ic}_pos" matches a Dimension's iterator_code in this model's
+        # domain. Iterators are implicit on every Dimension — no schema
+        # declaration. At row-build time they evaluate to idx / (size - 1).
         iterator_feats: list[tuple[str, int, int]] = []
-        for feat_code, feat_obj in self.schema.features.data_objects.items():
-            if feat_code not in declared_features:
+        for feat_code in declared_features:
+            if feat_code in self.schema.features.data_objects:
+                continue  # real feature, not an iterator
+            if not feat_code.endswith("_pos"):
                 continue
-            axis_code = getattr(feat_obj, "iterator_axis_code", None)
-            if axis_code is None:
-                continue
+            ic_target = feat_code[:-len("_pos")]
             for axis_pos, iter_code in enumerate(dim_iterators):
-                if iter_code == axis_code:
+                if iter_code == ic_target:
                     iterator_feats.append((feat_code, axis_pos, dim_sizes[axis_pos]))
                     break
 

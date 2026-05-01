@@ -107,7 +107,7 @@ def test_schema_from_dict_raises_for_missing_schema_id(tmp_path):
 
 def test_schema_raises_for_feature_with_unknown_domain(tmp_path):
     """Feature referencing a domain not registered in Domains should raise ValueError during init."""
-    feats = Features.from_list([Feature.array("f1", domain=Domain("nonexistent", [Dimension("d", "d_idx", 1, 2)]))])
+    feats = Features.from_list([Feature("f1", domain=Domain("nonexistent", [Dimension("d", "d_idx", 1, 2)]))])
     perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("p1")])
     params = Parameters.from_list([Parameter.real("param_1", 0.0, 10.0)])
 

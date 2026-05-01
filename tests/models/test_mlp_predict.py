@@ -47,15 +47,12 @@ def _build_2d_schema(tmp_path) -> DatasetSchema:
         Dimension("n_layers", "layer_idx", 1, 8),
         Dimension("n_segments", "segment_idx", 1, 8),
     ])
-    layer_dim, segment_dim = spatial.axes
-    grid_feat = Feature.array("grid", domain=spatial)
-    layer_iter = Feature.iterator(spatial, layer_dim)
-    segment_iter = Feature.iterator(spatial, segment_dim)
+    grid_feat = Feature("grid", domain=spatial)
     return DatasetSchema(
         root_folder=str(tmp_path),
         name="mlp_predict_schema",
         parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
-        features=Features.from_list([grid_feat, layer_iter, segment_iter]),
+        features=Features.from_list([grid_feat]),
         performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
         domains=Domains([spatial]),
     )

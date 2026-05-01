@@ -503,18 +503,12 @@ class Dataset:
         return exp_code in self._experiments
 
     def get_populated_experiment_codes(self) -> list[str]:
-        """Get list of experiments that have all *measured* features populated.
+        """Get list of experiments that have all measured features populated.
 
-        Iterator features (``Feature.iterator``) are excluded — no stored
-        tensor, computed at export time from row position. Without this skip,
-        any schema using ``Feature.iterator(...)`` would block training
-        whenever the derived tensor isn't on disk.
+        Iterator-style positional inputs (``f"{ic}_pos"``) live on Domain,
+        not Features — they're not stored, so they aren't checked here.
         """
-        from pred_fab.core.data_objects import DataArray
-        feature_names = [
-            name for name, obj in self.schema.features.items()
-            if not (isinstance(obj, DataArray) and obj.is_iterator)
-        ]
+        feature_names = list(self.schema.features.keys())
         return [
             code for code in self.get_experiment_codes()
             if all(self.get_experiment(code).is_feature_populated(f) for f in feature_names)
@@ -958,19 +952,14 @@ class Dataset:
             dim_combinations = exp_data.parameters.get_dim_combinations(dim_names)
             dim_iterators = exp_data.parameters.get_dim_iterator_codes(codes=dim_names)
 
+            # Iterator-style positional inputs are implicit on every Domain.
+            # For each axis in the experiment's domain, expose f"{ic}_pos"
+            # populated as idx / (size - 1).
             iterator_features: list[tuple[str, str, int]] = []
-            for feat_code, feat_obj in self.schema.features.data_objects.items():
-                axis_code = getattr(feat_obj, "iterator_axis_code", None)
-                if axis_code is None:
-                    continue
-                size = None
-                for i, dim_name in enumerate(dim_names):
-                    if dim_iterators[i] == axis_code:
-                        size = int(exp_data.parameters.get_value(dim_name))
-                        break
-                if size is None:
-                    continue
-                iterator_features.append((feat_code, axis_code, size))
+            for i, dim_name in enumerate(dim_names):
+                ic = dim_iterators[i]
+                size = int(exp_data.parameters.get_value(dim_name))
+                iterator_features.append((f"{ic}_pos", ic, size))
 
             for row_idx, idx_tuple in enumerate(dim_combinations):
                 row_dict = exp_data.get_effective_parameters_for_row(row_idx)

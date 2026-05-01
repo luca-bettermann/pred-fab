@@ -1,4 +1,9 @@
-"""Tests for `Feature.iterator()` — auto-derived row-position context features."""
+"""Tests for implicit iterator inputs (one per Domain axis).
+
+Iterators are no longer schema-declared features — every ``Dimension`` exposes
+a ``f"{ic}_pos"`` positional input automatically. Models reference them by
+name; the framework populates from row coordinate at export / batch time.
+"""
 
 import pytest
 
@@ -11,12 +16,11 @@ from pred_fab.core.data_objects import (
 )
 
 
-def _build_schema_with_iterator(tmp_path) -> DatasetSchema:
+def _build_schema(tmp_path) -> DatasetSchema:
     spatial = Domain("spatial", [
         Dimension("n_layers", "layer_idx", 1, 4),
         Dimension("n_segments", "segment_idx", 1, 3),
     ])
-    layer_dim, _ = spatial.axes
     return DatasetSchema(
         root_folder=str(tmp_path),
         name="iterator_schema",
@@ -24,8 +28,7 @@ def _build_schema_with_iterator(tmp_path) -> DatasetSchema:
             Parameter.real("param_1", min_val=0.0, max_val=1.0),
         ]),
         features=Features.from_list([
-            Feature.array("feature_grid", domain=spatial),
-            Feature.iterator(spatial, layer_dim),
+            Feature("feature_grid", domain=spatial),
         ]),
         performance=PerformanceAttributes.from_list([
             PerformanceAttribute.score("perf_1"),
@@ -34,24 +37,21 @@ def _build_schema_with_iterator(tmp_path) -> DatasetSchema:
     )
 
 
-def test_iterator_factory_marks_feature_as_context(tmp_path):
-    schema = _build_schema_with_iterator(tmp_path)
-    feat = schema.features.get("layer_idx_pos")
-    assert feat.context is True
-    assert feat.is_iterator is True
-    assert feat.iterator_axis_code == "layer_idx"
+def test_domain_exposes_iterator_input_codes(tmp_path):
+    schema = _build_schema(tmp_path)
+    spatial = schema.domains.get("spatial")
+    assert spatial.iterator_input_codes == ["layer_idx_pos", "segment_idx_pos"]
 
 
-def test_iterator_rejects_dim_outside_domain(tmp_path):
-    spatial = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 4)])
-    other = Domain("other", [Dimension("n_other", "other_idx", 1, 4)])
-    other_dim = other.axes[0]
-    with pytest.raises(ValueError):
-        Feature.iterator(spatial, other_dim)
+def test_iterator_input_not_in_features_block(tmp_path):
+    """Iterators are domain-implicit — not declared as features."""
+    schema = _build_schema(tmp_path)
+    assert "layer_idx_pos" not in schema.features.keys()
+    assert "segment_idx_pos" not in schema.features.keys()
 
 
 def test_iterator_values_normalised_per_row(tmp_path):
-    schema = _build_schema_with_iterator(tmp_path)
+    schema = _build_schema(tmp_path)
     dataset = Dataset(schema=schema, debug_flag=True)
     dataset.create_experiment(
         "exp_001",
@@ -61,18 +61,17 @@ def test_iterator_values_normalised_per_row(tmp_path):
     _, y_df = dataset.export_to_dataframe(["exp_001"])
 
     assert "layer_idx_pos" in y_df.columns
-    # 4 layers × 3 segments = 12 rows, layer index varies across the L axis.
-    # Values at layer k = k / (4 - 1) ∈ {0, 1/3, 2/3, 1}.
+    # 4 layers × 3 segments = 12 rows; layer values at k ∈ {0, 1/3, 2/3, 1}.
     expected = sorted({0.0, 1 / 3, 2 / 3, 1.0})
     actual = sorted(set(round(float(v), 6) for v in y_df["layer_idx_pos"]))
     assert all(abs(a - e) < 1e-6 for a, e in zip(actual, expected))
 
 
-def test_iterator_excluded_from_input_columns_active_mask(tmp_path):
-    """KDE active mask is parameter-only; iterator features must not be active."""
+def test_iterator_input_accepted_by_datamodule(tmp_path):
+    """KDE active mask is parameter-only; iterator inputs must not be active."""
     from pred_fab.core.datamodule import DataModule
 
-    schema = _build_schema_with_iterator(tmp_path)
+    schema = _build_schema(tmp_path)
     dataset = Dataset(schema=schema, debug_flag=True)
     dataset.create_experiment(
         "exp_001",
@@ -87,5 +86,4 @@ def test_iterator_excluded_from_input_columns_active_mask(tmp_path):
     )
 
     assert "layer_idx_pos" in dm.input_columns
-    # Confirms the column is *present* (model input) but is not a parameter.
     assert "layer_idx_pos" not in schema.parameters.data_objects

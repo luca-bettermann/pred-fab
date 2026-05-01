@@ -299,6 +299,23 @@ class Domain:
         return [a.iterator_code for a in self._axes]
 
     @property
+    def iterator_input_codes(self) -> list[str]:
+        """Per-axis positional input codes — implicit features any model may consume.
+
+        For each axis with iterator_code ``ic``, exposes ``f"{ic}_pos"`` as a model
+        input. Value at row k along that axis is ``k / (L − 1)``, populated by the
+        framework at batch-build time. No stored tensor; no schema declaration.
+        """
+        return [f"{a.iterator_code}_pos" for a in self._axes]
+
+    def axis_for_iterator_input(self, code: str) -> 'Dimension | None':
+        """Reverse lookup: given an iterator input code (``layer_idx_pos``), return the Dimension."""
+        for a in self._axes:
+            if f"{a.iterator_code}_pos" == code:
+                return a
+        return None
+
+    @property
     def depth(self) -> int:
         """Number of axes in this domain."""
         return len(self._axes)
@@ -331,17 +348,13 @@ class DataArray(DataObject):
 
     def __init__(self, code: str, role: Roles, dtype: str | type | np.dtype = np.float64,
                  domain_code: str | None = None, feature_depth: int | None = None,
-                 context: bool = False,
-                 iterator_axis_code: str | None = None):
+                 context: bool = False):
         # Convert to dtype instance for consistent validation and serialization
         resolved_dtype = np.dtype(dtype) if dtype else np.dtype(np.float64)
         self.columns: list[str] = []
         self.domain_code: str | None = domain_code
         self.feature_depth: int | None = feature_depth
         self.context: bool = context  # Observable but uncontrollable covariate; input-only, never optimized.
-        # Iterator-derived feature: value at row k = k / (L-1) along this axis,
-        # where L is the experiment's value of the iterator's parent Dimension.
-        self.iterator_axis_code: str | None = iterator_axis_code
 
         constraints: dict[str, Any] = {
             "dtype": resolved_dtype.name,
@@ -353,15 +366,8 @@ class DataArray(DataObject):
             constraints["feature_depth"] = feature_depth
         if context:
             constraints["context"] = True
-        if iterator_axis_code is not None:
-            constraints["iterator_axis_code"] = iterator_axis_code
 
         super().__init__(code, np.ndarray, role, constraints)
-
-    @property
-    def is_iterator(self) -> bool:
-        """Whether this feature is auto-derived from a Domain axis row index."""
-        return self.iterator_axis_code is not None
 
     @property
     def normalize_strategy(self) -> NormMethod:
@@ -400,7 +406,6 @@ class DataArray(DataObject):
             domain_code=constraints.get("domain_code"),
             feature_depth=constraints.get("feature_depth"),
             context=constraints.get("context", False),
-            iterator_axis_code=constraints.get("iterator_axis_code"),
         )
         obj.round_digits = round_digits
         if "columns" in constraints:
@@ -438,53 +443,41 @@ class Parameter:
 
 
 
-class Feature:
-    """Factory for creating feature Feature objects."""
+def Feature(
+    code: str,
+    *,
+    dtype: str | type | np.dtype = np.float64,
+    domain: Domain | None = None,
+    depth: int | None = None,
+    context: bool = False,
+) -> DataArray:
+    """Schema declaration for a measured / computed feature.
 
-    @staticmethod
-    def array(code: str, dtype: str | type | np.dtype = np.float64,
-              domain: Domain | None = None, depth: int | None = None) -> DataArray:
-        """Create a feature DataArray tied to a domain. depth=None means full domain depth."""
-        return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
-                         domain_code=domain.code if domain is not None else None, feature_depth=depth)
+    A feature is a quantity recorded during fabrication or computed by an
+    evaluation model. Three roles emerge from how it's referenced:
 
-    @staticmethod
-    def context(code: str, dtype: str | type | np.dtype = np.float64,
-                domain: Domain | None = None, depth: int | None = None) -> DataArray:
-        """Create a context feature DataArray — observable but uncontrollable covariate.
+    - **target** — declared in some prediction model's ``outputs``.
+    - **input** — declared in some prediction model's ``input_features``.
+    - **context** — set ``context=True`` here. Input-only covariate
+      (ambient temperature, batch ID); excluded from KDE active mask
+      and from optimiser bounds.
 
-        Context features are extracted like regular features but passed as fixed inputs
-        to the prediction model at calibration time; they are never optimized.
-        """
-        return DataArray(code=code, role=Roles.FEATURE, dtype=dtype,
-                         domain_code=domain.code if domain is not None else None,
-                         feature_depth=depth, context=True)
+    A feature can be both target and input (model A's output → model B's
+    input) — the framework handles cross-model deps via topological sort.
 
-    @staticmethod
-    def iterator(domain: Domain, dim: 'Dimension', code: str | None = None) -> DataArray:
-        """Create an iterator-derived feature: value at row k = k / (L-1) for axis ``dim``.
-
-        Auto-populated from row position; never read from stored experiment data.
-        Marked ``context=True`` (input-only, not in trust regions / not optimised) and
-        — being a Feature, not a Parameter — automatically excluded from the KDE
-        active mask. So it's available as a prediction-model input without adding
-        evidence/coverage dimensionality.
-
-        ``code`` defaults to ``f"{dim.iterator_code}_pos"`` (e.g., ``layer_idx_pos``).
-        """
-        if dim not in domain.axes:
-            raise ValueError(
-                f"Dimension '{dim.code}' is not part of Domain '{domain.code}'."
-            )
-        feat_code = code if code is not None else f"{dim.iterator_code}_pos"
-        return DataArray(
-            code=feat_code,
-            role=Roles.FEATURE,
-            domain_code=domain.code,
-            feature_depth=None,
-            context=True,
-            iterator_axis_code=dim.iterator_code,
-        )
+    Iterator-style positional inputs (``f"{iterator_code}_pos"`` for each
+    domain axis) are **not** declared here — they're implicit on every
+    ``Domain``. Reference them directly by name in ``model.input_features``;
+    the framework looks them up via ``Domain.iterator_input_codes``.
+    """
+    return DataArray(
+        code=code,
+        role=Roles.FEATURE,
+        dtype=dtype,
+        domain_code=domain.code if domain is not None else None,
+        feature_depth=depth,
+        context=context,
+    )
 
 
 class PerformanceAttribute:

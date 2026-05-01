@@ -88,7 +88,7 @@ def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
         DataReal(code="bounded", role=Roles.PARAMETER, min_val=0.0, max_val=10.0),
         DataReal(code="unbounded", role=Roles.PARAMETER),  # no min/max → infinite bounds
     ])
-    feats = Features.from_list([Feature.array("f1")])
+    feats = Features.from_list([Feature("f1")])
     perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("p1")])
 
     schema = DatasetSchema(

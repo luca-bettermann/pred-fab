@@ -15,20 +15,20 @@ from tests.utils.builders import (
 
 def test_feature_array_context_defaults_to_false():
     """Feature.array creates a non-context DataArray by default."""
-    feat = Feature.array("temperature")
+    feat = Feature("temperature")
     assert feat.context is False
 
 
 def test_feature_context_factory_sets_flag():
-    """Feature.context creates a DataArray with context=True."""
-    feat = Feature.context("temperature")
+    """Feature(..., context=True) creates a DataArray with context=True."""
+    feat = Feature("temperature", context=True)
     assert feat.context is True
 
 
 def test_feature_context_with_domain():
-    """Feature.context accepts a Domain object."""
+    """Feature(..., context=True) accepts a Domain object."""
     domain = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 5)])
-    feat = Feature.context("temperature", domain=domain)
+    feat = Feature("temperature", domain=domain, context=True)
     assert feat.context is True
     assert feat.domain_code == "spatial"
 
@@ -36,7 +36,7 @@ def test_feature_context_with_domain():
 def test_dataarray_context_serialization_roundtrip():
     """Context flag survives to_dict / from_dict round-trip."""
     from pred_fab.utils.enum import Roles
-    feat = Feature.context("humidity")
+    feat = Feature("humidity", context=True)
     d = feat.to_dict()
     assert d["constraints"].get("context") is True
 
@@ -46,7 +46,7 @@ def test_dataarray_context_serialization_roundtrip():
 
 def test_dataarray_non_context_not_in_constraints():
     """Non-context DataArray does not write 'context' key to constraints."""
-    feat = Feature.array("path_deviation")
+    feat = Feature("path_deviation")
     assert "context" not in feat.to_dict()["constraints"]
 
 
@@ -56,8 +56,8 @@ def _build_schema_with_context(tmp_path) -> DatasetSchema:
     """Schema with one regular feature and one context feature."""
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     spatial = Domain("spatial", [Dimension("n_layers", "layer_idx", 1, 3)])
-    f_output = Feature.array("path_deviation", domain=spatial)
-    f_context = Feature.context("temperature", domain=spatial)
+    f_output = Feature("path_deviation", domain=spatial)
+    f_context = Feature("temperature", domain=spatial, context=True)
     perf = PerformanceAttribute.score("accuracy")
     return DatasetSchema(
         root_folder=str(tmp_path),

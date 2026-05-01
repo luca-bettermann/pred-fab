@@ -39,7 +39,7 @@ def _build_dm(tmp_path) -> DataModule:
             Parameter.real("water", min_val=0.3, max_val=0.5),
         ]),
         features=Features.from_list([
-            Feature.array("perf_a", domain=spatial),
+            Feature("perf_a", domain=spatial),
         ]),
         performance=PerformanceAttributes.from_list([
             PerformanceAttribute.score("score_a"),

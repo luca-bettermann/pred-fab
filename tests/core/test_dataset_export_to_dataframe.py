@@ -45,12 +45,19 @@ def test_export_empty_experiment_codes_returns_empty_dataframes(tmp_path):
 
 
 def test_export_unpopulated_experiment_excludes_nan_from_y_columns(tmp_path):
-    """NaN feature values must not appear as y columns; X must still have all dim-combination rows."""
+    """NaN feature values must not appear as y columns; X must still have all dim-combination rows.
+
+    Domain-implicit iterator inputs (``f"{ic}_pos"``) are populated from cell
+    coordinates, not from stored data — so they appear in y_df even when
+    measured features are NaN.
+    """
     dataset = build_dataset_with_single_experiment(tmp_path)
-    # Features are all NaN (not populated)
+    # Measured features are all NaN (not populated)
     X_df, y_df = dataset.export_to_dataframe(["exp_001"])
     assert len(X_df) == 6        # one row per dim_1 × dim_2 combination
-    assert y_df.shape == (6, 0)  # NaN values filtered out → no columns
+    # No measured-feature columns (filtered out as NaN), but iterator columns survive.
+    measured_cols = [c for c in y_df.columns if not c.endswith("_pos")]
+    assert measured_cols == []
 
 
 def test_export_multiple_experiments_stacks_all_rows(tmp_path):
@@ -76,7 +83,7 @@ def test_export_multiple_experiments_stacks_all_rows(tmp_path):
 def test_export_scalar_experiment_with_no_dimension_parameters(tmp_path):
     """An experiment schema without dimension parameters exports as a single row per experiment."""
     params = Parameters.from_list([Parameter.real("param_a", 0.0, 10.0)])
-    feats = Features.from_list([Feature.array("feat_scalar")])
+    feats = Features.from_list([Feature("feat_scalar")])
     feats.get("feat_scalar").set_columns(["feat_scalar"])
     perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")])
 

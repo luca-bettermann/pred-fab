@@ -106,8 +106,8 @@ def _build_schema(tmp_path) -> DatasetSchema:
         Dimension("n_layers", "layer_idx", 1, 4),
         Dimension("n_segments", "segment_idx", 1, 3),
     ])
-    src = Feature.array("src", domain=spatial)
-    consumer_out = Feature.array("consumer_out", domain=spatial)
+    src = Feature("src", domain=spatial)
+    consumer_out = Feature("consumer_out", domain=spatial)
     return DatasetSchema(
         root_folder=str(tmp_path),
         name="cross_model_schema",
@@ -156,7 +156,7 @@ def test_topo_sort_raises_on_cycle(tmp_path):
         root_folder=str(tmp_path),
         name="cycle_schema",
         parameters=Parameters.from_list([Parameter.real("p", 0.0, 1.0)]),
-        features=Features.from_list([Feature.array("a"), Feature.array("b")]),
+        features=Features.from_list([Feature("a"), Feature("b")]),
         performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf")]),
     )
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))

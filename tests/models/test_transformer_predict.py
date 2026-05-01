@@ -54,7 +54,7 @@ def _build_1d_seq_schema(tmp_path) -> DatasetSchema:
         Dimension("n_layers", "layer_idx", 1, 8),
         Dimension("n_segments", "segment_idx", 1, 8),
     ])
-    src_feat = Feature.array("src", domain=spatial, depth=1)
+    src_feat = Feature("src", domain=spatial, depth=1)
     return DatasetSchema(
         root_folder=str(tmp_path),
         name="transformer_predict_schema",

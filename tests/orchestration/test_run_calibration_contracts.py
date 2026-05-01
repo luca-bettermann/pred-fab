@@ -677,9 +677,9 @@ def _build_two_runtime_agent_stack(tmp_path):
         Dimension("dim_1", "d1", 1, 4),
         Dimension("dim_2", "d2", 1, 4),
     ])
-    f_grid = Feature.array("feature_grid", domain=spatial)
-    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
-    f_scalar = Feature.array("feature_scalar")
+    f_grid = Feature("feature_grid", domain=spatial)
+    f_d1 = Feature("feature_d1", domain=spatial, depth=1)
+    f_scalar = Feature("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
     feats = Features.from_list([f_grid, f_d1, f_scalar])

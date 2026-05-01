@@ -48,7 +48,7 @@ def _build_dm(tmp_path) -> tuple[DataModule, _DoublingModel]:
         root_folder=str(tmp_path),
         name="det_predict_schema",
         parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
-        features=Features.from_list([Feature.array("y")]),
+        features=Features.from_list([Feature("y")]),
         performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
         domains=Domains([]),
     )

@@ -267,19 +267,23 @@ class PfabAgent:
             input_features.extend(pred_specs["input_features"])
             output_predicted_features.extend(pred_specs["outputs"])
 
+        # Domain iterator inputs (f"{ic}_pos") are implicit on every Domain;
+        # they're valid input feature codes even though they don't appear in
+        # schema.features. Build the allowed-input set as the union.
+        domain_iterator_codes: set[str] = set()
+        for domain in schema.domains.values():
+            domain_iterator_codes.update(domain.iterator_input_codes)
+        valid_input_feature_codes = set(schema.features.keys()) | domain_iterator_codes
+
         # Validate that all lists are represented in schema
         self._check_sets_against_keys(set(input_params), schema.parameters.keys())
-        self._check_sets_against_keys(set(input_features), schema.features.keys())
+        self._check_sets_against_keys(set(input_features), valid_input_feature_codes)
         self._check_sets_against_keys(set(output_features), schema.features.keys())
         self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
-        # Iterator features (auto-populated from row index) are produced
-        # without a feature model — treat them as computed for validation.
-        derived_codes = {
-            code for code, obj in schema.features.items()
-            if isinstance(obj, DataArray) and obj.is_iterator
-        }
-        output_features_set = set(output_features) | derived_codes
+        # Iterator inputs are auto-derived from row coord — count as
+        # "computed" for the input-vs-output coverage check.
+        output_features_set = set(output_features) | domain_iterator_codes
 
         # Validate that all input features are represented as outputs features
         uncomputed_inputs = set(input_features) - output_features_set

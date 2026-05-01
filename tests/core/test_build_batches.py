@@ -29,21 +29,14 @@ def _build_2d_schema(tmp_path) -> DatasetSchema:
         Dimension("n_layers", "layer_idx", 1, 10),
         Dimension("n_segments", "segment_idx", 1, 10),
     ])
-    layer_dim, segment_dim = spatial.axes
-    grid_feat = Feature.array("grid", domain=spatial)
-    layer_iter = Feature.iterator(spatial, layer_dim)  # layer_idx_pos
-    segment_iter = Feature.iterator(spatial, segment_dim)  # segment_idx_pos
+    grid_feat = Feature("grid", domain=spatial)
     return DatasetSchema(
         root_folder=str(tmp_path),
         name="build_batch_schema",
         parameters=Parameters.from_list([
             Parameter.real("p1", min_val=0.0, max_val=1.0),
         ]),
-        features=Features.from_list([
-            grid_feat,
-            layer_iter,
-            segment_iter,
-        ]),
+        features=Features.from_list([grid_feat]),
         performance=PerformanceAttributes.from_list([
             PerformanceAttribute.score("perf_1"),
         ]),

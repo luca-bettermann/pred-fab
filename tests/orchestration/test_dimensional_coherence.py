@@ -79,8 +79,8 @@ def test_coherence_error_on_mixed_output_depths(tmp_path):
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
-    f_deep = Feature.array("feat_deep", domain=spatial)       # depth 2
-    f_shallow = Feature.array("feat_shallow", domain=spatial, depth=1)  # depth 1
+    f_deep = Feature("feat_deep", domain=spatial)       # depth 2
+    f_shallow = Feature("feat_shallow", domain=spatial, depth=1)  # depth 1
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains([spatial])
@@ -120,8 +120,8 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2), Dimension("dim_2", "d2", 1, 3)])
-    f_deep = Feature.array("feat_deep", domain=spatial)    # depth 2 (input)
-    f_shallow = Feature.array("feat_shallow", domain=spatial, depth=1)  # depth 1 (output)
+    f_deep = Feature("feat_deep", domain=spatial)    # depth 2 (input)
+    f_shallow = Feature("feat_shallow", domain=spatial, depth=1)  # depth 1 (output)
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains([spatial])
@@ -171,8 +171,8 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
     spatial = Domain("spatial", [Dimension("dim_1", "d1", 1, 2)])
     temporal = Domain("temporal", [Dimension("t_step", "t", 1, 5)])
-    f_spatial = Feature.array("feat_spatial", domain=spatial)
-    f_temporal = Feature.array("feat_temporal", domain=temporal)
+    f_spatial = Feature("feat_spatial", domain=spatial)
+    f_temporal = Feature("feat_temporal", domain=temporal)
     perf = PerformanceAttribute.score("perf_1")
 
     domains = Domains([spatial, temporal])

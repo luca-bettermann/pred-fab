@@ -202,8 +202,8 @@ def test_parameters_to_dict_from_dict_roundtrip():
 
 
 def test_features_from_list_creates_block():
-    f1 = Feature.array("f1")
-    f2 = Feature.array("f2")
+    f1 = Feature("f1")
+    f2 = Feature("f2")
     feats = Features.from_list([f1, f2])
     assert feats.has("f1")
     assert feats.has("f2")
@@ -341,7 +341,7 @@ def test_get_dim_combinations_single_dim():
 
 def test_features_value_at_returns_none_when_not_set():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "feat_1"])
     feats.add(arr)
 
@@ -353,7 +353,7 @@ def test_features_value_at_returns_none_when_not_set():
 
 def test_features_value_at_returns_correct_value_for_2d_tensor():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
     feats.add(arr)
 
@@ -370,7 +370,7 @@ def test_features_value_at_returns_correct_value_for_2d_tensor():
 
 def test_features_value_at_scalar_feature():
     feats = Features()
-    arr = Feature.array("scalar_feat")
+    arr = Feature("scalar_feat")
     arr.set_columns(["scalar_feat"])  # no iterators
     feats.add(arr)
 
@@ -385,7 +385,7 @@ def test_features_value_at_scalar_feature():
 def test_features_value_at_returns_none_for_missing_iterator_key():
     """Missing iterator coordinate should return None."""
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
     feats.add(arr)
 
@@ -402,7 +402,7 @@ def test_features_value_at_returns_none_for_missing_iterator_key():
 
 def test_features_initialize_arrays_raises_for_unset_columns():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     # No set_columns() call
     feats.add(arr)
 
@@ -413,7 +413,7 @@ def test_features_initialize_arrays_raises_for_unset_columns():
 
 def test_features_initialize_arrays_produces_nan_filled_tensor():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "d2", "feat_1"])
     feats.add(arr)
 
@@ -427,7 +427,7 @@ def test_features_initialize_arrays_produces_nan_filled_tensor():
 
 def test_features_initialize_arrays_skips_when_already_initialized():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "feat_1"])
     feats.add(arr)
 
@@ -441,7 +441,7 @@ def test_features_initialize_arrays_skips_when_already_initialized():
 
 def test_features_initialize_arrays_resets_when_recompute():
     feats = Features()
-    arr = Feature.array("feat_1")
+    arr = Feature("feat_1")
     arr.set_columns(["d1", "feat_1"])
     feats.add(arr)
 

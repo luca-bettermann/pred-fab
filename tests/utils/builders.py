@@ -44,9 +44,9 @@ def build_mixed_feature_schema(tmp_path, name: str = "schema_test") -> DatasetSc
         Dimension("dim_2", "d2", 1, 3),
     ])
 
-    f_grid = Feature.array("feature_grid", domain=spatial)
-    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
-    f_scalar = Feature.array("feature_scalar")
+    f_grid = Feature("feature_grid", domain=spatial)
+    f_d1 = Feature("feature_d1", domain=spatial, depth=1)
+    f_scalar = Feature("feature_scalar")
 
     perf = PerformanceAttribute.score("performance_1")
 
@@ -82,9 +82,9 @@ def build_workflow_schema(tmp_path, name: str = "schema_001") -> DatasetSchema:
         Dimension("n_segments", "d2", 1, 5),
     ])
 
-    f1 = Feature.array("feature_1", domain=spatial)
-    f2 = Feature.array("feature_2", domain=spatial)
-    f3 = Feature.array("feature_3")
+    f1 = Feature("feature_1", domain=spatial)
+    f2 = Feature("feature_2", domain=spatial)
+    f3 = Feature("feature_3")
 
     perf1 = PerformanceAttribute.score("performance_1")
     perf2 = PerformanceAttribute.score("performance_2")
@@ -356,9 +356,9 @@ def build_runtime_agent_stack(tmp_path):
         Dimension("dim_2", "d2", 1, 3),
     ])
 
-    f_grid = Feature.array("feature_grid", domain=spatial)
-    f_d1 = Feature.array("feature_d1", domain=spatial, depth=1)
-    f_scalar = Feature.array("feature_scalar")
+    f_grid = Feature("feature_grid", domain=spatial)
+    f_d1 = Feature("feature_d1", domain=spatial, depth=1)
+    f_scalar = Feature("feature_scalar")
     perf = PerformanceAttribute.score("performance_1")
 
     feats = Features.from_list([f_grid, f_d1, f_scalar])

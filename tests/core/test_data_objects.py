@@ -518,14 +518,14 @@ def test_parameter_factory_boolean_creates_correct_type():
 
 
 def test_feature_factory_array_creates_correct_type():
-    f = Feature.array("my_feature")
+    f = Feature("my_feature")
     assert isinstance(f, DataArray)
     assert f.role == Roles.FEATURE
 
 
 def test_feature_factory_array_with_domain():
     d = Domain("spatial", [Dimension("dim_1", "d1", 1, 2)])
-    f = Feature.array("my_feature", domain=d, depth=1)
+    f = Feature("my_feature", domain=d, depth=1)
     assert isinstance(f, DataArray)
     assert f.domain_code == "spatial"
     assert f.feature_depth == 1

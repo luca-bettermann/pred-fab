@@ -42,7 +42,7 @@ class IPredictionModel(BaseInterface):
         max_depth = 0
         for code in self.outputs:
             feat = self._ref_features.get(code)
-            # _ref_features stores DataArray instances (Feature.array() factory output);
+            # _ref_features stores DataArray instances (Feature() factory output);
             # Pyright sees Feature (factory class) which lacks .columns — type: ignore needed.
             if feat is not None and hasattr(feat, "columns") and feat.columns:  # type: ignore[union-attr]
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
