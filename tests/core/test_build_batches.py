@@ -278,10 +278,17 @@ def test_sequence_batch_rejects_missing_axis(tmp_path):
         dm.build_sequence_batch(bad_model, params_list, [di])
 
 
-def test_sequence_batch_rejects_multi_axis(tmp_path):
-    """Multi-axis grids (segment > 1 alongside a layer sequence axis) raise."""
+def test_sequence_batch_multi_axis_segments_become_parallel_sequences(tmp_path):
+    """Multi-axis grids: non-sequence axes flatten into the batch dim as parallel sequences.
+
+    For shape (n_layers=4, n_segments=3), segment becomes a parallel sequence —
+    output shape is (S × n_segments, L=n_layers, n_input).
+    """
     dm = _build_dm(tmp_path, n_layers=4, n_segments=3)
-    params_list = [{"p1": 0.5, "n_layers": 4, "n_segments": 3}]
+    params_list = [
+        {"p1": 0.3, "n_layers": 4, "n_segments": 3},
+        {"p1": 0.7, "n_layers": 4, "n_segments": 3},
+    ]
     di = _dim_info(
         shape=(4, 3),
         iterator_feats=[("layer_idx_pos", 0, 4), ("segment_idx_pos", 1, 3)],
@@ -289,8 +296,19 @@ def test_sequence_batch_rejects_multi_axis(tmp_path):
         dim_iters=["layer_idx", "segment_idx"],
     )
     model = SimpleNamespace(sequence_axis_code="n_layers")
-    with pytest.raises(NotImplementedError, match="multi-axis grids"):
-        dm.build_sequence_batch(model, params_list, [di])
+    X_seq = dm.build_sequence_batch(model, params_list, [di, di])
+
+    # 2 candidates × 3 segments = 6 batch rows; L = 4 layers.
+    assert X_seq.shape == (2 * 3, 4, len(dm.input_columns))
+
+    # All rows for a given candidate s share static p1 — verify by checking the p1 column.
+    p1_col = dm.input_columns.index("p1")
+    p1_s0 = X_seq[0, 0, p1_col].item()
+    p1_s1 = X_seq[3, 0, p1_col].item()  # row 3 = candidate 1, segment 0
+    assert p1_s0 != p1_s1  # different candidates differ
+    # All 3 segments under candidate 0 share the same p1.
+    for j in range(3):
+        assert X_seq[j, 0, p1_col].item() == pytest.approx(p1_s0, abs=1e-6)
 
 
 def test_sequence_batch_empty_inputs(tmp_path):

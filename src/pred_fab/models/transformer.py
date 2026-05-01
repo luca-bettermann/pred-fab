@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -109,13 +110,14 @@ class TransformerModel(IPredictionModel):
     ) -> list[dict[str, torch.Tensor]]:
         """Per-candidate sequence-batched prediction → ``list[dict[feat, (*feat_shape) tensor]]``.
 
-        Builds ``(S, L, n_input)`` via ``dm.build_sequence_batch`` along
-        ``self.sequence_axis_code``, runs the encoder with causal attention,
-        denormalises, and reshapes per-(s, feat) to ``dim_info['shape']``.
+        Builds ``(S × n_other, L, n_input)`` via ``dm.build_sequence_batch``
+        — each non-sequence axis becomes a parallel sequence in the batch
+        dim. After the encoder forward, we reshape per-(s, feat) to the
+        full ``dim_info['shape']`` (with the sequence axis in the position
+        ``dim_codes_ordered.index(sequence_axis_code)``).
 
         ``predictions_so_far`` is unused — causal attention sees prior
-        positions' hidden states natively, so cross-model recursive lookups
-        are handled internally by the encoder, not via column substitution.
+        positions' hidden states natively.
         """
         del predictions_so_far
         S = len(params_list)
@@ -133,28 +135,56 @@ class TransformerModel(IPredictionModel):
 
         input_indices = dm.get_input_indices(self.input_parameters + self.input_features)
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-        X_model = X_seq.index_select(2, input_indices_t)  # (S, L, n_model_input)
+        X_model = X_seq.index_select(2, input_indices_t)  # (S_eff, L, n_model_input)
 
         if not self._is_trained or self._model is None:
-            L = X_seq.shape[1]
-            y_norm_seq = torch.zeros((S, L, len(self.outputs)), dtype=torch.float32)
+            S_eff = int(X_seq.shape[0])
+            L = int(X_seq.shape[1])
+            y_norm_seq = torch.zeros((S_eff, L, len(self.outputs)), dtype=torch.float32)
         else:
             y_norm_seq = self._model(X_model.to(dtype=torch.float32))
 
-        # Denormalise: (S, L, n_out) → flatten → denorm → reshape back. The
-        # affine norm preserves gradients across the round-trip.
+        # Denormalise via flatten/reshape — affine, gradient-clean.
+        S_eff = int(y_norm_seq.shape[0])
         L = int(y_norm_seq.shape[1])
         n_out = int(y_norm_seq.shape[2])
-        y_norm_flat = y_norm_seq.reshape(S * L, n_out)
+        y_norm_flat = y_norm_seq.reshape(S_eff * L, n_out)
         y_denorm_flat = dm.denormalize_values(y_norm_flat, self.outputs)
-        y_denorm_seq = y_denorm_flat.reshape(S, L, n_out)
+        y_denorm_seq = y_denorm_flat.reshape(S_eff, L, n_out)
+
+        # Reshape per-(s, feat) to feat_shape. n_other = S_eff / S; non-sequence
+        # axes are in the same order as dim_codes_ordered (minus seq_axis).
+        di_first = dim_info_list[0]
+        dim_codes = di_first['dim_codes_ordered']
+        seq_axis_code = self.sequence_axis_code
+        seq_axis_idx = dim_codes.index(seq_axis_code) if seq_axis_code in dim_codes else 0
 
         out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
         for s in range(S):
             feat_shape = dim_info_list[s]['shape']
+            if not feat_shape:
+                for f_idx, feat in enumerate(self.outputs):
+                    out[s][feat] = y_denorm_seq[s, 0, f_idx].reshape(())
+                continue
+
+            other_axis_indices = [i for i in range(len(feat_shape)) if i != seq_axis_idx]
+            other_sizes_s = [feat_shape[i] for i in other_axis_indices]
+            n_other_s = int(np.prod(other_sizes_s)) if other_sizes_s else 1
+            n_total = int(np.prod(feat_shape))
+
             for f_idx, feat in enumerate(self.outputs):
-                t = y_denorm_seq[s, :, f_idx]
-                out[s][feat] = t.reshape(feat_shape) if feat_shape else t.reshape(())
+                slots: list[torch.Tensor] = []
+                for cell_flat in range(n_total):
+                    coord = np.unravel_index(cell_flat, feat_shape)
+                    seq_pos = int(coord[seq_axis_idx])
+                    if other_sizes_s:
+                        other_coord = tuple(int(coord[i]) for i in other_axis_indices)
+                        other_idx = int(np.ravel_multi_index(other_coord, other_sizes_s))
+                    else:
+                        other_idx = 0
+                    batch_idx = s * n_other_s + other_idx
+                    slots.append(y_denorm_seq[batch_idx, seq_pos, f_idx])
+                out[s][feat] = torch.stack(slots, dim=0).reshape(feat_shape)
         return out
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:

@@ -188,17 +188,110 @@ class PredictionSystem(BaseOrchestrationSystem):
         val_batches,
         **kwargs,
     ) -> None:
-        """One fit call. Wrapped with progress bar by caller."""
-        model_train_batches = self._filter_batches_for_model(train_batches, model)
-        model_val_batches = self._filter_batches_for_model(val_batches, model)
-        # pass model-relative cat-index cardinalities
-        # so models with categorical inputs can size their internal one-hot
-        # / nn.Embedding expansion. No-op for models without cats.
+        """One fit call. Wrapped with progress bar by caller.
+
+        Dispatches batch shape: TransformerModel subclasses get sequence-
+        shaped (B, L, n_input) batches built from training experiments;
+        flat-batched models get the standard (N, n_input) batches via
+        column filtering.
+        """
+        from ..models.transformer import TransformerModel
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
+
+        if isinstance(model, TransformerModel):
+            model_train_batches = self._build_transformer_train_batches(model, SplitType.TRAIN)
+            model_val_batches = self._build_transformer_train_batches(model, SplitType.VAL)
+        else:
+            model_train_batches = self._filter_batches_for_model(train_batches, model)
+            model_val_batches = self._filter_batches_for_model(val_batches, model)
+
         self.logger.info(f"Training model for features {model.outputs}...")
         model.train(model_train_batches, model_val_batches, **kwargs)
         primary = model.outputs[0] if model.outputs else "unknown"
         self.logger.info(f"Trained model for '{primary}'")
+
+    def _build_transformer_train_batches(
+        self,
+        model: IPredictionModel,
+        split: SplitType,
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Build (B, L, n_input) / (B, L, n_output) batches per training experiment.
+
+        For each experiment in the split:
+          1. Resolve dim_info (`shape`, `dim_codes_ordered`, `iterator_feats`).
+          2. Use ``dm.build_sequence_batch`` to lay out X as
+             ``(n_other, L, n_model_input)`` with the experiment's actual params.
+          3. Pull ground-truth y for the same axis order from the dataset's
+             tensor export, reshape to ``(n_other, L, n_output)``.
+        Each experiment becomes one ``(X_seq, y_seq)`` batch entry; the
+        concatenation across experiments happens inside ``model.train``.
+        """
+        dm = self._assert_trained()
+        codes = dm.get_split_codes(split)
+        if not codes:
+            return []
+
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        output_indices = [dm.output_columns.index(f) for f in model.outputs]
+        output_indices_t = torch.as_tensor(output_indices, dtype=torch.long)
+
+        seq_axis_code = model.sequence_axis_code  # type: ignore[attr-defined]
+
+        out: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for code in codes:
+            exp = dm.dataset.get_experiment(code)
+            params = exp.get_effective_parameters_for_row(0)
+            dim_info = self._get_model_dim_info(model, params)
+            dim_codes = dim_info['dim_codes_ordered']
+            shape = dim_info['shape']
+            if not shape or seq_axis_code not in dim_codes:
+                continue
+            seq_axis_idx = dim_codes.index(seq_axis_code)
+            L = shape[seq_axis_idx]
+            other_axis_indices = [i for i in range(len(shape)) if i != seq_axis_idx]
+            other_sizes = [shape[i] for i in other_axis_indices]
+            n_other = int(np.prod(other_sizes)) if other_sizes else 1
+
+            # Build sequence X for this experiment: (n_other, L, n_model_input).
+            X_seq_full = dm.build_sequence_batch(model, [params], [dim_info])
+            X_seq = X_seq_full.index_select(2, input_indices_t)
+
+            # Pull y from the per-experiment tensor export and reshape.
+            exported = dm.dataset.export_to_tensor_dict(
+                [code],
+                x_columns=dm.input_columns,
+                y_columns=dm.output_columns,
+                categorical_mappings=dm.categorical_mappings,
+            )
+            if exported.is_empty():
+                continue
+            # cell_meta rows are in C-order over `shape` (dim_codes_ordered).
+            n_rows = exported.n_rows
+            y_cols: list[torch.Tensor] = []
+            for f_idx, feat in enumerate(model.outputs):
+                col_t = exported.y.get(feat, torch.zeros(n_rows, dtype=torch.float32))
+                stats = dm._feature_stats.get(feat)
+                if stats is not None:
+                    col_t = dm._apply_normalization_tensor(col_t.to(dtype=torch.float32), stats)
+                y_cols.append(col_t.to(dtype=torch.float32))
+            # Stack into (n_rows, n_out), reshape to canonical shape, then permute
+            # to (n_other, L, n_out): for each cell (coord), find seq_pos, other_idx.
+            y_flat = torch.stack(y_cols, dim=-1)  # (n_rows, n_out)
+            n_out = y_flat.shape[-1]
+            y_seq = torch.zeros((n_other, L, n_out), dtype=torch.float32)
+            for cell_flat in range(n_rows):
+                coord = np.unravel_index(cell_flat, shape)
+                seq_pos = int(coord[seq_axis_idx])
+                if other_sizes:
+                    other_coord = tuple(int(coord[i]) for i in other_axis_indices)
+                    other_idx = int(np.ravel_multi_index(other_coord, other_sizes))
+                else:
+                    other_idx = 0
+                y_seq[other_idx, seq_pos, :] = y_flat[cell_flat]
+
+            out.append((X_seq, y_seq))
+        return out
 
     def _compute_model_cat_cardinalities(self, model: IPredictionModel) -> dict[int, int]:
         """Translate DataModule cat cardinalities into model-relative col indices.

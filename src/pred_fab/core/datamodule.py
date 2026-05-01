@@ -911,21 +911,22 @@ class DataModule:
         params_list: list[dict[str, Any]],
         dim_info_list: list[dict[str, Any]],
     ) -> torch.Tensor:
-        """Build (S, L, n_input_cols) sequence batch along ``model.sequence_axis_code``.
+        """Build (S × n_other, L, n_input_cols) sequence batch along ``model.sequence_axis_code``.
 
-        Static inputs tiled across L positions via ``params_to_tensor``.
-        Iterator-feature columns filled per position: for the sequence axis,
-        value = pos / (L − 1); for non-sequence axes (must be size 1 today),
-        value = 0.
+        Multi-axis grids supported: non-sequence axes are flattened into
+        the batch dimension as parallel sequences. For shape
+        ``(L=n_layers, n_segments)`` with ``sequence_axis_code='n_layers'``,
+        each segment becomes its own sequence over layers — one causal
+        attention path per (candidate, segment).
 
-        The transformer's position embedding handles per-position context
-        internally — iterator-feature columns for the sequence axis are
-        redundant but tolerated. Causal attention sees prior positions'
-        outputs natively; no recursive-feature columns required.
+        Static inputs are tiled across L positions; non-sequence-axis
+        iterator inputs are tiled per-other-coord; the sequence-axis
+        iterator (if declared) is filled per-position.
 
-        Multi-axis grids (sequence axis + other axes of size > 1) are not
-        yet supported; callers should split into per-segment sequences and
-        call ``build_sequence_batch`` per segment.
+        ``n_other = product of non-sequence-axis sizes``. Returned tensor
+        is ``(S × n_other, L, n_input)``; batch index = ``s * n_other + other_idx``
+        where ``other_idx`` ravels the non-sequence coords in
+        ``dim_codes_ordered`` order.
         """
         if not self._is_fitted:
             raise RuntimeError("DataModule not fitted.")
@@ -957,22 +958,27 @@ class DataModule:
 
         shape = di_first['shape']
         L = shape[seq_axis_idx]
-        other_sizes = [s for i, s in enumerate(shape) if i != seq_axis_idx]
-        if any(sz > 1 for sz in other_sizes):
-            raise NotImplementedError(
-                f"build_sequence_batch: multi-axis grids not yet supported "
-                f"(shape={shape}, sequence axis at idx={seq_axis_idx}). Caller "
-                f"should split into per-segment sequences."
-            )
+        other_axis_indices = [i for i in range(len(shape)) if i != seq_axis_idx]
+        other_sizes = [shape[i] for i in other_axis_indices]
+        n_other = int(np.prod(other_sizes)) if other_sizes else 1
+        S_eff = S * n_other
+
+        # Pre-compute per-other-coord indices in original-axis ordering.
+        if other_sizes:
+            other_coords_arr = np.empty((n_other, len(other_sizes)), dtype=np.int64)
+            for j in range(n_other):
+                other_coords_arr[j] = np.unravel_index(j, other_sizes)
+        else:
+            other_coords_arr = np.zeros((1, 0), dtype=np.int64)
 
         x_norm_S = torch.stack([self.params_to_tensor(p) for p in params_list])
         code_to_idx = {c: i for i, c in enumerate(self.input_columns)}
 
-        # Tile static inputs across L: (S, n_input) → (S, L, n_input). Clone so
-        # in-place column overrides don't leak across positions in expand().
-        X_seq = x_norm_S.unsqueeze(1).expand(S, L, n_cols).clone()
+        # Tile candidates × n_other → (S_eff, n_input), then × L positions.
+        x_repeat = x_norm_S.unsqueeze(1).expand(S, n_other, n_cols).reshape(S_eff, n_cols)
+        X_seq = x_repeat.unsqueeze(1).expand(S_eff, L, n_cols).clone()
 
-        # Per-position iterator-feature overrides.
+        # Iterator overrides.
         iterator_feats = di_first['iterator_feats']
         for feat_code, axis_pos, size in iterator_feats:
             if feat_code not in code_to_idx:
@@ -980,6 +986,7 @@ class DataModule:
             col_idx = code_to_idx[feat_code]
             stats = self._parameter_stats.get(feat_code)
             if axis_pos == seq_axis_idx:
+                # Sequence axis: per-position pos / (L-1).
                 for pos in range(L):
                     raw_val = float(pos) / max(L - 1, 1)
                     if stats is not None:
@@ -990,8 +997,18 @@ class DataModule:
                         normed = raw_val
                     X_seq[:, pos, col_idx] = normed
             else:
-                # Other axis (size 1 enforced above): iterator value = 0.
-                X_seq[:, :, col_idx] = 0.0
+                # Non-sequence axis: per-other-coord constant across L.
+                p_other = other_axis_indices.index(axis_pos)
+                for j in range(n_other):
+                    raw_val = float(other_coords_arr[j, p_other]) / max(size - 1, 1)
+                    if stats is not None:
+                        normed = float(self._apply_normalization_tensor(
+                            torch.tensor(raw_val, dtype=X_seq.dtype), stats,
+                        ).item())
+                    else:
+                        normed = raw_val
+                    # All batch rows whose other_idx == j: indices j, j+n_other, j+2*n_other, ...
+                    X_seq[j::n_other, :, col_idx] = normed
 
         return X_seq
 
