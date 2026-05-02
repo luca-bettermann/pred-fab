@@ -348,6 +348,31 @@ class TransformerModel(IPredictionModel):
     # Schema check
     # ------------------------------------------------------------------
 
+    def validate_dimensional_coherence(self, schema: Any) -> str | None:
+        """Transformer requires single domain + axis-depth ≤ min-output-depth + input-depth ≤ op-depth.
+
+        Mixed output depths ARE allowed — depth decoders handle expansion.
+        ``len(sequence_axis_code) <= min(output_depths)`` ensures every output
+        is at axis depth or deeper (decoder can fill in extra axes); axis deeper
+        than any output requires a pooling decoder we don't ship.
+        """
+        domain_code = self._derive_single_domain(schema)
+        self._assert_input_depth_within_op_depth()
+
+        # Axis depth must not exceed the shallowest output's depth.
+        depths = self._output_depths()
+        if depths:
+            min_depth = min(depths.values())
+            axis_depth = len(self.sequence_axis_code)
+            if axis_depth > min_depth:
+                raise ValueError(
+                    f"{self.__class__.__name__}: sequence_axis_code has length "
+                    f"{axis_depth} but the shallowest output has depth {min_depth}. "
+                    f"Axis must not be deeper than any output (no pooling decoder). "
+                    f"Output depths: {depths}.",
+                )
+        return domain_code
+
     def _validate_schema_compatibility(self, schema: Any) -> None:
         """Require every ``sequence_axis_code`` entry to resolve to a real domain axis."""
         try:

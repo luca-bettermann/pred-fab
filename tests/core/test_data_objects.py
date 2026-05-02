@@ -407,15 +407,20 @@ def test_domain_to_dict_from_dict_roundtrip():
     assert d2.axes[1].iterator_code == "seg_idx"
 
 
-def test_dimension_max_val_none_by_default():
-    """Dimension with no max_val should have max_val=None."""
-    dim = Dimension("n_layers", "layer_idx", 1)
-    assert dim.max_val is None
+def test_dimension_max_val_required_default():
+    """Dimension with no max_val must raise — required for normalization + decoder bounds."""
+    with pytest.raises(ValueError, match="max_val must be set"):
+        Dimension("n_layers", "layer_idx", 1)
 
 
-def test_dimension_max_val_none_explicit():
-    dim = Dimension("n_layers", "layer_idx", 1, None)
-    assert dim.max_val is None
+def test_dimension_max_val_required_explicit_none():
+    with pytest.raises(ValueError, match="max_val must be set"):
+        Dimension("n_layers", "layer_idx", 1, None)
+
+
+def test_dimension_max_val_must_be_geq_min_val():
+    with pytest.raises(ValueError, match="max_val .* must be >= min_val"):
+        Dimension("n_layers", "layer_idx", 5, 3)
 
 
 # ===== DataArray =====

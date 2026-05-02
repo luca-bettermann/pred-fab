@@ -300,7 +300,17 @@ class MLPModel(IPredictionModel):
         layers.append(nn.Linear(prev, n_outputs))
         return nn.Sequential(*layers)
 
-    # predict and _validate_schema_compatibility inherit from IPredictionModel:
-    # the default flat-batched dispatch (build_flat_batch + forward_pass +
-    # de-multiplex) and the recursive-feature rejection are exactly what an
-    # MLP needs. TransformerModel overrides both.
+    # predict inherits from IPredictionModel: the default flat-batched dispatch
+    # (build_flat_batch + forward_pass + de-multiplex) is exactly what an MLP
+    # needs. TransformerModel overrides predict for sequence dispatch.
+
+    def validate_dimensional_coherence(self, schema: Any) -> str | None:
+        """MLP requires single domain + uniform output depth + input-depth ≤ op-depth.
+
+        Per-cell independent dispatch can't handle multi-depth outputs; depth
+        uniformity is structural for this class.
+        """
+        domain_code = self._derive_single_domain(schema)
+        self._assert_uniform_output_depth()
+        self._assert_input_depth_within_op_depth()
+        return domain_code

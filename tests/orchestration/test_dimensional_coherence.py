@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 
 from pred_fab.interfaces import IPredictionModel
+from pred_fab.models import MLPModel
 from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
 from pred_fab.core.data_objects import Feature, PerformanceAttribute, Dimension, Domain
 from pred_fab.core import DatasetSchema
@@ -73,8 +74,8 @@ def test_coherence_valid_depth2_model(tmp_path):
     model.validate_dimensional_coherence(dataset.schema)
 
 
-def test_coherence_error_on_mixed_output_depths(tmp_path):
-    """A model with mixed-depth outputs raises ValueError (Rule 1 is now an error)."""
+def test_coherence_error_on_mixed_output_depths_mlp(tmp_path):
+    """MLPModel rejects mixed-depth outputs (depth uniformity is MLP-specific now)."""
     from pred_fab.core.data_objects import Parameter
 
     p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
@@ -96,17 +97,15 @@ def test_coherence_error_on_mixed_output_depths(tmp_path):
 
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
 
-    class MixedDepthModel(IPredictionModel):
+    class MixedDepthMLP(MLPModel):
         @property
         def input_parameters(self): return ["param_1"]
         @property
         def input_features(self): return []
         @property
         def outputs(self): return ["feat_deep", "feat_shallow"]  # mixed depths
-        def forward_pass(self, X): return np.zeros((X.shape[0], 2))
-        def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
-    model = MixedDepthModel(logger)
+    model = MixedDepthMLP(logger)
     model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
@@ -137,17 +136,15 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
 
     logger = PfabLogger.get_logger(str(tmp_path / "logs"))
 
-    class DeepInputShallowOutputModel(IPredictionModel):
+    class DeepInputShallowOutputMLP(MLPModel):
         @property
         def input_parameters(self): return ["param_1"]
         @property
         def input_features(self): return ["feat_deep"]  # depth 2 > output depth 1
         @property
         def outputs(self): return ["feat_shallow"]
-        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
-        def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
-    model = DeepInputShallowOutputModel(logger)
+    model = DeepInputShallowOutputMLP(logger)
     model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 

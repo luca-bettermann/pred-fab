@@ -48,57 +48,70 @@ class IPredictionModel(BaseInterface):
                 max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
         return max_depth
 
-    @final
     def validate_dimensional_coherence(self, schema: Any) -> str | None:
-        """Enforce structural rules on the model's domain declarations and derive the domain code.
+        """Per-class structural rules for the model's domain/depth declarations.
 
-        1. Output features may not mix depths (error).
-        2. All output features must share the same named domain (error). This is also the
-           derivation step: the returned domain code is the single named domain, or None for
-           scalar models.
-        3. Input features may not exceed the model's operational depth (error).
+        Returns the derived domain code (single named domain shared across outputs,
+        or None for scalar models).
 
-        Returns the derived domain code (single named domain, or None for scalar models).
+        Each concrete subclass overrides to enforce its own rules:
 
-        ``@final`` — every prediction model goes through this same domain/depth check.
-        Type-specific checks (e.g. "transformer requires a sequence axis", "MLP rejects
-        recursive features") live on ``_validate_schema_compatibility`` instead.
+        - ``MLPModel`` — single domain + depth uniformity + input-depth ≤ op-depth.
+        - ``TransformerModel`` — single domain + axis-depth ≤ min-output-depth +
+          input-depth ≤ op-depth.
+        - ``DeterministicModel`` — no restrictions; derives domain best-effort.
+
+        Helpers ``_derive_single_domain``, ``_assert_uniform_output_depth``,
+        ``_assert_input_depth_within_op_depth`` cover the recurring rule fragments.
+        """
+        return self._derive_single_domain(schema)
+
+    # ------------------------------------------------------------------
+    # Validation helpers — building blocks for per-class implementations
+    # ------------------------------------------------------------------
+
+    def _output_depths(self) -> dict[str, int]:
+        """Map each output feature code to its iterator depth (0 for scalar)."""
+        depths: dict[str, int] = {}
+        for code in self.outputs:
+            feat = self._ref_features.get(code)
+            cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
+            depths[code] = (len(cols) - 1) if cols else 0
+        return depths
+
+    def _derive_single_domain(self, schema: Any) -> str | None:
+        """Derive the single named output domain; raise if outputs span multiple named domains.
+
+        Returns the single named domain code, or None for scalar-only models.
         """
         name = self.__class__.__name__
-        op_depth = self.depth
-
-        # Rule 1: mixed output depths are an error
-        if self.outputs:
-            output_depths = {}
-            for code in self.outputs:
-                feat = self._ref_features.get(code)
-                cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
-                d = (len(cols) - 1) if cols else 0
-                output_depths[code] = d
-            if len(set(output_depths.values())) > 1:
-                raise ValueError(
-                    f"{name}: output features have mixed depths {output_depths}. "
-                    f"The model will iterate at depth {op_depth}. Shallower outputs "
-                    f"will be overwritten on each deeper iteration step."
-                )
-
-        # Rule 2: all output features must share the same named domain (None = scalar, allowed alongside any domain).
-        # The single named domain is also the derived domain_code returned to the caller.
-        output_domains = set()
+        named_domains: set[str] = set()
         for code in self.outputs:
             feat_obj = schema.features.data_objects.get(code)
             domain_code = feat_obj.domain_code if (feat_obj is not None and hasattr(feat_obj, "domain_code")) else None  # type: ignore[union-attr]
-            output_domains.add(domain_code)
-        named_domains = {d for d in output_domains if d is not None}
+            if domain_code is not None:
+                named_domains.add(domain_code)
         if len(named_domains) > 1:
             raise ValueError(
                 f"{name}: output features span multiple named domains {named_domains}. "
                 f"A prediction model must operate within a single domain."
             )
+        return next(iter(named_domains)) if named_domains else None
 
-        derived_domain = next(iter(named_domains)) if named_domains else None
+    def _assert_uniform_output_depth(self) -> None:
+        """Raise if outputs mix depths."""
+        name = self.__class__.__name__
+        depths = self._output_depths()
+        if len(set(depths.values())) > 1:
+            raise ValueError(
+                f"{name}: output features have mixed depths {depths}. "
+                f"This model class requires all outputs to share the same depth."
+            )
 
-        # Rule 3: input features must not exceed operational depth
+    def _assert_input_depth_within_op_depth(self) -> None:
+        """Raise if any input feature depth exceeds the model's operational depth."""
+        name = self.__class__.__name__
+        op_depth = self.depth
         for code in self.input_features:
             feat = self._ref_features.get(code)
             feat_cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
@@ -110,8 +123,6 @@ class IPredictionModel(BaseInterface):
                         f"which exceeds the model's operational depth {op_depth}. A "
                         f"model cannot consume inputs at finer granularity than its outputs."
                     )
-
-        return derived_domain
 
     # === ABSTRACT METHODS ===
 

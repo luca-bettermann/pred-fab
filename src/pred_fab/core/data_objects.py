@@ -256,10 +256,20 @@ class Dimension:
     """User-facing declaration of a single domain axis: a named integer iteration parameter."""
 
     def __init__(self, code: str, iterator_code: str, min_val: int = 1, max_val: int | None = None):
+        if max_val is None:
+            raise ValueError(
+                f"Dimension(code='{code}'): max_val must be set. Domain axes use "
+                f"MIN_MAX normalization (requires a finite upper bound) and provide "
+                f"the upper bound for transformer decoder positional embeddings."
+            )
+        if int(max_val) < int(min_val):
+            raise ValueError(
+                f"Dimension(code='{code}'): max_val ({max_val}) must be >= min_val ({min_val})."
+            )
         self.code = code
         self.iterator_code = iterator_code
         self.min_val = int(min_val)
-        self.max_val = int(max_val) if max_val is not None else None
+        self.max_val = int(max_val)
 
 
 class DataDomainAxis(DataInt):
