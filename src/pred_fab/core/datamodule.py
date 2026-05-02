@@ -1051,6 +1051,36 @@ class DataModule:
             SplitType.VAL: list(val_codes or []),
             SplitType.TEST: list(test_codes or []),
         }
+
+    def set_split_dataset(
+        self,
+        dataset_code: str,
+        split: SplitType = SplitType.TRAIN,
+    ) -> list[str]:
+        """Set one split's membership from all experiments tagged with ``dataset_code``.
+
+        Sugar over ``set_split_codes``: filters ``self.dataset.experiments``
+        whose ``ExperimentData.dataset_code`` equals ``dataset_code`` and assigns
+        the resulting code list to the named ``split``. Other splits are left
+        untouched. Returns the matched experiment codes (in dataset iteration
+        order) for inspection.
+
+        Raises ``ValueError`` if no experiments match — usually a sign of a
+        typo in the dataset code or experiments not being tagged at creation.
+        """
+        if split not in (SplitType.TRAIN, SplitType.VAL, SplitType.TEST):
+            raise ValueError(f"set_split_dataset: unknown split {split!r}.")
+        codes = [
+            code for code, exp in self.dataset._experiments.items()
+            if exp.dataset_code == dataset_code
+        ]
+        if not codes:
+            raise ValueError(
+                f"set_split_dataset: no experiments tagged with dataset_code "
+                f"{dataset_code!r}.",
+            )
+        self._split_codes[split] = codes
+        return codes
     
     def __repr__(self) -> str:
         fitted_str = "fitted" if self._is_fitted else "not fitted"

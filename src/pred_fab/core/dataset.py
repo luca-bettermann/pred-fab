@@ -162,17 +162,22 @@ class ExperimentSpec:
 class ExperimentData:
     """All data for a single experiment: parameters, features, performance, and parameter update log."""
 
-    def __init__(self, 
-                 exp_code: str, 
-                 parameters: Parameters, 
-                 performance: PerformanceAttributes, 
-                 features: Features, 
+    def __init__(self,
+                 exp_code: str,
+                 parameters: Parameters,
+                 performance: PerformanceAttributes,
+                 features: Features,
+                 dataset_code: str | None = None,
                 #  predicted_features: Features
                  ):
         self.code = exp_code
         self.parameters = parameters
         self.performance = performance
         self.features = features
+        # Optional dataset grouping label — opaque to pred-fab core. External
+        # systems (e.g. pred-fab-nocodb) use this to tag experiments as belonging
+        # to a named dataset (baseline / reference / test / exploration / etc.).
+        self.dataset_code: str | None = dataset_code
         self.parameter_updates: list[ParameterUpdateEvent] = []
         # self.predicted_features = predicted_features
 
@@ -310,11 +315,18 @@ class ExperimentData:
             self.features.set_values_from_df(values, logger, parameters=self.parameters)
         elif block_type == BlockType.PERF_ATTRS:
             self.performance.set_values_from_dict(values, logger)
+        elif block_type == BlockType.METADATA:
+            if not isinstance(values, dict):
+                raise TypeError(
+                    f"Expected dict for metadata in experiment '{self.code}', "
+                    f"got {type(values).__name__}"
+                )
+            self.dataset_code = values.get("dataset_code")
         # elif block_type == BlockType.FEATURES_PRED:
         #     self.predicted_features.set_values_from_df(values, logger)
         else:
             raise ValueError(f"Unknown block type: {block_type}")
-        
+
     def get_data_dict(self, block_type: str) -> dict[str, Any]:
         """Get values as dict for a specific data type."""
         if block_type == BlockType.PARAMETERS:
@@ -327,11 +339,15 @@ class ExperimentData:
             return self.performance.get_values_dict()
         elif block_type == BlockType.FEATURES:
             return self.features.get_values_dict()
+        elif block_type == BlockType.METADATA:
+            if self.dataset_code is None:
+                return {}
+            return {"dataset_code": self.dataset_code}
         # elif block_type == BlockType.FEATURES_PRED:
         #     return self.predicted_features.get_values_dict()
         else:
             raise ValueError(f"Unknown block type: {block_type}")
-        
+
     def has_data(self, block_type: BlockType) -> bool:
         """Check if values are set for a specific data type."""
         if block_type == BlockType.PARAMETERS:
@@ -342,6 +358,8 @@ class ExperimentData:
             return bool(self.performance.get_values_dict())
         elif block_type == BlockType.FEATURES:
             return bool(self.features.get_values_dict())
+        elif block_type == BlockType.METADATA:
+            return self.dataset_code is not None
         # elif block_type == BlockType.FEATURES_PRED:
         #     return bool(self.predicted_features.get_values_dict())
         else:
@@ -394,18 +412,23 @@ class Dataset:
             block.add(data_obj)
         return block
         
-    def _create_experiment_shell(self, exp_code: str) -> ExperimentData:
+    def _create_experiment_shell(
+        self,
+        exp_code: str,
+        dataset_code: str | None = None,
+    ) -> ExperimentData:
         """Create new empty experiment shell with all blocks initialized."""
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
         perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance_attrs)
         arrays_block = self._init_from_schema(Features, self.schema.features)
         # pred_block = self._init_from_schema(Features, self.schema.features, suffix=PRED_SUFFIX)
-        
+
         return ExperimentData(
             exp_code=exp_code,
             parameters=params_block,
             performance=perf_block,
             features=arrays_block,
+            dataset_code=dataset_code,
             # predicted_features=pred_block
         )
     
@@ -416,11 +439,12 @@ class Dataset:
         performance: dict[str, Any] | None,
         metric_arrays: dict[str, np.ndarray] | None,
         parameter_updates: list[dict[str, Any]] | None = None,
+        dataset_code: str | None = None,
         # predicted_arrays: dict[str, np.ndarray] | None = None
     ) -> ExperimentData:
         """Build ExperimentData from loaded components."""
         # 1. Create shell with schema structure
-        exp_data = self._create_experiment_shell(exp_code)
+        exp_data = self._create_experiment_shell(exp_code, dataset_code=dataset_code)
         
         # 2. Set parameters and dimensions
         exp_data.parameters.set_values_from_dict(parameters, self.logger)
@@ -454,13 +478,20 @@ class Dataset:
         performance: dict[str, Any] | None = None,
         features: dict[str, np.ndarray] | None = None,
         parameter_updates: list[dict[str, Any]] | None = None,
+        dataset_code: str | None = None,
         recompute: bool = False
     ) -> ExperimentData:
-        """Create and register a new experiment; raises ValueError if it already exists and recompute=False."""
+        """Create and register a new experiment; raises ValueError if it already exists and recompute=False.
+
+        ``dataset_code`` (optional) tags the experiment as belonging to a named
+        dataset group (baseline / reference / test / etc.). Pred-fab core uses
+        it only as opaque metadata; ``DataModule.set_split_dataset`` reads it
+        for sugar-style split assignment.
+        """
         # Check memory
         if exp_code in self._experiments and not recompute:
             raise ValueError(f"Experiment {exp_code} already exists in memory")
-            
+
         # Check local storage
         if not recompute:
             # Check if folder exists
@@ -469,7 +500,10 @@ class Dataset:
                  raise ValueError(f"Experiment {exp_code} already exists locally")
 
         # Build and store
-        exp_data = self._build_experiment_data(exp_code, parameters, performance, features, parameter_updates)
+        exp_data = self._build_experiment_data(
+            exp_code, parameters, performance, features, parameter_updates,
+            dataset_code=dataset_code,
+        )
         self._experiments[exp_code] = exp_data
         return exp_data
     
@@ -642,6 +676,18 @@ class Dataset:
             verbose=verbose
         )
 
+        # 2c. Load metadata (optional — dataset_code etc.). Missing file is fine.
+        self._hierarchical_load(
+            BlockType.METADATA,
+            exp_codes,
+            loader=self.local_data.load_metadata,
+            setter=functools.partial(self._set_exp_data, block_type=BlockType.METADATA),
+            in_memory=functools.partial(self._has_exp_data, block_type=BlockType.METADATA),
+            external_loader=None,
+            recompute_flag=recompute_flag,
+            verbose=verbose
+        )
+
         # Filter codes that were actually found and validate (parameters are mandatory)
         for code in exp_codes:
             exp_data = self.get_experiment(code)
@@ -738,6 +784,16 @@ class Dataset:
             BlockType.PARAM_UPDATES, codes_to_save,
             getter=functools.partial(self._get_exp_data, block_type=BlockType.PARAM_UPDATES),
             saver=self.local_data.save_parameter_updates,
+            external_saver=None,
+            recompute=recompute,
+            verbose=verbose
+        )
+
+        # 2c. Save metadata (dataset_code etc.). Skipped per-experiment if empty.
+        self._hierarchical_save(
+            BlockType.METADATA, codes_to_save,
+            getter=functools.partial(self._get_exp_data, block_type=BlockType.METADATA),
+            saver=self.local_data.save_metadata,
             external_saver=None,
             recompute=recompute,
             verbose=verbose
@@ -1060,7 +1116,7 @@ class Dataset:
             if col in cat_maps:
                 cats = cat_maps[col]
                 cat_to_idx = {c: i for i, c in enumerate(cats)}
-                idxs = [cat_to_idx.get(row.get(col), 0) for row in X_rows]
+                idxs = [cat_to_idx.get(str(row.get(col, "")), 0) for row in X_rows]
                 X_dict[col] = torch.tensor(idxs, dtype=torch.long)
             else:
                 vals = []

@@ -142,6 +142,15 @@ class LocalData:
             file_format=FileFormat.JSON
         )
 
+    def load_metadata(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
+        """Load experiment metadata (e.g. ``dataset_code``) from local files."""
+        return self._load_files_generic(
+            codes=exp_codes,
+            subdirs=["{code}"],
+            filename=BlockType.METADATA.value,
+            file_format=FileFormat.JSON
+        )
+
     def load_features(self, exp_codes: list[str], **kwargs) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Load feature arrays from local files."""
         feature_name = kwargs.get('feature_name')
@@ -205,6 +214,18 @@ class LocalData:
             data=data,
             subdirs=["{code}"],
             filename=BlockType.PARAM_UPDATES.value,
+            recompute=recompute,
+            file_format=FileFormat.JSON
+        )
+
+    def save_metadata(self, exp_codes: list[str], data: dict[str, dict[str, Any]],
+                      recompute: bool, **kwargs) -> bool:
+        """Save experiment metadata (e.g. ``dataset_code``) to local files."""
+        return self._save_files_generic(
+            codes=exp_codes,
+            data=data,
+            subdirs=["{code}"],
+            filename=BlockType.METADATA.value,
             recompute=recompute,
             file_format=FileFormat.JSON
         )

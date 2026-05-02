@@ -44,6 +44,7 @@ class BlockType(str, Enum):
     PARAM_UPDATES = 'parameter_updates'
     PERF_ATTRS = 'performance_attrs'
     FEATURES = 'features'
+    METADATA = 'metadata'
     # FEATURES_PRED = 'features' + PRED_SUFFIX
 
 class Domain(str, Enum):
