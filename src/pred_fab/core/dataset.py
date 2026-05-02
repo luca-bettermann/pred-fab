@@ -117,11 +117,63 @@ class ParameterTrajectory:
     entries: list[tuple[int, 'ParameterProposal']] = field(default_factory=list)
 
     def apply(self, experiment: 'ExperimentData') -> None:
-        """Record all schedule entries as ParameterUpdateEvents on the experiment."""
-        for step_index, proposal in self.entries:
-            experiment.record_parameter_update(
-                proposal, dimension=self.dimension, step_index=step_index
+        """Record all schedule entries as ParameterUpdateEvents on the experiment.
+
+        Pure conversion goes through :func:`trajectory_to_events`; experiment-
+        side delta + sanitize + append is then handled by
+        ``ExperimentData.record_parameter_update`` per event.
+        """
+        for event in trajectory_to_events(self):
+            proposal = ParameterProposal(
+                values=dict(event.updates),
+                source_step=event.source_step,
             )
+            experiment.record_parameter_update(
+                proposal,
+                dimension=event.dimension,
+                step_index=event.step_index,
+            )
+
+
+def trajectory_to_events(trajectory: 'ParameterTrajectory') -> list[ParameterUpdateEvent]:
+    """Flatten a ``ParameterTrajectory`` into a list of ``ParameterUpdateEvent``s.
+
+    Each ``(step_index, proposal)`` entry becomes one event tagged with the
+    trajectory's dimension. Pure conversion — no experiment context required.
+    Inverse of :func:`events_to_trajectory`.
+    """
+    return [
+        ParameterUpdateEvent(
+            updates=dict(proposal.values),
+            dimension=trajectory.dimension,
+            step_index=step_index,
+            source_step=proposal.source_step,
+        )
+        for step_index, proposal in trajectory.entries
+    ]
+
+
+def events_to_trajectory(
+    events: list[ParameterUpdateEvent],
+    dimension: str,
+) -> 'ParameterTrajectory':
+    """Build a ``ParameterTrajectory`` for ``dimension`` from a flat event list.
+
+    Filters events to those whose ``dimension`` matches; sorts ascending by
+    ``step_index``; wraps each event's ``updates`` into a ``ParameterProposal``.
+    Events without a ``step_index`` (i.e. initial-state events not bound to a
+    schedule step) are skipped. Inverse of :func:`trajectory_to_events`.
+    """
+    matched = [e for e in events if e.dimension == dimension and e.step_index is not None]
+    matched.sort(key=lambda e: e.step_index)  # type: ignore[arg-type, return-value]
+    entries: list[tuple[int, ParameterProposal]] = [
+        (
+            int(e.step_index),  # type: ignore[arg-type]
+            ParameterProposal(values=dict(e.updates), source_step=e.source_step),
+        )
+        for e in matched
+    ]
+    return ParameterTrajectory(dimension=dimension, entries=entries)
 
 
 @dataclass

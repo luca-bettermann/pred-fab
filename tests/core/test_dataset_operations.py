@@ -9,7 +9,10 @@ from pred_fab.core import Dataset
 from pred_fab.core.dataset import (
     ExperimentData,
     ParameterProposal,
+    ParameterTrajectory,
     ParameterUpdateEvent,
+    events_to_trajectory,
+    trajectory_to_events,
 )
 from tests.utils.builders import (
     build_mixed_feature_schema,
@@ -365,3 +368,89 @@ def test_parameter_proposal_to_dict_returns_copy():
     d = proposal.to_dict()
     d["a"] = 999
     assert proposal["a"] == 1  # Original unchanged
+
+
+# ===== Trajectory ↔ events round-trip helpers =====
+
+def test_trajectory_to_events_preserves_ordering_and_payload():
+    """trajectory_to_events lifts each (step_index, proposal) into a tagged event."""
+    traj = ParameterTrajectory(
+        dimension="layer",
+        entries=[
+            (0, ParameterProposal({"speed": 30.0}, source_step="explore")),
+            (3, ParameterProposal({"speed": 45.0}, source_step="explore")),
+        ],
+    )
+    events = trajectory_to_events(traj)
+    assert len(events) == 2
+    assert events[0].dimension == "layer"
+    assert events[0].step_index == 0
+    assert events[0].updates == {"speed": 30.0}
+    assert events[0].source_step == "explore"
+    assert events[1].step_index == 3
+    assert events[1].updates == {"speed": 45.0}
+
+
+def test_events_to_trajectory_filters_by_dimension_and_sorts():
+    """events_to_trajectory keeps only matching-dimension events; sorts by step_index."""
+    events = [
+        ParameterUpdateEvent({"speed": 50.0}, dimension="layer", step_index=2),
+        ParameterUpdateEvent({"feed": 1.0}, dimension="segment", step_index=1),  # filtered out
+        ParameterUpdateEvent({"speed": 30.0}, dimension="layer", step_index=0),  # earlier
+    ]
+    traj = events_to_trajectory(events, dimension="layer")
+    assert traj.dimension == "layer"
+    assert len(traj.entries) == 2
+    assert [step for step, _ in traj.entries] == [0, 2]   # sorted
+    assert traj.entries[0][1].values == {"speed": 30.0}
+    assert traj.entries[1][1].values == {"speed": 50.0}
+
+
+def test_events_to_trajectory_skips_events_without_step_index():
+    """Events without step_index (e.g. initial-state events) are skipped."""
+    events = [
+        ParameterUpdateEvent({"speed": 30.0}, dimension="layer", step_index=None),  # skipped
+        ParameterUpdateEvent({"speed": 50.0}, dimension="layer", step_index=1),
+    ]
+    traj = events_to_trajectory(events, dimension="layer")
+    assert len(traj.entries) == 1
+    assert traj.entries[0][0] == 1
+
+
+def test_trajectory_events_round_trip():
+    """traj → events → traj produces an equivalent trajectory."""
+    original = ParameterTrajectory(
+        dimension="layer",
+        entries=[
+            (0, ParameterProposal({"speed": 30.0})),
+            (5, ParameterProposal({"speed": 45.0, "water": 0.4})),
+        ],
+    )
+    events = trajectory_to_events(original)
+    restored = events_to_trajectory(events, dimension="layer")
+    assert restored.dimension == original.dimension
+    assert len(restored.entries) == len(original.entries)
+    for (s_orig, p_orig), (s_rest, p_rest) in zip(original.entries, restored.entries):
+        assert s_orig == s_rest
+        assert p_orig.values == p_rest.values
+
+
+def test_apply_uses_trajectory_to_events(tmp_path):
+    """ParameterTrajectory.apply records events on the experiment via the helper path."""
+    schema = build_mixed_feature_schema(tmp_path)
+    dataset = Dataset(schema=schema, debug_flag=True)
+    dataset.create_experiment(
+        "exp_traj",
+        parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+    )
+    exp = dataset.get_experiment("exp_traj")
+
+    traj = ParameterTrajectory(
+        dimension="dim_1",
+        entries=[(1, ParameterProposal({"param_1": 9.0}))],
+    )
+    traj.apply(exp)
+    assert len(exp.parameter_updates) == 1
+    assert exp.parameter_updates[0].dimension == "dim_1"
+    assert exp.parameter_updates[0].step_index == 1
+    assert exp.parameter_updates[0].updates == {"param_1": 9.0}
