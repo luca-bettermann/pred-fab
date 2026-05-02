@@ -31,6 +31,8 @@ class _SmallMLP(MLPModel):
     def input_features(self) -> list[str]: return []
     @property
     def outputs(self) -> list[str]: return ["y"]
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]: return None, 0
 
 
 def _make_batches(n_rows: int, n_in: int = 1, n_out: int = 1) -> list[tuple[torch.Tensor, torch.Tensor]]:

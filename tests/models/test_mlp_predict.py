@@ -41,6 +41,10 @@ class _GridMLP(MLPModel):
     def outputs(self):
         return ["grid"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 2
+
 
 def _build_2d_schema(tmp_path) -> DatasetSchema:
     spatial = Domain("spatial", [

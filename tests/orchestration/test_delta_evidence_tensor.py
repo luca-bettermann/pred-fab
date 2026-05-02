@@ -28,6 +28,9 @@ class _IdentityModel(IPredictionModel):
     @property
     def outputs(self) -> list[str]: return ["feat_a"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]: return None, 0
+
     def train(self, *_: Any, **__: Any) -> None:
         self._is_trained = True
 

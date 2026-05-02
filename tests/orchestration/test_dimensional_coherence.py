@@ -37,6 +37,8 @@ def test_depth_is_zero_before_refs_set(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feature_grid"]
+        @property
+        def domain_spec(self) -> tuple[str | None, int | list[int]]: return None, 0
         def forward_pass(self, X, gradient_pass=False):
             return {"feature_grid": torch.zeros(X.shape[0])}
         def train(self, train_batches, val_batches, **kwargs): pass
@@ -106,12 +108,15 @@ def test_coherence_error_on_mixed_output_depths_mlp(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feat_deep", "feat_shallow"]  # mixed depths
+        @property
+        def domain_spec(self): return "spatial", 1   # MLP must declare a single depth
 
     model = MixedDepthMLP(logger)
     model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="mixed depths"):
+    # feat_deep has schema-depth 2, model declares accepted depth [1] → cross-check fails.
+    with pytest.raises(ValueError, match="not in the model's accepted depths"):
         model.validate_dimensional_coherence(schema)
 
 
@@ -145,6 +150,8 @@ def test_coherence_error_when_input_feature_deeper_than_output(tmp_path):
         def input_features(self): return ["feat_deep"]  # depth 2 > output depth 1
         @property
         def outputs(self): return ["feat_shallow"]
+        @property
+        def domain_spec(self): return "spatial", 1
 
     model = DeepInputShallowOutputMLP(logger)
     model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
@@ -194,14 +201,18 @@ def test_coherence_error_when_outputs_span_multiple_named_domains(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feat_spatial", "feat_temporal"]
-        def forward_pass(self, X): return np.zeros((X.shape[0], 2))
+        @property
+        def domain_spec(self): return "spatial", 1   # declares spatial; feat_temporal won't match
+        def forward_pass(self, X, gradient_pass=False):
+            return {"feat_spatial": torch.zeros(X.shape[0]), "feat_temporal": torch.zeros(X.shape[0])}
         def train(self, tb, vb, **kw): pass  # type: ignore[override]
 
     model = MultiDomainModel(logger)
     model.set_ref_parameters(list(schema.parameters.data_objects.values()))  # type: ignore[arg-type]
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="multiple named domains"):
+    # feat_temporal has schema-domain "temporal" which doesn't match declared "spatial".
+    with pytest.raises(ValueError, match="schema domain.*but model declares domain"):
         model.validate_dimensional_coherence(schema)
 
 

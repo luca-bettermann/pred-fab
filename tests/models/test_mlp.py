@@ -30,6 +30,10 @@ class _SingleOutMLP(MLPModel):
     def outputs(self):
         return ["y"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
+
 
 class _MultiOutMLP(MLPModel):
     HIDDEN = (12, 6)
@@ -46,6 +50,10 @@ class _MultiOutMLP(MLPModel):
     @property
     def outputs(self):
         return ["y1", "y2", "y3"]
+
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
 
 
 def _make_xy(n: int, n_inputs: int, n_outputs: int = 1, seed: int = 0):

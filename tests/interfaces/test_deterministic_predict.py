@@ -39,6 +39,10 @@ class _DoublingModel(DeterministicModel):
     def outputs(self):
         return ["y"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
+
     def formula(self, X: np.ndarray) -> dict[str, np.ndarray]:
         return {"y": X[:, 0] * 2.0}
 

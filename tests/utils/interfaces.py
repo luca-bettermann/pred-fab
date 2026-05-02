@@ -22,9 +22,16 @@ from pred_fab.interfaces import (
 class ShapeCheckingPredictionModel(IPredictionModel):
     """Prediction interface that captures observed batch widths and sizes."""
 
-    def __init__(self, logger, in_params: List[str], outputs: List[str]):
+    def __init__(
+        self,
+        logger,
+        in_params: List[str],
+        outputs: List[str],
+        domain_spec: tuple[str | None, int | list[int]] = (None, 0),
+    ):
         self._in_params = in_params
         self._outputs = outputs
+        self._domain_spec = domain_spec
         self.seen_widths: List[int] = []
         self.seen_batch_sizes: List[int] = []
         super().__init__(logger)
@@ -40,6 +47,10 @@ class ShapeCheckingPredictionModel(IPredictionModel):
     @property
     def outputs(self):
         return self._outputs
+
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return self._domain_spec
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         self.seen_widths.append(X.shape[1])
@@ -179,6 +190,10 @@ class MixedPredictionModelGrid(IPredictionModel):
     def outputs(self):
         return ["feature_grid"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 2
+
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         n_in = X.shape[1]
         w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
@@ -220,6 +235,10 @@ class MixedPredictionModelD1(IPredictionModel):
     def outputs(self):
         return ["feature_d1"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 1
+
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         n_in = X.shape[1]
         w = torch.from_numpy(self.weights[:n_in, :]).to(dtype=X.dtype)
@@ -260,6 +279,10 @@ class MixedPredictionModelScalar(IPredictionModel):
     @property
     def outputs(self):
         return ["feature_scalar"]
+
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         n_in = X.shape[1]
@@ -391,6 +414,10 @@ class WorkflowPredictionModel(IPredictionModel):
     def outputs(self) -> List[str]:
         return ["feature_1", "feature_2"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 2
+
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         w = torch.from_numpy(self.weights).to(dtype=X.dtype)
         if X.shape[1] != w.shape[0]:
@@ -506,6 +533,10 @@ class ContractPredictionModelDefaults(IPredictionModel):
     def outputs(self):
         return ["feature_scalar"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
+
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
         return {"feature_scalar": torch.zeros((X.shape[0],), dtype=X.dtype)}
 
@@ -527,6 +558,10 @@ class ContractDeterministicModel(DeterministicModel):
     @property
     def outputs(self):
         return ["feature_scalar"]
+
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return None, 0
 
     def formula(self, X: np.ndarray) -> dict[str, np.ndarray]:
         return {"feature_scalar": X[:, 0] * 2.0}

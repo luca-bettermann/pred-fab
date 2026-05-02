@@ -37,6 +37,10 @@ class _LayerTransformer(TransformerModel):
         return ("n_layers",)
 
     @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 1
+
+    @property
     def input_parameters(self):
         return ["p1", "n_layers", "n_segments"]
 
@@ -225,6 +229,8 @@ def test_validate_schema_compatibility_rejects_missing_property(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["src"]
+        @property
+        def domain_spec(self) -> tuple[str | None, int | list[int]]: return "spatial", 1
 
     model = _NoAxis(build_test_logger(tmp_path))
     model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
@@ -378,6 +384,10 @@ class _MixedDepthTransformer(TransformerModel):
         return ("n_layers",)
 
     @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", [1, 2]
+
+    @property
     def input_parameters(self):
         return ["p1", "n_layers", "n_segments"]
 
@@ -498,6 +508,10 @@ def test_validate_rejects_input_depth_above_axis_depth(tmp_path):
         @property
         def sequence_axis_code(self) -> tuple[str, ...]:
             return ("n_layers",)  # axis_depth = 1
+
+        @property
+        def domain_spec(self) -> tuple[str | None, int | list[int]]:
+            return "spatial", 1
 
         @property
         def input_parameters(self):

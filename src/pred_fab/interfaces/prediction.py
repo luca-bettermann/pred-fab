@@ -12,6 +12,9 @@ from ..utils.enum import NormMethod
 from ..core import DataObject, Dataset
 
 
+_UNRESOLVED = object()  # sentinel for "feature code couldn't be resolved against the schema"
+
+
 class IPredictionModel(BaseInterface):
     """Abstract base for prediction models: train on experiments, predict features, support export/import.
 
@@ -37,92 +40,138 @@ class IPredictionModel(BaseInterface):
         super().__init__(logger)
 
     @property
+    @abstractmethod
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        """Declare the model's structural envelope.
+
+        Returns ``(domain_code, accepted_depths)``:
+
+        - ``domain_code`` — the single schema domain this model operates in
+          (``None`` for scalar-only models that touch no domain).
+        - ``accepted_depths`` — ``int`` (single depth) or ``list[int]`` (multi).
+          Every declared output's schema-depth must lie in this set;
+          input-feature depth rules vary per class.
+
+        Validation cross-checks declared outputs and input_features against
+        this envelope and raises ``ValueError`` on mismatch.
+        """
+        ...
+
+    def _accepted_depths(self) -> list[int]:
+        """Normalised list view of the depth(s) declared in ``domain_spec``."""
+        _, d = self.domain_spec
+        return [int(d)] if isinstance(d, int) else [int(x) for x in d]
+
+    @property
     def depth(self) -> int:
-        """Max iterator depth across output features; 0 for scalar outputs. Requires set_ref_features() called first."""
-        max_depth = 0
-        for code in self.outputs:
-            feat = self._ref_features.get(code)
-            # _ref_features stores DataArray instances (Feature() factory output);
-            # Pyright sees Feature (factory class) which lacks .columns — type: ignore needed.
-            if feat is not None and hasattr(feat, "columns") and feat.columns:  # type: ignore[union-attr]
-                max_depth = max(max_depth, len(feat.columns) - 1)  # type: ignore[union-attr]
-        return max_depth
+        """Max iterator depth declared in ``domain_spec`` (0 for scalar-only models)."""
+        accepted = self._accepted_depths()
+        return max(accepted) if accepted else 0
 
     def validate_dimensional_coherence(self, schema: Any) -> str | None:
-        """Per-class structural rules for the model's domain/depth declarations.
+        """Cross-check declared ``domain_spec`` against the schema.
 
-        Returns the derived domain code (single named domain shared across outputs,
-        or None for scalar models).
+        Base rules (apply to all classes):
 
-        Each concrete subclass overrides to enforce its own rules:
+        1. ``domain_spec`` is implemented (subclasses must override).
+        2. Every declared output exists in the schema and lives in
+           ``domain_spec[0]``.
+        3. Every declared output's schema-depth is in ``_accepted_depths()``.
+        4. Every declared input feature exists in the schema and lives in
+           ``domain_spec[0]``.
 
-        - ``MLPModel`` — single domain + depth uniformity + input-depth ≤ op-depth.
-        - ``TransformerModel`` — single domain + axis-depth ≤ min-output-depth +
-          input-depth ≤ op-depth.
-        - ``DeterministicModel`` — no restrictions; derives domain best-effort.
-
-        Helpers ``_derive_single_domain``, ``_assert_uniform_output_depth``,
-        ``_assert_input_depth_within_op_depth`` cover the recurring rule fragments.
+        Returns ``domain_spec[0]`` so orchestration can register the model's
+        domain. Subclasses override to add class-specific structural rules
+        (uniform depth, axis-depth bounds, input-depth caps).
         """
-        return self._derive_single_domain(schema)
+        try:
+            declared_domain, _ = self.domain_spec
+        except NotImplementedError as e:
+            raise ValueError(
+                f"{self.__class__.__name__} must implement the `domain_spec` "
+                f"property to declare its structural envelope.",
+            ) from e
+
+        self._assert_features_in_declared_domain(schema, self.outputs, kind="output")
+        self._assert_features_in_declared_domain(schema, self.input_features, kind="input feature")
+        self._assert_output_depths_in_accepted_set(schema)
+        return declared_domain
 
     # ------------------------------------------------------------------
-    # Validation helpers — building blocks for per-class implementations
+    # Validation helpers — used by per-class overrides
     # ------------------------------------------------------------------
 
-    def _output_depths(self) -> dict[str, int]:
-        """Map each output feature code to its iterator depth (0 for scalar)."""
-        depths: dict[str, int] = {}
-        for code in self.outputs:
-            feat = self._ref_features.get(code)
-            cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
-            depths[code] = (len(cols) - 1) if cols else 0
-        return depths
-
-    def _derive_single_domain(self, schema: Any) -> str | None:
-        """Derive the single named output domain; raise if outputs span multiple named domains.
-
-        Returns the single named domain code, or None for scalar-only models.
+    def _assert_features_in_declared_domain(
+        self,
+        schema: Any,
+        codes: list[str],
+        kind: str,
+    ) -> None:
+        """Each code must resolve in schema (declared Feature or iterator-input-code)
+        with a domain matching ``domain_spec[0]``.
         """
         name = self.__class__.__name__
-        named_domains: set[str] = set()
+        declared_domain, _ = self.domain_spec
+        for code in codes:
+            feat_domain = self._resolve_feature_domain(schema, code)
+            if feat_domain is _UNRESOLVED:
+                raise ValueError(
+                    f"{name}: declared {kind} '{code}' is not in the schema "
+                    f"(neither a declared Feature nor a domain iterator-input-code).",
+                )
+            if feat_domain != declared_domain:
+                raise ValueError(
+                    f"{name}: {kind} '{code}' has schema domain {feat_domain!r}, "
+                    f"but model declares domain {declared_domain!r}.",
+                )
+
+    @staticmethod
+    def _resolve_feature_domain(schema: Any, code: str) -> Any:
+        """Return the domain code for a feature ``code`` looked up against the schema.
+
+        Resolution order: declared Feature → domain iterator-input-code → unresolved.
+        Returns the sentinel ``_UNRESOLVED`` if the code is neither.
+        """
+        feat_obj = schema.features.data_objects.get(code)
+        if feat_obj is not None:
+            return getattr(feat_obj, "domain_code", None)
+        for d_code in schema.domains.keys():
+            domain = schema.domains.get(d_code)
+            if code in domain.iterator_input_codes:
+                return d_code
+        return _UNRESOLVED
+
+    def _schema_feature_depth(self, schema: Any, code: str) -> int:
+        """Schema-declared depth for a feature code.
+
+        Resolution order:
+        - Declared Feature: depth = len(columns) - 1.
+        - Iterator-input-code: depth = axis index + 1 (e.g. ``layer_idx_pos`` on the
+          first axis of a 2-axis domain has depth 1).
+        - Unknown: 0 (caller's responsibility to guard via `_assert_features_in_declared_domain`).
+        """
+        feat_obj = schema.features.data_objects.get(code)
+        if feat_obj is not None:
+            cols = getattr(feat_obj, "columns", None) or []
+            return (len(cols) - 1) if cols else 0
+        for d_code in schema.domains.keys():
+            domain = schema.domains.get(d_code)
+            for axis_idx, ax in enumerate(domain.axes):
+                if f"{ax.iterator_code}_pos" == code:
+                    return axis_idx + 1
+        return 0
+
+    def _assert_output_depths_in_accepted_set(self, schema: Any) -> None:
+        """Each declared output's schema-depth must be in ``_accepted_depths()``."""
+        name = self.__class__.__name__
+        accepted = self._accepted_depths()
         for code in self.outputs:
-            feat_obj = schema.features.data_objects.get(code)
-            domain_code = feat_obj.domain_code if (feat_obj is not None and hasattr(feat_obj, "domain_code")) else None  # type: ignore[union-attr]
-            if domain_code is not None:
-                named_domains.add(domain_code)
-        if len(named_domains) > 1:
-            raise ValueError(
-                f"{name}: output features span multiple named domains {named_domains}. "
-                f"A prediction model must operate within a single domain."
-            )
-        return next(iter(named_domains)) if named_domains else None
-
-    def _assert_uniform_output_depth(self) -> None:
-        """Raise if outputs mix depths."""
-        name = self.__class__.__name__
-        depths = self._output_depths()
-        if len(set(depths.values())) > 1:
-            raise ValueError(
-                f"{name}: output features have mixed depths {depths}. "
-                f"This model class requires all outputs to share the same depth."
-            )
-
-    def _assert_input_depth_within_op_depth(self) -> None:
-        """Raise if any input feature depth exceeds the model's operational depth."""
-        name = self.__class__.__name__
-        op_depth = self.depth
-        for code in self.input_features:
-            feat = self._ref_features.get(code)
-            feat_cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
-            if feat_cols:
-                input_feat_depth = len(feat_cols) - 1
-                if input_feat_depth > op_depth:
-                    raise ValueError(
-                        f"{name}: input feature '{code}' has depth {input_feat_depth}, "
-                        f"which exceeds the model's operational depth {op_depth}. A "
-                        f"model cannot consume inputs at finer granularity than its outputs."
-                    )
+            feat_depth = self._schema_feature_depth(schema, code)
+            if feat_depth not in accepted:
+                raise ValueError(
+                    f"{name}: output '{code}' has schema depth {feat_depth}, "
+                    f"not in the model's accepted depths {accepted}.",
+                )
 
     # === ABSTRACT METHODS ===
 

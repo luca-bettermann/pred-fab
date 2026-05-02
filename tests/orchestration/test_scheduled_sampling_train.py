@@ -40,6 +40,10 @@ class _SourceModel(IPredictionModel):
     def outputs(self) -> list[str]:
         return ["src"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 2
+
     def train(self, train_batches, val_batches, **kwargs) -> None:
         self._is_trained = True
 
@@ -64,6 +68,10 @@ class _ConsumerModel(IPredictionModel):
     def outputs(self) -> list[str]:
         return ["consumer_out"]
 
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]:
+        return "spatial", 2
+
     def train(self, train_batches, val_batches, **kwargs) -> None:
         self._is_trained = True
 
@@ -82,6 +90,8 @@ class _CycleModelA(IPredictionModel):
     def input_features(self) -> list[str]: return ["b"]
     @property
     def outputs(self) -> list[str]: return ["a"]
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]: return None, 0
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch
@@ -98,6 +108,8 @@ class _CycleModelB(IPredictionModel):
     def input_features(self) -> list[str]: return ["a"]
     @property
     def outputs(self) -> list[str]: return ["b"]
+    @property
+    def domain_spec(self) -> tuple[str | None, int | list[int]]: return None, 0
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch

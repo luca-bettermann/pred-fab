@@ -49,7 +49,7 @@ import torch.nn as nn
 
 from ..interfaces import IPredictionModel
 from ..utils import PfabLogger
-from .depth_decoders import IDepthDecoder, PerNodeMLPDepthDecoder
+from .depth_decoders import PerNodeMLPDecoder
 
 
 class TransformerModel(IPredictionModel):
@@ -71,10 +71,6 @@ class TransformerModel(IPredictionModel):
     LR: float = 5e-4
     WEIGHT_DECAY: float = 1e-3
     SEED: int = 0
-
-    # Per-depth decoder overrides. Keyed by output feature depth. Missing
-    # depths fall back to ``PerNodeMLPDepthDecoder()`` (framework default).
-    DEPTH_DECODERS: dict[int, IDepthDecoder] = {}
 
     # Per-depth loss weights. Default 1.0 each; override to balance multi-
     # depth losses (e.g. ``LOSS_WEIGHTS = {1: 1.0, 2: 0.5}`` halves depth-2's
@@ -155,13 +151,31 @@ class TransformerModel(IPredictionModel):
         decoders: dict[int, nn.Module] = {}
         for depth, feats in self._depth_to_features.items():
             extra_axis_sizes = tuple(domain_axis_sizes[n_axes:depth])
-            factory: IDepthDecoder = self.DEPTH_DECODERS.get(depth, PerNodeMLPDepthDecoder())
-            decoders[depth] = factory.build(
-                d_model=self.D_MODEL,
+            decoders[depth] = self._build_decoder(
+                depth=depth,
                 n_features=len(feats),
                 extra_axis_sizes=extra_axis_sizes,
             )
         return _EncDecNet(encoder, decoders)
+
+    def _build_decoder(
+        self,
+        depth: int,
+        n_features: int,
+        extra_axis_sizes: tuple[int, ...],
+    ) -> nn.Module:
+        """Build the decoder for a single output depth.
+
+        Default: ``PerNodeMLPDecoder`` — symmetric-prior shared MLP applied at
+        every cell with positional embeddings on un-sequenced axes. Override
+        in subclasses to swap heads (e.g. for asymmetric-prior cases).
+        """
+        del depth  # not used by the default decoder
+        return PerNodeMLPDecoder(
+            d_model=self.D_MODEL,
+            n_features=n_features,
+            extra_axis_sizes=extra_axis_sizes,
+        )
 
     # ------------------------------------------------------------------
     # IPredictionModel contract — sequence-aware
@@ -456,17 +470,17 @@ class TransformerModel(IPredictionModel):
     # ------------------------------------------------------------------
 
     def validate_dimensional_coherence(self, schema: Any) -> str | None:
-        """Transformer rules: single domain + axis is a prefix of the domain + axis-depth
-        ≤ min-output-depth + input-depth ≤ axis-depth.
+        """Transformer rules layered on the base: axis prefix-of-domain +
+        axis-depth ≤ min(accepted_depths) + input-depth ≤ axis-depth.
 
-        Mixed output depths ARE allowed — depth decoders handle expansion. Axis
-        must be a *prefix* of ``domain.axes`` so depth-d feature shape is
+        Mixed accepted depths are allowed — depth decoders handle expansion.
+        Axis must be a *prefix* of ``domain.axes`` so depth-d feature shape is
         unambiguously the first ``d`` axes. Input depth ≤ axis depth ensures
-        all model inputs reach the encoder (deeper inputs would be lost when
+        all inputs reach the encoder (deeper inputs would be lost when
         n_other is collapsed).
         """
         name = self.__class__.__name__
-        domain_code = self._derive_single_domain(schema)
+        domain_code = super().validate_dimensional_coherence(schema)
         seq_axis_codes = self.sequence_axis_code
         axis_depth = len(seq_axis_codes)
 
@@ -482,31 +496,25 @@ class TransformerModel(IPredictionModel):
                     f"sequence_axis_code so they match in order.",
                 )
 
+        # Axis depth ≤ shallowest accepted depth.
+        accepted = self._accepted_depths()
+        if accepted and axis_depth > min(accepted):
+            raise ValueError(
+                f"{name}: sequence_axis_code has length {axis_depth} but the "
+                f"shallowest accepted depth is {min(accepted)}. Axis must not be "
+                f"deeper than any output (no pooling decoder).",
+            )
+
         # Input depth ≤ axis depth (deeper inputs would not reach the encoder).
         for code in self.input_features:
-            feat = self._ref_features.get(code)
-            feat_cols = feat.columns if (feat is not None and hasattr(feat, "columns")) else []  # type: ignore[union-attr]
-            if feat_cols:
-                input_feat_depth = len(feat_cols) - 1
-                if input_feat_depth > axis_depth:
-                    raise ValueError(
-                        f"{name}: input feature '{code}' has depth {input_feat_depth}, "
-                        f"which exceeds the model's sequence axis depth {axis_depth}. "
-                        f"The encoder operates at axis-depth granularity; deeper "
-                        f"inputs would be lost. Either lift the input to depth ≤ "
-                        f"{axis_depth} or extend sequence_axis_code.",
-                    )
-
-        # Axis depth ≤ shallowest output depth.
-        depths = self._output_depths()
-        if depths:
-            min_depth = min(depths.values())
-            if axis_depth > min_depth:
+            input_depth = self._schema_feature_depth(schema, code)
+            if input_depth > axis_depth:
                 raise ValueError(
-                    f"{name}: sequence_axis_code has length {axis_depth} but the "
-                    f"shallowest output has depth {min_depth}. Axis must not be "
-                    f"deeper than any output (no pooling decoder). Output depths: "
-                    f"{depths}.",
+                    f"{name}: input feature '{code}' has depth {input_depth}, "
+                    f"which exceeds the model's sequence axis depth {axis_depth}. "
+                    f"The encoder operates at axis-depth granularity; deeper "
+                    f"inputs would be lost. Either lift the input to depth ≤ "
+                    f"{axis_depth} or extend sequence_axis_code.",
                 )
         return domain_code
 

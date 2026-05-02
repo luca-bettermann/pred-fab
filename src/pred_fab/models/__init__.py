@@ -17,6 +17,6 @@ dependencies.
 
 from .mlp import MLPModel
 from .transformer import TransformerModel
-from .depth_decoders import IDepthDecoder, PerNodeMLPDepthDecoder
+from .depth_decoders import PerNodeMLPDecoder
 
-__all__ = ["MLPModel", "TransformerModel", "IDepthDecoder", "PerNodeMLPDepthDecoder"]
+__all__ = ["MLPModel", "TransformerModel", "PerNodeMLPDecoder"]

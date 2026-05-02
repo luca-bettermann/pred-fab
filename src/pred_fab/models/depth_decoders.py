@@ -1,103 +1,53 @@
-"""Depth decoders for ``TransformerModel`` — per-feature output heads.
+"""Depth decoder for ``TransformerModel`` — per-cell output head.
 
-Encoders produce a single latent representation per sequence position:
-``(B, L, D)``. The encoder is shared across all output features regardless of
-depth. Each output feature, however, lives at a specific depth (number of
-domain axes it spans). The decoder's job is to map the encoder's latent to
-the feature's native shape.
+The encoder produces a single latent representation per sequence position:
+``(B, L, D)``, shared across all output features regardless of depth. Each
+output feature lives at a specific depth (number of domain axes it spans).
+The decoder maps the encoder's latent to the feature's native shape.
 
-The framework auto-selects a decoder per output feature based on the
-relationship between ``len(sequence_axis_code)`` (axis depth) and the
-feature's depth:
+The framework ships exactly one decoder, ``PerNodeMLPDecoder`` — a shared
+2-layer MLP applied at every (sequence position, extra-axis position) with
+learned positional embeddings on the un-sequenced axes. Symmetric prior:
+the same physical mapping at each cell, distinguished only by position.
+Subclasses can override ``TransformerModel._build_decoder`` if a different
+head is ever needed.
 
-- Axis depth == feature depth → 2-layer MLP, no extra position embedding.
-- Axis depth < feature depth  → 2-layer MLP + per-extra-axis position
-  embedding broadcast across the un-sequenced axes.
-- Axis depth > feature depth  → rejected at validation (no pooling decoder).
+Operating regimes:
 
-``PerNodeMLPDepthDecoder`` is the universal default. Users can override on a
-per-depth basis by setting ``DEPTH_DECODERS = {2: CustomDecoder()}`` on a
-TransformerModel subclass; the framework only auto-selects when no override
-is provided.
+- Axis depth == feature depth → MLP only, no extra position embedding.
+- Axis depth < feature depth  → MLP + per-extra-axis position embedding
+  broadcast across the un-sequenced axes.
+- Axis depth > feature depth  → rejected at validation; no pooling decoder.
 
-Caveat: the per-extra-axis position embedding is sized at the schema's
-``max_val`` for that axis. Positions beyond what training actually saw remain
-randomly initialised. Make sure training experiments cover the full range of
-expected positions, or document degraded extrapolation for unseen counts.
+Caveat: per-extra-axis position embeddings are sized at the schema's
+``max_val`` for that axis. Positions beyond what training actually saw
+remain randomly initialised. Make sure training experiments cover the full
+range of expected positions, or document degraded extrapolation.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-
-import numpy as np
 import torch
 import torch.nn as nn
 
 
-class IDepthDecoder(ABC):
-    """Abstract decoder mapping encoder hidden state to a per-feature output tensor.
+class PerNodeMLPDecoder(nn.Module):
+    """Shared 2-layer MLP applied per output cell, with per-extra-axis position embeddings.
 
-    Decoders are *factories*: ``build(...)`` returns an ``nn.Module`` sized for
-    a specific (d_model, n_features, extra_axis_sizes) configuration. The
-    factory pattern keeps the decoder declaration parameter-free at class
-    declaration time on the model.
-    """
+    Maps ``(B, L, d_model) → (B, L, *extra_axis_sizes, n_features)``.
 
-    @abstractmethod
-    def build(
-        self,
-        d_model: int,
-        n_features: int,
-        extra_axis_sizes: tuple[int, ...],
-    ) -> nn.Module:
-        """Return an ``nn.Module`` that maps ``(B, L, d_model)`` → ``(B, L, *extra_axis_sizes, n_features)``.
-
-        ``extra_axis_sizes`` is the tuple of axis sizes the decoder must
-        expand over (i.e. axes the encoder did NOT sequence over). When
-        empty, the decoder simply maps ``(B, L, D) → (B, L, n_features)``.
-        """
-
-
-class PerNodeMLPDepthDecoder(IDepthDecoder):
-    """Universal symmetric-prior decoder.
-
-    Same shared MLP applied at every (sequence position, extra-axis position).
-    Per-extra-axis learned position embeddings encode where in the
-    un-sequenced grid each output cell sits; the encoder's own positional
-    embeddings handle the sequence axes. With zero extra axes the decoder
+    ``extra_axis_sizes`` is the tuple of axis sizes the decoder expands over —
+    axes the encoder did NOT sequence over. With zero extra axes the decoder
     degenerates to a per-position MLP.
     """
-
-    def __init__(self, hidden: int = 32, embed_dim: int = 16):
-        self.hidden = hidden
-        self.embed_dim = embed_dim
-
-    def build(
-        self,
-        d_model: int,
-        n_features: int,
-        extra_axis_sizes: tuple[int, ...],
-    ) -> nn.Module:
-        return _PerNodeMLPDecoderModule(
-            d_model=d_model,
-            n_features=n_features,
-            extra_axis_sizes=extra_axis_sizes,
-            hidden=self.hidden,
-            embed_dim=self.embed_dim,
-        )
-
-
-class _PerNodeMLPDecoderModule(nn.Module):
-    """Shared 2-layer MLP applied per output cell, with per-extra-axis position embeddings."""
 
     def __init__(
         self,
         d_model: int,
         n_features: int,
         extra_axis_sizes: tuple[int, ...],
-        hidden: int,
-        embed_dim: int,
+        hidden: int = 32,
+        embed_dim: int = 16,
     ):
         super().__init__()
         self.extra_axis_sizes = tuple(int(s) for s in extra_axis_sizes)
@@ -148,7 +98,6 @@ class _PerNodeMLPDecoderModule(nn.Module):
                 )
 
         B, L, _D = hidden.shape
-        # Slice embedding to actual size per axis: (*extra, n_extra · embed_dim).
         coords = [torch.arange(s, device=hidden.device) for s in extra]
         embed_per_axis = [emb(c) for emb, c in zip(self.pos_embeds, coords)]
 
@@ -165,21 +114,3 @@ class _PerNodeMLPDecoderModule(nn.Module):
 
         x = torch.cat([hidden_b, pos_b], dim=-1)
         return self.mlp(x)
-
-
-def select_default_decoder(
-    axis_depth: int,
-    feature_depth: int,
-) -> IDepthDecoder:
-    """Pick the framework-default decoder for an (axis_depth, feature_depth) combo.
-
-    Validation has already enforced ``axis_depth ≤ feature_depth``; this just
-    returns ``PerNodeMLPDepthDecoder`` (which handles both same-depth and
-    feature-deeper-than-axis via its ``extra_axis_sizes`` argument).
-    """
-    if axis_depth > feature_depth:
-        raise ValueError(
-            f"axis_depth={axis_depth} > feature_depth={feature_depth}. "
-            f"Pooling decoders are not supported; redesign the model.",
-        )
-    return PerNodeMLPDepthDecoder()

@@ -315,12 +315,27 @@ class MLPModel(IPredictionModel):
     # needs. TransformerModel overrides predict for sequence dispatch.
 
     def validate_dimensional_coherence(self, schema: Any) -> str | None:
-        """MLP requires single domain + uniform output depth + input-depth ≤ op-depth.
+        """MLP requires uniform output depth + input-feature depth ≤ accepted depth.
 
         Per-cell independent dispatch can't handle multi-depth outputs; depth
-        uniformity is structural for this class.
+        uniformity is structural for this class. ``domain_spec`` must declare
+        a single accepted depth (``int`` or 1-element ``list[int]``); inputs
+        must lie at that depth or shallower.
         """
-        domain_code = self._derive_single_domain(schema)
-        self._assert_uniform_output_depth()
-        self._assert_input_depth_within_op_depth()
+        domain_code = super().validate_dimensional_coherence(schema)
+        accepted = self._accepted_depths()
+        if len(accepted) != 1:
+            raise ValueError(
+                f"{self.__class__.__name__}: MLPModel requires a single accepted "
+                f"depth, got {accepted}. Declare ``domain_spec = (domain, int)``.",
+            )
+        max_input_depth = accepted[0]
+        for code in self.input_features:
+            input_depth = self._schema_feature_depth(schema, code)
+            if input_depth > max_input_depth:
+                raise ValueError(
+                    f"{self.__class__.__name__}: input feature '{code}' has "
+                    f"depth {input_depth}, exceeds the model's accepted depth "
+                    f"{max_input_depth}.",
+                )
         return domain_code
