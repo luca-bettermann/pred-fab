@@ -23,6 +23,7 @@ src/pred_fab/interfaces/features.py
 src/pred_fab/interfaces/prediction.py
 src/pred_fab/interfaces/tuning.py
 src/pred_fab/models/__init__.py
+src/pred_fab/models/depth_decoders.py
 src/pred_fab/models/mlp.py
 src/pred_fab/models/transformer.py
 src/pred_fab/orchestration/__init__.py

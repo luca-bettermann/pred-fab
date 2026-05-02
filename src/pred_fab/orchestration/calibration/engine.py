@@ -19,7 +19,6 @@ class _OptResult:
     convergence_history: list[float] = field(default_factory=list)  # best energy per iteration
 
 
-# Suppress sklearn warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
