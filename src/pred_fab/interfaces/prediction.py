@@ -155,11 +155,17 @@ class IPredictionModel(BaseInterface):
     @abstractmethod
     def train(
         self,
-        train_batches: list[tuple[torch.Tensor, torch.Tensor]],
-        val_batches: list[tuple[torch.Tensor, torch.Tensor]],
+        train_batches: list[tuple[torch.Tensor, Any]],
+        val_batches: list[tuple[torch.Tensor, Any]],
         **kwargs,
     ) -> None:
-        """Train the model on (X, y) tensor batch tuples."""
+        """Train the model on ``(X, y)`` batch tuples.
+
+        The y element's type depends on the concrete subclass:
+
+        - ``MLPModel`` / ``DeterministicModel``: ``torch.Tensor`` ``(B, n_outputs)``.
+        - ``TransformerModel``: ``dict[feat_code, tensor]`` at native shape per feature.
+        """
         pass
 
     # === POLYMORPHIC PREDICT + TYPE-SPECIFIC SCHEMA CHECK ===

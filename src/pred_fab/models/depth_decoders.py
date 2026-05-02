@@ -116,28 +116,50 @@ class _PerNodeMLPDecoderModule(nn.Module):
             nn.Linear(hidden, n_features),
         )
 
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        """``(B, L, D)`` → ``(B, L, *extra_axis_sizes, n_features)``."""
+    def forward(
+        self,
+        hidden: torch.Tensor,
+        actual_axis_sizes: tuple[int, ...] | None = None,
+    ) -> torch.Tensor:
+        """``(B, L, D)`` → ``(B, L, *actual_axis_sizes, n_features)``.
+
+        ``actual_axis_sizes`` is the per-call runtime size per extra axis (must
+        be ≤ schema-max ``extra_axis_sizes`` used at decoder construction). If
+        ``None``, defaults to schema-max. Each axis's positional embedding is
+        sliced to the actual size, so the same decoder serves variable-shaped
+        runtimes (e.g. experiments with smaller n_segments than schema max).
+        """
         if self.n_extra == 0:
             return self.mlp(hidden)
 
-        B, L, _D = hidden.shape
-        extra = self.extra_axis_sizes
-        # Build position embeddings on the extra grid: (*extra, n_extra · embed_dim).
-        coords = [torch.arange(size, device=hidden.device) for size in extra]
-        embed_per_axis = [emb(c) for emb, c in zip(self.pos_embeds, coords)]  # each (size_i, embed_dim)
+        extra = (
+            tuple(int(s) for s in actual_axis_sizes)
+            if actual_axis_sizes is not None else self.extra_axis_sizes
+        )
+        if len(extra) != self.n_extra:
+            raise ValueError(
+                f"actual_axis_sizes length {len(extra)} != n_extra {self.n_extra}.",
+            )
+        for i, size in enumerate(extra):
+            if size > self.extra_axis_sizes[i]:
+                raise ValueError(
+                    f"actual_axis_sizes[{i}] = {size} exceeds embedded size "
+                    f"{self.extra_axis_sizes[i]}; bump the schema axis max_val.",
+                )
 
-        # Outer-broadcast each axis's embedding to the full extra grid.
+        B, L, _D = hidden.shape
+        # Slice embedding to actual size per axis: (*extra, n_extra · embed_dim).
+        coords = [torch.arange(s, device=hidden.device) for s in extra]
+        embed_per_axis = [emb(c) for emb, c in zip(self.pos_embeds, coords)]
+
         broadcast_shapes = []
         for i, emb_i in enumerate(embed_per_axis):
             view_shape = [1] * self.n_extra + [emb_i.shape[-1]]
             view_shape[i] = emb_i.shape[0]
             broadcast_shapes.append(emb_i.view(*view_shape).expand(*extra, emb_i.shape[-1]))
-        pos_concat = torch.cat(broadcast_shapes, dim=-1)  # (*extra, n_extra · embed_dim)
+        pos_concat = torch.cat(broadcast_shapes, dim=-1)
 
-        # Tile hidden over the extra grid: (B, L, *extra, D).
         hidden_b = hidden.view(B, L, *([1] * self.n_extra), -1).expand(B, L, *extra, hidden.shape[-1])
-        # Tile pos_concat over (B, L): (B, L, *extra, n_extra · embed_dim).
         pos_b = pos_concat.view(*([1, 1] + list(extra) + [pos_concat.shape[-1]]))
         pos_b = pos_b.expand(B, L, *extra, pos_concat.shape[-1])
 

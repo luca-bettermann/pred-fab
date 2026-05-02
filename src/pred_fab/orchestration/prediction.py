@@ -199,12 +199,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
 
         if isinstance(model, TransformerModel):
-            model_train_batches, seq_axis_sizes = self._build_transformer_train_batches(
+            model_train_batches, seq_axis_sizes, domain_axis_sizes = self._build_transformer_train_batches(
                 model, SplitType.TRAIN,
             )
-            model_val_batches, _ = self._build_transformer_train_batches(model, SplitType.VAL)
+            model_val_batches, _, _ = self._build_transformer_train_batches(model, SplitType.VAL)
             if seq_axis_sizes:
                 kwargs["seq_axis_sizes"] = seq_axis_sizes
+            if domain_axis_sizes:
+                kwargs["domain_axis_sizes"] = domain_axis_sizes
         else:
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
@@ -218,36 +220,53 @@ class PredictionSystem(BaseOrchestrationSystem):
         self,
         model: IPredictionModel,
         split: SplitType,
-    ) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], tuple[int, ...]]:
-        """Build (B, L, n_input) / (B, L, n_output) batches per training experiment.
+    ) -> tuple[
+        list[tuple[torch.Tensor, dict[str, torch.Tensor]]],
+        tuple[int, ...],
+        tuple[int, ...],
+    ]:
+        """Build per-experiment ``(X_seq, y_dict)`` batches at encoder granularity.
 
         For each experiment in the split:
-          1. Resolve dim_info (`shape`, `dim_codes_ordered`, `iterator_feats`).
-          2. Use ``dm.build_sequence_batch`` to lay out X as
-             ``(n_other, L, n_model_input)`` with the experiment's actual params.
-          3. Pull ground-truth y for the same axis order from the dataset's
-             tensor export, reshape to ``(n_other, L, n_output)``.
-        Each experiment becomes one ``(X_seq, y_seq)`` batch entry; the
-        concatenation across experiments happens inside ``model.train``.
+          1. Resolve dim_info (``shape``, ``dim_codes_ordered``, ``iterator_feats``).
+          2. Use ``dm.build_sequence_batch`` to lay out X as ``(n_other, L, n_model_input)``
+             then collapse to ``(1, L, n_model_input)`` (rows are equivalent under
+             input_depth ≤ axis_depth).
+          3. Pull ground-truth y for each output feature, reshape to its native
+             encoder-aligned shape ``(1, L, *extra_axis_sizes_d)``.
 
-        Returns ``(batches, seq_axis_sizes)``. ``seq_axis_sizes`` is the per-
-        sequence-axis size tuple shared across experiments (uniform L is
-        already required for cat). Empty tuple when no batches.
+        Returns ``(batches, seq_axis_sizes, domain_axis_sizes)`` —
+        ``seq_axis_sizes`` is the per-sequence-axis size tuple shared across
+        experiments; ``domain_axis_sizes`` is the schema-derived upper bound
+        per domain axis (used by decoder positional embeddings).
         """
         dm = self._assert_trained()
         codes = dm.get_split_codes(split)
         if not codes:
-            return [], ()
+            return [], (), ()
 
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-        output_indices = [dm.output_columns.index(f) for f in model.outputs]
-        output_indices_t = torch.as_tensor(output_indices, dtype=torch.long)
 
         seq_codes: tuple[str, ...] = model.sequence_axis_code  # type: ignore[attr-defined]
+        n_axes = len(seq_codes)
         first_seq_axis_sizes: tuple[int, ...] | None = None
 
-        out: list[tuple[torch.Tensor, torch.Tensor]] = []
+        # Schema-derived domain axis sizes (max_val per axis) — same for all experiments.
+        domain_axis_sizes: tuple[int, ...] = ()
+        domain_code = self._model_domain_map.get(id(model))
+        if domain_code is not None and dm.dataset.schema.domains.has(domain_code):
+            domain = dm.dataset.schema.domains.get(domain_code)
+            domain_axis_sizes = tuple(int(ax.max_val) for ax in domain.axes)
+
+        # Per-feature depth lookup (feat → depth).
+        feat_depths: dict[str, int] = {}
+        for feat in model.outputs:
+            feat_obj = model._ref_features.get(feat)  # type: ignore[attr-defined]
+            cols = feat_obj.columns if (feat_obj is not None and hasattr(feat_obj, "columns")) else []  # type: ignore[union-attr]
+            feat_depths[feat] = (len(cols) - 1) if cols else 0
+
+        out: list[tuple[torch.Tensor, dict[str, torch.Tensor]]] = []
         for code in codes:
             exp = dm.dataset.get_experiment(code)
             params = exp.get_effective_parameters_for_row(0)
@@ -274,11 +293,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             other_sizes = [shape[i] for i in other_axis_indices]
             n_other = int(np.prod(other_sizes)) if other_sizes else 1
 
-            # Build sequence X for this experiment: (n_other, L, n_model_input).
+            # Encoder X: (n_other, L, n_input_full) → (1, L, n_input_full) → (1, L, n_model_input).
             X_seq_full = dm.build_sequence_batch(model, [params], [dim_info])
-            X_seq = X_seq_full.index_select(2, input_indices_t)
+            X_seq = X_seq_full[:1].index_select(2, input_indices_t)
 
-            # Pull y from the per-experiment tensor export and reshape.
             exported = dm.dataset.export_to_tensor_dict(
                 [code],
                 x_columns=dm.input_columns,
@@ -287,31 +305,34 @@ class PredictionSystem(BaseOrchestrationSystem):
             )
             if exported.is_empty():
                 continue
-            # cell_meta rows are in C-order over `shape` (dim_codes_ordered).
             n_rows = exported.n_rows
-            y_cols: list[torch.Tensor] = []
+
+            # Per-feature y at encoder-aligned native shape (1, L, *extra_axis_sizes_d).
+            y_dict: dict[str, torch.Tensor] = {}
             for feat in model.outputs:
-                col_t = exported.y.get(feat, torch.zeros(n_rows, dtype=torch.float32))
+                col_t = exported.y.get(feat, torch.zeros(n_rows, dtype=torch.float32)).to(dtype=torch.float32)
                 stats = dm._feature_stats.get(feat)
                 if stats is not None:
-                    col_t = dm._apply_normalization_tensor(col_t.to(dtype=torch.float32), stats)
-                y_cols.append(col_t.to(dtype=torch.float32))
-            y_flat = torch.stack(y_cols, dim=-1)  # (n_rows, n_out)
-            n_out = y_flat.shape[-1]
-            y_seq = torch.zeros((n_other, L, n_out), dtype=torch.float32)
-            for cell_flat in range(n_rows):
-                coord = np.unravel_index(cell_flat, shape)
-                seq_coord = tuple(int(coord[i]) for i in seq_axis_indices)
-                seq_pos = int(np.ravel_multi_index(seq_coord, seq_axis_sizes)) if seq_axis_sizes else 0
-                if other_sizes:
-                    other_coord = tuple(int(coord[i]) for i in other_axis_indices)
-                    other_idx = int(np.ravel_multi_index(other_coord, other_sizes))
-                else:
-                    other_idx = 0
-                y_seq[other_idx, seq_pos, :] = y_flat[cell_flat]
+                    col_t = dm._apply_normalization_tensor(col_t, stats)
+                feat_depth = feat_depths[feat]
+                # extra_axis_sizes_d: axes [axis_depth..feat_depth) of the model's shape.
+                extra_axis_sizes_d = tuple(shape[axis_idx] for axis_idx in range(n_axes, feat_depth))
+                # Build (1, L, *extra_axis_sizes_d). Cells deeper than feat_depth
+                # are broadcast-equivalent — last write wins (all values equal).
+                y_feat = torch.zeros((1, L) + extra_axis_sizes_d, dtype=torch.float32)
+                for cell_flat in range(n_rows):
+                    coord = np.unravel_index(cell_flat, shape)
+                    seq_coord = tuple(int(coord[i]) for i in seq_axis_indices)
+                    seq_pos = int(np.ravel_multi_index(seq_coord, seq_axis_sizes)) if seq_axis_sizes else 0
+                    if extra_axis_sizes_d:
+                        extra_coord = tuple(int(coord[axis_idx]) for axis_idx in range(n_axes, feat_depth))
+                        y_feat[(0, seq_pos) + extra_coord] = col_t[cell_flat]
+                    else:
+                        y_feat[0, seq_pos] = col_t[cell_flat]
+                y_dict[feat] = y_feat
 
-            out.append((X_seq, y_seq))
-        return out, (first_seq_axis_sizes or ())
+            out.append((X_seq, y_dict))
+        return out, (first_seq_axis_sizes or ()), domain_axis_sizes
 
     def _compute_model_cat_cardinalities(self, model: IPredictionModel) -> dict[int, int]:
         """Translate DataModule cat cardinalities into model-relative col indices.

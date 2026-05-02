@@ -105,11 +105,16 @@ def _train_transformer(tmp_path, dm, n_layers: int = 4):
     model = _LayerTransformer(build_test_logger(tmp_path))
     model.set_ref_features(list(dm.dataset.schema.features.data_objects.values()))  # type: ignore[arg-type]
 
-    # Synthesize a sequence-batch training set: 2 experiments × L positions.
+    # Synthesize a sequence-batch training set at encoder granularity:
+    # X_seq = (B=2, L=n_layers, n_input), y_dict per feature at native shape.
     n_input = len(dm.input_columns)
     X_seq = torch.randn(2, n_layers, n_input)
-    y_seq = torch.randn(2, n_layers, 1)
-    model.train([(X_seq, y_seq)], [])
+    y_dict = {"src": torch.randn(2, n_layers)}  # depth-1 → (B, L)
+    model.train(
+        [(X_seq, y_dict)], [],
+        seq_axis_sizes=(n_layers,),
+        domain_axis_sizes=(8, 8),  # matches schema: n_layers max=8, n_segments max=8
+    )
     return model
 
 
@@ -165,13 +170,16 @@ def test_predict_empty_returns_empty(tmp_path):
 # === train ================================================================
 
 
-def test_train_rejects_flat_batches(tmp_path):
-    """Sequence model rejects 2D (flat) batches with a helpful error."""
+def test_train_rejects_tensor_y(tmp_path):
+    """Train expects (X_seq, y_dict); plain tensor y is rejected with a helpful error."""
     model = _LayerTransformer(build_test_logger(tmp_path))
-    X_flat = torch.randn(8, 3)
-    y_flat = torch.randn(8, 1)
-    with pytest.raises(ValueError, match="sequence-shaped batches"):
-        model.train([(X_flat, y_flat)], [])
+    X_seq = torch.randn(2, 4, 3)
+    y_tensor = torch.randn(2, 4, 1)
+    with pytest.raises(ValueError, match="y_dict"):
+        model.train(
+            [(X_seq, y_tensor)], [],
+            seq_axis_sizes=(4,), domain_axis_sizes=(8, 8),
+        )
 
 
 def test_train_marks_is_trained(tmp_path):
@@ -228,13 +236,13 @@ def test_validate_schema_compatibility_rejects_missing_property(tmp_path):
 # === multi-axis encoder ===================================================
 
 
-def test_transformer_net_forward_multi_axis_shapes_match():
-    """``_TransformerNet`` with ``n_axes=2`` accepts (L, 2) axis_indices and produces (B, L, n_output)."""
-    from pred_fab.models.transformer import _TransformerNet
+def test_transformer_encoder_forward_multi_axis_shapes_match():
+    """``_TransformerEncoder`` with ``n_axes=2`` accepts (L, 2) axis_indices, returns (B, L, d_model)."""
+    from pred_fab.models.transformer import _TransformerEncoder
 
     torch.manual_seed(0)
-    net = _TransformerNet(
-        n_input=3, n_output=2, d_model=8, n_heads=2, n_layers=1,
+    net = _TransformerEncoder(
+        n_input=3, d_model=8, n_heads=2, n_layers=1,
         dim_ff=16, dropout=0.0, max_seq_len=16, n_axes=2,
     )
     net.eval()
@@ -246,16 +254,16 @@ def test_transformer_net_forward_multi_axis_shapes_match():
     )
     x = torch.randn(2, L, 3)  # (B=2, L=6, n_input=3)
     out = net(x, axis_indices)
-    assert out.shape == (2, L, 2)
+    assert out.shape == (2, L, 8)  # encoder returns hidden state (B, L, d_model)
     assert torch.isfinite(out).all()
 
 
-def test_transformer_net_forward_multi_axis_requires_axis_indices():
-    """``_TransformerNet`` with ``n_axes>=2`` raises if axis_indices is None."""
-    from pred_fab.models.transformer import _TransformerNet
+def test_transformer_encoder_forward_multi_axis_requires_axis_indices():
+    """``_TransformerEncoder`` with ``n_axes>=2`` raises if axis_indices is None."""
+    from pred_fab.models.transformer import _TransformerEncoder
 
-    net = _TransformerNet(
-        n_input=3, n_output=1, d_model=8, n_heads=2, n_layers=1,
+    net = _TransformerEncoder(
+        n_input=3, d_model=8, n_heads=2, n_layers=1,
         dim_ff=16, dropout=0.0, max_seq_len=16, n_axes=2,
     )
     net.eval()
@@ -276,14 +284,19 @@ class _GridTransformer(_LayerTransformer):
 
 
 def test_train_multi_axis_with_seq_axis_sizes(tmp_path):
-    """Multi-axis training succeeds when seq_axis_sizes kwarg is provided."""
+    """Multi-axis training succeeds when seq_axis_sizes + domain_axis_sizes kwargs provided."""
     model = _GridTransformer(build_test_logger(tmp_path))
     n_layers, n_segments = 3, 2
     L = n_layers * n_segments
     n_input = 5
     X_seq = torch.randn(2, L, n_input)
-    y_seq = torch.randn(2, L, 1)
-    model.train([(X_seq, y_seq)], [], seq_axis_sizes=(n_layers, n_segments))
+    # No ref_features set → src treated as depth-0 → y_dict shape (B, L).
+    y_dict = {"src": torch.randn(2, L)}
+    model.train(
+        [(X_seq, y_dict)], [],
+        seq_axis_sizes=(n_layers, n_segments),
+        domain_axis_sizes=(8, 8),
+    )
     assert model._is_trained
 
 
@@ -291,53 +304,25 @@ def test_train_multi_axis_without_seq_axis_sizes_raises(tmp_path):
     """Multi-axis training without seq_axis_sizes kwarg raises a clear error."""
     model = _GridTransformer(build_test_logger(tmp_path))
     X_seq = torch.randn(1, 6, 4)
-    y_seq = torch.randn(1, 6, 1)
+    y_dict = {"src": torch.randn(1, 6)}
     with pytest.raises(ValueError, match="requires `seq_axis_sizes`"):
-        model.train([(X_seq, y_seq)], [])
+        model.train([(X_seq, y_dict)], [], domain_axis_sizes=(8, 8))
 
 
 def test_train_multi_axis_seq_axis_sizes_mismatch_raises(tmp_path):
     """Multi-axis training raises when prod(seq_axis_sizes) != L."""
     model = _GridTransformer(build_test_logger(tmp_path))
     X_seq = torch.randn(1, 6, 4)  # L=6
-    y_seq = torch.randn(1, 6, 1)
+    y_dict = {"src": torch.randn(1, 6)}
     with pytest.raises(ValueError, match=r"product != batch L"):
-        model.train([(X_seq, y_seq)], [], seq_axis_sizes=(3, 3))  # prod=9 != 6
-
-
-def test_train_multi_axis_then_predict_grid_shape(tmp_path):
-    """After multi-axis training, predict reshapes back to (n_layers, n_segments) per output."""
-    dm, schema = _build_dm(tmp_path, n_layers=3)
-
-    # Reframe schema: same _build_dm fixture provides ('n_layers', 'n_segments') domain
-    # but n_segments=1; we need n_segments>=2. Synthesize a multi-axis dim_info manually.
-    n_layers, n_segments = 3, 2
-    L = n_layers * n_segments
-    grid_di = {
-        'shape': (n_layers, n_segments),
-        'dim_iterators': ['layer_idx', 'segment_idx'],
-        'dim_codes_ordered': ['n_layers', 'n_segments'],
-        'param_base': {},
-        'iterator_feats': [],
-        'total_positions': L,
-    }
-
-    model = _GridTransformer(build_test_logger(tmp_path))
-    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
-
-    n_input = len(dm.input_columns)
-    X_seq = torch.randn(2, L, n_input)
-    y_seq = torch.randn(2, L, 1)
-    model.train([(X_seq, y_seq)], [], seq_axis_sizes=(n_layers, n_segments))
-
-    params_list = [{"p1": 0.4, "n_layers": n_layers, "n_segments": n_segments}]
-    out = model.predict(params_list, dm, [grid_di], {})
-    assert out[0]["src"].shape == (n_layers, n_segments)
-    assert torch.isfinite(out[0]["src"]).all()
+        model.train(
+            [(X_seq, y_dict)], [],
+            seq_axis_sizes=(3, 3), domain_axis_sizes=(8, 8),  # prod=9 != 6
+        )
 
 
 def test_build_transformer_train_batches_returns_tuple(tmp_path):
-    """``_build_transformer_train_batches`` returns ``(batches, seq_axis_sizes)`` — empty-split smoke check."""
+    """``_build_transformer_train_batches`` returns ``(batches, seq_axis_sizes, domain_axis_sizes)`` — empty-split smoke check."""
     from pred_fab.orchestration.prediction import PredictionSystem
     from pred_fab.utils import LocalData
 
@@ -351,6 +336,200 @@ def test_build_transformer_train_batches_returns_tuple(tmp_path):
     psys.datamodule = dm
 
     model = _GridTransformer(build_test_logger(tmp_path))
-    batches, seq_axis_sizes = psys._build_transformer_train_batches(model, SplitType.VAL)
+    batches, seq_axis_sizes, domain_axis_sizes = psys._build_transformer_train_batches(
+        model, SplitType.VAL,
+    )
     assert batches == []
     assert seq_axis_sizes == ()
+    assert domain_axis_sizes == ()
+
+
+# === multi-depth integration =============================================
+
+
+def _build_mixed_depth_schema(tmp_path) -> DatasetSchema:
+    """Schema with depth-1 ``src`` + depth-2 ``grid`` outputs in one domain."""
+    spatial = Domain("spatial", [
+        Dimension("n_layers", "layer_idx", 1, 8),
+        Dimension("n_segments", "segment_idx", 1, 8),
+    ])
+    src_feat = Feature("src", domain=spatial, depth=1)
+    grid_feat = Feature("grid", domain=spatial, depth=2)
+    return DatasetSchema(
+        root_folder=str(tmp_path),
+        name="transformer_mixed_depth_schema",
+        parameters=Parameters.from_list([Parameter.real("p1", 0.0, 1.0)]),
+        features=Features.from_list([src_feat, grid_feat]),
+        performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
+        domains=Domains([spatial]),
+    )
+
+
+class _MixedDepthTransformer(TransformerModel):
+    """Mixed-depth: depth-1 src + depth-2 grid, axis = ("n_layers",)."""
+    D_MODEL = 8
+    N_HEADS = 2
+    N_LAYERS = 1
+    DIM_FEEDFORWARD = 16
+    EPOCHS = 5
+
+    @property
+    def sequence_axis_code(self) -> tuple[str, ...]:
+        return ("n_layers",)
+
+    @property
+    def input_parameters(self):
+        return ["p1", "n_layers", "n_segments"]
+
+    @property
+    def input_features(self):
+        return []
+
+    @property
+    def outputs(self):
+        return ["src", "grid"]
+
+
+def test_train_predict_mixed_depth_roundtrip(tmp_path):
+    """Mixed-depth: train succeeds, predict returns per-feature dict at native shapes."""
+    schema = _build_mixed_depth_schema(tmp_path)
+    model = _MixedDepthTransformer(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    n_layers, n_segments = 4, 3
+    L = n_layers
+    domain_axis_sizes = (8, 8)
+
+    # n_input must match what predict feeds: len(model.input_parameters + model.input_features).
+    n_input = len(model.input_parameters) + len(model.input_features)
+    X_seq = torch.randn(2, L, n_input)
+    y_dict = {
+        "src": torch.randn(2, L),
+        "grid": torch.randn(2, L, n_segments),
+    }
+    model.train(
+        [(X_seq, y_dict)], [],
+        seq_axis_sizes=(n_layers,),
+        domain_axis_sizes=domain_axis_sizes,
+    )
+    assert model._is_trained
+    # Two depths registered, with feature ordering preserved within each depth.
+    assert model._depth_to_features[1] == ["src"]
+    assert model._depth_to_features[2] == ["grid"]
+
+    # Predict: synthesize dim_info at (n_layers, n_segments).
+    grid_di = {
+        'shape': (n_layers, n_segments),
+        'dim_iterators': ['layer_idx', 'segment_idx'],
+        'dim_codes_ordered': ['n_layers', 'n_segments'],
+        'param_base': {},
+        'iterator_feats': [],
+        'total_positions': n_layers * n_segments,
+    }
+    # Build a minimal dm-like proxy: predict needs build_sequence_batch + denormalize_values
+    # + get_input_indices. Use the standard fixture for simplicity.
+    dataset = Dataset(schema=schema, debug_flag=True)
+    dataset.create_experiment("e1", parameters={"p1": 0.5, "n_layers": n_layers, "n_segments": n_segments})
+    exp = dataset.get_experiment("e1")
+    src_rows = [[k, float(k * 0.1)] for k in range(n_layers)]
+    grid_rows = [[k, s, float(k * 0.1 + s * 0.05)] for k in range(n_layers) for s in range(n_segments)]
+    exp.features.set_value("src", exp.features.table_to_tensor("src", np.array(src_rows, dtype=np.float64), exp.parameters))
+    exp.features.set_value("grid", exp.features.table_to_tensor("grid", np.array(grid_rows, dtype=np.float64), exp.parameters))
+    dm = DataModule(dataset=dataset)
+    dm.initialize(
+        input_parameters=["p1", "n_layers", "n_segments"],
+        input_features=[],
+        output_columns=["src", "grid"],
+    )
+    dm._split_codes[SplitType.TRAIN] = ["e1"]
+    dm.fit_normalization(SplitType.TRAIN)
+
+    params_list = [{"p1": 0.4, "n_layers": n_layers, "n_segments": n_segments}]
+    out = model.predict(params_list, dm, [grid_di], {})
+    assert out[0]["src"].shape == (n_layers,)            # depth-1 native shape
+    assert out[0]["grid"].shape == (n_layers, n_segments)  # depth-2 native shape
+    assert torch.isfinite(out[0]["src"]).all()
+    assert torch.isfinite(out[0]["grid"]).all()
+
+
+def test_validate_rejects_axis_deeper_than_min_output(tmp_path):
+    """axis_depth > min(output_depths) → rejected at validate_dimensional_coherence."""
+    schema = _build_1d_seq_schema(tmp_path)
+
+    class _BadAxis(_LayerTransformer):
+        @property
+        def sequence_axis_code(self) -> tuple[str, ...]:
+            return ("n_layers", "n_segments")  # axis_depth=2 but src is depth-1
+
+    model = _BadAxis(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="must not be deeper than any output"):
+        model.validate_dimensional_coherence(schema)
+
+
+def test_validate_rejects_axis_not_prefix_of_domain(tmp_path):
+    """sequence_axis_code must be a prefix of domain.axes — non-prefix is rejected."""
+    schema = _build_1d_seq_schema(tmp_path)
+
+    class _NonPrefixAxis(_LayerTransformer):
+        @property
+        def sequence_axis_code(self) -> tuple[str, ...]:
+            return ("n_segments",)  # second axis, not first
+
+    model = _NonPrefixAxis(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="prefix of the domain's axes"):
+        model.validate_dimensional_coherence(schema)
+
+
+def test_validate_rejects_input_depth_above_axis_depth(tmp_path):
+    """Input feature with depth > axis_depth → rejected (would not reach the encoder)."""
+    schema = _build_mixed_depth_schema(tmp_path)
+
+    class _DeepInputModel(TransformerModel):
+        D_MODEL = 8
+        N_HEADS = 2
+        N_LAYERS = 1
+        DIM_FEEDFORWARD = 16
+        EPOCHS = 5
+
+        @property
+        def sequence_axis_code(self) -> tuple[str, ...]:
+            return ("n_layers",)  # axis_depth = 1
+
+        @property
+        def input_parameters(self):
+            return ["p1"]
+
+        @property
+        def input_features(self):
+            return ["grid"]  # depth-2 input
+
+        @property
+        def outputs(self):
+            return ["src"]
+
+    model = _DeepInputModel(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="exceeds the model's sequence axis depth"):
+        model.validate_dimensional_coherence(schema)
+
+
+def test_forward_pass_raises_for_mixed_depth(tmp_path):
+    """L=1 forward_pass is undefined when output depths differ from axis_depth."""
+    schema = _build_mixed_depth_schema(tmp_path)
+    model = _MixedDepthTransformer(build_test_logger(tmp_path))
+    model.set_ref_features(list(schema.features.data_objects.values()))  # type: ignore[arg-type]
+
+    # Train minimally so _is_trained=True and _depth_to_features is populated.
+    L = 4
+    X_seq = torch.randn(1, L, 5)
+    y_dict = {"src": torch.randn(1, L), "grid": torch.randn(1, L, 3)}
+    model.train([(X_seq, y_dict)], [], seq_axis_sizes=(L,), domain_axis_sizes=(8, 8))
+
+    X_flat = torch.randn(2, 5)
+    with pytest.raises(NotImplementedError, match="every output's depth to equal axis_depth"):
+        model.forward_pass(X_flat)
