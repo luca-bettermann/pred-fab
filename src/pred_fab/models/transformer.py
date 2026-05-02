@@ -223,21 +223,28 @@ class TransformerModel(IPredictionModel):
                 out[s][feat] = torch.stack(slots, dim=0).reshape(feat_shape)
         return out
 
-    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Per-row forward — calls the encoder with L=1.
+    def forward_pass(
+        self,
+        X: torch.Tensor,
+        gradient_pass: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Per-row forward → ``dict[feat_code, (batch,) tensor]``. Calls the encoder with L=1.
 
-        Provided for the non-sequence call sites (KDE encode probe, etc.).
-        Real sequence prediction goes through ``predict``. With L=1 we use
-        position-0 embeddings on every axis (axis_indices = zeros).
+        Provided for the non-sequence call sites (residual learning, validation
+        R², calibration scoring, inference export). Real sequence prediction
+        goes through ``predict``. With L=1 we use position-0 embeddings on
+        every axis (axis_indices = zeros).
         """
         if not self._is_trained or self._model is None:
-            return torch.zeros((X.shape[0], len(self.outputs)), dtype=torch.float32)
+            zero = torch.zeros((X.shape[0],), dtype=torch.float32)
+            return {feat: zero.clone() for feat in self.outputs}
         ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
         with ctx:
             x_seq = X.unsqueeze(1).to(dtype=torch.float32)  # (B, 1, n_input)
             n_axes = len(self.sequence_axis_code)
             axis_indices = torch.zeros((1, n_axes), dtype=torch.long)
-            return self._model(x_seq, axis_indices)[:, 0, :]
+            y = self._model(x_seq, axis_indices)[:, 0, :]  # (B, n_outputs)
+        return {feat: y[:, i] for i, feat in enumerate(self.outputs)}
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         """Penultimate-layer activations for KDE — input projection at position 0.

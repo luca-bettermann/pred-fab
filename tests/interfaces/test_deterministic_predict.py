@@ -39,8 +39,8 @@ class _DoublingModel(DeterministicModel):
     def outputs(self):
         return ["y"]
 
-    def formula(self, X: np.ndarray) -> np.ndarray:
-        return (X[:, 0] * 2.0).reshape(-1, 1)
+    def formula(self, X: np.ndarray) -> dict[str, np.ndarray]:
+        return {"y": X[:, 0] * 2.0}
 
 
 def _build_dm(tmp_path) -> tuple[DataModule, _DoublingModel]:

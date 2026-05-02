@@ -31,9 +31,8 @@ class _IdentityModel(IPredictionModel):
     def train(self, *_: Any, **__: Any) -> None:
         self._is_trained = True
 
-    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        # one output column, copy input directly
-        return X[:, :1].to(dtype=torch.float32)
+    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
+        return {"feat_a": X[:, 0].to(dtype=torch.float32)}
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         return X

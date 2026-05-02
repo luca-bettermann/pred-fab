@@ -252,24 +252,34 @@ class MLPModel(IPredictionModel):
                 self._compiled_forward = None
         self._is_trained = True
 
-    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Inference forward — applies categorical one-hot expansion first.
+    def forward_pass(
+        self,
+        X: torch.Tensor,
+        gradient_pass: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Inference forward → ``dict[feat_code, (batch,) tensor]``.
+
+        Applies categorical one-hot expansion before the network. Returns one
+        normalised-space (batch,) tensor per output feature.
 
         ``gradient_pass=False`` (default): wraps in ``torch.no_grad()``.
-        ``gradient_pass=True``: keeps the autograd tape live (
-        gradient acquisition). Categorical expansion via ``_embed_cats``
-        is non-differentiable (discrete index → one-hot float), but it
-        doesn't break gradient flow on the *non-categorical* columns.
+        ``gradient_pass=True``: keeps the autograd tape live (gradient
+        acquisition). Categorical expansion via ``_embed_cats`` is non-
+        differentiable (discrete index → one-hot float), but it doesn't
+        break gradient flow on the non-categorical columns.
         """
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
-            return torch.zeros((X.shape[0], n_outputs), dtype=X.dtype)
+            zero = torch.zeros((X.shape[0],), dtype=X.dtype)
+            return {feat: zero.clone() for feat in self.outputs}
         X_expanded = self._embed_cats(X)
         if gradient_pass:
-            return self._model(X_expanded).reshape(-1, n_outputs)
-        net = self._compiled_forward if self._compiled_forward is not None else self._model
-        with torch.no_grad():
-            return net(X_expanded).reshape(-1, n_outputs)
+            y = self._model(X_expanded).reshape(-1, n_outputs)
+        else:
+            net = self._compiled_forward if self._compiled_forward is not None else self._model
+            with torch.no_grad():
+                y = net(X_expanded).reshape(-1, n_outputs)
+        return {feat: y[:, i] for i, feat in enumerate(self.outputs)}
 
     def encode(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
         if self._model is None or not self._is_trained:

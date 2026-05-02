@@ -153,8 +153,9 @@ def test_predict_self_consistency(tmp_path):
         dm.get_input_indices(mlp.input_parameters + mlp.input_features), dtype=torch.long,
     )
     X_model = X_flat.index_select(1, input_indices_t)
-    y_norm = mlp.forward_pass(X_model)
-    y_denorm = dm.denormalize_values(y_norm, mlp.outputs)
+    y_norm_dict = mlp.forward_pass(X_model)
+    y_norm_stacked = torch.stack([y_norm_dict[f] for f in mlp.outputs], dim=-1)
+    y_denorm = dm.denormalize_values(y_norm_stacked, mlp.outputs)
     expected = torch.zeros((4, 3), dtype=y_denorm.dtype)
     for row_idx, (s, cell_flat) in enumerate(row_map):
         k, sg = divmod(cell_flat, 3)

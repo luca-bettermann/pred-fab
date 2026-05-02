@@ -67,14 +67,17 @@ class TestUntrainedBehaviour:
         m = _SingleOutMLP(build_test_logger(tmp_path))
         X = torch.from_numpy(np.random.randn(7, 2).astype(np.float32))
         out = m.forward_pass(X)
-        assert out.shape == (7, 1)
-        torch.testing.assert_close(out, torch.zeros((7, 1)))
+        assert set(out.keys()) == {"y"}
+        assert out["y"].shape == (7,)
+        torch.testing.assert_close(out["y"], torch.zeros(7))
 
     def test_forward_pass_zeros_shape_matches_n_outputs(self, tmp_path):
         m = _MultiOutMLP(build_test_logger(tmp_path))
         X = torch.from_numpy(np.random.randn(4, 1).astype(np.float32))
         out = m.forward_pass(X)
-        assert out.shape == (4, 3)
+        assert set(out.keys()) == {"y1", "y2", "y3"}
+        for v in out.values():
+            assert v.shape == (4,)
 
     def test_encode_returns_identity_when_untrained(self, tmp_path):
         m = _SingleOutMLP(build_test_logger(tmp_path))
@@ -102,8 +105,8 @@ class TestTraining:
         m = _SingleOutMLP(build_test_logger(tmp_path))
         X, y = _make_xy(200, 2)
         m.train([(X, y)], [])
-        pred = m.forward_pass(X)
-        residual_std = float((pred.flatten() - y.flatten()).std())
+        pred_dict = m.forward_pass(X)
+        residual_std = float((pred_dict["y"] - y.flatten()).std())
         target_std = float(y.std())
         # Trained MLP should explain meaningful variance vs predict-mean baseline
         assert residual_std < 0.5 * target_std
@@ -116,13 +119,18 @@ class TestForwardPassShape:
         m = _SingleOutMLP(build_test_logger(tmp_path))
         X, y = _make_xy(40, 2)
         m.train([(X, y)], [])
-        assert m.forward_pass(X[:5]).shape == (5, 1)
+        out = m.forward_pass(X[:5])
+        assert set(out.keys()) == {"y"}
+        assert out["y"].shape == (5,)
 
     def test_multi_output_shape(self, tmp_path):
         m = _MultiOutMLP(build_test_logger(tmp_path))
         X, y = _make_xy(40, 1, n_outputs=3)
         m.train([(X, y)], [])
-        assert m.forward_pass(X[:6]).shape == (6, 3)
+        out = m.forward_pass(X[:6])
+        assert set(out.keys()) == {"y1", "y2", "y3"}
+        for v in out.values():
+            assert v.shape == (6,)
 
 
 class TestEncodeShape:
@@ -161,7 +169,7 @@ class TestReproducibility:
         m2.train([(X, y)], [])
         out2 = m2.forward_pass(X[:5])
 
-        torch.testing.assert_close(out1, out2, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(out1["y"], out2["y"], atol=1e-6, rtol=1e-6)
 
 
 class TestBatchTraining:
@@ -179,4 +187,4 @@ class TestBatchTraining:
         m2.train([(X1, y1), (X2, y2)], [])
 
         # Same SEED + same final concatenated data → same network
-        torch.testing.assert_close(m1.forward_pass(X[:5]), m2.forward_pass(X[:5]), atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(m1.forward_pass(X[:5])["y"], m2.forward_pass(X[:5])["y"], atol=1e-6, rtol=1e-6)

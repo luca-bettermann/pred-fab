@@ -1108,12 +1108,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Get predictions from all base models
         self.logger.info("Generating base predictions for residual learning...")
         for model in self.models:
-            output_indices = [dm.output_columns.index(f) for f in model.outputs]
             input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
             input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
             X_model = X_tune.index_select(1, input_indices_t)
-            y_pred_model = model.forward_pass(X_model)
-            y_pred_base[:, output_indices] = y_pred_model.detach().cpu().numpy()
+            y_pred_dict = model.forward_pass(X_model)
+            for feat in model.outputs:
+                col = dm.output_columns.index(feat)
+                y_pred_base[:, col] = y_pred_dict[feat].detach().cpu().numpy()
 
         # TODO: Store predicted features in exp_data.predicted_features. do we need another array?
             
@@ -1246,7 +1247,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             y_true = dm.denormalize_values(y_true_norm, model.outputs).detach().cpu().numpy()
 
             # Prediction.
-            y_pred_norm = model.forward_pass(X_split.index_select(1, input_indices_t))
+            y_pred_dict = model.forward_pass(X_split.index_select(1, input_indices_t))
+            y_pred_norm = torch.stack([y_pred_dict[f] for f in model.outputs], dim=-1)
             y_pred = dm.denormalize_values(y_pred_norm, model.outputs).detach().cpu().numpy()
 
             for i, feature_name in enumerate(model.outputs):
@@ -1617,7 +1619,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             input_indices = dm.get_input_indices(m.input_parameters + m.input_features)
             input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
             X_model = X_norm.index_select(1, input_indices_t)
-            y_pred_norm = m.forward_pass(X_model)
+            y_pred_dict = m.forward_pass(X_model)
+            y_pred_norm = torch.stack([y_pred_dict[f] for f in m.outputs], dim=-1)
             y_pred = dm.denormalize_values(y_pred_norm, m.outputs)
 
             # y_pred: (batch, n_outputs) tensor

@@ -54,7 +54,7 @@ def test_train_uses_full_batch_below_threshold(tmp_path):
     assert model._is_trained
     # Quick sanity: y(0.5) ≈ 1.0
     pred = model.forward_pass(torch.tensor([[0.5]], dtype=torch.float32))
-    assert abs(pred.item() - 1.0) < 0.5  # generous bound — small model, few epochs
+    assert abs(pred["y"].item() - 1.0) < 0.5  # generous bound — small model, few epochs
 
 
 def test_train_uses_dataloader_above_threshold(tmp_path):
@@ -69,7 +69,7 @@ def test_train_uses_dataloader_above_threshold(tmp_path):
 
     assert model._is_trained
     pred = model.forward_pass(torch.tensor([[0.5]], dtype=torch.float32))
-    assert abs(pred.item() - 1.0) < 0.5
+    assert abs(pred["y"].item() - 1.0) < 0.5
 
 
 def test_train_paths_produce_similar_quality(tmp_path):
@@ -91,8 +91,8 @@ def test_train_paths_produce_similar_quality(tmp_path):
     model_mb.train(_make_batches(80), [])
 
     test_X = torch.tensor([[0.0], [0.3], [0.7], [1.0]], dtype=torch.float32)
-    pred_full = model_full.forward_pass(test_X).flatten()
-    pred_mb = model_mb.forward_pass(test_X).flatten()
+    pred_full = model_full.forward_pass(test_X)["y"]
+    pred_mb = model_mb.forward_pass(test_X)["y"]
 
     # Both should track 2x roughly. We don't assert tight matching — they're
     # different optimisers in effect (full-batch vs minibatch SGD).

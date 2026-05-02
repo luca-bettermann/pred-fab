@@ -132,19 +132,23 @@ class IPredictionModel(BaseInterface):
     # - outputs
 
     @abstractmethod
-    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Run model inference on normalized X (batch, n_inputs) → normalized y (batch, n_outputs).
+    def forward_pass(
+        self,
+        X: torch.Tensor,
+        gradient_pass: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Run model inference on normalized X (batch, n_inputs) → ``dict[feat_code, tensor]``.
 
-        Tensor-native contract. The framework guarantees X arrives as a CPU
-        float32 tensor in normalized input space; implementations should return
-        a CPU float32 tensor in normalized output space.
+        Returns one entry per ``self.outputs`` feature, each tensor in
+        normalized output space at the feature's natural per-cell shape (for
+        the flat-batched case, a 1-D ``(batch,)`` tensor of scalars). Multi-
+        depth models may return tensors with extra trailing axes (Phase B —
+        not yet wired).
 
         ``gradient_pass=False`` (default): inference under ``torch.no_grad()``.
-        Used by the existing DE acquisition path.
-
-        ``gradient_pass=True``: gradients flow through the network to its
-        inputs. Used by the gradient-based acquisition. Implementations
-        should skip any ``torch.no_grad()`` context they otherwise apply.
+        ``gradient_pass=True``: gradients flow through the network. The
+        framework guarantees X arrives as a CPU float32 tensor in normalized
+        input space.
         """
         pass
 
@@ -214,16 +218,19 @@ class IPredictionModel(BaseInterface):
         input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
         X_model = X_flat.index_select(1, input_indices_t)
 
-        y_norm = self.forward_pass(X_model, gradient_pass=True)
-        y_denorm = dm.denormalize_values(y_norm, self.outputs)
-        # y_denorm: (n_rows, n_outputs)
+        y_norm_dict = self.forward_pass(X_model, gradient_pass=True)
+        # Stack for normalization/denormalization (per-feature stats), then split.
+        y_norm_stacked = torch.stack(
+            [y_norm_dict[feat] for feat in self.outputs], dim=-1,
+        )  # (n_rows, n_outputs)
+        y_denorm_stacked = dm.denormalize_values(y_norm_stacked, self.outputs)
 
         accum: list[dict[str, dict[int, torch.Tensor]]] = [
             {feat: {} for feat in self.outputs} for _ in range(S)
         ]
         for row_idx, (s, cell_flat) in enumerate(row_map):
             for f_idx, feat in enumerate(self.outputs):
-                accum[s][feat][cell_flat] = y_denorm[row_idx, f_idx]
+                accum[s][feat][cell_flat] = y_denorm_stacked[row_idx, f_idx]
 
         out: list[dict[str, torch.Tensor]] = [{} for _ in range(S)]
         for s in range(S):
@@ -346,22 +353,27 @@ class DeterministicModel(IPredictionModel):
     # === ABSTRACT: USER IMPLEMENTS THIS ===
 
     @abstractmethod
-    def formula(self, X: np.ndarray) -> np.ndarray:
+    def formula(self, X: np.ndarray) -> dict[str, np.ndarray]:
         """Compute output values from raw (denormalized) input values.
 
         X has shape (batch, n_raw_inputs) with columns ordered by ``input_parameters``.
         Real parameters are in original scale; categorical parameters are integer-encoded
         (index into the sorted category list available via ``self.categorical_mappings``).
 
-        Must return shape (batch, n_outputs) in original (physical) scale.
+        Must return ``dict[feat_code, np.ndarray]`` — one entry per ``self.outputs``,
+        each a 1-D ``(batch,)`` array in original (physical) scale.
         """
         ...
 
     # === PRE-DEFINED PIPELINE ===
 
     @final
-    def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> torch.Tensor:
-        """Denormalize inputs → formula → renormalize outputs.
+    def forward_pass(
+        self,
+        X: torch.Tensor,
+        gradient_pass: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        """Denormalize inputs → formula → renormalize outputs (per feature).
 
         Internal numpy boundary: ``formula(X_raw)`` operates on numpy arrays
         in physical units; the tensor↔numpy round-trip is a once-per-call
@@ -381,9 +393,11 @@ class DeterministicModel(IPredictionModel):
             )
         X_np = X.detach().cpu().numpy()
         X_raw = self._denormalize_inputs(X_np)
-        y_raw = self.formula(X_raw)
-        y_norm = self._normalize_outputs(y_raw)
-        return torch.from_numpy(y_norm.astype(np.float32))
+        y_raw_dict = self.formula(X_raw)
+        return {
+            feat: torch.from_numpy(self._normalize_output_feature(y_raw_dict[feat], feat).astype(np.float32))
+            for feat in self.outputs
+        }
 
     @final
     def train(
@@ -429,14 +443,12 @@ class DeterministicModel(IPredictionModel):
 
         return np.hstack(raw_cols) if raw_cols else np.empty((batch_size, 0))
 
-    def _normalize_outputs(self, y_raw: np.ndarray) -> np.ndarray:
-        """Apply normalization to raw output values."""
-        y_norm = y_raw.copy()
-        for i, feat in enumerate(self.outputs):
-            if feat in self._norm_feature_stats:
-                stats = self._norm_feature_stats[feat]
-                y_norm[:, i] = self._apply_normalization(y_norm[:, i], stats)
-        return y_norm
+    def _normalize_output_feature(self, y_raw: np.ndarray, feat_code: str) -> np.ndarray:
+        """Apply normalization to a single feature's raw output values."""
+        stats = self._norm_feature_stats.get(feat_code)
+        if stats is None:
+            return y_raw
+        return self._apply_normalization(y_raw, stats)
 
     @staticmethod
     def _reverse_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:

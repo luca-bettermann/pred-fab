@@ -1,6 +1,7 @@
 """Tests for prediction model dimensional coherence: depth property and validation."""
 import pytest
 import numpy as np
+import torch
 
 from pred_fab.interfaces import IPredictionModel
 from pred_fab.models import MLPModel
@@ -36,7 +37,8 @@ def test_depth_is_zero_before_refs_set(tmp_path):
         def input_features(self): return []
         @property
         def outputs(self): return ["feature_grid"]
-        def forward_pass(self, X): return np.zeros((X.shape[0], 1))
+        def forward_pass(self, X, gradient_pass=False):
+            return {"feature_grid": torch.zeros(X.shape[0])}
         def train(self, train_batches, val_batches, **kwargs): pass
 
     model = SimpleModel(logger)

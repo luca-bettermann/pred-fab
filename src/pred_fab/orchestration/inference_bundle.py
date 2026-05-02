@@ -89,8 +89,11 @@ class InferenceBundle:
 
         predictions: dict[str, Any] = {}
         for model in self.prediction_models:
-            y_pred_norm_t = model.forward_pass(X_norm_t)
-            y_pred_np = self._denormalize_values(y_pred_norm_t.detach().cpu().numpy(), model.outputs)
+            y_pred_dict = model.forward_pass(X_norm_t)
+            y_pred_norm_np = np.stack(
+                [y_pred_dict[f].detach().cpu().numpy() for f in model.outputs], axis=-1,
+            )
+            y_pred_np = self._denormalize_values(y_pred_norm_np, model.outputs)
             for i, col in enumerate(model.outputs):
                 predictions[col] = y_pred_np[:, i].tolist()
 

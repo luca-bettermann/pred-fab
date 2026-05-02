@@ -84,7 +84,8 @@ class TestForwardPass:
         # Normalized input: (raw - mean) / std = (5.0 - 5.0) / 2.0 = 0.0
         X_norm = torch.tensor([[0.0]])
         result = model.forward_pass(X_norm)
-        assert result.shape == (1, 1)
+        assert set(result.keys()) == {"feature_scalar"}
+        assert result["feature_scalar"].shape == (1,)
 
     def test_forward_pass_denorm_formula_renorm(self, tmp_path):
         """Verify the full pipeline: denorm → formula(raw) → renorm."""
@@ -100,14 +101,14 @@ class TestForwardPass:
         # renorm: (10.0 - 10.0) / 4.0 = 0.0
         X_norm = torch.tensor([[0.0]])
         result = model.forward_pass(X_norm)
-        assert abs(float(result[0, 0]) - 0.0) < 1e-6
+        assert abs(float(result["feature_scalar"][0]) - 0.0) < 1e-6
 
         # raw_param = 5.0 + 1.0 * 2.0 = 7.0
         # formula(7.0) = 7.0 * 2 = 14.0
         # renorm: (14.0 - 10.0) / 4.0 = 1.0
         X_norm = torch.tensor([[1.0]])
         result = model.forward_pass(X_norm)
-        assert abs(float(result[0, 0]) - 1.0) < 1e-6
+        assert abs(float(result["feature_scalar"][0]) - 1.0) < 1e-6
 
     def test_forward_pass_batch(self, tmp_path):
         """Batch input should produce batch output."""
@@ -119,4 +120,4 @@ class TestForwardPass:
         )
         X_norm = torch.tensor([[0.0], [1.0], [-1.0]])
         result = model.forward_pass(X_norm)
-        assert result.shape == (3, 1)
+        assert result["feature_scalar"].shape == (3,)

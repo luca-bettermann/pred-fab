@@ -45,7 +45,8 @@ class _SourceModel(IPredictionModel):
 
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch
-        return torch.zeros((X.shape[0], 1), dtype=torch.float32)
+        zero = torch.zeros((X.shape[0],), dtype=torch.float32)
+        return {feat: zero.clone() for feat in self.outputs}
 
 
 class _ConsumerModel(IPredictionModel):
@@ -68,7 +69,8 @@ class _ConsumerModel(IPredictionModel):
 
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch
-        return torch.zeros((X.shape[0], 1), dtype=torch.float32)
+        zero = torch.zeros((X.shape[0],), dtype=torch.float32)
+        return {feat: zero.clone() for feat in self.outputs}
 
 
 class _CycleModelA(IPredictionModel):
@@ -83,7 +85,8 @@ class _CycleModelA(IPredictionModel):
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch
-        return torch.zeros((X.shape[0], 1))
+        zero = torch.zeros((X.shape[0],))
+        return {feat: zero.clone() for feat in self.outputs}
 
 
 class _CycleModelB(IPredictionModel):
@@ -98,7 +101,8 @@ class _CycleModelB(IPredictionModel):
     def train(self, *_, **__) -> None: ...
     def forward_pass(self, X, gradient_pass: bool = False):
         import torch
-        return torch.zeros((X.shape[0], 1))
+        zero = torch.zeros((X.shape[0],))
+        return {feat: zero.clone() for feat in self.outputs}
 
 
 def _build_schema(tmp_path) -> DatasetSchema:
