@@ -1596,7 +1596,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         dm = self._assert_trained()
 
         batch_indices: list[tuple[int, ...]] = [
-            tuple(np.unravel_index(pos, shape))
+            tuple(int(c) for c in np.unravel_index(pos, shape))
             for pos in range(batch_start, batch_end)
         ]
         n_cells = len(batch_indices)

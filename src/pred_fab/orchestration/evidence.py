@@ -333,6 +333,40 @@ class EvidenceEstimator(ABC):
             out[s] = self.integrated_evidence(index_new)
         return out
 
+    def integrated_evidence_perturbed_batched_joint(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: np.ndarray,
+        new_weights_SL: np.ndarray,
+    ) -> np.ndarray:
+        """Joint-batched ``E(old ∪ {L kernels of candidate s})`` per s. Returns ``(S,)``.
+
+        Default: loops ``integrated_evidence`` per candidate, rebuilding
+        ``index_new[s]`` with all L joint kernels added at once. Subclasses
+        override for vectorised perf — see
+        ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint``.
+        """
+        S = int(new_centers_SL.shape[0])
+        if S == 0:
+            return np.zeros(0, dtype=np.float64)
+        out = np.zeros(S, dtype=np.float64)
+        for s in range(S):
+            new_centers_s = new_centers_SL[s]
+            new_weights_s = new_weights_SL[s]
+            if index_old.is_empty:
+                all_centers = new_centers_s
+                all_weights = new_weights_s
+            else:
+                all_centers = np.vstack([index_old.centers, new_centers_s])
+                all_weights = np.concatenate([index_old.weights, new_weights_s])
+            index_new = KernelIndex(
+                all_centers, all_weights, index_old.sigma,
+                cutoff_sigmas=index_old.cutoff_sigmas,
+                truncation_threshold=index_old.truncation_threshold,
+            )
+            out[s] = self.integrated_evidence(index_new)
+        return out
+
 
 # ---------------------------------------------------------------------------
 # KernelField — radial shell quadrature
