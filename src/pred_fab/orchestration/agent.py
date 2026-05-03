@@ -277,7 +277,17 @@ class PfabAgent:
 
         # Validate that all lists are represented in schema
         self._check_sets_against_keys(set(input_params), schema.parameters.keys())
-        self._check_sets_against_keys(set(input_features), valid_input_feature_codes)
+        # input_features check: error on unknown codes only. The "unused
+        # schema feature" warning is a false positive whenever a feature is
+        # consumed implicitly — e.g. transformer outputs are seen by the next
+        # layer's causal attention without an explicit input declaration, and
+        # iterator codes are framework-generated rather than user-asserted.
+        unknown_input_features = set(input_features) - valid_input_feature_codes
+        if unknown_input_features:
+            raise ValueError(
+                f"The following input features are not in the schema: "
+                f"{unknown_input_features}"
+            )
         self._check_sets_against_keys(set(output_features), schema.features.keys())
         self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
