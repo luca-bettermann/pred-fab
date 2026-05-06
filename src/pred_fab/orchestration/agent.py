@@ -126,7 +126,7 @@ class PfabAgent:
         # Step 1: Initialize systems (dataset will be set later)
         self.logger.info("Instantiating models from registered classes...")
         if not self._feature_model_specs:
-            raise ValueError("No feature models registered. Call register_feature_model() first.")
+            self.logger.console_warning("No feature models registered — evaluation will not be available.")
 
         # Instantiate feature models
         self.feature_system = FeatureSystem(logger=self.logger)
@@ -297,7 +297,7 @@ class PfabAgent:
 
         # Validate that all input features are represented as outputs features
         uncomputed_inputs = set(input_features) - output_features_set
-        if uncomputed_inputs:
+        if uncomputed_inputs and self._feature_model_specs:
             raise ValueError(
                 f"The following input features are not computed by any model: "
                 f"{uncomputed_inputs}"
@@ -305,7 +305,7 @@ class PfabAgent:
         
         # Check if there are any predicted features that are not computed by feature models
         unpredicted_features = set(output_predicted_features) - set(output_features)
-        if unpredicted_features:
+        if unpredicted_features and self._feature_model_specs:
             raise ValueError(
                 f"The following predicted features are not computed by any feature model: "
                 f"{unpredicted_features}"
