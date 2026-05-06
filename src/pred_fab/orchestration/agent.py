@@ -42,9 +42,11 @@ class PfabAgent:
     """Main orchestration class: coordinates EvaluationSystem, PredictionSystem, and CalibrationSystem."""
 
     # Dependency graph: system → set of systems that must be initialized first.
+    # Evaluation has no system deps — it defines target/scaling independently.
+    # Feature is only needed when actually running extraction (evaluate method).
     SYSTEM_DEPS: dict[SystemName, set[SystemName]] = {
         SystemName.FEATURE:     set(),
-        SystemName.EVALUATION:  {SystemName.FEATURE},
+        SystemName.EVALUATION:  set(),
         SystemName.PREDICTION:  set(),
         SystemName.CALIBRATION: {SystemName.PREDICTION, SystemName.EVALUATION},
     }
