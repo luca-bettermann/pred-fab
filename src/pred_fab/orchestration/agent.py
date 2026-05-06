@@ -432,24 +432,7 @@ class PfabAgent:
             n_optimization_rounds=n_optimization_rounds,
         )
 
-        # Console: show proposal (single or schedule)
-        cal = self.calibration_system
-        if self._console is not None and self._console.enabled:
-            self._console.print_proposal_row(
-                [], cal.last_opt_perf, cal.last_opt_unc, cal.last_opt_score,
-            )
-            tunable_codes = set(cal.get_tunable_params(datamodule))
-            params = dict(result.initial_params) if result.initial_params else {}
-            tunable = {k: v for k, v in params.items() if k in tunable_codes}
-
-            if cal.last_trajectory and len(cal.last_trajectory) > 1:
-                self._console.print_trajectory_table(
-                    cal.last_trajectory, tunable_codes, cal.trajectory_configs,
-                )
-            else:
-                self._console.print_params_line(tunable)
-
-        self.logger.info(f"Successfully completed acquisition step (kappa={kappa}).")
+        self.logger.info(f"Completed acquisition step (kappa={kappa}).")
         return result
 
     # Backward-compatible aliases
@@ -854,7 +837,6 @@ class PfabAgent:
             result = self.calibration_system.run_baseline(n=n)
         finally:
             self.pred_system._bypass_encoder = False
-        self.logger.console_success(f"Successfully completed baseline step ({n} proposals).")
         return result
 
     # === Helper Functions ===

@@ -877,22 +877,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
         self.last_domain_values = list(structural_values) if structural_values is not None else None
 
-        # Console: show process params per experiment. Domain axes are excluded
-        # because they were already printed under the Domain phase header.
-        console = self.logger._console_output_enabled
-        if console and flat_specs:
-            _D = "\033[2m"
-            _R = "\033[0m"
-            _S = "\033[38;2;39;39;42m"  # Zinc-800
-            skip_codes = set(self.fixed_params) | domain_axis_codes
-            for i, spec in enumerate(flat_specs):
-                p = spec.initial_params.to_dict()
-                parts = [
-                    f"{k[:3]}={v:.3f}" if isinstance(v, float) else f"{k[:3]}={v}"
-                    for k, v in p.items() if k not in skip_codes
-                ]
-                if parts:
-                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{'  '.join(parts)}{_R}")
+        self.last_global_specs = list(flat_specs) if flat_specs else []
 
         # --- Derive per_exp_L from domain axis values in Process output ---
         per_exp_L: list[int] | None = None
@@ -1411,12 +1396,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return scores_neg
 
         console = self.logger._console_output_enabled
-        if console:
-            sched_info = ", ".join(
-                f"{code} over {self.trajectory_configs.get(code, '?')}"
-                for code, _, _ in state.sched_params
-            )
-            print(f"\n  Trajectory (joint, n={n}, D={total_dims}){f': {sched_info}' if sched_info else ''}")
 
         opt = self.engine.run_acquisition_gradient(
             _joint_objective,
@@ -1482,19 +1461,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             specs_out.append(ExperimentSpec(initial_params=initial, trajectories=trajectories))
 
-        # Per-layer schedule values grouped by param.
-        if self.logger._console_output_enabled:
-            _D = "\033[2m"
-            _R = "\033[0m"
-            _S = "\033[38;2;39;39;42m"  # Zinc-800
-            print()  # blank line after "Hit max_passes" / "Converged at pass X"
-            for si, (code, lo, hi) in enumerate(state.sched_params):
-                print(f"    {code}")
-                for i in range(state.n):
-                    vals = [float(state.schedule_norms[i][k, si] * (hi - lo) + lo)
-                            for k in range(state.per_exp_L[i])]
-                    vals_str = " → ".join(f"{v:.1f}" for v in vals)
-                    print(f"    {_S}baseline_{i + 1:02d}{_R}  {_D}{vals_str}{_R}")
+        # Store trajectory data for callers to display
+        self.last_trajectory_schedule_norms = [s.copy() for s in state.schedule_norms]
+        self.last_trajectory_sched_params = list(state.sched_params)
+        self.last_trajectory_per_exp_L = list(state.per_exp_L)
 
         return specs_out
 
