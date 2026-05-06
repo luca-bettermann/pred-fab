@@ -1089,10 +1089,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         # Gradient path when the tensor evidence backend is wired + no integer
-        # dims in scope (DE remains correct for integer/categorical phases —
-        # rounded variables aren't differentiable).
+        # dims in scope + evidence model already has observations (DE remains
+        # correct for: integer/categorical phases, and the first baseline phase
+        # where the evidence landscape is flat → zero gradient → LBFGS exits
+        # in 1 iteration).
         use_gradient = (
             self.evidence.joint_batched_tensor is not None
+            and not init_evidence
             and not (space.integrality is not None and any(space.integrality))
         )
 

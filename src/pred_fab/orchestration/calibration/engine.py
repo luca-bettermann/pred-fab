@@ -241,6 +241,8 @@ class OptimizationEngine:
                     [z], lr=lr, max_iter=n_iters, line_search_fn="strong_wolfe",
                 )
                 last_vals: list[torch.Tensor] = []
+                _iter_count = [0]
+                _prev_loss: list[float] = [float("inf")]
 
                 def _closure() -> torch.Tensor:
                     optimizer.zero_grad()
@@ -249,9 +251,15 @@ class OptimizationEngine:
                     last_vals.append(vals.detach())
                     loss = vals.sum()
                     loss.backward()
-                    history.append(float(vals.detach().min().item()))
-                    if bar:
-                        bar.step(obj=history[-1])
+                    cur = float(vals.detach().min().item())
+                    # Only count as a new iteration when loss improves or first call
+                    # (line search re-evaluations don't advance the iteration counter).
+                    if cur < _prev_loss[0] - 1e-12 or _iter_count[0] == 0:
+                        _iter_count[0] += 1
+                        _prev_loss[0] = cur
+                        history.append(cur)
+                        if bar:
+                            bar.step(i=_iter_count[0], obj=cur)
                     return loss
 
                 optimizer.step(_closure)
