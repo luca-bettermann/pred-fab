@@ -20,6 +20,11 @@ class BaseOrchestrationSystem(ABC):
         self.models: list[Any] = []
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
+        self._initialized = False
+
+    @property
+    def is_initialized(self) -> bool:
+        return self._initialized
 
     @property
     def random_seed(self) -> int | None:

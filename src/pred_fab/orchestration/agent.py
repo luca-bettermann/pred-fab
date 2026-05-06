@@ -1,10 +1,23 @@
 """PfabAgent — main orchestration class for the PFAB framework."""
 
 import copy
+import functools
 from typing import Any
 
 import numpy as np
 import torch
+
+
+def requires(*systems: "SystemName"):
+    """Decorator: assert that the named systems are initialized before the method runs."""
+    def decorator(method):
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            self._require(*systems)
+            return method(self, *args, **kwargs)
+        wrapper._required_systems = systems  # type: ignore[attr-defined]
+        return wrapper
+    return decorator
 
 from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
@@ -27,6 +40,14 @@ from .evidence import EstimatorConfig
 
 class PfabAgent:
     """Main orchestration class: coordinates EvaluationSystem, PredictionSystem, and CalibrationSystem."""
+
+    # Dependency graph: system → set of systems that must be initialized first.
+    SYSTEM_DEPS: dict[SystemName, set[SystemName]] = {
+        SystemName.FEATURE:     set(),
+        SystemName.EVALUATION:  {SystemName.FEATURE},
+        SystemName.PREDICTION:  set(),
+        SystemName.CALIBRATION: {SystemName.PREDICTION, SystemName.EVALUATION},
+    }
 
     def __init__(
         self,
@@ -76,6 +97,38 @@ class PfabAgent:
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize_systems() first.")
 
+    def _get_system(self, name: SystemName) -> "BaseOrchestrationSystem":
+        """Return the orchestration system for the given name."""
+        return {
+            SystemName.FEATURE: self.feature_system,
+            SystemName.EVALUATION: self.eval_system,
+            SystemName.PREDICTION: self.pred_system,
+            SystemName.CALIBRATION: self.calibration_system,
+        }[name]
+
+    def _require(self, *systems: SystemName) -> None:
+        """Assert that the named systems (and their transitive deps) are initialized."""
+        self._assert_initialized()
+        needed: set[SystemName] = set()
+        stack = list(systems)
+        while stack:
+            s = stack.pop()
+            if s not in needed:
+                needed.add(s)
+                stack.extend(self.SYSTEM_DEPS.get(s, set()))
+        missing = [
+            s.value for s in needed
+            if (sys := self._get_system(s)) is None or not sys.is_initialized
+        ]
+        if missing:
+            missing.sort()
+            asked = ", ".join(s.value for s in systems)
+            raise RuntimeError(
+                f"Systems not initialized: {', '.join(missing)}. "
+                f"Register the required models before calling this method "
+                f"(needs: {asked})."
+            )
+
     @property
     def console(self) -> ConsoleReporter:
         """Schema-aware console reporter; available after initialize_systems()."""
@@ -123,89 +176,75 @@ class PfabAgent:
         """Initialize dataset and orchestration systems from registered models and validate with schema."""
         self.schema = schema
 
-        # Step 1: Initialize systems (dataset will be set later)
+        # Step 1: Initialize systems that have registered models
         self.logger.info("Instantiating models from registered classes...")
-        if not self._feature_model_specs:
-            raise ValueError("No feature models registered. Call register_feature_model() first.")
 
-        # Instantiate feature models
         self.feature_system = FeatureSystem(logger=self.logger)
-        self._instantiate_model_group(
-            self._feature_model_specs,
-            self.feature_system.models,
-            "feature"
-        )
-        self.feature_system._set_feature_column_names(schema)
-        self.feature_system.set_ref_objects(schema)
+        if self._feature_model_specs:
+            self._instantiate_model_group(self._feature_model_specs, self.feature_system.models, "feature")
+            self.feature_system._set_feature_column_names(schema)
+            self.feature_system.set_ref_objects(schema)
+            self.feature_system._initialized = True
 
-        # Instantiate evaluation models
         self.eval_system = EvaluationSystem(logger=self.logger)
-        self._instantiate_model_group(
-            self._evaluation_model_specs,
-            self.eval_system.models,
-            "evaluation"
-        )
-        self.eval_system.set_ref_objects(schema)
+        if self._evaluation_model_specs:
+            self._instantiate_model_group(self._evaluation_model_specs, self.eval_system.models, "evaluation")
+            self.eval_system.set_ref_objects(schema)
+            self.eval_system._initialized = True
 
-        # Instantiate prediction models
         self.pred_system = PredictionSystem(logger=self.logger, schema=schema, local_data=self.local_data)
-        self._instantiate_model_group(
-            self._prediction_model_specs,
-            self.pred_system.models,
-            "prediction"
-        )
-        self.pred_system.set_ref_objects(schema)
+        if self._prediction_model_specs:
+            self._instantiate_model_group(self._prediction_model_specs, self.pred_system.models, "prediction")
+            self.pred_system.set_ref_objects(schema)
+            self.pred_system._initialized = True
 
-        # Calibration system needs a perf closure that goes prediction → eval.
-        # _perf_fn_tensor encapsulates that — gradient-traversable, batched.
-        _pred = self.pred_system
-        _eval = self.eval_system
-        _ctx = self._context_snapshot  # mutable dict; closure captures reference
+        # Calibration system — requires Prediction + Evaluation (per SYSTEM_DEPS)
+        if self.pred_system.is_initialized and self.eval_system.is_initialized:
+            _pred = self.pred_system
+            _eval = self.eval_system
+            _ctx = self._context_snapshot
 
-        def _perf_fn_tensor(
-            params_dicts: list[dict[str, Any]],
-        ) -> dict[str, torch.Tensor]:
-            """Batched perf evaluation, gradient flowing back into any tensor-valued continuous params."""
-            if not params_dicts:
-                return {}
-            merged_list: list[dict[str, Any]] = []
-            for pd_ in params_dicts:
-                m = dict(pd_)
-                if _ctx:
-                    m.update(_ctx)
-                merged_list.append(m)
-            feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
+            def _perf_fn_tensor(
+                params_dicts: list[dict[str, Any]],
+            ) -> dict[str, torch.Tensor]:
+                if not params_dicts:
+                    return {}
+                merged_list: list[dict[str, Any]] = []
+                for pd_ in params_dicts:
+                    m = dict(pd_)
+                    if _ctx:
+                        m.update(_ctx)
+                    merged_list.append(m)
+                feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
+                params_blocks: list[Any] = []
+                for pd_ in merged_list:
+                    block = copy.deepcopy(schema.parameters)
+                    for code, val in pd_.items():
+                        if code not in block.data_objects:
+                            continue
+                        v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
+                        try:
+                            block.set_value(code, v)
+                        except Exception:
+                            pass
+                    params_blocks.append(block)
+                return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
 
-            # Build params_blocks for eval target/scaling (numeric values only —
-            # tensor-valued params get .item()'d since target/scaling is computed
-            # via user-defined non-differentiable Python formulas).
-            params_blocks: list[Any] = []
-            for pd_ in merged_list:
-                block = copy.deepcopy(schema.parameters)
-                for code, val in pd_.items():
-                    if code not in block.data_objects:
-                        continue
-                    v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
-                    try:
-                        block.set_value(code, v)
-                    except Exception:
-                        pass
-                params_blocks.append(block)
-
-            return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
-
-        self.calibration_system = CalibrationSystem(
-            schema=schema,
-            logger=self.logger,
-            perf_fn_tensor=_perf_fn_tensor,
-            uncertainty_fn=_pred.uncertainty,
-            evidence=EvidenceBackend(
-                batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
-                joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
-            ),
-            n_exp_fn=lambda: _pred._n_exp,
-            fit_empty_kde_fn=_pred.fit_empty_kde,
-        )
+            self.calibration_system = CalibrationSystem(
+                schema=schema,
+                logger=self.logger,
+                perf_fn_tensor=_perf_fn_tensor,
+                uncertainty_fn=_pred.uncertainty,
+                evidence=EvidenceBackend(
+                    batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
+                    joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
+                ),
+                n_exp_fn=lambda: _pred._n_exp,
+                fit_empty_kde_fn=_pred.fit_empty_kde,
+            )
+            self.calibration_system._initialized = True
+        else:
+            self.calibration_system = None  # type: ignore[assignment]
 
         # validate against schema
         self._validate_systems_against_schema(schema)
@@ -245,71 +284,65 @@ class PfabAgent:
         return datamodule
         
     def _validate_systems_against_schema(self, schema: DatasetSchema) -> None:
-        """Validate all orchestration systems against the provided schema."""
-        
-        # Extract specs from systems
-        feat_specs = self.feature_system.get_model_specs()
-        input_params = feat_specs["input_parameters"]
-        input_features = feat_specs["input_features"]
-        output_features = feat_specs["outputs"]
-        output_predicted_features = []
-        output_performance_attrs = []
+        """Validate initialized orchestration systems against the schema."""
 
-        if self.eval_system:
-            eval_specs = self.eval_system.get_model_specs()
-            input_params.extend(eval_specs["input_parameters"])
-            input_features.extend(eval_specs["input_features"])
-            output_performance_attrs.extend(eval_specs["outputs"])
+        input_params: list[str] = []
+        input_features: list[str] = []
+        output_features: list[str] = []
+        output_predicted_features: list[str] = []
+        output_performance_attrs: list[str] = []
 
-        if self.pred_system:
-            pred_specs = self.pred_system.get_model_specs()
-            input_params.extend(pred_specs["input_parameters"])
-            input_features.extend(pred_specs["input_features"])
-            output_predicted_features.extend(pred_specs["outputs"])
+        if self.feature_system.is_initialized:
+            specs = self.feature_system.get_model_specs()
+            input_params.extend(specs["input_parameters"])
+            input_features.extend(specs["input_features"])
+            output_features.extend(specs["outputs"])
 
-        # Domain iterator inputs (f"{ic}_pos") are implicit on every Domain;
-        # they're valid input feature codes even though they don't appear in
-        # schema.features. Build the allowed-input set as the union.
+        if self.eval_system.is_initialized:
+            specs = self.eval_system.get_model_specs()
+            input_params.extend(specs["input_parameters"])
+            input_features.extend(specs["input_features"])
+            output_performance_attrs.extend(specs["outputs"])
+
+        if self.pred_system.is_initialized:
+            specs = self.pred_system.get_model_specs()
+            input_params.extend(specs["input_parameters"])
+            input_features.extend(specs["input_features"])
+            output_predicted_features.extend(specs["outputs"])
+
         domain_iterator_codes: set[str] = set()
         for domain in schema.domains.values():
             domain_iterator_codes.update(domain.iterator_input_codes)
         valid_input_feature_codes = set(schema.features.keys()) | domain_iterator_codes
 
-        # Validate that all lists are represented in schema
         self._check_sets_against_keys(set(input_params), schema.parameters.keys())
-        # input_features check: error on unknown codes only. The "unused
-        # schema feature" warning is a false positive whenever a feature is
-        # consumed implicitly — e.g. transformer outputs are seen by the next
-        # layer's causal attention without an explicit input declaration, and
-        # iterator codes are framework-generated rather than user-asserted.
         unknown_input_features = set(input_features) - valid_input_feature_codes
         if unknown_input_features:
             raise ValueError(
                 f"The following input features are not in the schema: "
                 f"{unknown_input_features}"
             )
-        self._check_sets_against_keys(set(output_features), schema.features.keys())
-        self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
+        if output_features:
+            self._check_sets_against_keys(set(output_features), schema.features.keys())
+        if output_performance_attrs:
+            self._check_sets_against_keys(set(output_performance_attrs), schema.performance_attrs.keys())
 
-        # Iterator inputs are auto-derived from row coord — count as
-        # "computed" for the input-vs-output coverage check.
         output_features_set = set(output_features) | domain_iterator_codes
 
-        # Validate that all input features are represented as outputs features
-        uncomputed_inputs = set(input_features) - output_features_set
-        if uncomputed_inputs:
-            raise ValueError(
-                f"The following input features are not computed by any model: "
-                f"{uncomputed_inputs}"
-            )
-        
-        # Check if there are any predicted features that are not computed by feature models
-        unpredicted_features = set(output_predicted_features) - set(output_features)
-        if unpredicted_features:
-            raise ValueError(
-                f"The following predicted features are not computed by any feature model: "
-                f"{unpredicted_features}"
-            )
+        if self.feature_system.is_initialized:
+            uncomputed_inputs = set(input_features) - output_features_set
+            if uncomputed_inputs:
+                raise ValueError(
+                    f"The following input features are not computed by any model: "
+                    f"{uncomputed_inputs}"
+                )
+            if self.pred_system.is_initialized:
+                unpredicted = set(output_predicted_features) - set(output_features)
+                if unpredicted:
+                    raise ValueError(
+                        f"The following predicted features are not computed by any feature model: "
+                        f"{unpredicted}"
+                    )
 
     def set_active_experiment(self, exp_data: ExperimentData) -> None:
         """Set the active experiment for online operations."""
@@ -372,6 +405,7 @@ class PfabAgent:
 
     # === STEP METHODS ==
     
+    @requires(SystemName.CALIBRATION)
     def acquisition_step(
         self,
         datamodule: DataModule,
@@ -384,7 +418,6 @@ class PfabAgent:
         ``kappa=None`` resolves to the persistent default set by
         ``configure_exploration(kappa=...)`` (initial value 0.5).
         """
-        self._check_systems(StepType.FULL)
         if kappa is None:
             kappa = self.calibration_system.kappa_default
 
@@ -517,6 +550,7 @@ class PfabAgent:
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
+    @requires(SystemName.PREDICTION)
     def train(
         self,
         datamodule: DataModule,
@@ -525,8 +559,6 @@ class PfabAgent:
         **kwargs
     ) -> dict[str, Any] | None:
         """Train prediction models and optionally validate/test."""
-        if self.pred_system is None:
-            raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
         
         # Train prediction models using provided DataModule
         self.pred_system.train(datamodule, **kwargs)
@@ -801,6 +833,7 @@ class PfabAgent:
         self._context_snapshot.clear()
         self._context_snapshot.update(values)
 
+    @requires(SystemName.CALIBRATION)
     def baseline_step(
         self,
         n: int,
@@ -811,7 +844,6 @@ class PfabAgent:
         the integrated evidence gain). Each new proposal is added to the
         evidence field so subsequent proposals naturally space-fill.
         """
-        self._assert_initialized()
         # Bypass the encoder during baseline so the (random-init) prediction
         # model can't taint placement: evidence/KDE operates on raw normalised
         # input space here. Auto-managed; not user-facing.
@@ -855,42 +887,16 @@ class PfabAgent:
                 f"{unused}"
             )        
 
-    def _get_system(self, system_name: SystemName) -> Any:
-        """Get a system by name, raising an error if not initialized."""
-        systems = {
-            SystemName.EVALUATION: self.eval_system,
-            SystemName.PREDICTION: self.pred_system,
-            SystemName.CALIBRATION: self.calibration_system,
-        }
-        
-        if system_name not in systems:
-            raise ValueError(f"Unknown system name: {system_name}")
-        
-        system = systems[system_name]
-        if system is None:
-            raise RuntimeError(f"{system_name.value.capitalize()} System not initialized. Call initialize() first.")
-        
-        return system
     
     def _check_systems(self, step: StepType) -> None:
-        """Validate that all systems are initialized and active for a full step."""
-        self._assert_initialized()
-        
+        """Legacy bridge — maps StepType to _require()."""
         if step == StepType.EVAL:
-            rel_systems = [self.feature_system, self.eval_system]
+            self._require(SystemName.FEATURE, SystemName.EVALUATION)
         elif step == StepType.FULL:
-            rel_systems = [
-                self.feature_system,
-                self.eval_system,
-                self.pred_system,
-                self.calibration_system
-            ]
+            self._require(SystemName.FEATURE, SystemName.EVALUATION,
+                          SystemName.PREDICTION, SystemName.CALIBRATION)
         else:
-            raise ValueError(f"Unknown step type: {step}")
-        
-        # Validate that all required systems are active
-        if not all(rel_systems):
-            raise RuntimeError(f"One or more required systems not initialized for {step.value} step.")
+            self._assert_initialized()
         
     def _step_config(
             self, 
