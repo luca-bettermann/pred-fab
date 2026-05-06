@@ -37,11 +37,8 @@ class OptimizationEngine:
         # DE optimizer parameters (population-based, used for integer phase).
         # Convergence is governed by "no improvement in K generations" via the
         # callback heuristic — same as the prior scipy wrapper.
-        self.de_maxiter: int = 1000
-        # popsize × D individuals per generation. Default 8 gives sufficient
-        # diversity for smooth-ish acquisition landscapes while halving
-        # evaluations per generation. Tunable via configure_optimizer.
-        self.de_popsize: int = 8
+        self.de_maxiter: int = 100
+        self.de_popsize: int = 64
         self.de_no_improve_window: int = 10  # generations without improvement → halt
         self.de_improvement_eps: float = 1e-6  # min Δbest to count as an improvement
 
@@ -50,7 +47,7 @@ class OptimizationEngine:
         # ~5-30 iterations on the smooth, deterministic acquisition surface
         # we have. Adam is available for noisier/flatter surfaces.
         self.gradient_n_starts: int = 4
-        self.gradient_n_iters: int = 60
+        self.gradient_n_iters: int = 100
         self.gradient_lr: float = 0.05
         self.gradient_method: str = "lbfgs"  # "lbfgs" | "adam"
 
