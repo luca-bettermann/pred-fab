@@ -733,9 +733,9 @@ class PfabAgent:
         """Set optimiser tuning parameters.
 
         ``de_maxiter`` / ``de_popsize`` control the joint global DE phase
-        (Phase 1, mixed-integer); ``n_starts`` / ``n_iters`` / ``lr`` control
-        the LBFGS multi-start phases (Phase 2 continuous refine when no
-        trajectory; Phase 3 trajectory). Backend dispatch is internal —
+        (Global DE, mixed-integer); ``n_starts`` / ``n_iters`` / ``lr`` control
+        the LBFGS multi-start phases (Refine (continuous) when no
+        trajectory; Trajectory). Backend dispatch is internal —
         users do not pick DE vs gradient.
         """
         self._assert_initialized()

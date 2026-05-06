@@ -13,8 +13,8 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `PredictionSystem` | `prediction.py` | Trains/infers prediction models. Canonical autoreg is `predict_for_calibration_tensor` (gradient-traversable). Owns per-model evidence (KDE) state. |
 | `EvidenceEstimator` | `evidence.py` | Pluggable Δ∫E: `KernelFieldEstimator` (deterministic shells, gradient-traversable; probe count grows with D) or `SobolLocalEstimator` (QMC cube, fixed `n_samples` regardless of D — high-D escape hatch, also gradient-traversable). |
 | `_choose_kde_regime` / `_resolve_kde_regime` | `evidence.py` | σ/D-aware regime dispatcher (dense / knn / cluster); only dense implemented, others log INFO and fall back |
-| `CalibrationSystem` | `calibration/system.py` | Two-phase optimisation orchestrator |
-| `OptimizationEngine` | `calibration/engine.py` | Torch-native DE (Phase 1) + multi-start gradient (LBFGS default) with sigmoid bound reparam (Phase 2/3) |
+| `CalibrationSystem` | `calibration/system.py` | Global → Refine/Trajectory optimisation orchestrator |
+| `OptimizationEngine` | `calibration/engine.py` | Torch-native DE (Global) + multi-start gradient (LBFGS default) with sigmoid bound reparam (Refine/Trajectory) |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds + trust regions |
 | `SolutionSpace` | `calibration/space.py` | Static-only decision-vector layout + bounds (gradient owns the trajectory path) |
 | `EvidenceBackend` | `calibration/system.py` | Bundles the five Δ∫E callbacks (scalar / batched / joint_batched / batched_tensor / joint_batched_tensor) |
@@ -38,15 +38,15 @@ D(z)   = Σ_j w_j · ρ_j(z)                  ≥ 0       — raw density
 
 Persistent κ default settable via `configure_exploration(kappa=...)`; `inference_step` hardcodes κ=0.
 
-## Optimisation strategy — 2 phases
+## Optimisation strategy — Global → Refine / Trajectory
 
 Internal dispatch; users do not pick backends.
 
-| Phase | Method | When |
+| Stage | Method | When |
 |---|---|---|
-| **Phase 1 — Joint global** | DE on all dims with `integrality_mask`, fixed `maxiter=30, popsize=64`. Output: joint `(discrete*, continuous*)`. | Every step except Adaptation |
-| **Phase 2 — Continuous refine** | Single LBFGS from Phase 1's continuous best; discretes fixed. Same path as Adaptation (with `x0 = current_params`). | When no trajectory |
-| **Phase 3 — Trajectory** | Joint multi-start LBFGS over `(D_static + L_i × D_sched) × N` dims; Sobol+Boltzmann diverse starts; per-experiment static drift trust regions. Replaces the iterative-pass Gauss-Seidel scheme. | When `trajectory_configs` set |
+| **Global** | Joint DE over all dims (domain + process) with `integrality_mask`. Fixed `maxiter=30, popsize=64`. Domains committed from this result. | Every step except Adaptation |
+| **Refine** | Single LBFGS from Global's continuous best; discretes fixed. Same path as Adaptation (with `x0 = current_params`). | When no trajectory configured |
+| **Trajectory** | Joint multi-start LBFGS over `(D_static + L_i × D_sched) × N` dims; Sobol+Boltzmann diverse starts; per-experiment static drift trust regions. | When `trajectory_configs` set |
 | **Adaptation** | Single LBFGS, `x0 = current_params`, trust-region bounds. | Online refinement |
 
 Sigmoid bound reparam (`x = σ(z)·(hi−lo) + lo`) enforces strict bounds in z-space; no clipping. Soft delta-constraint penalty for trajectory adjacency. Default `gradient_method = "lbfgs"` (Adam available).

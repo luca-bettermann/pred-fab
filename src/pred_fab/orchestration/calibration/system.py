@@ -38,7 +38,7 @@ class EvidenceBackend:
 
 @dataclass
 class _ScheduleState:
-    """Per-call state for the iterative Schedule phase (Phase 3).
+    """Per-call state for the Trajectory phase.
 
     Holds warm-starts, mutable optimisation state, and pre-computed lookups
     that the inner-DE machinery reads on every per-experiment call.
@@ -125,10 +125,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.parameters = schema.parameters
 
         # Backend is phase-deterministic — no user-facing optimizer choice:
-        # Phase 1 (Domain → Process discrete commit) = DE (handles
-        # integers/cats natively). Phase 2 (continuous refine) and Phase 3
+        # Global (joint DE over all dims) = DE (handles
+        # integers/cats natively). Refine (continuous LBFGS) and Trajectory
         # (trajectory) = LBFGS multi-start. The Domain → Process split inside
-        # Phase 1 keeps each DE call small (joint over all dims at full DE
+        # Global keeps each DE call small (joint over all dims at full DE
         # budget timed out at >5 min for N=5 + ~3 numeric params).
 
         # Persistent κ default for acquisition_step / exploration_step. Overridable
@@ -837,67 +837,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         if self.trajectory_configs[code] in self.fixed_params
                     }
 
-        # --- Detect domain axes among unfixed numeric params ---
+        # --- Global: joint DE over all dims (domain + process) ---
         domain_axis_codes = {
             code for code, _, _ in numeric_params
             if code in self.data_objects and isinstance(self.data_objects[code], DataDomainAxis)
         }
-        do_split = bool(domain_axis_codes) and n_numeric > 0
 
-        # --- Phase: Domain (only when split is on and domain axes exist) ---
-        structural_values: list[dict[str, int]] | None = None
-        domain_specs: list[ExperimentSpec] = []
-        if do_split:
-            d_params, d_init, d_int_set, d_int_ranges = self._filter_phase_params(
-                numeric_params, init_norm, int_set, int_ranges_map, domain_axis_codes
-            )
-            domain_specs, _, _ = self._run_acquisition_phase(
-                n, d_params, integer_params, d_int_set, d_int_ranges,
-                d_init, cat_codes, cat_assignments,
-                structural_values=None,
-                label=f"Domain (D={len(d_params)})", init_evidence=True,
-            )
-            structural_values = []
-            for spec in domain_specs:
-                p = spec.initial_params.to_dict()
-                structural_values.append({c: int(p[c]) for c in domain_axis_codes if c in p})
-
-            # Per-exp Domain results, shown right after the Domain progress bar
-            # so Process output below only needs to repeat what *it* optimized.
-            if self.logger._console_output_enabled and structural_values:
-                _D = "\033[2m"
-                _R = "\033[0m"
-                _S = "\033[38;2;39;39;42m"  # Zinc-800
-                for i, sv in enumerate(structural_values):
-                    parts = "  ".join(f"{k[:3]}={v}" for k, v in sv.items())
-                    print(f"    {_S}baseline_{i+1:02d}{_R}  {_D}{parts}{_R}")
-
-        # --- Phase: Process (single call; inputs branched on do_split) ---
-        if do_split:
-            process_codes = {code for code, _, _ in numeric_params} - domain_axis_codes
-            p_params, p_init, p_int_set, p_int_ranges = self._filter_phase_params(
-                numeric_params, init_norm, int_set, int_ranges_map, process_codes
-            )
-            p_init_evidence = False
-        else:
-            p_params = numeric_params
-            p_init = init_norm
-            p_int_set = int_set
-            p_int_ranges = int_ranges_map
-            p_init_evidence = True
-
-        if p_params:
+        if numeric_params:
             flat_specs, flat_params, optimized = self._run_acquisition_phase(
-                n, p_params, integer_params, p_int_set, p_int_ranges,
-                p_init, cat_codes, cat_assignments,
-                structural_values=structural_values,
-                label=f"Process (D={len(p_params)})", init_evidence=p_init_evidence,
+                n, numeric_params, integer_params, int_set, int_ranges_map,
+                init_norm, cat_codes, cat_assignments,
+                structural_values=None,
+                label=f"Global (D={len(numeric_params)})", init_evidence=True,
             )
-        elif do_split:
-            # Pure-domain case: all non-domain params fixed. Use Domain results as-is.
-            flat_specs = domain_specs
-            flat_params = np.zeros((n, 0))
-            optimized = np.zeros((n, 0))
         else:
             # No numeric params anywhere — fall back to centre-of-bounds + cats.
             optimized = np.zeros((n, 0))
@@ -912,6 +864,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
                 proposal = ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE)
                 flat_specs.append(ExperimentSpec(initial_params=proposal, trajectories={}))
+
+        # Extract domain axis values from Global results (needed by Trajectory)
+        structural_values: list[dict[str, int]] | None = None
+        if domain_axis_codes and flat_specs:
+            structural_values = []
+            for spec in flat_specs:
+                p = spec.initial_params.to_dict()
+                structural_values.append({c: int(p[c]) for c in domain_axis_codes if c in p})
 
         # Store phase points for validation plot
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
@@ -1220,7 +1180,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         structural_values: list[dict[str, int]] | None,
         static_params: list[tuple[str, float, float]] | None = None,
     ) -> list[ExperimentSpec]:
-        """Phase 3: joint multi-start LBFGS over all N experiments' trajectories.
+        """Trajectory: joint multi-start LBFGS over all N experiments' trajectories.
 
         Decision vector: ``(D_static + L_i × D_sched)`` per experiment, all
         concatenated → ``Σᵢ (D_static + L_i × D_sched)`` total dims.
@@ -1230,7 +1190,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Per-experiment delta constraints are smooth quadratic penalties on
         adjacent step differences.
 
-        Multi-start covers the trajectory-shape axis: Phase 1's warm start
+        Multi-start covers the trajectory-shape axis: Global's warm start
         anchors the static dims (and step-0 schedule values) but the
         trajectory shape over ``k=1..L-1`` is otherwise unspecified, so
         diverse starting shapes converge to different basins and we pick
@@ -1906,8 +1866,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             D_sched = len(sched_codes)
             code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
 
-            # --- Phase 2 (Process): single-point acquisition, no schedule ---
-            # All params (static + sched) treated as flat static for Phase 2
+            # --- Refine (Process): single-point acquisition, no schedule ---
+            # All params (static + sched) treated as flat static for Refine
             all_p2_codes = static_codes + sched_codes
             D_p2 = len(all_p2_codes)
 
@@ -1916,7 +1876,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 p2_bounds = all_global_bounds
 
-            # Phase 2 (Process): vectorised single-point κ-acquisition over
+            # Refine (Process): vectorised single-point κ-acquisition over
             # all_p2_codes. Routes through _run_phase which uses
             # _acquisition_joint_batched_objective (perf + KDE batched across
             # the DE candidate dim). Eliminates the scalar per-candidate path
@@ -1942,7 +1902,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 full_bounds=p2_bounds,
                 kappa=_eff_kappa_p2,
                 perf_range=_perf_range_p2,
-                label="Process",
+                label="Global",
                 show_progress=console,
                 n_proposals=1,
                 n_schedule_steps=1,
@@ -1952,7 +1912,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.last_opt_n_starts = opt_p2.n_starts
             self.last_opt_score = opt_p2.score
 
-            # Build flat_x from Phase 2 result + fixed-for-p2 prefill (codes
+            # Build flat_x from Refine result + fixed-for-p2 prefill (codes
             # outside the p2 set, e.g. trust-region-pinned working_params).
             flat_x = np.zeros(n_input)
             if opt_p2.best_x is not None:
@@ -1964,7 +1924,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     if c in code_to_idx:
                         flat_x[code_to_idx[c]] = v
 
-            # --- Phase 3 (Schedule): fix static, optimize offsets ---
+            # --- Trajectory (Schedule): fix static, optimize offsets ---
             if D_sched > 0:
                 # Build sched DE bounds and delta norms in normalized space
                 sched_de_bounds: list[tuple[float, float]] = []
@@ -2016,7 +1976,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
 
                 self.logger.debug(
-                    f"Phase 3 schedule optimization (gradient): L={L}, "
+                    f"Trajectory schedule optimization (gradient): L={L}, "
                     f"D_sched={D_sched}, total_vars={L * D_sched}"
                 )
 
@@ -2045,7 +2005,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 opt = self.engine.run_acquisition_gradient(
                     _schedule_objective_tensor, abs_bounds,
-                    label="Schedule", show_progress=console,
+                    label="Trajectory", show_progress=console,
                 )
                 self.last_opt_nfev += opt.nfev
                 self.convergence_history["Schedule"] = opt.convergence_history
@@ -2173,7 +2133,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     full_bounds=bounds,
                     kappa=_eff_kappa,
                     perf_range=_perf_range,
-                    label=f"Domain (D={len(phase_codes['domain'])})",
+                    label=f"Global · domain (D={len(phase_codes['domain'])})",
                     show_progress=console,
                     n_proposals=1,
                     n_schedule_steps=1,
@@ -2188,7 +2148,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     full_bounds=bounds,
                     kappa=_eff_kappa,
                     perf_range=_perf_range,
-                    label=f"Process (D={len(phase_codes['process'])})",
+                    label=f"Global (D={len(phase_codes['process'])})",
                     show_progress=console,
                     n_proposals=1,
                     n_schedule_steps=1,
