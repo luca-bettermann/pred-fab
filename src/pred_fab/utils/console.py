@@ -230,66 +230,67 @@ class ConsoleReporter:
         obj_s = f"obj={_score_color(obj)}{obj:.3f}{_R}"
         self._print(f"  {_C}>{_R} {perf_s}  {unc_s}  {obj_s}")
 
-    def print_params_line(self, params: dict[str, Any]) -> None:
-        """Print proposed parameters in grey on own line, with trailing blank line."""
-        if not self.enabled:
-            return
-        parts: list[str] = []
-        for code, val in params.items():
-            if isinstance(val, float):
-                fmt = f"{val:.2f}" if abs(val) < 1 else f"{val:.1f}"
-                parts.append(f"{code}={fmt}")
-            elif isinstance(val, int):
-                parts.append(f"{code}={val}")
-            else:
-                parts.append(f"{code}={val}")
-        if parts:
-            self._print(f"    {_D}\u2192 {', '.join(parts)}{_R}")
-        if self._logger._console_output_enabled:
-            print("", flush=True)
-
-    def print_trajectory_table(
+    def print_proposal_table(
         self,
-        proposals: list[dict[str, Any]],
-        tunable_codes: set[str],
-        trajectory_configs: dict[str, str],
+        title: str,
+        exp_codes: list[str],
+        params_list: list[dict[str, Any]],
+        *,
+        exclude_codes: set[str] | None = None,
+        short_names: dict[str, str] | None = None,
     ) -> None:
-        """Print per-step parameter schedule as a vertical table."""
-        if not self.enabled or not proposals:
+        """Print a parameter table with one row per experiment."""
+        if not self.enabled or not exp_codes:
             return
-        # Identify which params vary per layer vs fixed across layers
-        sched_params = set(trajectory_configs.keys())
-        fixed_params: dict[str, str] = {}
-        for code in tunable_codes:
-            if code not in sched_params:
-                val = proposals[0].get(code)
-                if val is not None:
-                    fmt = f"{val:.2f}" if isinstance(val, float) and abs(val) < 1 else f"{val:.1f}" if isinstance(val, float) else str(val)
-                    fixed_params[code] = fmt
+        exclude = exclude_codes or set()
+        shorts = short_names or {}
+        columns = [c for c in self._param_codes if c not in exclude]
+        if not columns:
+            return
+        headers = [shorts.get(c, c[:8]) for c in columns]
 
-        # Fixed params line
-        if fixed_params:
-            fixed_s = ", ".join(f"{k}={v}" for k, v in fixed_params.items())
-            self._print(f"    {_D}\u2192 {fixed_s}{_R}")
+        self._print(f"\n  {_D}{title}{_R}")
+        self._print(f"  {'code':<16s}" + "  ".join(f"{h:>8s}" for h in headers))
+        self._print(f"  {'\u2500' * (16 + 10 * len(headers))}")
 
-        # Per-step table for schedule params
-        sched_codes = sorted(sched_params & tunable_codes)
-        if sched_codes:
-            header = f"    {_D}{'step':<7s}"
-            for code in sched_codes:
-                header += f"  {code:>8s}"
-            header += _R
-            self._print(header)
-            for i, p in enumerate(proposals):
-                row = f"    {_D}{i+1:<7d}"
-                for code in sched_codes:
-                    val = p.get(code, 0)
-                    row += f"  {float(val):8.1f}" if isinstance(val, (int, float)) else f"  {str(val):>8s}"
-                row += _R
-                self._print(row)
+        for code, params in zip(exp_codes, params_list):
+            vals: list[str] = []
+            for col in columns:
+                v = params.get(col, "\u2014")
+                if isinstance(v, float):
+                    vals.append(f"{v:8.4f}")
+                elif isinstance(v, int):
+                    vals.append(f"{v:>8d}")
+                else:
+                    vals.append(f"{str(v):>8s}")
+            self._print(f"  {code:<16s}" + "  ".join(vals))
 
-        if self._logger._console_output_enabled:
-            print("", flush=True)
+        self._logger.console_new_line()
+
+    def print_schedule_table(
+        self,
+        param_code: str,
+        exp_codes: list[str],
+        per_exp_values: list[list[float]],
+        *,
+        short_name: str | None = None,
+    ) -> None:
+        """Print a per-step trajectory table for one schedule parameter."""
+        if not self.enabled or not per_exp_values:
+            return
+        n_steps = max(len(v) for v in per_exp_values)
+        step_headers = [str(i + 1) for i in range(n_steps)]
+        label = short_name or param_code
+
+        self._print(f"\n  {_D}{label}{_R}")
+        self._print(f"  {'code':<16s}" + "  ".join(f"{h:>7s}" for h in step_headers))
+        self._print(f"  {'\u2500' * (16 + 9 * n_steps)}")
+
+        for code, vals in zip(exp_codes, per_exp_values):
+            val_strs = [f"{v:7.3f}" for v in vals]
+            self._print(f"  {code:<16s}" + "  ".join(val_strs))
+
+        self._logger.console_new_line()
 
     def print_optimizer_stats(self, n_starts: int, n_evals: int) -> None:
         """Dim optimizer summary line."""

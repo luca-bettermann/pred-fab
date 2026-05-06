@@ -1401,7 +1401,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _joint_objective,
             bounds,
             x0=x0,
-            label=f"Trajectory (joint n={n})",
+            label=f"Trajectory (D={D_static + D_sched}, V={total_dims})",
             show_progress=console,
         )
         best_x = opt.best_x if opt.best_x is not None else x0
