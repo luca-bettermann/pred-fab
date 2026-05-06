@@ -574,6 +574,14 @@ class Dataset:
     def get_experiment_codes(self) -> list[str]:
         """Get list of all experiment codes in dataset."""
         return list(self._experiments.keys())
+
+    def list_dataset_codes(self) -> list[str]:
+        """Return distinct ``dataset_code`` values across loaded experiments, preserving insertion order."""
+        seen: dict[str, None] = {}
+        for exp in self._experiments.values():
+            if exp.dataset_code is not None and exp.dataset_code not in seen:
+                seen[exp.dataset_code] = None
+        return list(seen)
     
     def get_experiment_params(self, exp_code: str) -> dict[str, Any]:
         """Get experiment parameters as dictionary."""

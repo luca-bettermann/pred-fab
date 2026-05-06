@@ -1081,7 +1081,30 @@ class DataModule:
             )
         self._split_codes[split] = codes
         return codes
-    
+
+    def set_split_datasets(
+        self,
+        dataset_codes: list[str],
+        split: SplitType = SplitType.TRAIN,
+    ) -> list[str]:
+        """Union multiple ``dataset_code`` values into one split."""
+        if split not in (SplitType.TRAIN, SplitType.VAL, SplitType.TEST):
+            raise ValueError(f"set_split_datasets: unknown split {split!r}.")
+        codes: list[str] = []
+        for dc in dataset_codes:
+            matched = [
+                code for code, exp in self.dataset._experiments.items()
+                if exp.dataset_code == dc
+            ]
+            codes.extend(matched)
+        if not codes:
+            raise ValueError(
+                f"set_split_datasets: no experiments tagged with any of "
+                f"{dataset_codes!r}.",
+            )
+        self._split_codes[split] = codes
+        return codes
+
     def __repr__(self) -> str:
         fitted_str = "fitted" if self._is_fitted else "not fitted"
         batch_str = f"batch_size={self.batch_size}" if self.batch_size else "no batching"

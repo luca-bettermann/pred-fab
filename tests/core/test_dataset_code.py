@@ -135,3 +135,40 @@ def test_dataset_code_none_does_not_create_metadata_file(tmp_path):
     dataset_b = Dataset(schema=schema, debug_flag=True)
     dataset_b.load_experiment("exp_untagged", verbose=False)
     assert dataset_b.get_experiment("exp_untagged").dataset_code is None
+
+
+# ===== Dataset.list_dataset_codes =====
+
+def test_list_dataset_codes_returns_distinct_codes(tmp_path):
+    """list_dataset_codes returns unique codes in insertion order."""
+    schema = build_mixed_feature_schema(tmp_path)
+    dataset = Dataset(schema=schema, debug_flag=True)
+    for code, ds_code in [
+        ("e1", "baseline"), ("e2", "baseline"), ("e3", "exploration"),
+        ("e4", None), ("e5", "test"),
+    ]:
+        dataset.create_experiment(
+            code, parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+            dataset_code=ds_code,
+        )
+    assert dataset.list_dataset_codes() == ["baseline", "exploration", "test"]
+
+
+def test_list_dataset_codes_empty_when_no_tags(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    assert dataset.list_dataset_codes() == []
+
+
+# ===== DataModule.set_split_datasets (multi-code) =====
+
+def test_set_split_datasets_unions_multiple_codes(tmp_path):
+    """set_split_datasets unions experiments from multiple dataset_codes."""
+    dataset, dm = _build_dm_with_tagged_experiments(tmp_path)
+    matched = dm.set_split_datasets(["ADVEI_2026/baseline", "ADVEI_2026/test"])
+    assert sorted(matched) == ["exp_b001", "exp_b002", "exp_t001"]
+
+
+def test_set_split_datasets_raises_when_none_match(tmp_path):
+    _, dm = _build_dm_with_tagged_experiments(tmp_path)
+    with pytest.raises(ValueError, match="no experiments tagged"):
+        dm.set_split_datasets(["nonexistent"])
