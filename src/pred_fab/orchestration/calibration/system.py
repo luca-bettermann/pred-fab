@@ -1041,6 +1041,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         for si, (_, code, lo, hi) in enumerate(all_phase_params):
             if code in baseline_dm.input_columns:
                 phase_col_map.append((si, baseline_dm.input_columns.index(code)))
+        self.logger.info(
+            f"phase_col_map: {len(phase_col_map)}/{len(all_phase_params)} mapped  "
+            f"dm_cols={baseline_dm.input_columns}  "
+            f"phase_codes={[c for _, c, _, _ in all_phase_params]}  "
+            f"unmapped={[c for si, (_, c, _, _) in enumerate(all_phase_params) if c not in baseline_dm.input_columns]}"
+        )
 
         # Pre-fill batch with structural values from prior phases (e.g. Domain
         # values pinned when running Process after Domain). Filled at 0.5 for
