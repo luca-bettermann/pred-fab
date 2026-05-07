@@ -1059,19 +1059,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         except ValueError:
                             prior_fill[i, col] = 0.5
 
-        def _acquisition_batch_objective(x_flat: np.ndarray) -> float:
-            """Maximize Δ∫E over joint N-batch placement (κ=1)."""
-            pts = space.decode(x_flat)  # (N, D_point)
-            X_batch = prior_fill.copy()
-            for si, col_idx in phase_col_map:
-                for i in range(n):
-                    X_batch[i, col_idx] = pts[i, si]
-            # Route via the tensor variant (S=1, N=n, L=1) — single source of truth
-            # for the κ-blend math, no parallel numpy implementation.
-            full_S_NL = torch.from_numpy(X_batch).double().unsqueeze(0).unsqueeze(2)
+        d_phase = len(all_phase_params)
+        prior_fill_t = torch.from_numpy(prior_fill).to(dtype=torch.float64)
+        phase_cols_t = torch.tensor(
+            [c for _, c in phase_col_map], dtype=torch.long,
+        ) if phase_col_map else None
+        phase_si_t = torch.tensor(
+            [s for s, _ in phase_col_map], dtype=torch.long,
+        ) if phase_col_map else None
+
+        def _acquisition_batch_objective_vec(x_flat_DS: np.ndarray) -> np.ndarray:
+            """Vectorised: ``(D, S) → (S,)`` — one negated ΔE per population member."""
+            x_flat_SD = torch.from_numpy(x_flat_DS.T).double()  # (S, total_vars)
+            S = int(x_flat_SD.shape[0])
+            pts_S = x_flat_SD.reshape(S, n, d_phase)
+            X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone()
+            if phase_cols_t is not None and phase_si_t is not None:
+                src = pts_S.index_select(-1, phase_si_t)
+                X_batch_S[:, :, phase_cols_t] = src
+            full_S_NL = X_batch_S.unsqueeze(2)  # (S, N, 1, D)
             with torch.no_grad():
                 scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None)
-            return float(scores_neg[0].item())
+            return scores_neg.cpu().numpy()
 
         # Build init_norm for the phase-local space (remap original indices)
         merged_init = np.zeros((n, len(all_phase_params)))
@@ -1100,15 +1109,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
         if use_gradient:
-            d_phase = len(all_phase_params)
-            prior_fill_t = torch.from_numpy(prior_fill).to(dtype=torch.float64)
-            phase_cols_t = torch.tensor(
-                [c for _, c in phase_col_map], dtype=torch.long,
-            ) if phase_col_map else None
-            phase_si_t = torch.tensor(
-                [s for s, _ in phase_col_map], dtype=torch.long,
-            ) if phase_col_map else None
-
             def _acquisition_batch_objective_tensor(x_flat_S: torch.Tensor) -> torch.Tensor:
                 S = int(x_flat_S.shape[0])
                 pts_S = x_flat_S.reshape(S, n, d_phase)  # (S, n, d_phase)
@@ -1129,9 +1129,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
         else:
             opt = self.engine._run_de(
-                _acquisition_batch_objective, space.bounds, init_pop=init_pop,
+                _acquisition_batch_objective_vec, space.bounds, init_pop=init_pop,
                 integrality=space.integrality, label=label, show_progress=console,
-                maxiter=smart_maxiter,
+                maxiter=smart_maxiter, vectorized=True,
             )
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev

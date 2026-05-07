@@ -298,6 +298,8 @@ class OptimizationEngine:
         maxiter: int | None = None,
         popsize: int | None = None,
         vectorized: bool = False,
+        no_improve_window: int | None = None,
+        improvement_eps: float | None = None,
     ) -> _OptResult:
         """Torch-native differential evolution.
 
@@ -384,8 +386,8 @@ class OptimizationEngine:
         best_so_far = float(f.min().item())
         best_at_last_check = best_so_far
         gens_no_improve = 0
-        improvement_eps = self.de_improvement_eps
-        no_improve_window = self.de_no_improve_window
+        _eps = improvement_eps if improvement_eps is not None else self.de_improvement_eps
+        _window = no_improve_window if no_improve_window is not None else self.de_no_improve_window
         recombination = 0.7
         iter_count = 0
 
@@ -444,12 +446,12 @@ class OptimizationEngine:
                 if bar:
                     bar.step(obj=best_so_far)
 
-                if best_so_far < best_at_last_check - improvement_eps:
+                if best_so_far < best_at_last_check - _eps:
                     best_at_last_check = best_so_far
                     gens_no_improve = 0
                 else:
                     gens_no_improve += 1
-                if gens_no_improve >= no_improve_window:
+                if gens_no_improve >= _window:
                     break
 
         best_idx = int(torch.argmin(f).item())
