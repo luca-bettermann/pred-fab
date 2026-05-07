@@ -533,10 +533,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # rho_other_per_old[j, m] = sum over k != j of w_k * exp(-||probes_per_old[j,m] - old_k||²/2σ²)
         # diff_old: (n_old, M, n_old, D) — broadcast probes_per_old vs old_centers
         diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
-        d2_old = np.sum(diff_old * diff_old, axis=-1)  # (n_old, M, n_old)
-        kernels_old = np.exp(-d2_old * inv_2sig2)  # (n_old, M, n_old)
+        d2_per_dim_old = diff_old * diff_old
+        kernels_old = _anova_kernel_np(d2_per_dim_old, inv_2sig2)
         if do_truncate:
-            kernels_old = np.where(d2_old <= cutoff_d2, kernels_old, 0.0)
+            kernels_old = np.where(d2_per_dim_old.sum(axis=-1) <= cutoff_d2, kernels_old, 0.0)
         weighted_old = kernels_old * old_weights[None, None, :]  # (n_old, M, n_old)
         # Mask out k == j (last dim equals first): rho_other excludes j
         eye_jk = np.eye(n_old, dtype=np.float64)  # (n_old, n_old)
@@ -547,10 +547,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # ---- Per-(s, j) perturbation: density at probes_per_old[j, m] from new kernel s ----
         # diff_new_to_old_probes: (n_old, M, S, D)
         diff_new_to_old = probes_per_old[:, :, None, :] - new_centers_S[None, None, :, :]
-        d2_new_to_old = np.sum(diff_new_to_old * diff_new_to_old, axis=-1)  # (n_old, M, S)
-        kernels_new_to_old = np.exp(-d2_new_to_old * inv_2sig2)
+        d2_per_dim_nto = diff_new_to_old * diff_new_to_old
+        kernels_new_to_old = _anova_kernel_np(d2_per_dim_nto, inv_2sig2)
         if do_truncate:
-            kernels_new_to_old = np.where(d2_new_to_old <= cutoff_d2, kernels_new_to_old, 0.0)
+            kernels_new_to_old = np.where(d2_per_dim_nto.sum(axis=-1) <= cutoff_d2, kernels_new_to_old, 0.0)
         delta_density = kernels_new_to_old * new_weights_S[None, None, :]  # (n_old, M, S)
 
         # ---- Old kernels' self-integrals when new kernel is added ----
@@ -567,10 +567,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # ---- New kernel's own self-integral ----
         # density at probes_new from all old kernels: (S, M, n_old) → sum over n_old → (S, M)
         diff_old_to_new = probes_new[:, :, None, :] - old_centers[None, None, :, :]
-        d2_old_to_new = np.sum(diff_old_to_new * diff_old_to_new, axis=-1)  # (S, M, n_old)
-        kernels_old_to_new = np.exp(-d2_old_to_new * inv_2sig2)
+        d2_per_dim_otn = diff_old_to_new * diff_old_to_new
+        kernels_old_to_new = _anova_kernel_np(d2_per_dim_otn, inv_2sig2)
         if do_truncate:
-            kernels_old_to_new = np.where(d2_old_to_new <= cutoff_d2, kernels_old_to_new, 0.0)
+            kernels_old_to_new = np.where(d2_per_dim_otn.sum(axis=-1) <= cutoff_d2, kernels_old_to_new, 0.0)
         rho_old_at_new_probes = (
             kernels_old_to_new * old_weights[None, None, :]
         ).sum(axis=-1)  # (S, M)
