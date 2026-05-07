@@ -272,18 +272,11 @@ class OptimizationEngine:
                             bar.step(i=_iter_count[0], obj=cur)
                     return loss
 
-                while _iters_remaining[0] > 0:
-                    prev_count = _iter_count[0]
-                    optimizer = torch.optim.LBFGS(
-                        [z], lr=lr, max_iter=_iters_remaining[0],
-                        line_search_fn="strong_wolfe",
-                        tolerance_grad=0, tolerance_change=0,
-                    )
-                    optimizer.step(_closure)
-                    steps_taken = _iter_count[0] - prev_count
-                    _iters_remaining[0] -= max(steps_taken, 1)
-                    if steps_taken == 0:
-                        break
+                optimizer = torch.optim.LBFGS(
+                    [z], lr=lr, max_iter=n_iters,
+                    tolerance_grad=0, tolerance_change=0,
+                )
+                optimizer.step(_closure)
                 if not history and last_vals:
                     history.append(float(last_vals[0].min().item()))
 
