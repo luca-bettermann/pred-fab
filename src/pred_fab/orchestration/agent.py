@@ -76,7 +76,7 @@ class PfabAgent:
         self.eval_system: EvaluationSystem
         self.pred_system: PredictionSystem
         self.calibration_system: CalibrationSystem
-        self._baseline_radius_multiplier: float = 3.0
+        self._baseline_radius_multiplier: float = 1.0
         
         # Model registry (store classes and params until dataset is initialized)
         self._feature_model_specs: list[tuple[type[IFeatureModel], dict]] = []  # List of (class, kwargs)
