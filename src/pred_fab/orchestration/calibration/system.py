@@ -1100,10 +1100,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         def _acquisition_batch_objective_tensor(x_flat_S: torch.Tensor) -> torch.Tensor:
             S = int(x_flat_S.shape[0])
             pts_S = x_flat_S.reshape(S, n, d_phase)
-            X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone()
+            # Out-of-place column replacement to preserve autograd.
+            # Start from prior_fill (constant), then replace phase columns
+            # with optimised values via index arithmetic (no in-place ops).
+            X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=x_flat_S.dtype)
             if phase_cols_t is not None and phase_si_t is not None:
                 src = pts_S.index_select(-1, phase_si_t)
-                X_batch_S[:, :, phase_cols_t] = src
+                idx = phase_cols_t.unsqueeze(0).unsqueeze(0).expand(S, n, -1)
+                X_batch_S = X_batch_S.scatter(-1, idx, src)
             de = self.evidence.joint_batched_tensor(X_batch_S)  # type: ignore[misc]
             return -de.to(dtype=x_flat_S.dtype)
 
@@ -1120,23 +1124,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 integrality=space.integrality, label=label, show_progress=console,
                 maxiter=self.engine.de_maxiter, vectorized=True,
             )
+            self.convergence_history[label] = opt.convergence_history
             # Refinement: LBFGS polish from DE warm start (continuous dims only)
             has_int = space.integrality is not None and any(space.integrality)
             if not has_int and self.evidence.joint_batched_tensor is not None and opt.best_x is not None:
+                refine_label = f"Refine (D={d_phase}, V={space.total_vars})"
                 refine_opt = self.engine.run_acquisition_gradient(
                     _acquisition_batch_objective_tensor,
                     space.bounds,
                     x0=opt.best_x,
-                    label=f"Refine (D={d_phase}, V={space.total_vars})",
+                    label=refine_label,
                     show_progress=console,
                 )
+                self.convergence_history[refine_label] = refine_opt.convergence_history
                 if refine_opt.best_x is not None and refine_opt.score >= opt.score:
                     opt = refine_opt
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
         else:
             self.last_baseline_nfev += opt.nfev
-        self.convergence_history[label] = opt.convergence_history
 
         best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
         specs = space.decode_to_specs(
@@ -1368,15 +1374,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     S, L_i, D_sched,
                 )
                 base_row_i = base_rows_t[i]                                              # (n_dm_cols,)
-                cand_i = base_row_i.unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone()
-                # x_S arrives as float64 from the LBFGS optimiser; cand_i is
-                # float32 to match the framework's hot-path dtype. Coerce at
-                # the boundary so the in-place assignment doesn't choke.
+                cand_i = base_row_i.unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
-                    stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static).to(dtype=cand_i.dtype)
-                    cand_i[:, :, static_col_idxs] = stat_per_step
+                    stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static)
+                    cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), stat_per_step)
                 if D_sched > 0:
-                    cand_i[:, :, sched_col_idxs] = traj.to(dtype=cand_i.dtype)
+                    cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
                 cand_blocks.append(cand_i)
                 traj_blocks.append(traj)
 
