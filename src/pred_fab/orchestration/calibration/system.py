@@ -1093,7 +1093,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # in 1 iteration).
         use_gradient = (
             self.evidence.joint_batched_tensor is not None
-            and not init_evidence
             and not (space.integrality is not None and any(space.integrality))
         )
 

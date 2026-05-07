@@ -154,7 +154,7 @@ class OptimizationEngine:
         if x0 is not None:
             x_inits.append(np.clip(x0, bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
 
-        raw_samples = max(int(self.gradient_raw_samples), 0)
+        raw_samples = max(int(self.gradient_raw_samples * (D ** 0.5)), 0)
         eta = float(self.gradient_init_eta)
         n_more = max(n_starts - len(x_inits), 0)
 
