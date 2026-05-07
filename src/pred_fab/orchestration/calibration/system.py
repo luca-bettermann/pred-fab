@@ -86,6 +86,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         evidence: EvidenceBackend | None = None,
         n_exp_fn: Callable[[], int] | None = None,
         fit_empty_kde_fn: Callable[[DataModule, int], None] | None = None,
+        push_virtual_fn: Callable[[list[dict[str, Any]], list[float] | None, DataModule | None], None] | None = None,
+        pop_virtual_fn: Callable[[], None] | None = None,
         perf_fn_tensor: Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]] | None = None,
         random_seed: int | None = None,
     ):
@@ -95,6 +97,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.evidence = evidence if evidence is not None else EvidenceBackend()
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn
+        self._push_virtual_fn = push_virtual_fn
+        self._pop_virtual_fn = pop_virtual_fn
 
         # Composed subsystems
         self.engine = OptimizationEngine(logger, random_seed=random_seed)
@@ -1359,7 +1363,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 blocks.append(row_j)
             return torch.cat(blocks, dim=0) if blocks else torch.empty(0, n_dm_cols, dtype=torch.float64)
 
-        def _make_per_exp_objective(exp_idx: int, fixed_rows: torch.Tensor):
+        def _make_per_exp_objective(exp_idx: int):
             L_i = per_exp_L[exp_idx]
             D_exp = D_static + L_i * D_sched
 
@@ -1375,13 +1379,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 if D_sched > 0:
                     cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
 
-                # Combine with fixed experiments
-                if fixed_rows.shape[0] > 0:
-                    fixed_exp = fixed_rows.unsqueeze(0).expand(S, -1, -1).to(dtype=x_S.dtype)
-                    full = torch.cat([cand_i, fixed_exp], dim=1)
-                else:
-                    full = cand_i
-                full_S_NL = full.unsqueeze(1)
+                # Only this experiment's layers — others are in the KDE via virtual points
+                full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
                 scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
 
                 # Delta constraint
@@ -1408,15 +1407,50 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return _objective, D_exp
 
+        def _build_virtual_params(exclude_idx: int = -1) -> list[dict[str, Any]]:
+            """Build param dicts for all experiments except exclude_idx (-1 = include all)."""
+            params_list: list[dict[str, Any]] = []
+            for j in range(n):
+                if j == exclude_idx and exclude_idx >= 0:
+                    continue
+                for k in range(per_exp_L[j]):
+                    p: dict[str, Any] = {}
+                    for si, (code, lo, hi) in enumerate(state.static_params):
+                        p[code] = float(state.static_norms[j, si] * (hi - lo) + lo)
+                    for si, (code, lo, hi) in enumerate(state.sched_params):
+                        p[code] = float(state.schedule_norms[j][k, si] * (hi - lo) + lo)
+                    # Add fixed params
+                    base_dict = state.flat_specs[j].initial_params.to_dict()
+                    for code, val in base_dict.items():
+                        if code not in p:
+                            p[code] = val
+                    params_list.append(p)
+            return params_list
+
         max_rounds = max(1, self.engine.gradient_n_iters // max(n, 1))
         total_iters = 0
+        can_push = self._push_virtual_fn is not None and self._pop_virtual_fn is not None
+        baseline_dm = self._active_datamodule
+
+        # Push ALL experiments as virtual points initially
+        if can_push:
+            all_virtual = _build_virtual_params(-1)  # -1 = exclude none
+            if all_virtual:
+                self._push_virtual_fn(all_virtual, None, baseline_dm)  # type: ignore[misc]
 
         for round_idx in range(max_rounds):
             improved_this_round = False
             for exp_idx in range(n):
                 L_i = per_exp_L[exp_idx]
-                fixed_rows = _build_fixed_rows(exp_idx)
-                objective, D_exp = _make_per_exp_objective(exp_idx, fixed_rows)
+
+                # Pop current experiment's layers, keep all others
+                if can_push:
+                    self._pop_virtual_fn()  # type: ignore[misc]
+                    others = _build_virtual_params(exp_idx)
+                    if others:
+                        self._push_virtual_fn(others, None, baseline_dm)  # type: ignore[misc]
+
+                objective, D_exp = _make_per_exp_objective(exp_idx)
 
                 # Bounds for this experiment
                 bounds_i: list[tuple[float, float]] = []
@@ -1449,11 +1483,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     state.static_norms[exp_idx] = new_static.copy()
                     state.schedule_norms[exp_idx] = new_sched.copy()
 
+                # Push updated experiment back into virtual points
+                if can_push:
+                    self._pop_virtual_fn()  # type: ignore[misc]
+                    all_current = _build_virtual_params(-1)
+                    if all_current:
+                        self._push_virtual_fn(all_current, None, baseline_dm)  # type: ignore[misc]
+
                 if self.trajectory_step_callback is not None:
                     self.trajectory_step_callback(round_idx, exp_idx, state)
 
             if not improved_this_round:
                 break
+
+        # Clean up virtual points
+        if can_push:
+            self._pop_virtual_fn()  # type: ignore[misc]
 
         self.last_baseline_nfev += total_iters
         self.convergence_history["Trajectory"] = []

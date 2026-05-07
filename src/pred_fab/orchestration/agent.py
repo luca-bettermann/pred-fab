@@ -243,6 +243,8 @@ class PfabAgent:
                 ),
                 n_exp_fn=lambda: _pred._n_exp,
                 fit_empty_kde_fn=_pred.fit_empty_kde,
+                push_virtual_fn=_pred.push_virtual_points,
+                pop_virtual_fn=_pred.pop_virtual_points,
             )
             self.calibration_system._initialized = True
         else:
