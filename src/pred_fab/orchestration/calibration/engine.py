@@ -41,12 +41,12 @@ class OptimizationEngine:
         # Local (LBFGS) optimizer parameters.
         self.gradient_n_starts: int = 4
         self.gradient_n_iters: int = 100
-        self.gradient_lr: float = 1.0
+        self.gradient_lr: float = 0.05
 
         # Convergence: stagnation window as fraction of maxiter.
         self.convergence_window_frac: float = 0.1   # 10% of maxiter
         self.convergence_eps_frac: float = 1e-6
-        self.gradient_method: str = "sgd"  # "sgd" | "adam" | "lbfgs"
+        self.gradient_method: str = "lbfgs"  # "lbfgs" | "sgd" | "adam"
 
         # Smart-init parameters (BoTorch gen_batch_initial_conditions
         # pattern). raw_samples Sobol points are batch-evaluated, top-K selected via
@@ -274,6 +274,7 @@ class OptimizationEngine:
 
                 optimizer = torch.optim.LBFGS(
                     [z], lr=lr, max_iter=n_iters,
+                    line_search_fn="strong_wolfe",
                     tolerance_grad=0, tolerance_change=0,
                 )
                 optimizer.step(_closure)
