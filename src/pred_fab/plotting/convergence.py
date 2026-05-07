@@ -39,7 +39,7 @@ def plot_convergence(
         ax.plot(range(1, len(normalized) + 1), normalized, color=color, linewidth=1.5,
                 label=label, alpha=0.8)
 
-    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     ax.set_xlabel("Iteration", fontsize=9, color=ZINC_700)
     ax.set_ylabel("Relative Objective", fontsize=9, color=ZINC_700)
     ax.legend(fontsize=8, frameon=False)
