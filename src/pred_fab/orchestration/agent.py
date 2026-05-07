@@ -717,6 +717,7 @@ class PfabAgent:
         gradient_method: str | None = None,
         raw_samples: int | None = None,
         init_eta: float | None = None,
+        smoothness_weight: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters.
 
@@ -746,6 +747,8 @@ class PfabAgent:
             cal.engine.gradient_raw_samples = raw_samples
         if init_eta is not None:
             cal.engine.gradient_init_eta = init_eta
+        if smoothness_weight is not None:
+            cal.smoothness_weight = smoothness_weight
 
     def configure_trajectory(
         self,
