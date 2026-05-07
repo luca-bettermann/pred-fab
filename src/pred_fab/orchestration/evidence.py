@@ -95,32 +95,6 @@ def _resolve_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ANOVA kernel: (marginal + joint) / 2
-# ---------------------------------------------------------------------------
-
-def _anova_kernel_np(d2_per_dim: np.ndarray, inv_2sig2: float) -> np.ndarray:
-    """ANOVA-decomposed kernel from per-dimension squared differences.
-
-    ``d2_per_dim`` has shape ``(..., D)``. Returns ``(...)``.
-
-    ``k(x,c) = [ (1/D) Σ_d exp(-δ_d²/(2σ²)) + exp(-Σ_d δ_d²/(2σ²)) ] / 2``
-
-    Marginal term: per-dimension Gaussian (main effects).
-    Joint term: isotropic Gaussian (full interaction).
-    """
-    marginal = np.exp(-d2_per_dim * inv_2sig2).mean(axis=-1)
-    joint = np.exp(-d2_per_dim.sum(axis=-1) * inv_2sig2)
-    return (marginal + joint) * 0.5
-
-
-def _anova_kernel_torch(d2_per_dim: torch.Tensor, inv_2sig2: float) -> torch.Tensor:
-    """Torch equivalent of ``_anova_kernel_np``."""
-    marginal = torch.exp(-d2_per_dim * inv_2sig2).mean(dim=-1)
-    joint = torch.exp(-d2_per_dim.sum(dim=-1) * inv_2sig2)
-    return (marginal + joint) * 0.5
-
-
-# ---------------------------------------------------------------------------
 # Kernel index — O(M · log K) density evaluation via neighbour search
 # ---------------------------------------------------------------------------
 
@@ -134,19 +108,21 @@ class KernelIndex:
 
     def __init__(
         self,
-        centers: np.ndarray,
-        weights: np.ndarray,
+        centers: np.ndarray | torch.Tensor,
+        weights: np.ndarray | torch.Tensor,
         sigma: float,
         cutoff_sigmas: float = 5.0,
         truncation_threshold: int = 10,
     ):
-        self.centers = np.asarray(centers, dtype=float)
-        self.weights = np.asarray(weights, dtype=float)
+        self.centers_np = np.asarray(centers if isinstance(centers, np.ndarray) else centers.cpu().numpy(), dtype=float)
+        self.weights_np = np.asarray(weights if isinstance(weights, np.ndarray) else weights.cpu().numpy(), dtype=float)
+        self.centers = torch.as_tensor(self.centers_np, dtype=torch.float64)
+        self.weights = torch.as_tensor(self.weights_np, dtype=torch.float64)
         self.sigma = float(sigma)
         self.cutoff_sigmas = float(cutoff_sigmas)
         self.truncation_threshold = int(truncation_threshold)
-        self._n = len(self.centers)
-        self._D = int(self.centers.shape[1]) if self.centers.ndim == 2 and self._n else 0
+        self._n = len(self.centers_np)
+        self._D = int(self.centers_np.shape[1]) if self.centers_np.ndim == 2 and self._n else 0
 
     @property
     def is_empty(self) -> bool:
@@ -156,50 +132,30 @@ class KernelIndex:
     def cutoff(self) -> float:
         return self.cutoff_sigmas * self.sigma
 
-    def density_at(self, points: np.ndarray, exclude_idx: int | None = None) -> np.ndarray:
-        """D(z) = Σⱼ wⱼ · exp(−‖z−zⱼ‖²/2σ²) at each row of `points`.
-
-        Peak-1 Gaussian per kernel — ρⱼ(zⱼ) = 1 — so D is bounded by the
-        sum of weights when kernels overlap, and the saturation transform
-        E = D/(1+D) keeps a usable gradient instead of pinning at 1 from a
-        single kernel.
-
-        If `exclude_idx` is given, kernel at that index is skipped — used by
-        the KernelField estimator to substitute a precomputed self-density.
-        """
-        points = np.asarray(points, dtype=float)
-        if points.ndim == 1:
-            points = points.reshape(1, -1)
-        M = points.shape[0]
+    def density_at(self, points: np.ndarray | torch.Tensor, exclude_idx: int | None = None) -> np.ndarray:
+        """D(z) = Σⱼ wⱼ · exp(−‖z−zⱼ‖²/2σ²) at each row of `points`."""
+        pts = torch.as_tensor(points, dtype=torch.float64)
+        if pts.ndim == 1:
+            pts = pts.unsqueeze(0)
+        M = pts.shape[0]
         if self.is_empty or self._D == 0:
             return np.zeros(M)
 
         inv_2sig2 = 1.0 / (2.0 * self.sigma ** 2)
+        diff = pts[:, None, :] - self.centers[None, :, :]
+        d2 = (diff * diff).sum(dim=-1)
 
-        if self._n < self.truncation_threshold:
-            # Direct sum — small N, full Gaussian tail kept.
-            diff = points[:, None, :] - self.centers[None, :, :]
-            exp_term = _anova_kernel_np(diff * diff, inv_2sig2)
-            if exclude_idx is not None:
-                mask = np.arange(self._n) != exclude_idx
-                return (exp_term[:, mask] * self.weights[mask]).sum(axis=-1)
-            return (exp_term * self.weights).sum(axis=-1)
+        if self._n >= self.truncation_threshold:
+            cutoff_d2 = (self.cutoff_sigmas * self.sigma) ** 2
+            exp_term = torch.where(d2 <= cutoff_d2, torch.exp(-d2 * inv_2sig2), torch.zeros_like(d2))
+        else:
+            exp_term = torch.exp(-d2 * inv_2sig2)
 
-        # Truncated sum — kernels beyond 5σ joint distance contribute negligibly.
-        cutoff_d2 = (self.cutoff_sigmas * self.sigma) ** 2
-        pts_t = torch.from_numpy(points).double()
-        cnt_t = torch.from_numpy(self.centers).double()
-        diff = pts_t[:, None, :] - cnt_t[None, :, :]  # (M, n_kernels, D)
-        d2_per_dim = diff * diff
-        d2_joint = d2_per_dim.sum(dim=-1)  # (M, n_kernels)
-        exp_term = _anova_kernel_torch(d2_per_dim, inv_2sig2)
-        exp_term = torch.where(d2_joint <= cutoff_d2, exp_term, torch.zeros_like(exp_term))
-        weights_t = torch.from_numpy(self.weights).double()
         if exclude_idx is not None:
             keep = torch.ones(self._n, dtype=torch.bool)
             keep[exclude_idx] = False
-            return (exp_term[:, keep] * weights_t[keep]).sum(dim=-1).cpu().numpy()
-        return (exp_term * weights_t).sum(dim=-1).cpu().numpy()
+            return (exp_term[:, keep] * self.weights[keep]).sum(dim=-1).cpu().numpy()
+        return (exp_term * self.weights).sum(dim=-1).cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -320,9 +276,9 @@ class EvidenceEstimator(ABC):
         if index.is_empty:
             return 0.0
         total = 0.0
-        for j in range(len(index.centers)):
-            total += float(index.weights[j]) * self.self_integral(
-                index.centers[j], index, kernel_idx=j,
+        for j in range(len(index.centers_np)):
+            total += float(index.weights_np[j]) * self.self_integral(
+                index.centers_np[j], index, kernel_idx=j,
             )
         return total
 
@@ -347,8 +303,8 @@ class EvidenceEstimator(ABC):
                 all_centers = new_centers_S[s:s + 1]
                 all_weights = new_weights_S[s:s + 1]
             else:
-                all_centers = np.vstack([index_old.centers, new_centers_S[s:s + 1]])
-                all_weights = np.concatenate([index_old.weights, new_weights_S[s:s + 1]])
+                all_centers = np.vstack([index_old.centers_np, new_centers_S[s:s + 1]])
+                all_weights = np.concatenate([index_old.weights_np, new_weights_S[s:s + 1]])
             index_new = KernelIndex(
                 all_centers, all_weights, index_old.sigma,
                 cutoff_sigmas=index_old.cutoff_sigmas,
@@ -381,8 +337,8 @@ class EvidenceEstimator(ABC):
                 all_centers = new_centers_s
                 all_weights = new_weights_s
             else:
-                all_centers = np.vstack([index_old.centers, new_centers_s])
-                all_weights = np.concatenate([index_old.weights, new_weights_s])
+                all_centers = np.vstack([index_old.centers_np, new_centers_s])
+                all_weights = np.concatenate([index_old.weights_np, new_weights_s])
             index_new = KernelIndex(
                 all_centers, all_weights, index_old.sigma,
                 cutoff_sigmas=index_old.cutoff_sigmas,
@@ -390,6 +346,15 @@ class EvidenceEstimator(ABC):
             )
             out[s] = self.integrated_evidence(index_new)
         return out
+
+    def integrated_evidence_perturbed_batched_joint_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """Torch path — subclasses override for autograd-compatible vectorised Δ∫E."""
+        raise NotImplementedError("Subclass must implement torch joint batched path")
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +405,8 @@ class KernelFieldEstimator(EvidenceEstimator):
         weights = np.asarray(weights_list, dtype=float)
 
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
-        self_density = _anova_kernel_np(offsets ** 2, inv_2sig2)
+        offset_sq = np.sum(offsets ** 2, axis=-1)
+        self_density = np.exp(-offset_sq * inv_2sig2)
 
         self._cache[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
@@ -460,272 +426,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         integrand = 1.0 / (1.0 + rho)
         return float(np.sum(weights * integrand * in_domain))
 
-    def integrated_evidence_perturbed_batched(
-        self,
-        index_old: KernelIndex,
-        new_centers_S: np.ndarray,
-        new_weights_S: np.ndarray,
-    ) -> np.ndarray:
-        """Vectorised E(old ∪ {(new[s], w[s])}) per s. Returns ``(S,)``.
-
-        Replaces the S-times-rebuild-`index_new` + S-times-`integrated_evidence`
-        loop with a single broadcast computation:
-
-          - One ``(n_old, M, S)`` distance tensor for "new candidates → probes
-            around each old kernel" — the perturbation each candidate s adds
-            to each old self-integral.
-          - One ``(S, M, n_old)`` distance tensor for "old kernels → probes
-            around each new candidate" — needed for each new kernel's own
-            self-integral.
-          - All quadrature reductions vectorised across the candidate batch.
-
-        Truncation: when ``index_old`` has ≥ ``truncation_threshold`` kernels,
-        a 5σ mask is applied to both distance tensors; matches scalar
-        ``KernelIndex.density_at`` semantics within numerical tolerance.
-
-        Equivalence: matches the scalar
-        ``EvidenceEstimator.integrated_evidence(index_new[s])`` to ~1e-5,
-        with the loose tolerance reflecting different summation orders
-        between the per-candidate scalar reduction and the broadcast tensor.
-        """
-        S = int(new_centers_S.shape[0])
-        if S == 0:
-            return np.zeros(0, dtype=np.float64)
-        sigma = index_old.sigma
-        D = int(new_centers_S.shape[1])
-        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
-        offsets, quad_weights, self_density = self._probes_weights_self(D, sigma)
-        M = offsets.shape[0]
-
-        # Truncation mask threshold (squared distance for cheap comparison).
-        n_old = len(index_old.centers) if not index_old.is_empty else 0
-        do_truncate = n_old >= index_old.truncation_threshold
-        cutoff_d2 = (index_old.cutoff_sigmas * sigma) ** 2
-
-        # === Probes around each new candidate: (S, M, D) ===
-        probes_new = offsets[None, :, :] + new_centers_S[:, None, :]
-        in_domain_new = _in_unit_cube(probes_new.reshape(-1, D)).reshape(S, M).astype(np.float64)
-
-        # === Branch 1: no old kernels — only the new kernel contributes ===
-        if n_old == 0:
-            # Density at probes_new comes only from the new kernel itself.
-            # rho_new[s, m] = self_density[m] * w_new[s]
-            rho_new = self_density[None, :] * new_weights_S[:, None]
-            integrand_new = 1.0 / (1.0 + rho_new)
-            integral_new_per_s = (
-                quad_weights[None, :] * integrand_new * in_domain_new
-            ).sum(axis=-1)
-            return new_weights_S * integral_new_per_s
-
-        # === Branch 2: old kernels exist ===
-        old_centers = index_old.centers
-        old_weights = index_old.weights
-
-        # ---- Per-old precompute (independent of s) ----
-        # Probes around each old kernel: (n_old, M, D)
-        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]
-        in_domain_per_old = (
-            _in_unit_cube(probes_per_old.reshape(-1, D)).reshape(n_old, M).astype(np.float64)
-        )
-
-        # rho_other_per_old[j, m] = sum over k != j of w_k * exp(-||probes_per_old[j,m] - old_k||²/2σ²)
-        # diff_old: (n_old, M, n_old, D) — broadcast probes_per_old vs old_centers
-        diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
-        d2_per_dim_old = diff_old * diff_old
-        kernels_old = _anova_kernel_np(d2_per_dim_old, inv_2sig2)
-        if do_truncate:
-            kernels_old = np.where(d2_per_dim_old.sum(axis=-1) <= cutoff_d2, kernels_old, 0.0)
-        weighted_old = kernels_old * old_weights[None, None, :]  # (n_old, M, n_old)
-        # Mask out k == j (last dim equals first): rho_other excludes j
-        eye_jk = np.eye(n_old, dtype=np.float64)  # (n_old, n_old)
-        keep_jk = (1.0 - eye_jk)  # (n_old, n_old)
-        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(axis=-1)  # (n_old, M)
-        self_contribution_per_old = self_density[None, :] * old_weights[:, None]  # (n_old, M)
-
-        # ---- Per-(s, j) perturbation: density at probes_per_old[j, m] from new kernel s ----
-        # diff_new_to_old_probes: (n_old, M, S, D)
-        diff_new_to_old = probes_per_old[:, :, None, :] - new_centers_S[None, None, :, :]
-        d2_per_dim_nto = diff_new_to_old * diff_new_to_old
-        kernels_new_to_old = _anova_kernel_np(d2_per_dim_nto, inv_2sig2)
-        if do_truncate:
-            kernels_new_to_old = np.where(d2_per_dim_nto.sum(axis=-1) <= cutoff_d2, kernels_new_to_old, 0.0)
-        delta_density = kernels_new_to_old * new_weights_S[None, None, :]  # (n_old, M, S)
-
-        # ---- Old kernels' self-integrals when new kernel is added ----
-        # total[j, m, s] = self_contribution_per_old[j, m] + rho_other_per_old[j, m] + delta_density[j, m, s]
-        total_density_old = (
-            (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
-        )  # (n_old, M, S)
-        integrand_old = 1.0 / (1.0 + total_density_old)  # (n_old, M, S)
-        # weighted by quadrature × in_domain, sum over m → (n_old, S)
-        integral_old_per_s = (
-            integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
-        ).sum(axis=1)
-
-        # ---- New kernel's own self-integral ----
-        # density at probes_new from all old kernels: (S, M, n_old) → sum over n_old → (S, M)
-        diff_old_to_new = probes_new[:, :, None, :] - old_centers[None, None, :, :]
-        d2_per_dim_otn = diff_old_to_new * diff_old_to_new
-        kernels_old_to_new = _anova_kernel_np(d2_per_dim_otn, inv_2sig2)
-        if do_truncate:
-            kernels_old_to_new = np.where(d2_per_dim_otn.sum(axis=-1) <= cutoff_d2, kernels_old_to_new, 0.0)
-        rho_old_at_new_probes = (
-            kernels_old_to_new * old_weights[None, None, :]
-        ).sum(axis=-1)  # (S, M)
-        self_contribution_new = self_density[None, :] * new_weights_S[:, None]  # (S, M)
-        total_density_new = self_contribution_new + rho_old_at_new_probes  # (S, M)
-        integrand_new = 1.0 / (1.0 + total_density_new)  # (S, M)
-        integral_new_per_s = (quad_weights[None, :] * integrand_new * in_domain_new).sum(axis=-1)  # (S,)
-
-        # ---- Combine ----
-        # E_new[s] = sum_j w_j_old * integral_old_per_s[j, s] + w_new[s] * integral_new_per_s[s]
-        e_new = (old_weights[:, None] * integral_old_per_s).sum(axis=0) + new_weights_S * integral_new_per_s
-        return e_new
-
-    def integrated_evidence_perturbed_batched_joint(
-        self,
-        index_old: KernelIndex,
-        new_centers_SL: np.ndarray,
-        new_weights_SL: np.ndarray,
-    ) -> np.ndarray:
-        """Joint-batched ``E(old ∪ {L kernels of candidate s})`` per s. Returns ``(S,)``.
-
-        Like `integrated_evidence_perturbed_batched` but each candidate
-        adds **L kernels jointly** (a schedule trajectory) instead of one. Used
-        by schedule-mode acquisition where each DE candidate decodes to an
-        L-step trajectory that's evaluated as a joint Δ∫E.
-
-        Shapes:
-          - ``new_centers_SL``: ``(S, L, D)`` — S candidates × L points each.
-          - ``new_weights_SL``: ``(S, L)`` — per-point weights.
-
-        Reduces to ``integrated_evidence_perturbed_batched`` when ``L == 1``
-        (verified by equivalence test). For L > 1 each candidate's L points
-        are added together; old kernels see all L additions; new kernels of
-        the same candidate also see each other's contributions (correct
-        joint-Δ∫E semantics).
-        """
-        S = int(new_centers_SL.shape[0])
-        if S == 0:
-            return np.zeros(0, dtype=np.float64)
-        L = int(new_centers_SL.shape[1])
-        D = int(new_centers_SL.shape[2])
-        sigma = index_old.sigma
-        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
-        offsets, quad_weights, self_density = self._probes_weights_self(D, sigma)
-        M = offsets.shape[0]
-
-        n_old = len(index_old.centers) if not index_old.is_empty else 0
-        do_truncate = n_old >= index_old.truncation_threshold
-        cutoff_d2 = (index_old.cutoff_sigmas * sigma) ** 2
-
-        # Probes around each new candidate's L kernels: (S, L, M, D)
-        probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
-        in_domain_new_SL = (
-            _in_unit_cube(probes_new_SL.reshape(-1, D)).reshape(S, L, M).astype(np.float64)
-        )
-
-        # Cross-influence between candidate-s's own L kernels at probes_s_l:
-        # density at probes_s_l from the OTHER (L-1) kernels of the same candidate.
-        # diff_self_l_to_lprime: (S, L, M, L, D) — probes around l vs centres at lprime
-        diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]  # (S, L, M, L, D)
-        d2_per_dim_self = diff_self * diff_self  # (S, L, M, L, D)
-        kernels_self = _anova_kernel_np(d2_per_dim_self, inv_2sig2)
-        if do_truncate:
-            d2_self = d2_per_dim_self.sum(axis=-1)
-            kernels_self = np.where(d2_self <= cutoff_d2, kernels_self, 0.0)
-        # Mask out l == lprime (that's the kernel's own self-density, handled separately)
-        eye_LL = np.eye(L, dtype=np.float64)
-        keep_LL = (1.0 - eye_LL)  # (L, L)
-        weighted_self = kernels_self * new_weights_SL[:, None, None, :]  # broadcast over m
-        rho_other_self_at_probes_SL = (
-            weighted_self * keep_LL[None, :, None, :]
-        ).sum(axis=-1)  # (S, L, M) — density from OTHER L-1 kernels of same candidate
-
-        # === Branch 1: no old kernels ===
-        if n_old == 0:
-            # total density at probes_s_l: self_contribution + other-self-contribution
-            self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]  # (S, L, M)
-            total_density_new = self_contribution_new + rho_other_self_at_probes_SL
-            integrand_new = 1.0 / (1.0 + total_density_new)
-            integral_new_SL = (
-                quad_weights[None, None, :] * integrand_new * in_domain_new_SL
-            ).sum(axis=-1)  # (S, L)
-            # E_new[s] = sum_l w_new_SL[s, l] * integral_new[s, l]
-            return (new_weights_SL * integral_new_SL).sum(axis=-1)
-
-        # === Branch 2: old kernels exist ===
-        old_centers = index_old.centers
-        old_weights = index_old.weights
-
-        # ---- Per-old precompute (independent of s) ----
-        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]  # (n_old, M, D)
-        in_domain_per_old = (
-            _in_unit_cube(probes_per_old.reshape(-1, D)).reshape(n_old, M).astype(np.float64)
-        )
-        # rho_other_old_at_old_probes[j, m] = sum_{k!=j} w_k * exp(-||probes[j,m] - old_k||² / 2σ²)
-        diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]  # (n_old, M, n_old, D)
-        d2_per_dim_old = diff_old * diff_old  # (n_old, M, n_old, D)
-        kernels_old = _anova_kernel_np(d2_per_dim_old, inv_2sig2)
-        if do_truncate:
-            d2_old = d2_per_dim_old.sum(axis=-1)
-            kernels_old = np.where(d2_old <= cutoff_d2, kernels_old, 0.0)
-        weighted_old = kernels_old * old_weights[None, None, :]
-        eye_jk = np.eye(n_old, dtype=np.float64)
-        keep_jk = (1.0 - eye_jk)
-        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(axis=-1)  # (n_old, M)
-        self_contribution_per_old = self_density[None, :] * old_weights[:, None]  # (n_old, M)
-
-        # ---- Old kernels' self-integrals when L new kernels added ----
-        # delta_density[j, m, s, l] = density at probes_per_old[j, m] from new kernel (s, l)
-        # diff: (n_old, M, S, L, D)
-        diff_new_to_old = probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
-        d2_per_dim_nto = diff_new_to_old * diff_new_to_old  # (n_old, M, S, L, D)
-        kernels_new_to_old = _anova_kernel_np(d2_per_dim_nto, inv_2sig2)
-        if do_truncate:
-            d2_new_to_old = d2_per_dim_nto.sum(axis=-1)
-            kernels_new_to_old = np.where(d2_new_to_old <= cutoff_d2, kernels_new_to_old, 0.0)
-        delta_density = (
-            kernels_new_to_old * new_weights_SL[None, None, :, :]
-        ).sum(axis=-1)  # (n_old, M, S) — sum over L (joint addition)
-
-        total_density_old = (
-            (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
-        )  # (n_old, M, S)
-        integrand_old = 1.0 / (1.0 + total_density_old)
-        integral_old_per_s = (
-            integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
-        ).sum(axis=1)  # (n_old, S)
-
-        # ---- New kernels' own self-integrals (each (s, l)) ----
-        # density at probes_new_SL[s, l, m] from old kernels: (S, L, M, n_old) → sum n_old → (S, L, M)
-        diff_old_to_new = probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
-        d2_per_dim_otn = diff_old_to_new * diff_old_to_new  # (S, L, M, n_old, D)
-        kernels_old_to_new = _anova_kernel_np(d2_per_dim_otn, inv_2sig2)
-        if do_truncate:
-            d2_old_to_new = d2_per_dim_otn.sum(axis=-1)
-            kernels_old_to_new = np.where(d2_old_to_new <= cutoff_d2, kernels_old_to_new, 0.0)
-        rho_old_at_new_probes = (
-            kernels_old_to_new * old_weights[None, None, None, :]
-        ).sum(axis=-1)  # (S, L, M)
-
-        # Self-contribution for kernel (s, l) at its own probes
-        self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]  # (S, L, M)
-
-        total_density_new = (
-            self_contribution_new + rho_old_at_new_probes + rho_other_self_at_probes_SL
-        )  # (S, L, M)
-        integrand_new = 1.0 / (1.0 + total_density_new)
-        integral_new_SL = (
-            quad_weights[None, None, :] * integrand_new * in_domain_new_SL
-        ).sum(axis=-1)  # (S, L)
-
-        # ---- Combine ----
-        e_new = (
-            (old_weights[:, None] * integral_old_per_s).sum(axis=0)
-            + (new_weights_SL * integral_new_SL).sum(axis=-1)
-        )
-        return e_new
 
     def integrated_evidence_perturbed_batched_joint_torch(
         self,
@@ -764,11 +464,104 @@ class KernelFieldEstimator(EvidenceEstimator):
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Dense-regime per-candidate joint Δ∫E: sum over all old kernels per probe.
+        """Marginal-joint evidence: ``(E_marginal + E_joint) / 2``.
 
-        All tensor moves target ``new_centers_SL.device`` — when the caller
-        has placed inputs on GPU, the entire compute runs there end-to-end.
+        Marginal: D independent 1D integrals (per-dimension evidence).
+        Joint: D-dimensional shell-probe integral (interaction evidence).
+        ANOVA decomposition at the integration level — standard isotropic
+        kernels used within each integral at the appropriate dimensionality.
         """
+        e_marginal = self._marginal_evidence_torch(index_old, new_centers_SL, new_weights_SL)
+        e_joint = self._joint_evidence_torch(index_old, new_centers_SL, new_weights_SL)
+        return (e_marginal + e_joint) * 0.5
+
+    def _marginal_evidence_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """D independent 1D integrals — per-dimension evidence with 1D Gaussian density."""
+        S = int(new_centers_SL.shape[0])
+        L = int(new_centers_SL.shape[1])
+        D = int(new_centers_SL.shape[2])
+        dtype = new_centers_SL.dtype
+        device = new_centers_SL.device
+        sigma = index_old.sigma
+        inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
+        n_old = len(index_old.centers) if not index_old.is_empty else 0
+
+        # 1D probes: centre + ±r for each radius
+        abs_radii = torch.tensor([r * sigma for r in self.radii], dtype=dtype, device=device)
+        probes_1d = torch.cat([torch.zeros(1, dtype=dtype, device=device),
+                               torch.cat([-abs_radii, abs_radii])])
+        probes_1d = probes_1d.sort().values  # sorted for cleanliness
+        P = probes_1d.shape[0]
+
+        # 1D quadrature weights (normalised Gaussian measure)
+        w_raw = torch.exp(-probes_1d ** 2 * inv_2sig2)
+        quad_w = w_raw / w_raw.sum()
+
+        # 1D self-density
+        self_dens_1d = torch.exp(-probes_1d ** 2 * inv_2sig2)
+
+        # Convert old centres once
+        old_d_all = index_old.centers.to(device=device, dtype=dtype) if n_old > 0 else None
+        old_w = index_old.weights.to(device=device, dtype=dtype) if n_old > 0 else None
+
+        e_marginal = torch.zeros(S, dtype=dtype, device=device)
+
+        for d in range(D):
+            new_d = new_centers_SL[:, :, d]                          # (S, L)
+            probes_d = new_d[:, :, None] + probes_1d[None, None, :]  # (S, L, P)
+            in_dom_d = ((probes_d >= 0.0) & (probes_d <= 1.0)).to(dtype=dtype)
+
+            # 1D cross-influence between new kernels
+            diff_nn = probes_d[:, :, :, None] - new_d[:, None, None, :]  # (S, L, P, L)
+            rho_nn = torch.exp(-diff_nn ** 2 * inv_2sig2)
+            eye_LL = torch.eye(L, dtype=dtype, device=device)
+            rho_other = (rho_nn * new_weights_SL[:, None, None, :] * (1.0 - eye_LL)[None, :, None, :]).sum(dim=-1)
+
+            # 1D density from old kernels
+            rho_old = torch.zeros(S, L, P, dtype=dtype, device=device)
+            if n_old > 0:
+                old_d = old_d_all[:, d]  # type: ignore[index]
+                diff_on = probes_d[:, :, :, None] - old_d[None, None, None, :]
+                rho_old = (torch.exp(-diff_on ** 2 * inv_2sig2) * old_w[None, None, None, :]).sum(dim=-1)  # type: ignore[index]
+
+            total_rho = self_dens_1d[None, None, :] * new_weights_SL[:, :, None] + rho_other + rho_old
+            integrand = 1.0 / (1.0 + total_rho)
+            integral_d = (quad_w[None, None, :] * integrand * in_dom_d).sum(dim=-1)
+            e_marginal = e_marginal + (new_weights_SL * integral_d).sum(dim=-1)
+
+            # Old kernels' marginal integrals perturbation
+            if n_old > 0:
+                old_d = old_d_all[:, d]  # type: ignore[index]
+                probes_old_d = old_d[:, None] + probes_1d[None, :]    # (n_old, P)
+                in_dom_old = ((probes_old_d >= 0.0) & (probes_old_d <= 1.0)).to(dtype=dtype)
+                # Old-to-old
+                diff_oo = probes_old_d[:, :, None] - old_d[None, None, :]
+                rho_oo = torch.exp(-diff_oo ** 2 * inv_2sig2) * old_w[None, None, :]  # type: ignore[index]
+                eye_oo = torch.eye(n_old, dtype=dtype, device=device)
+                rho_other_old = (rho_oo * (1.0 - eye_oo)[:, None, :]).sum(dim=-1)
+                # New-to-old
+                diff_no = probes_old_d[:, :, None, None] - new_d[None, None, :, :]
+                delta = (torch.exp(-diff_no ** 2 * inv_2sig2) * new_weights_SL[None, None, :, :]).sum(dim=-1)
+                self_old = self_dens_1d[None, :] * old_w[:, None]  # type: ignore[index]
+                total_old = (self_old + rho_other_old)[:, :, None] + delta
+                integrand_old = 1.0 / (1.0 + total_old)
+                integral_old = (quad_w[None, :, None] * integrand_old * in_dom_old[:, :, None]).sum(dim=1)
+                e_marginal = e_marginal + (old_w[:, None] * integral_old).sum(dim=0)  # type: ignore[index]
+
+        return e_marginal / D
+
+    def _joint_evidence_torch(
+        self,
+        index_old: KernelIndex,
+        new_centers_SL: torch.Tensor,
+        new_weights_SL: torch.Tensor,
+    ) -> torch.Tensor:
+        """D-dimensional shell-probe integral — isotropic kernel (interaction evidence)."""
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
         D = int(new_centers_SL.shape[2])
@@ -777,7 +570,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         sigma = index_old.sigma
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
 
-        # Probes / quad weights / per-probe self-density — convert to caller device.
         offsets_np, quad_weights_np, self_density_np = self._probes_weights_self(D, sigma)
         offsets = torch.from_numpy(offsets_np).to(device=device, dtype=dtype)
         quad_weights = torch.from_numpy(quad_weights_np).to(device=device, dtype=dtype)
@@ -786,21 +578,19 @@ class KernelFieldEstimator(EvidenceEstimator):
 
         n_old = len(index_old.centers) if not index_old.is_empty else 0
 
-        # Probes around each new candidate's L kernels: (S, L, M, D).
         probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
         in_domain_new_SL = _in_unit_cube_torch(probes_new_SL.reshape(-1, D)).reshape(
             S, L, M
         ).to(dtype=dtype)
 
-        # Cross-influence: density at probes_s_l from OTHER (L-1) kernels of same candidate.
         diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]
-        kernels_self = _anova_kernel_torch(diff_self * diff_self, inv_2sig2)
-        eye_LL = torch.eye(L, dtype=dtype)
+        d2_self = (diff_self * diff_self).sum(dim=-1)
+        kernels_self = torch.exp(-d2_self * inv_2sig2)
+        eye_LL = torch.eye(L, dtype=dtype, device=device)
         keep_LL = 1.0 - eye_LL
         weighted_self = kernels_self * new_weights_SL[:, None, None, :]
-        rho_other_self_SL = (weighted_self * keep_LL[None, :, None, :]).sum(dim=-1)  # (S, L, M)
+        rho_other_self_SL = (weighted_self * keep_LL[None, :, None, :]).sum(dim=-1)
 
-        # === Branch 1: no old kernels ===
         if n_old == 0:
             self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]
             total_density_new = self_contribution_new + rho_other_self_SL
@@ -810,33 +600,31 @@ class KernelFieldEstimator(EvidenceEstimator):
             ).sum(dim=-1)
             return (new_weights_SL * integral_new_SL).sum(dim=-1)
 
-        # === Branch 2: old kernels exist ===
-        old_centers = torch.from_numpy(index_old.centers).to(device=device, dtype=dtype)
-        old_weights = torch.from_numpy(index_old.weights).to(device=device, dtype=dtype)
+        old_centers = index_old.centers.to(device=device, dtype=dtype)
+        old_weights = index_old.weights.to(device=device, dtype=dtype)
 
-        # Per-old precompute (independent of S — could be cached across acquisition
-        # generations in a future optimisation; for now recompute per call).
-        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]  # (n_old, M, D)
+        probes_per_old = offsets[None, :, :] + old_centers[:, None, :]
         in_domain_per_old = _in_unit_cube_torch(probes_per_old.reshape(-1, D)).reshape(
             n_old, M
         ).to(dtype=dtype)
 
         diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
-        kernels_old = _anova_kernel_torch(diff_old * diff_old, inv_2sig2)
+        d2_old = (diff_old * diff_old).sum(dim=-1)
+        kernels_old = torch.exp(-d2_old * inv_2sig2)
         weighted_old = kernels_old * old_weights[None, None, :]
-        eye_jk = torch.eye(n_old, dtype=dtype)
+        eye_jk = torch.eye(n_old, dtype=dtype, device=device)
         keep_jk = 1.0 - eye_jk
-        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(dim=-1)  # (n_old, M)
+        rho_other_per_old = (weighted_old * keep_jk[:, None, :]).sum(dim=-1)
         self_contribution_per_old = self_density[None, :] * old_weights[:, None]
 
-        # Old kernels' self-integrals when L new kernels added.
         diff_new_to_old = (
             probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
         )
-        kernels_new_to_old = _anova_kernel_torch(diff_new_to_old * diff_new_to_old, inv_2sig2)
+        d2_new_to_old = (diff_new_to_old * diff_new_to_old).sum(dim=-1)
+        kernels_new_to_old = torch.exp(-d2_new_to_old * inv_2sig2)
         delta_density = (
             kernels_new_to_old * new_weights_SL[None, None, :, :]
-        ).sum(dim=-1)  # (n_old, M, S)
+        ).sum(dim=-1)
 
         total_density_old = (
             (self_contribution_per_old + rho_other_per_old)[:, :, None] + delta_density
@@ -844,16 +632,16 @@ class KernelFieldEstimator(EvidenceEstimator):
         integrand_old = 1.0 / (1.0 + total_density_old)
         integral_old_per_s = (
             integrand_old * (quad_weights[None, :, None] * in_domain_per_old[:, :, None])
-        ).sum(dim=1)  # (n_old, S)
+        ).sum(dim=1)
 
-        # New kernels' own self-integrals.
         diff_old_to_new = (
             probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
         )
-        kernels_old_to_new = _anova_kernel_torch(diff_old_to_new * diff_old_to_new, inv_2sig2)
+        d2_old_to_new = (diff_old_to_new * diff_old_to_new).sum(dim=-1)
+        kernels_old_to_new = torch.exp(-d2_old_to_new * inv_2sig2)
         rho_old_at_new_probes = (
             kernels_old_to_new * old_weights[None, None, None, :]
-        ).sum(dim=-1)  # (S, L, M)
+        ).sum(dim=-1)
 
         self_contribution_new = self_density[None, None, :] * new_weights_SL[:, :, None]
         total_density_new = (
@@ -862,13 +650,12 @@ class KernelFieldEstimator(EvidenceEstimator):
         integrand_new = 1.0 / (1.0 + total_density_new)
         integral_new_SL = (
             quad_weights[None, None, :] * integrand_new * in_domain_new_SL
-        ).sum(dim=-1)  # (S, L)
+        ).sum(dim=-1)
 
-        e_new = (
+        return (
             (old_weights[:, None] * integral_old_per_s).sum(dim=0)
             + (new_weights_SL * integral_new_SL).sum(dim=-1)
         )
-        return e_new
 
 
 # ---------------------------------------------------------------------------
@@ -982,8 +769,8 @@ class SobolLocalEstimator(EvidenceEstimator):
             old_centers = torch.zeros((0, D), dtype=dtype, device=device)
             old_weights = torch.zeros(0, dtype=dtype, device=device)
         else:
-            old_centers = torch.from_numpy(index_old.centers).to(dtype=dtype, device=device)
-            old_weights = torch.from_numpy(index_old.weights).to(dtype=dtype, device=device)
+            old_centers = index_old.centers.to(dtype=dtype, device=device)
+            old_weights = index_old.weights.to(dtype=dtype, device=device)
         n_old = old_centers.shape[0]
 
         # ---------- self-integrals for OLD kernels (per S) ----------

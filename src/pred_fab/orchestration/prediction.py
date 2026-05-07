@@ -797,24 +797,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
             E_old = self._estimator.integrated_evidence(index_old)
 
-            torch_fn = getattr(
-                self._estimator, "integrated_evidence_perturbed_batched_joint_torch", None,
+            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                index_old,
+                new_centers_z_active.unsqueeze(1),
+                weights_S.unsqueeze(1),
             )
-            if torch_fn is not None:
-                E_new_per_s = torch_fn(
-                    index_old,
-                    new_centers_z_active.unsqueeze(1),  # (S, 1, n_active)
-                    weights_S.unsqueeze(1),             # (S, 1)
-                )
-            else:
-                # Fall back to numpy — gradient lost when the estimator has no torch path.
-                E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched(
-                    index_old,
-                    new_centers_z_active.detach().cpu().numpy(),
-                    weights_S.detach().cpu().numpy(),
-                )
-                E_new_per_s = torch.from_numpy(E_new_per_s_np).to(dtype=dtype)
-
             out = out + float(kde.weight) * (E_new_per_s - float(E_old))
             total_w += float(kde.weight)
 
@@ -853,19 +840,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
             E_old = self._estimator.integrated_evidence(index_old)
 
-            torch_fn = getattr(
-                self._estimator, "integrated_evidence_perturbed_batched_joint_torch", None,
+            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                index_old, new_centers_SL, weights_SL,
             )
-            if torch_fn is not None:
-                E_new_per_s = torch_fn(index_old, new_centers_SL, weights_SL)
-            else:
-                E_new_per_s_np = self._estimator.integrated_evidence_perturbed_batched_joint(
-                    index_old,
-                    new_centers_SL.detach().cpu().numpy(),
-                    weights_SL.detach().cpu().numpy(),
-                )
-                E_new_per_s = torch.from_numpy(E_new_per_s_np).to(dtype=dtype)
-
             out = out + float(kde.weight) * (E_new_per_s - float(E_old))
             total_w += float(kde.weight)
 
