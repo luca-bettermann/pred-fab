@@ -227,6 +227,7 @@ class OptimizationEngine:
             else:  # lbfgs
                 optimizer = torch.optim.LBFGS(
                     [z], lr=lr, max_iter=n_iters, line_search_fn="strong_wolfe",
+                    tolerance_grad=0, tolerance_change=0,
                 )
                 last_vals: list[torch.Tensor] = []
                 _iter_count = [0]
