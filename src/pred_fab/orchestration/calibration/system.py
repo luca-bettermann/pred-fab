@@ -1416,7 +1416,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     ss_res = ((y - y_hat) ** 2).sum(dim=1)  # (S, D_sched)
                     r2 = 1.0 - ss_res / ss_tot.clamp(min=1e-12)
                     smooth_penalty = smooth_penalty + (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-                scores_neg = scores_neg + 0.05 * smooth_penalty
+                scores_neg = scores_neg + 0.01 * smooth_penalty
 
             return scores_neg
 
