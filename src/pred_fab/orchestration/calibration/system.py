@@ -864,7 +864,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points = [spec.initial_params.to_dict() for spec in flat_specs] if flat_specs else None
         self.last_domain_values = list(structural_values) if structural_values is not None else None
 
-        self.last_global_specs = list(getattr(self, '_last_de_specs', flat_specs)) if flat_specs else []
+        self.last_global_specs = list(flat_specs) if flat_specs else []
 
         # --- Derive per_exp_L from domain axis values in Process output ---
         per_exp_L: list[int] | None = None
@@ -1129,9 +1129,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 maxiter=self.engine.de_maxiter, vectorized=True,
             )
             self.convergence_history[label] = opt.convergence_history
-            # Store DE specs before refinement (for comparison plots)
+            # Snapshot DE params before refinement (deep copy as plain dicts)
             de_best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
-            self._last_de_specs = space.decode_to_specs(
+            de_specs = space.decode_to_specs(
                 de_best_x,
                 fixed_params=dict(self.fixed_params),
                 cat_codes=cat_codes,
@@ -1142,6 +1142,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 integer_params=integer_params,
                 source_step=SourceStep.BASELINE,
             )
+            self.last_de_params = [dict(s.initial_params.to_dict()) for s in de_specs]
             # Refinement: gradient polish from DE warm start (continuous dims only)
             has_int = space.integrality is not None and any(space.integrality)
             if not has_int and self.evidence.joint_batched_tensor is not None and opt.best_x is not None:
