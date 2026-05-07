@@ -179,23 +179,21 @@ class KernelIndex:
         if self._n < self.truncation_threshold:
             # Direct sum — small N, full Gaussian tail kept.
             diff = points[:, None, :] - self.centers[None, :, :]
-            d2 = np.sum(diff * diff, axis=-1)
-            exp_term = np.exp(-d2 * inv_2sig2)
+            exp_term = _anova_kernel_np(diff * diff, inv_2sig2)
             if exclude_idx is not None:
                 mask = np.arange(self._n) != exclude_idx
                 return (exp_term[:, mask] * self.weights[mask]).sum(axis=-1)
             return (exp_term * self.weights).sum(axis=-1)
 
-        # Truncated sum via torch.cdist (replaces scipy.spatial.cKDTree).
-        # Squared 5σ cutoff — kernels beyond contribute < exp(−12.5) ≈ 4e−6.
+        # Truncated sum — kernels beyond 5σ joint distance contribute negligibly.
         cutoff_d2 = (self.cutoff_sigmas * self.sigma) ** 2
         pts_t = torch.from_numpy(points).double()
         cnt_t = torch.from_numpy(self.centers).double()
-        # cdist returns euclidean distance; we want squared.
-        d2_t = torch.cdist(pts_t, cnt_t, p=2.0).pow(2)  # (M, n_kernels)
-        # Apply 5σ truncation: zero out distances above cutoff.
-        in_range = d2_t <= cutoff_d2
-        exp_term = torch.where(in_range, torch.exp(-d2_t * inv_2sig2), torch.zeros_like(d2_t))
+        diff = pts_t[:, None, :] - cnt_t[None, :, :]  # (M, n_kernels, D)
+        d2_per_dim = diff * diff
+        d2_joint = d2_per_dim.sum(dim=-1)  # (M, n_kernels)
+        exp_term = _anova_kernel_torch(d2_per_dim, inv_2sig2)
+        exp_term = torch.where(d2_joint <= cutoff_d2, exp_term, torch.zeros_like(exp_term))
         weights_t = torch.from_numpy(self.weights).double()
         if exclude_idx is not None:
             keep = torch.ones(self._n, dtype=torch.bool)
