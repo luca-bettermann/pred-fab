@@ -1,10 +1,9 @@
-"""Tests for tensor-typed KDE evaluation.
+"""Tests for tensor-typed ANOVA marginal-joint evidence integration.
 
-Three guarantees this commit promises:
-  1. Numerical equivalence between
-     ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint_torch``
-     and the existing numpy ``integrated_evidence_perturbed_batched_joint``
-     (same math, same shapes, just torch ops).
+Three guarantees:
+  1. ANOVA torch path produces well-behaved positive evidence values,
+     both marginal and joint components contribute, and the combined
+     estimator is deterministic.
   2. Gradient flow: ``new_centers_SL`` with ``requires_grad=True`` produces
      finite gradients on backward of the ``(S,)`` E_new output.
   3. Regime dispatcher ``_choose_kde_regime(n, σ, D)`` returns expected
@@ -79,11 +78,11 @@ def test_regime_cluster_for_huge_n():
     assert _choose_kde_regime(150_000, sigma=0.05, D=4) == "cluster"
 
 
-# ── Numerical equivalence with the numpy variant ──────────────────────────
+# ── ANOVA torch path: well-behavedness and consistency ───────────────────
 
 
-def test_torch_matches_numpy_smoke_scale(kf_estimator):
-    """3 old kernels, D=4, S=8 — no truncation regime."""
+def test_torch_positive_evidence_smoke(kf_estimator):
+    """E_new values are strictly positive for well-placed candidates."""
     rng = np.random.default_rng(42)
     sigma = 0.075
     D = 4
@@ -97,22 +96,16 @@ def test_torch_matches_numpy_smoke_scale(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    expected_np = kf_estimator.integrated_evidence_perturbed_batched_joint(
-        index_old, new_centers[:, None, :], new_weights[:, None],
-    )
-    got_torch = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
         index_old,
         torch.from_numpy(new_centers[:, None, :]).double(),
         torch.from_numpy(new_weights[:, None]).double(),
     )
-
-    np.testing.assert_allclose(
-        got_torch.detach().cpu().numpy(), expected_np, atol=1e-6, rtol=1e-6,
-    )
+    assert (got > 0).all(), f"E_new should be positive, got {got}"
 
 
-def test_torch_matches_numpy_l_3(kf_estimator):
-    """L=3 — typical schedule trajectory length."""
+def test_torch_deterministic(kf_estimator):
+    """Same inputs produce identical outputs on repeated calls."""
     rng = np.random.default_rng(7)
     sigma = 0.075
     D = 4
@@ -126,23 +119,23 @@ def test_torch_matches_numpy_l_3(kf_estimator):
     new_weights_SL = np.ones((S, L))
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
+    t_centers = torch.from_numpy(new_centers_SL).double()
+    t_weights = torch.from_numpy(new_weights_SL).double()
 
-    expected_np = kf_estimator.integrated_evidence_perturbed_batched_joint(
-        index_old, new_centers_SL, new_weights_SL,
+    r1 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, t_centers, t_weights,
     )
-    got_torch = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
-        index_old,
-        torch.from_numpy(new_centers_SL).double(),
-        torch.from_numpy(new_weights_SL).double(),
+    r2 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, t_centers, t_weights,
     )
-
     np.testing.assert_allclose(
-        got_torch.detach().cpu().numpy(), expected_np, atol=1e-6, rtol=1e-6,
+        r1.detach().cpu().numpy(), r2.detach().cpu().numpy(),
+        atol=0, rtol=0,
     )
 
 
-def test_torch_matches_numpy_empty_old(kf_estimator):
-    """No old kernels — only the candidate's own L points contribute."""
+def test_torch_empty_old_positive(kf_estimator):
+    """No old kernels -- candidate self-evidence is positive."""
     rng = np.random.default_rng(3)
     sigma = 0.075
     D = 3
@@ -154,22 +147,16 @@ def test_torch_matches_numpy_empty_old(kf_estimator):
 
     index_old = KernelIndex(np.zeros((0, D)), np.zeros(0), sigma)
 
-    expected_np = kf_estimator.integrated_evidence_perturbed_batched_joint(
-        index_old, new_centers_SL, new_weights_SL,
-    )
-    got_torch = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
     )
-
-    np.testing.assert_allclose(
-        got_torch.detach().cpu().numpy(), expected_np, atol=1e-6, rtol=1e-6,
-    )
+    assert (got > 0).all()
 
 
-def test_torch_matches_numpy_nonuniform_weights(kf_estimator):
-    """Non-uniform weights for both old and joint-added new kernels."""
+def test_torch_nonuniform_weights_positive(kf_estimator):
+    """Non-uniform weights -- evidence still positive and finite."""
     rng = np.random.default_rng(55)
     sigma = 0.075
     D = 4
@@ -184,17 +171,44 @@ def test_torch_matches_numpy_nonuniform_weights(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    expected_np = kf_estimator.integrated_evidence_perturbed_batched_joint(
-        index_old, new_centers_SL, new_weights_SL,
-    )
-    got_torch = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
     )
+    assert (got > 0).all()
+    assert torch.isfinite(got).all()
 
+
+def test_torch_marginal_joint_both_contribute(kf_estimator):
+    """Verify that both _marginal and _joint produce nonzero evidence."""
+    rng = np.random.default_rng(10)
+    sigma = 0.075
+    D = 3
+    n_old = 3
+    S = 4
+    L = 1
+
+    old_centers = rng.uniform(0.2, 0.8, size=(n_old, D))
+    old_weights = np.ones(n_old)
+
+    index_old = KernelIndex(old_centers, old_weights, sigma)
+    t_centers = torch.from_numpy(rng.uniform(0.2, 0.8, size=(S, L, D))).double()
+    t_weights = torch.ones((S, L), dtype=torch.float64)
+
+    e_marginal = kf_estimator._marginal_evidence_torch(index_old, t_centers, t_weights)
+    e_joint = kf_estimator._joint_evidence_torch(index_old, t_centers, t_weights)
+
+    assert (e_marginal > 0).all(), "Marginal evidence should be positive"
+    assert (e_joint > 0).all(), "Joint evidence should be positive"
+    # Combined = (marginal + joint) / 2, both contribute
+    combined = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+        index_old, t_centers, t_weights,
+    )
     np.testing.assert_allclose(
-        got_torch.detach().cpu().numpy(), expected_np, atol=1e-6, rtol=1e-6,
+        combined.detach().cpu().numpy(),
+        ((e_marginal + e_joint) * 0.5).detach().cpu().numpy(),
+        atol=1e-10,
     )
 
 

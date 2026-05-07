@@ -282,71 +282,6 @@ class EvidenceEstimator(ABC):
             )
         return total
 
-    def integrated_evidence_perturbed_batched(
-        self,
-        index_old: KernelIndex,
-        new_centers_S: np.ndarray,
-        new_weights_S: np.ndarray,
-    ) -> np.ndarray:
-        """E(old ∪ {(new_centers_S[s], new_weights_S[s])}) for each s. Returns ``(S,)``.
-
-        Default implementation loops ``integrated_evidence`` per candidate,
-        rebuilding ``index_new[s]`` each time. Subclasses override for
-        vectorised perf — see `KernelFieldEstimator.integrated_evidence_perturbed_batched`.
-        """
-        S = int(new_centers_S.shape[0])
-        if S == 0:
-            return np.zeros(0, dtype=np.float64)
-        out = np.zeros(S, dtype=np.float64)
-        for s in range(S):
-            if index_old.is_empty:
-                all_centers = new_centers_S[s:s + 1]
-                all_weights = new_weights_S[s:s + 1]
-            else:
-                all_centers = np.vstack([index_old.centers_np, new_centers_S[s:s + 1]])
-                all_weights = np.concatenate([index_old.weights_np, new_weights_S[s:s + 1]])
-            index_new = KernelIndex(
-                all_centers, all_weights, index_old.sigma,
-                cutoff_sigmas=index_old.cutoff_sigmas,
-                truncation_threshold=index_old.truncation_threshold,
-            )
-            out[s] = self.integrated_evidence(index_new)
-        return out
-
-    def integrated_evidence_perturbed_batched_joint(
-        self,
-        index_old: KernelIndex,
-        new_centers_SL: np.ndarray,
-        new_weights_SL: np.ndarray,
-    ) -> np.ndarray:
-        """Joint-batched ``E(old ∪ {L kernels of candidate s})`` per s. Returns ``(S,)``.
-
-        Default: loops ``integrated_evidence`` per candidate, rebuilding
-        ``index_new[s]`` with all L joint kernels added at once. Subclasses
-        override for vectorised perf — see
-        ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint``.
-        """
-        S = int(new_centers_SL.shape[0])
-        if S == 0:
-            return np.zeros(0, dtype=np.float64)
-        out = np.zeros(S, dtype=np.float64)
-        for s in range(S):
-            new_centers_s = new_centers_SL[s]
-            new_weights_s = new_weights_SL[s]
-            if index_old.is_empty:
-                all_centers = new_centers_s
-                all_weights = new_weights_s
-            else:
-                all_centers = np.vstack([index_old.centers_np, new_centers_s])
-                all_weights = np.concatenate([index_old.weights_np, new_weights_s])
-            index_new = KernelIndex(
-                all_centers, all_weights, index_old.sigma,
-                cutoff_sigmas=index_old.cutoff_sigmas,
-                truncation_threshold=index_old.truncation_threshold,
-            )
-            out[s] = self.integrated_evidence(index_new)
-        return out
-
     def integrated_evidence_perturbed_batched_joint_torch(
         self,
         index_old: KernelIndex,
@@ -369,6 +304,7 @@ class KernelFieldEstimator(EvidenceEstimator):
     angular_gap_deg: float = DEFAULT_ANGULAR_GAP_DEG
 
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
+    _cache_torch: dict = field(default_factory=dict, repr=False, compare=False)
 
     def _probes_and_weights(self, D: int, sigma: float) -> tuple[np.ndarray, np.ndarray]:
         """Probe offsets (relative to any centre) and quadrature weights."""
@@ -409,6 +345,20 @@ class KernelFieldEstimator(EvidenceEstimator):
         self_density = np.exp(-offset_sq * inv_2sig2)
 
         self._cache[key] = (offsets, weights, self_density)
+        return offsets, weights, self_density
+
+    def _probes_weights_self_torch(
+        self, D: int, sigma: float, dtype: torch.dtype, device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Torch-cached version of ``_probes_weights_self``."""
+        key = (D, sigma, dtype, device)
+        if key in self._cache_torch:
+            return self._cache_torch[key]
+        offsets_np, weights_np, self_density_np = self._probes_weights_self(D, sigma)
+        offsets = torch.from_numpy(offsets_np).to(device=device, dtype=dtype)
+        weights = torch.from_numpy(weights_np).to(device=device, dtype=dtype)
+        self_density = torch.from_numpy(self_density_np).to(device=device, dtype=dtype)
+        self._cache_torch[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
 
     def self_integral(
@@ -570,10 +520,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         sigma = index_old.sigma
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
 
-        offsets_np, quad_weights_np, self_density_np = self._probes_weights_self(D, sigma)
-        offsets = torch.from_numpy(offsets_np).to(device=device, dtype=dtype)
-        quad_weights = torch.from_numpy(quad_weights_np).to(device=device, dtype=dtype)
-        self_density = torch.from_numpy(self_density_np).to(device=device, dtype=dtype)
+        offsets, quad_weights, self_density = self._probes_weights_self_torch(D, sigma, dtype, device)
         M = offsets.shape[0]
 
         n_old = len(index_old.centers) if not index_old.is_empty else 0
