@@ -72,9 +72,9 @@ class ProgressBar:
             info += f"  nfev={nfev}" if info else f"nfev={nfev}"
         if not info:
             info = f"{self._i}/{self._max}"
-        # Pad to overwrite any leftover characters from the longer step() line
-        # that may have included an obj=X.XXX suffix during optimization.
-        print(f"{_G}\u2713{_R} {self._label:<14s} [{bar}] {_D}{info}{_R}            ")
+        import sys
+        sys.stdout.write(f"\r{_G}\u2713{_R} {self._label:<14s} [{bar}] {_D}{info}{_R}            \n")
+        sys.stdout.flush()
 
 
 class ConsoleReporter:
