@@ -1118,6 +1118,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 label=label,
                 show_progress=console,
             )
+            self.convergence_history[label] = opt.convergence_history
         else:
             opt = self.engine._run_de(
                 _acquisition_batch_objective_vec, space.bounds, init_pop=init_pop,
