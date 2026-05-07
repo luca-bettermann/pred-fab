@@ -212,41 +212,29 @@ class OptimizationEngine:
 
         with profiler.section("engine.run_acquisition_gradient"):
             if method == "sgd":
-                z_before = z.detach().clone()
                 optimizer = torch.optim.SGD([z], lr=lr)
                 for _it in range(n_iters):
                     optimizer.zero_grad()
                     vals = _eval_obj(z)
                     loss = vals.sum()
                     loss.backward()
-                    if _it == 0:
-                        grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
-                        self.logger.info(f"SGD grad norm after first eval: {grad_norm:.2e}")
                     optimizer.step()
                     best_now = float(vals.detach().min().item())
                     history.append(best_now)
                     if bar:
                         bar.step(obj=best_now)
-                z_movement = float((z.detach() - z_before).abs().max().item())
-                self.logger.info(f"SGD total z movement (max): {z_movement:.6f}")
             elif method == "adam":
-                z_before = z.detach().clone()
                 optimizer = torch.optim.Adam([z], lr=lr)
                 for _it in range(n_iters):
                     optimizer.zero_grad()
                     vals = _eval_obj(z)
                     loss = vals.sum()
                     loss.backward()
-                    if _it == 0:
-                        grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
-                        self.logger.info(f"Adam grad norm after first eval: {grad_norm:.2e}, z.grad is None: {z.grad is None}")
                     optimizer.step()
                     best_now = float(vals.detach().min().item())
                     history.append(best_now)
                     if bar:
                         bar.step(obj=best_now)
-                z_movement = float((z.detach() - z_before).abs().max().item())
-                self.logger.info(f"Adam total z movement (max): {z_movement:.6f}")
             else:  # lbfgs with restarts
                 last_vals: list[torch.Tensor] = []
                 _iter_count = [0]
@@ -261,9 +249,6 @@ class OptimizationEngine:
                     loss = vals.sum()
                     loss.backward()
                     cur = float(vals.detach().min().item())
-                    if _iter_count[0] == 0:
-                        grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
-                        self.logger.info(f"LBFGS grad norm after first eval: {grad_norm:.2e}")
                     if cur < _best_obj[0] - 1e-15 or _iter_count[0] == 0:
                         _iter_count[0] += 1
                         _best_obj[0] = cur

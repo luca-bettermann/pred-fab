@@ -1035,13 +1035,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         for si, (_, code, lo, hi) in enumerate(all_phase_params):
             if code in baseline_dm.input_columns:
                 phase_col_map.append((si, baseline_dm.input_columns.index(code)))
-        self.logger.info(
-            f"phase_col_map: {len(phase_col_map)}/{len(all_phase_params)} mapped  "
-            f"dm_cols={baseline_dm.input_columns}  "
-            f"phase_codes={[c for _, c, _, _ in all_phase_params]}  "
-            f"unmapped={[c for si, (_, c, _, _) in enumerate(all_phase_params) if c not in baseline_dm.input_columns]}"
-        )
-
         # Pre-fill batch with structural values from prior phases (e.g. Domain
         # values pinned when running Process after Domain). Filled at 0.5 for
         # any column the previous phase didn't touch.
@@ -1158,10 +1151,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     show_progress=console,
                 )
                 self.convergence_history[refine_label] = refine_opt.convergence_history
-                self.logger.info(
-                    f"Refine: DE score={opt.score:.6f}, refine score={refine_opt.score:.6f}, "
-                    f"accepted={refine_opt.best_x is not None and refine_opt.score >= opt.score}"
-                )
                 if refine_opt.best_x is not None and refine_opt.score >= opt.score:
                     opt = refine_opt
         if not hasattr(self, 'last_baseline_nfev'):
