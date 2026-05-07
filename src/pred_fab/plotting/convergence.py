@@ -30,11 +30,12 @@ def plot_convergence(
             continue
         color = colors[i % len(colors)]
         h = np.array(history)
+        h_rel = h / h[0] if abs(h[0]) > 1e-15 else h - h[0] + 1.0
         x = np.linspace(0, 1, len(h))
-        ax.plot(x, h, color=color, linewidth=1.5, label=label, alpha=0.8)
+        ax.plot(x, h_rel, color=color, linewidth=1.5, label=label, alpha=0.8)
 
     ax.set_xlabel("Progress (fraction of max iterations)", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("Objective", fontsize=9, color=ZINC_700)
+    ax.set_ylabel("Relative Objective", fontsize=9, color=ZINC_700)
     ax.set_xlim(0, 1)
     ax.legend(fontsize=8, frameon=False)
     ax.grid(True, alpha=0.2, color=ZINC_300)
