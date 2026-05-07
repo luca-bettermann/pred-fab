@@ -231,13 +231,7 @@ class OptimizationEngine:
                 )
                 last_vals: list[torch.Tensor] = []
                 _iter_count = [0]
-                _best_loss: list[float] = [float("inf")]
-                _stagnation = [0]
-                _lbfgs_window = max(1, int(n_iters * self.convergence_window_frac))
-                _lbfgs_eps: list[float] = [1e-12]  # updated after first eval
-
-                class _ConvergedEarly(Exception):
-                    pass
+                _best_obj: list[float] = [float("inf")]
 
                 def _closure() -> torch.Tensor:
                     optimizer.zero_grad()
@@ -246,34 +240,19 @@ class OptimizationEngine:
                     last_vals.append(vals.detach())
                     loss = vals.sum()
                     loss.backward()
-                    grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
-                    if _iter_count[0] == 0:
-                        self.logger.info(f"LBFGS grad norm after first eval: {grad_norm:.2e}")
                     cur = float(vals.detach().min().item())
                     if _iter_count[0] == 0:
-                        _best_loss[0] = cur
-                        _lbfgs_eps[0] = abs(cur) * self.convergence_eps_frac if abs(cur) > 1e-15 else 1e-12
-                        _iter_count[0] = 1
-                        history.append(cur)
-                        if bar:
-                            bar.step(i=1, obj=cur)
-                    elif cur < _best_loss[0] - _lbfgs_eps[0]:
-                        _best_loss[0] = cur
-                        _stagnation[0] = 0
+                        grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
+                        self.logger.info(f"LBFGS grad norm after first eval: {grad_norm:.2e}")
+                    if cur < _best_obj[0] - 1e-15 or _iter_count[0] == 0:
                         _iter_count[0] += 1
+                        _best_obj[0] = cur
                         history.append(cur)
                         if bar:
                             bar.step(i=_iter_count[0], obj=cur)
-                    else:
-                        _stagnation[0] += 1
-                        if _stagnation[0] >= _lbfgs_window:
-                            raise _ConvergedEarly()
                     return loss
 
-                try:
-                    optimizer.step(_closure)
-                except _ConvergedEarly:
-                    pass
+                optimizer.step(_closure)
                 if not history and last_vals:
                     history.append(float(last_vals[0].min().item()))
 
