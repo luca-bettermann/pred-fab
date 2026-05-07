@@ -599,8 +599,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         )
 
     def _resolve_sigma(self, n_dims: int = 1) -> float:
-        """σ = radius × √D, clamped to SIGMA_MIN."""
-        sigma = float(self._radius) * (n_dims ** 0.5)
+        """σ = radius (1D bandwidth). With ANOVA kernel, no √D scaling needed."""
+        sigma = float(self._radius)
         if sigma < SIGMA_MIN:
             self.logger.warning(
                 f"σ={sigma:.4f} below floor; clamping to SIGMA_MIN={SIGMA_MIN}."

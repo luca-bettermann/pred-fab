@@ -95,6 +95,32 @@ def _resolve_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ANOVA kernel: (marginal + joint) / 2
+# ---------------------------------------------------------------------------
+
+def _anova_kernel_np(d2_per_dim: np.ndarray, inv_2sig2: float) -> np.ndarray:
+    """ANOVA-decomposed kernel from per-dimension squared differences.
+
+    ``d2_per_dim`` has shape ``(..., D)``. Returns ``(...)``.
+
+    ``k(x,c) = [ (1/D) Σ_d exp(-δ_d²/(2σ²)) + exp(-Σ_d δ_d²/(2σ²)) ] / 2``
+
+    Marginal term: per-dimension Gaussian (main effects).
+    Joint term: isotropic Gaussian (full interaction).
+    """
+    marginal = np.exp(-d2_per_dim * inv_2sig2).mean(axis=-1)
+    joint = np.exp(-d2_per_dim.sum(axis=-1) * inv_2sig2)
+    return (marginal + joint) * 0.5
+
+
+def _anova_kernel_torch(d2_per_dim: torch.Tensor, inv_2sig2: float) -> torch.Tensor:
+    """Torch equivalent of ``_anova_kernel_np``."""
+    marginal = torch.exp(-d2_per_dim * inv_2sig2).mean(dim=-1)
+    joint = torch.exp(-d2_per_dim.sum(dim=-1) * inv_2sig2)
+    return (marginal + joint) * 0.5
+
+
+# ---------------------------------------------------------------------------
 # Kernel index — O(M · log K) density evaluation via neighbour search
 # ---------------------------------------------------------------------------
 
@@ -416,8 +442,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         weights = np.asarray(weights_list, dtype=float)
 
         inv_2sig2 = 1.0 / (2.0 * sigma ** 2)
-        offset_sq = np.sum(offsets ** 2, axis=-1)
-        self_density = np.exp(-offset_sq * inv_2sig2)
+        self_density = _anova_kernel_np(offsets ** 2, inv_2sig2)
 
         self._cache[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
@@ -606,9 +631,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # density at probes_s_l from the OTHER (L-1) kernels of the same candidate.
         # diff_self_l_to_lprime: (S, L, M, L, D) — probes around l vs centres at lprime
         diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]  # (S, L, M, L, D)
-        d2_self = np.sum(diff_self * diff_self, axis=-1)  # (S, L, M, L)
-        kernels_self = np.exp(-d2_self * inv_2sig2)
+        d2_per_dim_self = diff_self * diff_self  # (S, L, M, L, D)
+        kernels_self = _anova_kernel_np(d2_per_dim_self, inv_2sig2)
         if do_truncate:
+            d2_self = d2_per_dim_self.sum(axis=-1)
             kernels_self = np.where(d2_self <= cutoff_d2, kernels_self, 0.0)
         # Mask out l == lprime (that's the kernel's own self-density, handled separately)
         eye_LL = np.eye(L, dtype=np.float64)
@@ -641,9 +667,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         )
         # rho_other_old_at_old_probes[j, m] = sum_{k!=j} w_k * exp(-||probes[j,m] - old_k||² / 2σ²)
         diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]  # (n_old, M, n_old, D)
-        d2_old = np.sum(diff_old * diff_old, axis=-1)
-        kernels_old = np.exp(-d2_old * inv_2sig2)
+        d2_per_dim_old = diff_old * diff_old  # (n_old, M, n_old, D)
+        kernels_old = _anova_kernel_np(d2_per_dim_old, inv_2sig2)
         if do_truncate:
+            d2_old = d2_per_dim_old.sum(axis=-1)
             kernels_old = np.where(d2_old <= cutoff_d2, kernels_old, 0.0)
         weighted_old = kernels_old * old_weights[None, None, :]
         eye_jk = np.eye(n_old, dtype=np.float64)
@@ -655,9 +682,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # delta_density[j, m, s, l] = density at probes_per_old[j, m] from new kernel (s, l)
         # diff: (n_old, M, S, L, D)
         diff_new_to_old = probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
-        d2_new_to_old = np.sum(diff_new_to_old * diff_new_to_old, axis=-1)  # (n_old, M, S, L)
-        kernels_new_to_old = np.exp(-d2_new_to_old * inv_2sig2)
+        d2_per_dim_nto = diff_new_to_old * diff_new_to_old  # (n_old, M, S, L, D)
+        kernels_new_to_old = _anova_kernel_np(d2_per_dim_nto, inv_2sig2)
         if do_truncate:
+            d2_new_to_old = d2_per_dim_nto.sum(axis=-1)
             kernels_new_to_old = np.where(d2_new_to_old <= cutoff_d2, kernels_new_to_old, 0.0)
         delta_density = (
             kernels_new_to_old * new_weights_SL[None, None, :, :]
@@ -674,9 +702,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         # ---- New kernels' own self-integrals (each (s, l)) ----
         # density at probes_new_SL[s, l, m] from old kernels: (S, L, M, n_old) → sum n_old → (S, L, M)
         diff_old_to_new = probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
-        d2_old_to_new = np.sum(diff_old_to_new * diff_old_to_new, axis=-1)  # (S, L, M, n_old)
-        kernels_old_to_new = np.exp(-d2_old_to_new * inv_2sig2)
+        d2_per_dim_otn = diff_old_to_new * diff_old_to_new  # (S, L, M, n_old, D)
+        kernels_old_to_new = _anova_kernel_np(d2_per_dim_otn, inv_2sig2)
         if do_truncate:
+            d2_old_to_new = d2_per_dim_otn.sum(axis=-1)
             kernels_old_to_new = np.where(d2_old_to_new <= cutoff_d2, kernels_old_to_new, 0.0)
         rho_old_at_new_probes = (
             kernels_old_to_new * old_weights[None, None, None, :]
@@ -767,8 +796,7 @@ class KernelFieldEstimator(EvidenceEstimator):
 
         # Cross-influence: density at probes_s_l from OTHER (L-1) kernels of same candidate.
         diff_self = probes_new_SL[:, :, :, None, :] - new_centers_SL[:, None, None, :, :]
-        d2_self = (diff_self * diff_self).sum(dim=-1)  # (S, L, M, L)
-        kernels_self = torch.exp(-d2_self * inv_2sig2)
+        kernels_self = _anova_kernel_torch(diff_self * diff_self, inv_2sig2)
         eye_LL = torch.eye(L, dtype=dtype)
         keep_LL = 1.0 - eye_LL
         weighted_self = kernels_self * new_weights_SL[:, None, None, :]
@@ -796,8 +824,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         ).to(dtype=dtype)
 
         diff_old = probes_per_old[:, :, None, :] - old_centers[None, None, :, :]
-        d2_old = (diff_old * diff_old).sum(dim=-1)  # (n_old, M, n_old)
-        kernels_old = torch.exp(-d2_old * inv_2sig2)
+        kernels_old = _anova_kernel_torch(diff_old * diff_old, inv_2sig2)
         weighted_old = kernels_old * old_weights[None, None, :]
         eye_jk = torch.eye(n_old, dtype=dtype)
         keep_jk = 1.0 - eye_jk
@@ -808,8 +835,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         diff_new_to_old = (
             probes_per_old[:, :, None, None, :] - new_centers_SL[None, None, :, :, :]
         )
-        d2_new_to_old = (diff_new_to_old * diff_new_to_old).sum(dim=-1)  # (n_old, M, S, L)
-        kernels_new_to_old = torch.exp(-d2_new_to_old * inv_2sig2)
+        kernels_new_to_old = _anova_kernel_torch(diff_new_to_old * diff_new_to_old, inv_2sig2)
         delta_density = (
             kernels_new_to_old * new_weights_SL[None, None, :, :]
         ).sum(dim=-1)  # (n_old, M, S)
@@ -826,8 +852,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         diff_old_to_new = (
             probes_new_SL[:, :, :, None, :] - old_centers[None, None, None, :, :]
         )
-        d2_old_to_new = (diff_old_to_new * diff_old_to_new).sum(dim=-1)  # (S, L, M, n_old)
-        kernels_old_to_new = torch.exp(-d2_old_to_new * inv_2sig2)
+        kernels_old_to_new = _anova_kernel_torch(diff_old_to_new * diff_old_to_new, inv_2sig2)
         rho_old_at_new_probes = (
             kernels_old_to_new * old_weights[None, None, None, :]
         ).sum(dim=-1)  # (S, L, M)
