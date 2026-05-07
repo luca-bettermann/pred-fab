@@ -76,6 +76,7 @@ class PfabAgent:
         self.eval_system: EvaluationSystem
         self.pred_system: PredictionSystem
         self.calibration_system: CalibrationSystem
+        self._baseline_radius_multiplier: float = 3.0
         
         # Model registry (store classes and params until dataset is initialized)
         self._feature_model_specs: list[tuple[type[IFeatureModel], dict]] = []  # List of (class, kwargs)
@@ -714,6 +715,7 @@ class PfabAgent:
         lr: float | None = None,
         convergence_window: float | None = None,
         convergence_eps: float | None = None,
+        baseline_radius_multiplier: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters.
 
@@ -738,6 +740,8 @@ class PfabAgent:
             cal.engine.convergence_window_frac = convergence_window
         if convergence_eps is not None:
             cal.engine.convergence_eps_frac = convergence_eps
+        if baseline_radius_multiplier is not None:
+            self._baseline_radius_multiplier = baseline_radius_multiplier
 
     def configure_trajectory(
         self,
@@ -838,10 +842,13 @@ class PfabAgent:
         # model can't taint placement: evidence/KDE operates on raw normalised
         # input space here. Auto-managed; not user-facing.
         self.pred_system._bypass_encoder = True
+        saved_radius = self.pred_system._radius
+        self.pred_system._radius = saved_radius * self._baseline_radius_multiplier
         try:
             result = self.calibration_system.run_baseline(n=n)
         finally:
             self.pred_system._bypass_encoder = False
+            self.pred_system._radius = saved_radius
         return result
 
     # === Helper Functions ===
