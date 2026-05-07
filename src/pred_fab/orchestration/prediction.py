@@ -33,7 +33,7 @@ SIGMA_MIN: float = 0.03
 under any finite probe budget and the evidence model becomes over-confident about
 any single point."""
 
-SIGMA_DEFAULT: float = 0.075
+SIGMA_DEFAULT: float = 0.05
 """Default σ when no override is provided."""
 
 
@@ -505,7 +505,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             projected = latent_array[:, active_mask]
             n_active_dims = projected.shape[1]
-            sigma = self._resolve_sigma()
+            sigma = self._resolve_sigma(n_active_dims)
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
@@ -581,7 +581,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             if n_active == 0:
                 active_mask = np.ones(n_dims, dtype=bool)
                 n_active = n_dims
-            sigma = self._resolve_sigma()
+            sigma = self._resolve_sigma(n_active)
 
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
@@ -598,9 +598,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             f"(σ={self._sigma}, estimator={self._estimator_config.type})."
         )
 
-    def _resolve_sigma(self) -> float:
-        """Active σ, clamped to SIGMA_MIN."""
-        sigma = float(self._sigma)
+    def _resolve_sigma(self, n_dims: int = 1) -> float:
+        """Active σ scaled by √D, clamped to SIGMA_MIN."""
+        sigma = float(self._sigma) * (n_dims ** 0.5)
         if sigma < SIGMA_MIN:
             self.logger.warning(
                 f"σ={sigma:.4f} below floor; clamping to SIGMA_MIN={SIGMA_MIN}."
@@ -617,11 +617,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             self._sigma = float(sigma)
 
         if self._model_kdes:
-            resolved = self._resolve_sigma()
             for kde in self._model_kdes.values():
-                kde.sigma = resolved
+                kde.sigma = self._resolve_sigma(kde.n_active_dims)
             self.logger.info(
-                f"Evidence model updated: σ={self._sigma}, "
+                f"Evidence model updated: σ_base={self._sigma}, "
                 f"{len(self._model_kdes)} models."
             )
 
