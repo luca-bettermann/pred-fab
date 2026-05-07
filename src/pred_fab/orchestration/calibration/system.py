@@ -119,6 +119,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_exp_ids: list[int] | None = None
         self.trajectory_locked_static: set[str] = set()
         self.smoothness_weight: float = 0.01
+        self.trajectory_step_callback: Callable[[int, int, '_ScheduleState'], None] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -1447,6 +1448,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         improved_this_round = True
                     state.static_norms[exp_idx] = new_static.copy()
                     state.schedule_norms[exp_idx] = new_sched.copy()
+
+                if self.trajectory_step_callback is not None:
+                    self.trajectory_step_callback(round_idx, exp_idx, state)
 
             if not improved_this_round:
                 break
