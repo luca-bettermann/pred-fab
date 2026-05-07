@@ -1311,17 +1311,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return out
 
     def _run_joint_trajectory_optimisation(self, state: _ScheduleState) -> None:
-        """Single joint multi-start LBFGS over all N experiments' trajectories.
+        """Coordinate descent over N experiments' trajectories.
 
-        Decision vector (concatenated across experiments):
-          per-exp slice = ``[static, step_0_sched, step_1_sched, ..., step_{L_i-1}_sched]``
-
-        Per-dim bounds: each experiment's static drifts around its
-        Phase-1 anchor (``±_STATIC_DRIFT_FRAC``); schedule values are
-        ``[0, 1]``. Per-experiment delta constraint is a smooth
-        quadratic penalty on adjacent step differences. All experiments
-        optimise simultaneously — no Gauss-Seidel iterative passes —
-        and multi-start covers diverse starting trajectory shapes.
+        Each round optimises one experiment at a time (~D_static + L×D_sched
+        dims) while holding all others fixed. Iterates rounds until convergence
+        or maxiter budget is exhausted.
 
         Mutates ``state.static_norms`` and ``state.schedule_norms`` in place.
         """
@@ -1329,40 +1323,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         D_static = state.D_static
         D_sched = state.D_sched
         per_exp_L = list(state.per_exp_L)
+        console = self.logger._console_output_enabled
 
-        # Per-experiment slice offsets in the joint vector.
-        exp_offsets: list[int] = []
-        cur = 0
-        for L_i in per_exp_L:
-            exp_offsets.append(cur)
-            cur += D_static + L_i * D_sched
-        total_dims = cur
-
-        # Per-dim bounds: static drift around each exp's Phase-1 anchor; schedule [0,1].
-        bounds: list[tuple[float, float]] = []
-        for i in range(n):
-            for si in range(D_static):
-                centre = float(state.static_norms[i, si])
-                lo_b = max(0.0, centre - _STATIC_DRIFT_FRAC)
-                hi_b = min(1.0, centre + _STATIC_DRIFT_FRAC)
-                if hi_b <= lo_b:
-                    hi_b = min(1.0, lo_b + 1e-6)
-                bounds.append((lo_b, hi_b))
-            for _k in range(per_exp_L[i]):
-                for _si in range(D_sched):
-                    bounds.append((0.0, 1.0))
-
-        # x0: anchor at Phase-1 static + flat schedule (every step at step-0 warmstart).
-        x0 = np.zeros(total_dims)
-        for i in range(n):
-            off = exp_offsets[i]
-            x0[off:off + D_static] = state.static_norms[i]
-            for k in range(per_exp_L[i]):
-                base = off + D_static + k * D_sched
-                x0[base:base + D_sched] = state.schedule_norms[i][0]
-
-        # Pre-build closure constants.
-        base_rows_t = torch.from_numpy(np.stack(state.exp_base_rows)).float()  # (n, n_dm_cols)
+        base_rows_t = torch.from_numpy(np.stack(state.exp_base_rows)).to(dtype=torch.float64)
         n_dm_cols = base_rows_t.shape[1]
         static_col_idxs = torch.tensor(
             [col_idx for _, col_idx in state.static_col_map], dtype=torch.long,
@@ -1371,97 +1334,126 @@ class CalibrationSystem(BaseOrchestrationSystem):
             [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
         )
         sched_delta_t = (
-            torch.tensor(state.sched_delta_norms, dtype=torch.float32)
-            if state.sched_delta_norms else torch.zeros(D_sched, dtype=torch.float32)
+            torch.tensor(state.sched_delta_norms, dtype=torch.float64)
+            if state.sched_delta_norms else torch.zeros(D_sched, dtype=torch.float64)
         )
         delta_active = bool((sched_delta_t > 0).any().item()) if D_sched > 0 else False
+        kappa = 1.0
 
-        kappa = 1.0  # baseline trajectory: pure Δ∫E
-
-        def _joint_objective(x_S: torch.Tensor) -> torch.Tensor:
-            """``(S, total_dims) → (S,)`` negated scores for joint trajectory placement."""
-            S = int(x_S.shape[0])
-
-            # Build per-experiment (S, L_i, n_dm_cols) candidate rows; concatenate to
-            # one big (S, NL_total, n_dm_cols) for the joint Δ∫E call.
-            cand_blocks: list[torch.Tensor] = []
-            traj_blocks: list[torch.Tensor] = []  # for delta-penalty per experiment
-            for i in range(n):
-                off = exp_offsets[i]
-                L_i = per_exp_L[i]
-                stat = x_S[:, off:off + D_static]                                       # (S, D_static)
-                traj = x_S[:, off + D_static:off + D_static + L_i * D_sched].reshape(   # (S, L_i, D_sched)
-                    S, L_i, D_sched,
-                )
-                base_row_i = base_rows_t[i]                                              # (n_dm_cols,)
-                cand_i = base_row_i.unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
+        def _build_fixed_rows(exclude_idx: int) -> torch.Tensor:
+            """Build (NL_fixed, n_dm_cols) for all experiments except exclude_idx."""
+            blocks: list[torch.Tensor] = []
+            for j in range(n):
+                if j == exclude_idx:
+                    continue
+                L_j = per_exp_L[j]
+                row_j = base_rows_t[j].unsqueeze(0).expand(L_j, n_dm_cols).clone()
                 if D_static > 0:
-                    stat_per_step = stat.unsqueeze(1).expand(S, L_i, D_static)
-                    cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), stat_per_step)
+                    stat_j = torch.from_numpy(state.static_norms[j]).to(dtype=torch.float64)
+                    row_j = row_j.scatter(-1, static_col_idxs.unsqueeze(0).expand(L_j, -1),
+                                          stat_j.unsqueeze(0).expand(L_j, -1))
+                if D_sched > 0:
+                    sched_j = torch.from_numpy(state.schedule_norms[j]).to(dtype=torch.float64)
+                    row_j = row_j.scatter(-1, sched_col_idxs.unsqueeze(0).expand(L_j, -1), sched_j)
+                blocks.append(row_j)
+            return torch.cat(blocks, dim=0) if blocks else torch.empty(0, n_dm_cols, dtype=torch.float64)
+
+        def _make_per_exp_objective(exp_idx: int, fixed_rows: torch.Tensor):
+            L_i = per_exp_L[exp_idx]
+            D_exp = D_static + L_i * D_sched
+
+            def _objective(x_S: torch.Tensor) -> torch.Tensor:
+                S = int(x_S.shape[0])
+                stat = x_S[:, :D_static]
+                traj = x_S[:, D_static:].reshape(S, L_i, D_sched)
+
+                cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
+                if D_static > 0:
+                    cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1),
+                                            stat.unsqueeze(1).expand(S, L_i, D_static))
                 if D_sched > 0:
                     cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
-                cand_blocks.append(cand_i)
-                traj_blocks.append(traj)
 
-            full = torch.cat(cand_blocks, dim=1)                # (S, NL_total, n_dm_cols)
-            full_S_NL = full.unsqueeze(1)                        # (S, 1, NL_total, n_dm_cols)
-            scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
+                # Combine with fixed experiments
+                if fixed_rows.shape[0] > 0:
+                    fixed_exp = fixed_rows.unsqueeze(0).expand(S, -1, -1).to(dtype=x_S.dtype)
+                    full = torch.cat([cand_i, fixed_exp], dim=1)
+                else:
+                    full = cand_i
+                full_S_NL = full.unsqueeze(1)
+                scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
 
-            # Per-experiment soft delta-constraint penalty.
-            if D_sched > 0 and delta_active:
-                penalty = torch.zeros(S, dtype=full.dtype)
-                for traj in traj_blocks:
-                    if traj.shape[1] <= 1:
-                        continue
+                # Delta constraint
+                if D_sched > 0 and delta_active and L_i > 1:
                     step_diffs = (traj[:, 1:, :] - traj[:, :-1, :]).abs()
                     excess = (step_diffs - sched_delta_t).clamp(min=0.0) * (sched_delta_t > 0).to(dtype=traj.dtype)
-                    penalty = penalty + (excess ** 2).sum(dim=(1, 2))
-                scores_neg = scores_neg + 10.0 * penalty
+                    scores_neg = scores_neg + 10.0 * (excess ** 2).sum(dim=(1, 2))
 
-            # R²-based smoothness: penalise zig-zagging by rewarding linear trends.
-            if D_sched > 0:
-                smooth_penalty = torch.zeros(S, dtype=full.dtype)
-                for traj in traj_blocks:
-                    L_i = traj.shape[1]
-                    if L_i <= 2:
-                        continue
-                    # Linear regression per sched param: t = 0..L-1
-                    t = torch.arange(L_i, dtype=full.dtype)
+                # R² smoothness
+                if D_sched > 0 and L_i > 2:
+                    t = torch.arange(L_i, dtype=x_S.dtype)
                     t_mean = t.mean()
                     t_var = ((t - t_mean) ** 2).sum()
-                    y = traj  # (S, L_i, D_sched)
-                    y_mean = y.mean(dim=1, keepdim=True)
-                    ss_tot = ((y - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
-                    cov = ((t[None, :, None] - t_mean) * (y - y_mean)).sum(dim=1)
+                    y_mean = traj.mean(dim=1, keepdim=True)
+                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)
+                    cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
                     slope = cov / t_var.clamp(min=1e-12)
                     y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
-                    ss_res = ((y - y_hat) ** 2).sum(dim=1)  # (S, D_sched)
+                    ss_res = ((traj - y_hat) ** 2).sum(dim=1)
                     r2 = 1.0 - ss_res / ss_tot.clamp(min=1e-12)
-                    smooth_penalty = smooth_penalty + (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-                scores_neg = scores_neg + self.smoothness_weight * smooth_penalty
+                    scores_neg = scores_neg + self.smoothness_weight * (1.0 - r2).clamp(min=0.0).sum(dim=-1)
 
-            return scores_neg
+                return scores_neg
 
-        console = self.logger._console_output_enabled
+            return _objective, D_exp
 
-        opt = self.engine.run_acquisition_gradient(
-            _joint_objective,
-            bounds,
-            x0=x0,
-            label=f"Trajectory (D={D_static + D_sched}, V={total_dims})",
-            show_progress=console,
-        )
-        best_x = opt.best_x if opt.best_x is not None else x0
-        self.last_baseline_nfev += opt.nfev
+        max_rounds = max(1, self.engine.gradient_n_iters // max(n, 1))
+        total_iters = 0
 
-        # Decode best_x back into per-experiment static + schedule arrays.
-        for i in range(n):
-            off = exp_offsets[i]
-            L_i = per_exp_L[i]
-            state.static_norms[i] = best_x[off:off + D_static].copy()
-            state.schedule_norms[i] = best_x[
-                off + D_static:off + D_static + L_i * D_sched
-            ].reshape(L_i, D_sched).copy()
+        for round_idx in range(max_rounds):
+            improved_this_round = False
+            for exp_idx in range(n):
+                L_i = per_exp_L[exp_idx]
+                fixed_rows = _build_fixed_rows(exp_idx)
+                objective, D_exp = _make_per_exp_objective(exp_idx, fixed_rows)
+
+                # Bounds for this experiment
+                bounds_i: list[tuple[float, float]] = []
+                for si in range(D_static):
+                    c = float(state.static_norms[exp_idx, si])
+                    bounds_i.append((max(0.0, c - _STATIC_DRIFT_FRAC), min(1.0, c + _STATIC_DRIFT_FRAC)))
+                for _k in range(L_i):
+                    for _si in range(D_sched):
+                        bounds_i.append((0.0, 1.0))
+
+                # Warm start
+                x0_i = np.zeros(D_exp)
+                x0_i[:D_static] = state.static_norms[exp_idx]
+                x0_i[D_static:] = state.schedule_norms[exp_idx].ravel()
+
+                opt = self.engine.run_acquisition_gradient(
+                    objective, bounds_i, x0=x0_i,
+                    label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
+                    show_progress=console,
+                    n_starts=1,
+                )
+                total_iters += len(opt.convergence_history)
+
+                if opt.best_x is not None:
+                    new_static = opt.best_x[:D_static]
+                    new_sched = opt.best_x[D_static:].reshape(L_i, D_sched)
+                    if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
+                       not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
+                        improved_this_round = True
+                    state.static_norms[exp_idx] = new_static.copy()
+                    state.schedule_norms[exp_idx] = new_sched.copy()
+
+            if not improved_this_round:
+                break
+
+        self.last_baseline_nfev += total_iters
+        self.convergence_history["Trajectory"] = []
+
 
 
     def _decode_trajectory_specs(
