@@ -247,17 +247,14 @@ class OptimizationEngine:
                         bar.step(obj=best_now)
                 z_movement = float((z.detach() - z_before).abs().max().item())
                 self.logger.info(f"Adam total z movement (max): {z_movement:.6f}")
-            else:  # lbfgs
-                optimizer = torch.optim.LBFGS(
-                    [z], lr=lr, max_iter=n_iters, line_search_fn="strong_wolfe",
-                    tolerance_grad=0, tolerance_change=0,
-                )
+            else:  # lbfgs with restarts
                 last_vals: list[torch.Tensor] = []
                 _iter_count = [0]
                 _best_obj: list[float] = [float("inf")]
+                _iters_remaining = [n_iters]
 
                 def _closure() -> torch.Tensor:
-                    optimizer.zero_grad()
+                    optimizer.zero_grad()  # type: ignore[has-type]
                     vals = _eval_obj(z)
                     last_vals.clear()
                     last_vals.append(vals.detach())
@@ -275,7 +272,18 @@ class OptimizationEngine:
                             bar.step(i=_iter_count[0], obj=cur)
                     return loss
 
-                optimizer.step(_closure)
+                while _iters_remaining[0] > 0:
+                    prev_count = _iter_count[0]
+                    optimizer = torch.optim.LBFGS(
+                        [z], lr=lr, max_iter=_iters_remaining[0],
+                        line_search_fn="strong_wolfe",
+                        tolerance_grad=0, tolerance_change=0,
+                    )
+                    optimizer.step(_closure)
+                    steps_taken = _iter_count[0] - prev_count
+                    _iters_remaining[0] -= max(steps_taken, 1)
+                    if steps_taken == 0:
+                        break
                 if not history and last_vals:
                     history.append(float(last_vals[0].min().item()))
 
