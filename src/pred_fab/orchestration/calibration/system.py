@@ -1396,6 +1396,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     penalty = penalty + (excess ** 2).sum(dim=(1, 2))
                 scores_neg = scores_neg + 10.0 * penalty
 
+            # R²-based smoothness: penalise zig-zagging by rewarding linear trends.
+            if D_sched > 0:
+                smooth_penalty = torch.zeros(S, dtype=full.dtype)
+                for traj in traj_blocks:
+                    L_i = traj.shape[1]
+                    if L_i <= 2:
+                        continue
+                    # Linear regression per sched param: t = 0..L-1
+                    t = torch.arange(L_i, dtype=full.dtype)
+                    t_mean = t.mean()
+                    t_var = ((t - t_mean) ** 2).sum()
+                    y = traj  # (S, L_i, D_sched)
+                    y_mean = y.mean(dim=1, keepdim=True)
+                    ss_tot = ((y - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
+                    cov = ((t[None, :, None] - t_mean) * (y - y_mean)).sum(dim=1)
+                    slope = cov / t_var.clamp(min=1e-12)
+                    y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
+                    ss_res = ((y - y_hat) ** 2).sum(dim=1)  # (S, D_sched)
+                    r2 = 1.0 - ss_res / ss_tot.clamp(min=1e-12)
+                    smooth_penalty = smooth_penalty + (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+                scores_neg = scores_neg + 0.05 * smooth_penalty
+
             return scores_neg
 
         console = self.logger._console_output_enabled
