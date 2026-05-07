@@ -33,8 +33,8 @@ SIGMA_MIN: float = 0.03
 under any finite probe budget and the evidence model becomes over-confident about
 any single point."""
 
-SIGMA_DEFAULT: float = 0.05
-"""Default σ when no override is provided."""
+RADIUS_DEFAULT: float = 0.05
+"""Default kernel radius in normalised [0,1] space. σ = radius × √D."""
 
 
 @dataclass
@@ -79,7 +79,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Per-model evidence state. Gaussian density kernel; integrated-objective acquisition.
         self._model_kdes: dict[int, _ModelKDE] = {}
         self._n_exp: int = 0
-        self._sigma: float = SIGMA_DEFAULT
+        self._radius: float = RADIUS_DEFAULT
 
         # When True, evidence/KDE bypasses model.encode() and operates in raw
         # normalised input space. Auto-toggled by agent.baseline_step() so the
@@ -527,7 +527,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             total_w = sum(k.weight for k in self._model_kdes.values())
             self.logger.info(
                 f"Evidence model: {len(self._model_kdes)} models from {n_exp} experiments "
-                f"(σ={self._sigma}, estimator={self._estimator_config.type}, total_weight={total_w:.2f})."
+                f"(radius={self._radius}, estimator={self._estimator_config.type}, total_weight={total_w:.2f})."
             )
 
     def fit_empty_kde(self, datamodule: DataModule, target_n: int = 1) -> None:
@@ -595,12 +595,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"Empty evidence initialized for {len(self._model_kdes)} models "
-            f"(σ={self._sigma}, estimator={self._estimator_config.type})."
+            f"(radius={self._radius}, estimator={self._estimator_config.type})."
         )
 
     def _resolve_sigma(self, n_dims: int = 1) -> float:
-        """Active σ scaled by √D, clamped to SIGMA_MIN."""
-        sigma = float(self._sigma) * (n_dims ** 0.5)
+        """σ = radius × √D, clamped to SIGMA_MIN."""
+        sigma = float(self._radius) * (n_dims ** 0.5)
         if sigma < SIGMA_MIN:
             self.logger.warning(
                 f"σ={sigma:.4f} below floor; clamping to SIGMA_MIN={SIGMA_MIN}."
@@ -610,17 +610,20 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     def configure_exploration(
         self,
+        radius: float | None = None,
         sigma: float | None = None,
     ) -> None:
-        """Configure σ (kernel bandwidth) for the evidence objective."""
-        if sigma is not None:
-            self._sigma = float(sigma)
+        """Configure kernel radius (σ = radius × √D)."""
+        if radius is not None:
+            self._radius = float(radius)
+        elif sigma is not None:
+            self._radius = float(sigma)
 
         if self._model_kdes:
             for kde in self._model_kdes.values():
                 kde.sigma = self._resolve_sigma(kde.n_active_dims)
             self.logger.info(
-                f"Evidence model updated: σ_base={self._sigma}, "
+                f"Evidence model updated: radius={self._radius}, "
                 f"{len(self._model_kdes)} models."
             )
 
