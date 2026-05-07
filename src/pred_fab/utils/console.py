@@ -46,6 +46,7 @@ class ProgressBar:
         self._max = max_iter
         self._len = bar_len
         self._i = 0
+        self._prev_obj: float | None = None
 
     def step(self, i: int | None = None, obj: float | None = None) -> None:
         """Advance by one (or jump to ``i``) and redraw."""
@@ -53,8 +54,14 @@ class ProgressBar:
         self._i = (self._i + 1) if i is None else i
         filled = int(self._len * min(self._i / self._max, 1.0))
         bar = "\u2588" * filled + "\u2591" * (self._len - filled)
-        obj_str = f"  obj={obj:.3f}" if obj is not None else ""
-        sys.stdout.write(f"\r  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{obj_str}{_R}            ")
+        if obj is not None:
+            improved = self._prev_obj is not None and obj < self._prev_obj - 1e-15
+            color = _G if improved else _D
+            obj_str = f"  {color}obj={obj:.3f}{_R}"
+            self._prev_obj = obj
+        else:
+            obj_str = ""
+        sys.stdout.write(f"\r  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{_R}{obj_str}            ")
         sys.stdout.flush()
 
     def finish(self, nfev: int | None = None, suffix: str = "") -> None:
