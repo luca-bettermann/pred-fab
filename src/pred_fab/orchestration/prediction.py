@@ -759,9 +759,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not input_indices:
             return X_norm_batch.index_select(-1, active_idx)
         input_idx_t = torch.tensor(input_indices, dtype=torch.long)
-        X_model = X_norm_batch.index_select(-1, input_idx_t).to(dtype=torch.float32)
         if self._bypass_encoder:
-            return X_model.index_select(-1, active_idx)
+            return X_norm_batch.index_select(-1, input_idx_t).index_select(-1, active_idx)
+        X_model = X_norm_batch.index_select(-1, input_idx_t).to(dtype=torch.float32)
         z_t = model.encode(X_model, gradient_pass=True)
         return z_t.index_select(-1, active_idx)
 
