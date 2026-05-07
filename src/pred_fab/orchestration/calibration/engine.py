@@ -47,7 +47,7 @@ class OptimizationEngine:
         # fraction of initial objective for improvement threshold.
         self.convergence_window_frac: float = 0.1   # 10% of maxiter
         self.convergence_eps_frac: float = 0.001     # 0.1% of initial objective
-        self.gradient_method: str = "lbfgs"  # "lbfgs" | "adam"
+        self.gradient_method: str = "adam"  # "adam" | "lbfgs"
 
         # Smart-init parameters (BoTorch gen_batch_initial_conditions
         # pattern). raw_samples Sobol points are batch-evaluated, top-K selected via
