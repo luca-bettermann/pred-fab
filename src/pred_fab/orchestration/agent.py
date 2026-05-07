@@ -715,6 +715,9 @@ class PfabAgent:
         lr: float | None = None,
         convergence_window: float | None = None,
         convergence_eps: float | None = None,
+        gradient_method: str | None = None,
+        raw_samples: int | None = None,
+        init_eta: float | None = None,
         baseline_radius_multiplier: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters.
@@ -739,6 +742,12 @@ class PfabAgent:
             cal.engine.convergence_window_frac = convergence_window
         if convergence_eps is not None:
             cal.engine.convergence_eps_frac = convergence_eps
+        if gradient_method is not None:
+            cal.engine.gradient_method = gradient_method
+        if raw_samples is not None:
+            cal.engine.gradient_raw_samples = raw_samples
+        if init_eta is not None:
+            cal.engine.gradient_init_eta = init_eta
         if baseline_radius_multiplier is not None:
             self._baseline_radius_multiplier = baseline_radius_multiplier
 
