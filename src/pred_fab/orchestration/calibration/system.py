@@ -117,6 +117,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points: list[dict[str, Any]] | None = None
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
+        self.trajectory_locked_static: set[str] = set()
 
         # Set ordered weights
         self.schema = schema
@@ -902,10 +903,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             if sched_params_list:
                 # Continuous static params eligible for schedule-phase
-                # drift refinement (excludes integer / domain-axis / sched).
+                # drift refinement (excludes integer / domain-axis / sched /
+                # params that derive trajectory dimensions).
+                locked = sched_set | self.trajectory_locked_static
                 static_params_list = [
                     (code, lo, hi) for code, lo, hi in continuous_params
-                    if code not in sched_set
+                    if code not in locked
                 ]
                 specs = self._phase3_trajectory(
                     n, flat_specs, sched_params_list, per_exp_L,
