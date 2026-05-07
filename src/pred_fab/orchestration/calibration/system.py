@@ -1154,6 +1154,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     show_progress=console,
                 )
                 self.convergence_history[refine_label] = refine_opt.convergence_history
+                self.logger.info(
+                    f"Refine: DE score={opt.score:.6f}, refine score={refine_opt.score:.6f}, "
+                    f"accepted={refine_opt.best_x is not None and refine_opt.score >= opt.score}"
+                )
                 if refine_opt.best_x is not None and refine_opt.score >= opt.score:
                     opt = refine_opt
         if not hasattr(self, 'last_baseline_nfev'):
