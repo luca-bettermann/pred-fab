@@ -381,6 +381,11 @@ class OptimizationEngine:
         f = _eval_pop(X)
         nfev = int(N_pop)
 
+        self.logger.info(
+            f"DE init pop: best={float(f.min()):.6f}  worst={float(f.max()):.6f}  "
+            f"std={float(f.std()):.6f}  N_pop={N_pop}"
+        )
+
         bar = ProgressBar(label, max_iter=maxiter) if show_progress else None
         history: list[float] = []
         best_so_far = float(f.min().item())
