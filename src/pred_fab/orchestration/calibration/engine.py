@@ -246,6 +246,9 @@ class OptimizationEngine:
                     last_vals.append(vals.detach())
                     loss = vals.sum()
                     loss.backward()
+                    grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
+                    if _iter_count[0] == 0:
+                        self.logger.info(f"LBFGS grad norm after first eval: {grad_norm:.2e}")
                     cur = float(vals.detach().min().item())
                     if _iter_count[0] == 0:
                         _best_loss[0] = cur
