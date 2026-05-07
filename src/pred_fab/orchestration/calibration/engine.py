@@ -43,10 +43,10 @@ class OptimizationEngine:
         self.gradient_n_iters: int = 100
         self.gradient_lr: float = 0.05
 
-        # Unified convergence: fraction of maxiter for stagnation window,
-        # fraction of initial objective for improvement threshold.
+        # Convergence: stagnation window as fraction of maxiter,
+        # eps as fraction of initial objective (very low default = any real improvement counts).
         self.convergence_window_frac: float = 0.1   # 10% of maxiter
-        self.convergence_eps_frac: float = 0.001     # 0.1% of initial objective
+        self.convergence_eps_frac: float = 1e-6      # 0.0001% of initial objective
         self.gradient_method: str = "adam"  # "adam" | "lbfgs"
 
         # Smart-init parameters (BoTorch gen_batch_initial_conditions
@@ -380,7 +380,6 @@ class OptimizationEngine:
         best_at_last_check = best_so_far
         gens_no_improve = 0
         _window = max(1, int(maxiter * self.convergence_window_frac))
-        _eps = abs(best_so_far) * self.convergence_eps_frac if abs(best_so_far) > 1e-15 else 1e-12
         recombination = 0.7
         iter_count = 0
 
@@ -439,6 +438,7 @@ class OptimizationEngine:
                 if bar:
                     bar.step(obj=best_so_far)
 
+                _eps = abs(best_so_far) * self.convergence_eps_frac if abs(best_so_far) > 1e-15 else 1e-15
                 if best_so_far < best_at_last_check - _eps:
                     best_at_last_check = best_so_far
                     gens_no_improve = 0

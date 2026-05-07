@@ -720,9 +720,8 @@ class PfabAgent:
         """Set optimiser tuning parameters.
 
         ``de_maxiter`` / ``de_popsize`` control the global DE phase;
-        ``n_starts`` / ``n_iters`` / ``lr`` control the local LBFGS phase.
-        ``convergence_window`` (fraction of maxiter) and ``convergence_eps``
-        (fraction of initial objective) apply to both.
+        ``n_starts`` / ``n_iters`` / ``lr`` control the local phase.
+        ``convergence_window`` / ``convergence_eps`` control early stopping.
         """
         self._assert_initialized()
         cal = self.calibration_system
