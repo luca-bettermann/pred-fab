@@ -848,7 +848,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 n, numeric_params, integer_params, int_set, int_ranges_map,
                 init_norm, cat_codes, cat_assignments,
                 structural_values=None,
-                label=f"Global (D={len(numeric_params)})", init_evidence=True,
+                label=f"Global (D={len(numeric_params)}, V={n * len(numeric_params)})", init_evidence=True,
             )
         else:
             # No numeric params anywhere — fall back to centre-of-bounds + cats.
@@ -1096,11 +1096,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         init_pop = space.build_init_population(self.engine.rng, merged_init)
 
-        smart_maxiter = self.engine.smart_maxiter(space.total_vars)
-
         self.logger.info(
             f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
-            f"D_sched=0, total_vars={space.total_vars}, maxiter={smart_maxiter}"
+            f"D_sched=0, total_vars={space.total_vars}, maxiter={self.engine.de_maxiter}"
         )
 
         # Gradient path when the tensor evidence backend is wired + no integer
@@ -1137,7 +1135,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             opt = self.engine._run_de(
                 _acquisition_batch_objective_vec, space.bounds, init_pop=init_pop,
                 integrality=space.integrality, label=label, show_progress=console,
-                maxiter=smart_maxiter, vectorized=True,
+                maxiter=self.engine.de_maxiter, vectorized=True,
             )
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
