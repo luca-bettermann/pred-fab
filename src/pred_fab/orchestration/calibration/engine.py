@@ -41,13 +41,12 @@ class OptimizationEngine:
         # Local (LBFGS) optimizer parameters.
         self.gradient_n_starts: int = 4
         self.gradient_n_iters: int = 100
-        self.gradient_lr: float = 0.05
+        self.gradient_lr: float = 1.0
 
-        # Convergence: stagnation window as fraction of maxiter,
-        # eps as fraction of initial objective (very low default = any real improvement counts).
+        # Convergence: stagnation window as fraction of maxiter.
         self.convergence_window_frac: float = 0.1   # 10% of maxiter
-        self.convergence_eps_frac: float = 1e-6      # 0.0001% of initial objective
-        self.gradient_method: str = "adam"  # "adam" | "lbfgs"
+        self.convergence_eps_frac: float = 1e-6
+        self.gradient_method: str = "sgd"  # "sgd" | "adam" | "lbfgs"
 
         # Smart-init parameters (BoTorch gen_batch_initial_conditions
         # pattern). raw_samples Sobol points are batch-evaluated, top-K selected via
@@ -122,7 +121,7 @@ class OptimizationEngine:
         n_iters = n_iters if n_iters is not None else self.gradient_n_iters
         lr = lr if lr is not None else self.gradient_lr
         method = (method or self.gradient_method).lower()
-        if method not in ("adam", "lbfgs"):
+        if method not in ("adam", "lbfgs", "sgd"):
             raise ValueError(f"unknown gradient method: {method!r}")
 
         D = len(bounds)
@@ -212,7 +211,25 @@ class OptimizationEngine:
             return vals
 
         with profiler.section("engine.run_acquisition_gradient"):
-            if method == "adam":
+            if method == "sgd":
+                z_before = z.detach().clone()
+                optimizer = torch.optim.SGD([z], lr=lr)
+                for _it in range(n_iters):
+                    optimizer.zero_grad()
+                    vals = _eval_obj(z)
+                    loss = vals.sum()
+                    loss.backward()
+                    if _it == 0:
+                        grad_norm = float(z.grad.abs().max().item()) if z.grad is not None else 0.0
+                        self.logger.info(f"SGD grad norm after first eval: {grad_norm:.2e}")
+                    optimizer.step()
+                    best_now = float(vals.detach().min().item())
+                    history.append(best_now)
+                    if bar:
+                        bar.step(obj=best_now)
+                z_movement = float((z.detach() - z_before).abs().max().item())
+                self.logger.info(f"SGD total z movement (max): {z_movement:.6f}")
+            elif method == "adam":
                 z_before = z.detach().clone()
                 optimizer = torch.optim.Adam([z], lr=lr)
                 for _it in range(n_iters):
