@@ -34,21 +34,19 @@ class OptimizationEngine:
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
-        # DE optimizer parameters (population-based, used for integer phase).
-        # Convergence is governed by "no improvement in K generations" via the
-        # callback heuristic — same as the prior scipy wrapper.
+        # Global (DE) optimizer parameters.
         self.de_maxiter: int = 1000
         self.de_popsize: int = 64
-        self.de_no_improve_window: int = 50  # generations without improvement → halt
-        self.de_improvement_eps: float = 1e-10  # min Δbest to count as an improvement
 
-        # GRADIENT optimizer parameters (autograd multi-start with sigmoid bound reparam).
-        # LBFGS is the default — quasi-Newton with line search; converges in
-        # ~5-30 iterations on the smooth, deterministic acquisition surface
-        # we have. Adam is available for noisier/flatter surfaces.
+        # Local (LBFGS) optimizer parameters.
         self.gradient_n_starts: int = 4
         self.gradient_n_iters: int = 100
         self.gradient_lr: float = 0.05
+
+        # Unified convergence: fraction of maxiter for stagnation window,
+        # fraction of initial objective for improvement threshold.
+        self.convergence_window_frac: float = 0.1   # 10% of maxiter
+        self.convergence_eps_frac: float = 0.001     # 0.1% of initial objective
         self.gradient_method: str = "lbfgs"  # "lbfgs" | "adam"
 
         # Smart-init parameters (BoTorch gen_batch_initial_conditions
@@ -58,16 +56,6 @@ class OptimizationEngine:
         self.gradient_raw_samples: int = 256
         self.gradient_init_eta: float = 1.0
 
-    def smart_maxiter(self, D: int) -> int:
-        """Per-call DE maxiter scaled with decision-variable count, capped by
-        the configured global ceiling and floored at 5 (scipy DE requirement).
-
-        Same rule across baseline / exploration / inference / per-exp schedule
-        — single source of truth so the X/cap ratio in DE progress bars is
-        consistent across all phases. Override behaviour by setting
-        ``self.de_maxiter`` (capping ceiling) at agent-config time.
-        """
-        return min(max(40, 15 * max(D, 1)), max(self.de_maxiter, 5))
 
     def run_acquisition_vectorized(
         self,
@@ -94,7 +82,7 @@ class OptimizationEngine:
             bounds,
             label=label,
             show_progress=show_progress,
-            maxiter=self.smart_maxiter(len(bounds)),
+            maxiter=self.de_maxiter,
             vectorized=True,
         )
 
@@ -242,7 +230,13 @@ class OptimizationEngine:
                 )
                 last_vals: list[torch.Tensor] = []
                 _iter_count = [0]
-                _prev_loss: list[float] = [float("inf")]
+                _best_loss: list[float] = [float("inf")]
+                _stagnation = [0]
+                _lbfgs_window = max(1, int(n_iters * self.convergence_window_frac))
+                _lbfgs_eps: list[float] = [1e-12]  # updated after first eval
+
+                class _ConvergedEarly(Exception):
+                    pass
 
                 def _closure() -> torch.Tensor:
                     optimizer.zero_grad()
@@ -252,17 +246,30 @@ class OptimizationEngine:
                     loss = vals.sum()
                     loss.backward()
                     cur = float(vals.detach().min().item())
-                    # Only count as a new iteration when loss improves or first call
-                    # (line search re-evaluations don't advance the iteration counter).
-                    if cur < _prev_loss[0] - 1e-12 or _iter_count[0] == 0:
+                    if _iter_count[0] == 0:
+                        _best_loss[0] = cur
+                        _lbfgs_eps[0] = abs(cur) * self.convergence_eps_frac if abs(cur) > 1e-15 else 1e-12
+                        _iter_count[0] = 1
+                        history.append(cur)
+                        if bar:
+                            bar.step(i=1, obj=cur)
+                    elif cur < _best_loss[0] - _lbfgs_eps[0]:
+                        _best_loss[0] = cur
+                        _stagnation[0] = 0
                         _iter_count[0] += 1
-                        _prev_loss[0] = cur
                         history.append(cur)
                         if bar:
                             bar.step(i=_iter_count[0], obj=cur)
+                    else:
+                        _stagnation[0] += 1
+                        if _stagnation[0] >= _lbfgs_window:
+                            raise _ConvergedEarly()
                     return loss
 
-                optimizer.step(_closure)
+                try:
+                    optimizer.step(_closure)
+                except _ConvergedEarly:
+                    pass
                 if not history and last_vals:
                     history.append(float(last_vals[0].min().item()))
 
@@ -298,8 +305,6 @@ class OptimizationEngine:
         maxiter: int | None = None,
         popsize: int | None = None,
         vectorized: bool = False,
-        no_improve_window: int | None = None,
-        improvement_eps: float | None = None,
     ) -> _OptResult:
         """Torch-native differential evolution.
 
@@ -391,8 +396,8 @@ class OptimizationEngine:
         best_so_far = float(f.min().item())
         best_at_last_check = best_so_far
         gens_no_improve = 0
-        _eps = improvement_eps if improvement_eps is not None else self.de_improvement_eps
-        _window = no_improve_window if no_improve_window is not None else self.de_no_improve_window
+        _window = max(1, int(maxiter * self.convergence_window_frac))
+        _eps = abs(best_so_far) * self.convergence_eps_frac if abs(best_so_far) > 1e-15 else 1e-12
         recombination = 0.7
         iter_count = 0
 

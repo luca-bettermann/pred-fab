@@ -190,21 +190,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def de_popsize(self, value: int) -> None:
         self.engine.de_popsize = value
 
-    @property
-    def de_no_improve_window(self) -> int:
-        return self.engine.de_no_improve_window
-
-    @de_no_improve_window.setter
-    def de_no_improve_window(self, value: int) -> None:
-        self.engine.de_no_improve_window = value
-
-    @property
-    def de_improvement_eps(self) -> float:
-        return self.engine.de_improvement_eps
-
-    @de_improvement_eps.setter
-    def de_improvement_eps(self, value: float) -> None:
-        self.engine.de_improvement_eps = value
 
 
     # ------------------------------------------------------------------
@@ -2111,7 +2096,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             # Phase-decomposed acquisition (Domain → Process). Splitting bounds
             # the per-phase DE budget at O(D_domain²) + O(D_process²) instead
-            # of O(D_total²) under smart_maxiter, which empirically times out
+            # of O(D_total²) under de_maxiter, which empirically times out
             # at >5 minutes for joint regimes at typical N. Codes whose bounds
             # collapse (trust-region pin, fixed_params, schema constants) drop
             # out of both buckets; either bucket may be empty without breaking
