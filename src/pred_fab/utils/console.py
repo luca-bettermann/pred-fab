@@ -48,13 +48,14 @@ class ProgressBar:
         self._i = 0
 
     def step(self, i: int | None = None, obj: float | None = None) -> None:
-        """Advance by one (or jump to ``i``) and redraw. Optional ``obj`` is
-        the current best objective value, displayed live (3 decimals)."""
+        """Advance by one (or jump to ``i``) and redraw."""
+        import sys
         self._i = (self._i + 1) if i is None else i
         filled = int(self._len * min(self._i / self._max, 1.0))
         bar = "\u2588" * filled + "\u2591" * (self._len - filled)
         obj_str = f"  obj={obj:.3f}" if obj is not None else ""
-        print(f"  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{obj_str}{_R}", end="\r", flush=True)
+        sys.stdout.write(f"\r  {self._label:<14s} [{bar}] {_D}{self._i}/{self._max}{obj_str}{_R}            ")
+        sys.stdout.flush()
 
     def finish(self, nfev: int | None = None, suffix: str = "") -> None:
         """Fill the bar completely and print final info."""
