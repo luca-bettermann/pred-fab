@@ -709,17 +709,18 @@ class PfabAgent:
         *,
         de_maxiter: int | None = None,
         de_popsize: int | None = None,
+        de_no_improve_window: int | None = None,
+        de_improvement_eps: float | None = None,
         n_starts: int | None = None,
         n_iters: int | None = None,
         lr: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters.
 
-        ``de_maxiter`` / ``de_popsize`` control the joint global DE phase
-        (Global DE, mixed-integer); ``n_starts`` / ``n_iters`` / ``lr`` control
-        the LBFGS multi-start phases (Refine (continuous) when no
-        trajectory; Trajectory). Backend dispatch is internal —
-        users do not pick DE vs gradient.
+        ``de_maxiter`` / ``de_popsize`` / ``de_no_improve_window`` /
+        ``de_improvement_eps`` control the joint global DE phase;
+        ``n_starts`` / ``n_iters`` / ``lr`` control the LBFGS multi-start
+        phases. Backend dispatch is internal.
         """
         self._assert_initialized()
         cal = self.calibration_system
@@ -727,6 +728,10 @@ class PfabAgent:
             cal.de_maxiter = de_maxiter
         if de_popsize is not None:
             cal.de_popsize = de_popsize
+        if de_no_improve_window is not None:
+            cal.engine.de_no_improve_window = de_no_improve_window
+        if de_improvement_eps is not None:
+            cal.engine.de_improvement_eps = de_improvement_eps
         if n_starts is not None:
             cal.engine.gradient_n_starts = n_starts
         if n_iters is not None:
