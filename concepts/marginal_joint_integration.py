@@ -81,12 +81,17 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
         # Shell radii in current surface colormap
         add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=False,
                             base_color=ZINC_400)
-        # Probes colored by density with minimum visibility floor
+        # Probes — use contrasting color on Greys, cmap-matched otherwise
         pts = c + offsets
-        probe_norm = Normalize(vmin=0, vmax=1)
-        ax.scatter(pts[1:, 0], pts[1:, 1],
-                   c=probe_vis[1:], cmap=cm, norm=probe_norm,
-                   s=MARKERS["probe"].size, alpha=0.8, edgecolors="none", zorder=4)
+        if surface_name == "density":
+            from pred_fab.plotting._style import STEEL_500
+            ax.scatter(pts[1:, 0], pts[1:, 1], c=STEEL_500,
+                       s=MARKERS["probe"].size, alpha=0.7, edgecolors="none", zorder=4)
+        else:
+            probe_norm = Normalize(vmin=0, vmax=1)
+            ax.scatter(pts[1:, 0], pts[1:, 1],
+                       c=probe_vis[1:], cmap=cm, norm=probe_norm,
+                       s=MARKERS["probe"].size, alpha=0.8, edgecolors="none", zorder=4)
         # Centre (red)
         m = MARKERS["sample"]
         ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
@@ -215,7 +220,7 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
 
     # Colorbar snug against the joint plot
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.03)
+    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.05)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
