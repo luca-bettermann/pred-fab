@@ -205,9 +205,12 @@ def test_torch_marginal_joint_both_contribute(kf_estimator):
     combined = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
         index_old, t_centers, t_weights,
     )
+    D = t_centers.shape[2]
+    alpha_m = D / (D + 1)
+    alpha_j = 1.0 / (D + 1)
     np.testing.assert_allclose(
         combined.detach().cpu().numpy(),
-        ((e_marginal + e_joint) * 0.5).detach().cpu().numpy(),
+        (alpha_m * e_marginal + alpha_j * e_joint).detach().cpu().numpy(),
         atol=1e-10,
     )
 

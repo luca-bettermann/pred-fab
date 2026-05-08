@@ -37,9 +37,9 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 # A and B near-identical x (offset slightly for visibility), C separate.
 CENTERS = np.array([
-    [0.28, 0.20],
-    [0.32, 0.75],
-    [0.75, 0.50],
+    [0.25, 0.18],
+    [0.28, 0.82],
+    [0.78, 0.48],
 ])
 LABELS = ["A", "B", "C"]
 SIGMA_VIS = 0.08
@@ -64,13 +64,9 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     """Draw the 2D panel with KernelField probes and projection lines."""
     surf = get_surface(surface_name)
     cm = cmap(surface_name)
-    if surf.bounded:
-        norm = Normalize(vmin=surf.vmin, vmax=surf.vmax)
-    else:
-        norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
+    norm = Normalize(vmin=0, vmax=field_2d.max())
 
-    ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm,
-                alpha=FILL_ALPHA["contour"])
+    ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm)
     ax.contour(xs, xs, field_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
 
     # KernelField probes
@@ -79,18 +75,19 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
 
     probe_d2 = np.sum(offsets ** 2, axis=-1)
     probe_density = np.exp(-probe_d2 / (2 * sigma ** 2))
-    probe_vis = np.clip(probe_density, 0.25, 1.0)  # minimum 25% visibility
+    probe_vis = np.clip(probe_density, 0.4, 1.0)  # minimum 40% visibility
 
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
         # Shell radii in current surface colormap
         add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=False,
                             base_color=ZINC_400)
-        # Probes colored by density with minimum visibility floor
+        # Probes colored by inverted density (outer=dark, inner=light)
         pts = c + offsets
+        probe_inv = 1.0 - probe_vis[1:]
         probe_norm = Normalize(vmin=0, vmax=1)
         ax.scatter(pts[1:, 0], pts[1:, 1],
-                   c=probe_vis[1:], cmap=cm, norm=probe_norm,
-                   s=MARKERS["probe"].size, alpha=0.8, edgecolors="none", zorder=4)
+                   c=probe_inv, cmap=cm, norm=probe_norm,
+                   s=MARKERS["probe"].size + 2, alpha=0.9, edgecolors="none", zorder=4)
         # Centre (red)
         m = MARKERS["sample"]
         ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
@@ -111,7 +108,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
                 alpha=0.5, zorder=1)
         ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
-        _bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
+        _bbox = dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=1.0)
         ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
                 ha="center", va="top", zorder=9, clip_on=False, bbox=_bbox)
         # Horizontal projection to y-axis
@@ -143,7 +140,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
 
     proj_color_x = ZINC_500
     proj_color_y = ZINC_400
-    bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
+    bbox = dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=1.0)
 
     # Y-axis limits: bounded [0,1]; density: shared max so scale differences are visible
     if surf.bounded:
@@ -160,7 +157,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
         curve_norm = curve / y_max if y_max > 0 else curve
         gradient = gradient * curve_norm[None, :]
         ax.imshow(gradient, aspect="auto", origin="lower", extent=extent,
-                  cmap=cm_obj, norm=norm_fill, alpha=0.4, zorder=0)
+                  cmap=cm_obj, norm=norm_fill, alpha=0.7, zorder=0)
         # Mask above the curve
         ax.fill_between(xs, curve, y_max, color="white", zorder=1)
 
@@ -208,23 +205,18 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(2, 4, width_ratios=[1.2, 0.04, 0.08, 1], hspace=0.5, wspace=0.05,
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.15,
                           left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
-    ax_cbar = fig.add_subplot(gs[:, 1])
-    ax_mx = fig.add_subplot(gs[0, 3])
-    ax_my = fig.add_subplot(gs[1, 3])
+    ax_mx = fig.add_subplot(gs[0, 1])
+    ax_my = fig.add_subplot(gs[1, 1])
 
     cm, norm = _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
     subplot_label(ax_joint, title_2d)
 
-    # Colorbar tight against the joint plot
+    # Colorbar snug against the joint plot
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, cax=ax_cbar)
-    style_colorbar(cbar)
-
-    # Blank spacer column
-    fig.add_subplot(gs[:, 2]).set_visible(False)
+    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.06)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
@@ -251,9 +243,9 @@ def main():
     evidence_x = rho_x / (1.0 + rho_x)
     evidence_y = rho_y / (1.0 + rho_y)
 
-    gain_2d = 1.0 / (1.0 + rho_2d)
-    gain_x = 1.0 / (1.0 + rho_x)
-    gain_y = 1.0 / (1.0 + rho_y)
+    gain_2d = 1.0 / (1.0 + evidence_2d)
+    gain_x = 1.0 / (1.0 + evidence_x)
+    gain_y = 1.0 / (1.0 + evidence_y)
 
     _make_figure("density",
                  "Joint density  ρ(x, y)", "Marginal density  ρ(x)", "Marginal density  ρ(y)",
@@ -265,10 +257,85 @@ def main():
                  evidence_2d, evidence_x, evidence_y,
                  "marginal_joint_evidence.png")
 
-    _make_figure("evidence_gain",
-                 "Joint evidence gain  1/(1+ρ)", "Marginal evidence gain  1/(1+ρ_x)", "Marginal evidence gain  1/(1+ρ_y)",
-                 gain_2d, gain_x, gain_y,
-                 "marginal_joint_evidence_gain.png")
+    # Figure 3: Evidence gain topology — acquisition surface with Z_new
+    _figure_acquisition(xs, xx, yy, gain_2d, sigma)
+
+
+def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
+    """Evidence gain topology computed via real KernelField ΔE."""
+    apply_style()
+    import torch
+    from pred_fab.orchestration.evidence import KernelIndex, KernelFieldEstimator
+
+    kf = KernelFieldEstimator()
+    index_old = KernelIndex(CENTERS, np.ones(len(CENTERS)), sigma)
+
+    # Compute E_old via same ANOVA path (existing kernels as "new" to empty index)
+    empty_index = KernelIndex(np.empty((0, 2)), np.empty(0), sigma)
+    old_centers_t = index_old.centers.unsqueeze(0).double()
+    old_weights_t = index_old.weights.unsqueeze(0).double()
+    E_old = float(kf.integrated_evidence_perturbed_batched_joint_torch(
+        empty_index, old_centers_t, old_weights_t,
+    )[0].item())
+
+    # Compute E(old ∪ new) at each grid point → ΔE = E(old ∪ new) - E_old
+    res = 80  # higher resolution for smooth contours
+    xs_gain = np.linspace(0, 1, res)
+    gain_real = np.zeros((res, res))
+    for j in range(res):
+        row_pts = np.stack([xs_gain, np.full(res, xs_gain[j])], axis=-1)
+        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
+        weights_t = torch.ones(res, 1, dtype=torch.float64)
+        e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
+            index_old, row_pts_t, weights_t,
+        )
+        gain_real[j, :] = (e_new.detach().cpu().numpy() - E_old)
+
+    cm = cmap("evidence_gain")
+    norm = Normalize(vmin=gain_real.min(), vmax=gain_real.max())
+
+    # Find optimal Z_new from real ΔE
+    idx_flat = np.argmax(gain_real)
+    iy, ix = np.unravel_index(idx_flat, gain_real.shape)
+    z_new = np.array([xs_gain[ix], xs_gain[iy]])
+
+    fig, ax = plt.subplots(figsize=(6, 5.5))
+    ax.contourf(xs_gain, xs_gain, gain_real, levels=24, cmap=cm, norm=norm)
+    ax.contour(xs_gain, xs_gain, gain_real, levels=12, colors=["white"], linewidths=0.3, alpha=0.4)
+
+    # Existing points
+    m = MARKERS["sample"]
+    for c, lab in zip(CENTERS, LABELS):
+        ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
+                   linewidth=m.linewidth, zorder=10)
+        ax.text(c[0] + 0.03, c[1] + 0.03, lab, fontsize=FONT["annotation"],
+                color="white", fontweight="bold", zorder=11)
+
+    # Proposed Z_new
+    from pred_fab.plotting._style import ACCENT_YELLOW
+    ax.scatter([z_new[0]], [z_new[1]], c=ACCENT_YELLOW, s=80,
+               marker="X", edgecolors="white", linewidth=1.2, zorder=12)
+    ax.text(z_new[0] + 0.03, z_new[1] + 0.03, "Z_new", fontsize=FONT["annotation"],
+            color=ACCENT_YELLOW, fontweight="bold", zorder=13)
+
+    # Colorbar
+    from matplotlib.cm import ScalarMappable
+    sm = ScalarMappable(norm=norm, cmap=cm)
+    cbar = fig.colorbar(sm, ax=ax, location="right", shrink=0.85, pad=0.06)
+    style_colorbar(cbar)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
+    ax.set_ylabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
+    subplot_label(ax, "Evidence gain  ΔE")
+    clean_spines(ax)
+
+    path = PLOTS_DIR / "marginal_joint_evidence_gain.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {path}")
 
 
 if __name__ == "__main__":

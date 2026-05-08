@@ -795,14 +795,26 @@ class PredictionSystem(BaseOrchestrationSystem):
             ).to(dtype=dtype)  # (S, n_active)
 
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
-            E_old = self._estimator.integrated_evidence(index_old)
+
+            # Compute E_old via the same ANOVA torch path (empty index + old as "new")
+            if index_old.is_empty:
+                E_old = 0.0
+            else:
+                empty_index = self._kernel_index(
+                    np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
+                )
+                old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)  # (1, n_old, D)
+                old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)  # (1, n_old)
+                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                    empty_index, old_centers_t, old_weights_t,
+                )[0].item())
 
             E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
                 index_old,
                 new_centers_z_active.unsqueeze(1),
                 weights_S.unsqueeze(1),
             )
-            out = out + float(kde.weight) * (E_new_per_s - float(E_old))
+            out = out + float(kde.weight) * (E_new_per_s - E_old)
             total_w += float(kde.weight)
 
         return out / total_w if total_w > 0 else out
@@ -838,12 +850,24 @@ class PredictionSystem(BaseOrchestrationSystem):
             new_centers_SL = new_centers_flat.reshape(S, L, -1)
 
             index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
-            E_old = self._estimator.integrated_evidence(index_old)
+
+            # Compute E_old via the same ANOVA torch path
+            if index_old.is_empty:
+                E_old = 0.0
+            else:
+                empty_index = self._kernel_index(
+                    np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
+                )
+                old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)
+                old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)
+                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                    empty_index, old_centers_t, old_weights_t,
+                )[0].item())
 
             E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
                 index_old, new_centers_SL, weights_SL,
             )
-            out = out + float(kde.weight) * (E_new_per_s - float(E_old))
+            out = out + float(kde.weight) * (E_new_per_s - E_old)
             total_w += float(kde.weight)
 
         return out / total_w if total_w > 0 else out
