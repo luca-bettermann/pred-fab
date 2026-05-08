@@ -205,7 +205,7 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.25,
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.35,
                           left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_mx = fig.add_subplot(gs[0, 1])
@@ -216,7 +216,7 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
 
     # Colorbar snug against the joint plot
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.05)
+    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.06)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
@@ -321,7 +321,7 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
     # Colorbar
     from matplotlib.cm import ScalarMappable
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, ax=ax, location="right", shrink=0.85, pad=0.03)
+    cbar = fig.colorbar(sm, ax=ax, location="right", shrink=0.85, pad=0.06)
     style_colorbar(cbar)
 
     ax.set_xlim(0, 1)
