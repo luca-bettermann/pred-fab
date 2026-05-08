@@ -192,8 +192,9 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     res = 200
     xs = np.linspace(0, 1, res)
 
-    fig = plt.figure(figsize=(11, 5), constrained_layout=True)
-    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.45, wspace=0.15)
+    fig = plt.figure(figsize=(11, 5))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.5, wspace=0.15,
+                          left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_cbar = fig.add_subplot(gs[:, 1])
     ax_mx = fig.add_subplot(gs[0, 2])
