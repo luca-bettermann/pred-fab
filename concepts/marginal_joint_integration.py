@@ -69,8 +69,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     else:
         norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
 
-    ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm,
-                alpha=FILL_ALPHA["contour"])
+    ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm)
     ax.contour(xs, xs, field_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
 
     # KernelField probes
@@ -111,7 +110,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
                 alpha=0.5, zorder=1)
         ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
-        _bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
+        _bbox = dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=1.0)
         ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
                 ha="center", va="top", zorder=9, clip_on=False, bbox=_bbox)
         # Horizontal projection to y-axis
@@ -143,7 +142,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
 
     proj_color_x = ZINC_500
     proj_color_y = ZINC_400
-    bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
+    bbox = dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=1.0)
 
     # Y-axis limits: bounded [0,1]; density: shared max so scale differences are visible
     if surf.bounded:
@@ -208,23 +207,18 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(2, 4, width_ratios=[1.2, 0.04, 0.08, 1], hspace=0.5, wspace=0.05,
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.25,
                           left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
-    ax_cbar = fig.add_subplot(gs[:, 1])
-    ax_mx = fig.add_subplot(gs[0, 3])
-    ax_my = fig.add_subplot(gs[1, 3])
+    ax_mx = fig.add_subplot(gs[0, 1])
+    ax_my = fig.add_subplot(gs[1, 1])
 
     cm, norm = _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
     subplot_label(ax_joint, title_2d)
 
-    # Colorbar tight against the joint plot
+    # Colorbar snug against the joint plot
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, cax=ax_cbar)
-    style_colorbar(cbar)
-
-    # Blank spacer column
-    fig.add_subplot(gs[:, 2]).set_visible(False)
+    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.85, pad=0.03)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
@@ -251,9 +245,9 @@ def main():
     evidence_x = rho_x / (1.0 + rho_x)
     evidence_y = rho_y / (1.0 + rho_y)
 
-    gain_2d = 1.0 / (1.0 + rho_2d)
-    gain_x = 1.0 / (1.0 + rho_x)
-    gain_y = 1.0 / (1.0 + rho_y)
+    gain_2d = 1.0 / (1.0 + evidence_2d)
+    gain_x = 1.0 / (1.0 + evidence_x)
+    gain_y = 1.0 / (1.0 + evidence_y)
 
     _make_figure("density",
                  "Joint density  ρ(x, y)", "Marginal density  ρ(x)", "Marginal density  ρ(y)",
@@ -266,7 +260,7 @@ def main():
                  "marginal_joint_evidence.png")
 
     _make_figure("evidence_gain",
-                 "Joint evidence gain  1/(1+ρ)", "Marginal evidence gain  1/(1+ρ_x)", "Marginal evidence gain  1/(1+ρ_y)",
+                 "Joint evidence gain  1/(1+E)", "Marginal evidence gain  1/(1+Eₓ)", "Marginal evidence gain  1/(1+Eᵧ)",
                  gain_2d, gain_x, gain_y,
                  "marginal_joint_evidence_gain.png")
 
