@@ -1380,16 +1380,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
                 scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
 
-                # Direction-reversal penalty: penalize adjacent steps that
-                # pull in opposite directions. Each reversal adds a soft
-                # quadratic cost scaled by the objective magnitude.
+                # Smoothness penalties (per sched dimension, objective-relative).
                 if D_sched > 0 and L_i > 2:
+                    obj_scale = scores_neg.detach().abs()
                     diffs = traj[:, 1:, :] - traj[:, :-1, :]  # (S, L_i-1, D_sched)
-                    # Product of consecutive diffs: negative = reversal
+
+                    # Reversal penalty: adjacent steps pulling opposite directions.
                     products = diffs[:, 1:, :] * diffs[:, :-1, :]  # (S, L_i-2, D_sched)
-                    reversals = (-products).clamp(min=0.0)  # only count reversals
-                    reversal_penalty = reversals.sum(dim=(1, 2))
-                    scores_neg = scores_neg + scores_neg.detach().abs() * self.smoothness_weight * reversal_penalty
+                    reversal_penalty = (-products).clamp(min=0.0).sum(dim=(1, 2))
+                    scores_neg = scores_neg + obj_scale * self.smoothness_weight * reversal_penalty
+
+                    # R² penalty: non-linearity per dimension.
+                    t = torch.arange(L_i, dtype=x_S.dtype)
+                    t_mean = t.mean()
+                    t_var = ((t - t_mean) ** 2).sum()
+                    y_mean = traj.mean(dim=1, keepdim=True)
+                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
+                    has_variation = ss_tot > 1e-6
+                    if bool(has_variation.any().item()):
+                        cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
+                        slope = cov / t_var.clamp(min=1e-12)
+                        y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
+                        ss_res = ((traj - y_hat) ** 2).sum(dim=1)
+                        r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
+                        r2_penalty = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+                        scores_neg = scores_neg + obj_scale * self.smoothness_weight * r2_penalty
 
                 return scores_neg
 
