@@ -41,16 +41,15 @@ def _gaussian_field(grid, center, sigma):
     return np.exp(-d2 / (2.0 * sigma ** 2))
 
 
-def _minimal_3d_axes(ax):
-    """Strip 3D to just tick labels — we draw our own back-corner frame."""
+def _tinted_3d_panes(ax):
     for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
         pane.set_facecolor("white")
         pane.set_alpha(0)
-        pane.set_edgecolor("none")
+        pane.set_edgecolor(ZINC_300)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.set_tick_params(colors=ZINC_600, labelsize=7, pad=1)
         axis.label.set_color(ZINC_700)
-        axis.line.set_color("none")
+        axis.line.set_color(ZINC_500)
     ax.grid(False)
 
 
@@ -96,7 +95,7 @@ def main():
     kf_dens_2d = _density_fraction(kf_pts_2d, center_2d, sigma)
     kf_dens_3d = _density_fraction(kf_pts_3d, center_3d, sigma)
 
-    pad = 2.2 * sigma
+    pad = 2.6 * sigma
     lo = 0.5 - pad
     hi = 0.5 + pad
     ticks = [round(0.5 - 2 * sigma, 2), 0.5, round(0.5 + 2 * sigma, 2)]
@@ -113,7 +112,7 @@ def main():
 
     # === 2D panel ===
     ax2 = fig.add_subplot(121)
-    # Angular gap marker + radii labels
+    ax2.contourf(g_x, g_x, bg, levels=18, cmap=cm, norm=norm, alpha=0.18, zorder=0)
     _angular_gap_marker(ax2, center_2d, sigma)
     add_kernel_radii_2d(ax2, center_2d, sigma, DEFAULT_RADII, color_scale=True)
     _radii_labels(ax2, center_2d, sigma, DEFAULT_RADII)
@@ -144,19 +143,16 @@ def main():
                 c=RED, s=42, edgecolors="none",
                 depthshade=False, zorder=10)
 
-    # Back-corner L-frame: z vertical + x horizontal + y horizontal
-    # All meet at (lo, hi, lo) — the back-left-bottom corner for azim=35
-    bc = (lo, hi)  # back corner in x, y
-    ax3.plot([bc[0], bc[0]], [bc[1], bc[1]], [lo, hi],  # z vertical
-             color=ZINC_300, lw=0.8, zorder=0)
-    ax3.plot([bc[0], hi], [bc[1], bc[1]], [lo, lo],     # x along bottom
-             color=ZINC_300, lw=0.8, zorder=0)
-    ax3.plot([bc[0], bc[0]], [lo, bc[1]], [lo, lo],      # y along bottom
-             color=ZINC_300, lw=0.8, zorder=0)
+    pad_3d = 2.2 * sigma
+    lo3 = 0.5 - pad_3d
+    hi3 = 0.5 + pad_3d
+    ax3.set_xlim(lo3, hi3)
+    ax3.set_ylim(lo3, hi3)
+    ax3.set_zlim(lo3, hi3)  # type: ignore[attr-defined]
 
-    ax3.set_xlim(lo, hi)
-    ax3.set_ylim(lo, hi)
-    ax3.set_zlim(lo, hi)  # type: ignore[attr-defined]
+    # Vertical z-spine at the back corner where x and y axes meet
+    ax3.plot([lo3, lo3], [hi3, hi3], [lo3, hi3],  # type: ignore[arg-type]
+             color=ZINC_300, lw=0.8, zorder=0)
     ax3.set_xticks(ticks)
     ax3.set_yticks(ticks)
     ax3.set_zticks(ticks)  # type: ignore[attr-defined]
@@ -164,7 +160,7 @@ def main():
     ax3.set_ylabel("z₂", fontsize=FONT["axis_label"])
     ax3.set_zlabel("z₃", fontsize=FONT["axis_label"])  # type: ignore[attr-defined]
     ax3.view_init(elev=20.0, azim=35.0)
-    _minimal_3d_axes(ax3)
+    _tinted_3d_panes(ax3)
     subplot_label(ax3, f"KernelField 3D  ·  {n_3d} probes  ·  σ = {sigma:g}")
 
     # Shared colorbar
