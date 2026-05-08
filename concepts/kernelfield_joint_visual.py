@@ -143,7 +143,7 @@ def main():
                 c=RED, s=42, edgecolors="none",
                 depthshade=False, zorder=10)
 
-    pad_3d = 1.4 * sigma
+    pad_3d = 1.0 * sigma
     lo3 = 0.5 - pad_3d
     hi3 = 0.5 + pad_3d
     ax3.set_xlim(lo3, hi3)
@@ -159,6 +159,7 @@ def main():
     ax3.set_ylabel("z₂", fontsize=FONT["axis_label"])
     ax3.set_zlabel("z₃", fontsize=FONT["axis_label"])  # type: ignore[attr-defined]
     ax3.view_init(elev=20.0, azim=35.0)
+    ax3.dist = 7  # default is ~10, lower = closer
     _tinted_3d_panes(ax3)
     subplot_label(ax3, f"KernelField 3D  ·  {n_3d} probes  ·  σ = {sigma:g}")
 
