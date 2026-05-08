@@ -257,10 +257,58 @@ def main():
                  evidence_2d, evidence_x, evidence_y,
                  "marginal_joint_evidence.png")
 
-    _make_figure("evidence_gain",
-                 "Joint evidence gain  1/(1+E)", "Marginal evidence gain  1/(1+Eₓ)", "Marginal evidence gain  1/(1+Eᵧ)",
-                 gain_2d, gain_x, gain_y,
-                 "marginal_joint_evidence_gain.png")
+    # Figure 3: Evidence gain topology — acquisition surface with Z_new
+    _figure_acquisition(xs, xx, yy, gain_2d, sigma)
+
+
+def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
+    """Evidence gain topology with existing points and optimal Z_new."""
+    apply_style()
+    cm = cmap("evidence_gain")
+    norm = Normalize(vmin=0, vmax=gain_2d.max())
+
+    # Find optimal placement (argmax of gain)
+    idx_flat = np.argmax(gain_2d)
+    iy, ix = np.unravel_index(idx_flat, gain_2d.shape)
+    z_new = np.array([xs[ix], xs[iy]])
+
+    fig, ax = plt.subplots(figsize=(6, 5.5))
+    ax.contourf(xs, xs, gain_2d, levels=18, cmap=cm, norm=norm)
+    ax.contour(xs, xs, gain_2d, levels=8, colors=["white"], linewidths=0.4, alpha=0.5)
+
+    # Existing points
+    m = MARKERS["sample"]
+    for c, lab in zip(CENTERS, LABELS):
+        ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
+                   linewidth=m.linewidth, zorder=10)
+        ax.text(c[0] + 0.03, c[1] + 0.03, lab, fontsize=FONT["annotation"],
+                color="white", fontweight="bold", zorder=11)
+
+    # Proposed Z_new
+    from pred_fab.plotting._style import ACCENT_YELLOW
+    ax.scatter([z_new[0]], [z_new[1]], c=ACCENT_YELLOW, s=80,
+               marker="X", edgecolors="white", linewidth=1.2, zorder=12)
+    ax.text(z_new[0] + 0.03, z_new[1] + 0.03, "Z_new", fontsize=FONT["annotation"],
+            color=ACCENT_YELLOW, fontweight="bold", zorder=13)
+
+    # Colorbar
+    from matplotlib.cm import ScalarMappable
+    sm = ScalarMappable(norm=norm, cmap=cm)
+    cbar = fig.colorbar(sm, ax=ax, location="right", shrink=0.85, pad=0.03)
+    style_colorbar(cbar)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
+    ax.set_ylabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
+    subplot_label(ax, "Evidence gain  1/(1+E)  —  where to explore next")
+    clean_spines(ax)
+
+    path = PLOTS_DIR / "marginal_joint_evidence_gain.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {path}")
 
 
 if __name__ == "__main__":
