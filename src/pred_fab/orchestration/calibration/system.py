@@ -902,8 +902,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sched_params_list.append((code, lo, hi))
 
             if sched_params_list:
-                # TEST: disable static drift to isolate trajectory behavior
-                static_params_list: list[tuple[str, float, float]] = []
+                locked = sched_set | self.trajectory_locked_static
+                static_params_list = [
+                    (code, lo, hi) for code, lo, hi in continuous_params
+                    if code not in locked
+                ]
                 specs = self._phase3_trajectory(
                     n, flat_specs, sched_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
@@ -1377,24 +1380,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
                 scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
 
-                # R² smoothness (delta bounds replace the old soft delta constraint)
+                # Direction-reversal penalty: penalize adjacent steps that
+                # pull in opposite directions. Each reversal adds a soft
+                # quadratic cost scaled by the objective magnitude.
                 if D_sched > 0 and L_i > 2:
-                    t = torch.arange(L_i, dtype=x_S.dtype)
-                    t_mean = t.mean()
-                    t_var = ((t - t_mean) ** 2).sum()
-                    y_mean = traj.mean(dim=1, keepdim=True)
-                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
-                    # Only penalize when trajectory has meaningful variation;
-                    # near-flat ss_tot ≈ 0 makes the ratio pathological.
-                    has_variation = ss_tot > 1e-6
-                    if bool(has_variation.any().item()):
-                        cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
-                        slope = cov / t_var.clamp(min=1e-12)
-                        y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
-                        ss_res = ((traj - y_hat) ** 2).sum(dim=1)
-                        r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
-                        penalty = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-                        scores_neg = scores_neg + scores_neg.detach().abs() * self.smoothness_weight * penalty
+                    diffs = traj[:, 1:, :] - traj[:, :-1, :]  # (S, L_i-1, D_sched)
+                    # Product of consecutive diffs: negative = reversal
+                    products = diffs[:, 1:, :] * diffs[:, :-1, :]  # (S, L_i-2, D_sched)
+                    reversals = (-products).clamp(min=0.0)  # only count reversals
+                    reversal_penalty = reversals.sum(dim=(1, 2))
+                    scores_neg = scores_neg + scores_neg.detach().abs() * self.smoothness_weight * reversal_penalty
 
                 return scores_neg
 
