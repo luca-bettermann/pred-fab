@@ -901,14 +901,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 sched_params_list.append((code, lo, hi))
 
             if sched_params_list:
-                # Continuous static params eligible for schedule-phase
-                # drift refinement (excludes integer / domain-axis / sched /
-                # params that derive trajectory dimensions).
-                locked = sched_set | self.trajectory_locked_static
-                static_params_list = [
-                    (code, lo, hi) for code, lo, hi in continuous_params
-                    if code not in locked
-                ]
+                # TEST: disable static drift to isolate trajectory behavior
+                static_params_list: list[tuple[str, float, float]] = []
                 specs = self._phase3_trajectory(
                     n, flat_specs, sched_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
