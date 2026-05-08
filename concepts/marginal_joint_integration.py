@@ -37,9 +37,9 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 # A and B near-identical x (offset slightly for visibility), C separate.
 CENTERS = np.array([
-    [0.18, 0.15],
-    [0.22, 0.82],
-    [0.82, 0.55],
+    [0.25, 0.20],
+    [0.28, 0.78],
+    [0.78, 0.52],
 ])
 LABELS = ["A", "B", "C"]
 SIGMA_VIS = 0.08
@@ -205,7 +205,7 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.35,
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.15,
                           left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_mx = fig.add_subplot(gs[0, 1])
