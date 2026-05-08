@@ -11,7 +11,7 @@ import numpy as np
 
 # Production σ — same SIGMA_DEFAULT the PredictionSystem uses when no
 # override is configured. Changing it in prediction.py propagates here.
-from pred_fab.orchestration.prediction import SIGMA_DEFAULT as SIGMA
+from pred_fab.orchestration.prediction import RADIUS_DEFAULT as SIGMA
 
 # 8 existing kernel centres laid out for visually interesting topology:
 # two clustered pairs (saturation), four scattered singletons (clean peaks),
