@@ -37,9 +37,9 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 # A and B near-identical x (offset slightly for visibility), C separate.
 CENTERS = np.array([
-    [0.28, 0.20],
-    [0.32, 0.75],
-    [0.75, 0.50],
+    [0.18, 0.15],
+    [0.22, 0.82],
+    [0.82, 0.55],
 ])
 LABELS = ["A", "B", "C"]
 SIGMA_VIS = 0.08
