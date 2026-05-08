@@ -43,8 +43,8 @@ def _gaussian_field(grid, center, sigma):
 
 def _tinted_3d_panes(ax):
     for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
-        pane.set_facecolor("#F4F4F5")
-        pane.set_alpha(0.55)
+        pane.set_facecolor("white")
+        pane.set_alpha(1.0)
         pane.set_edgecolor(ZINC_300)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.set_tick_params(colors=ZINC_600, labelsize=7, pad=1)
@@ -130,7 +130,7 @@ def main():
 
     # Vertical z-spine at the back corner where x and y axes meet
     ax3.plot([lo, lo], [hi, hi], [lo, hi],  # type: ignore[arg-type]
-             color=ZINC_300, lw=0.8, alpha=0.7, zorder=0)
+             color=ZINC_300, lw=0.8, zorder=0)
 
     ax3.set_xlim(lo, hi)
     ax3.set_ylim(lo, hi)
