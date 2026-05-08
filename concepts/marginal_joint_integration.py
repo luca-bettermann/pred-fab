@@ -64,10 +64,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     """Draw the 2D panel with KernelField probes and projection lines."""
     surf = get_surface(surface_name)
     cm = cmap(surface_name)
-    if surf.bounded:
-        norm = Normalize(vmin=surf.vmin, vmax=surf.vmax)
-    else:
-        norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
+    norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
 
     ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm)
     ax.contour(xs, xs, field_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
