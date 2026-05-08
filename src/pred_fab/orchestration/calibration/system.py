@@ -1386,7 +1386,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
                         ss_res = ((traj - y_hat) ** 2).sum(dim=1)
                         r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
-                        scores_neg = scores_neg + self.smoothness_weight * (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+                        penalty = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+                        scores_neg = scores_neg + scores_neg.detach().abs() * self.smoothness_weight * penalty
 
                 return scores_neg
 
@@ -1412,7 +1413,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     params_list.append(p)
             return params_list
 
-        max_rounds = max(1, self.engine.gradient_n_iters // max(n, 1))
+        max_rounds = min(5, max(1, self.engine.gradient_n_iters // max(n, 1)))
         total_iters = 0
         can_push = self._push_virtual_fn is not None and self._pop_virtual_fn is not None
         baseline_dm = self._active_datamodule
