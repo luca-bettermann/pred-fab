@@ -25,9 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
-from scipy.optimize import differential_evolution
-from scipy.stats import qmc
 
 
 # ---------- Kernel and evidence ----------
@@ -71,8 +70,8 @@ def optimize_joint_phase1(
 ) -> tuple[np.ndarray, float, int]:
     """Maximize ∫E dz over N batch positions in [0,1]^D."""
     # Fixed Sobol samples: deterministic objective surface
-    sampler = qmc.Sobol(d=D, scramble=True, seed=seed)
-    sobol_samples = sampler.random(n=M_samples)
+    sobol_engine = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=seed)
+    sobol_samples = sobol_engine.draw(M_samples).numpy()
 
     def objective(x_flat: np.ndarray) -> float:
         centers = x_flat.reshape(N, D)
@@ -80,12 +79,14 @@ def optimize_joint_phase1(
         return -integrated_evidence(centers, weights, sigma, sobol_samples)
 
     bounds = [(0.0, 1.0)] * (N * D)
-    res = differential_evolution(
-        objective, bounds, seed=seed, maxiter=maxiter, tol=1e-6,
-        popsize=15, mutation=(0.5, 1.0), recombination=0.7, workers=1,
-    )
-    centers = res.x.reshape(N, D)
-    return centers, -res.fun, res.nfev
+    from pred_fab.orchestration.calibration.engine import OptimizationEngine
+    from pred_fab.utils import PfabLogger
+    engine = OptimizationEngine(PfabLogger.get_logger("/tmp"), random_seed=seed)
+    engine.de_maxiter = maxiter
+    engine.de_popsize = 15
+    opt = engine._run_de(objective, bounds, maxiter=maxiter)
+    centers = opt.best_x.reshape(N, D) if opt.best_x is not None else np.zeros((N, D))
+    return centers, opt.score, opt.nfev
 
 
 # ---------- Boundary hit diagnostics ----------
@@ -136,11 +137,13 @@ def optimize_pointwise_phase1(
         return -pointwise_batch_u(x_flat.reshape(N, D), sigma, use_boundary=use_boundary)
 
     bounds = [(0.0, 1.0)] * (N * D)
-    res = differential_evolution(
-        obj, bounds, seed=seed, maxiter=maxiter, tol=1e-5,
-        popsize=10, mutation=(0.5, 1.0), recombination=0.7, workers=1,
-    )
-    return res.x.reshape(N, D)
+    from pred_fab.orchestration.calibration.engine import OptimizationEngine
+    from pred_fab.utils import PfabLogger
+    engine = OptimizationEngine(PfabLogger.get_logger("/tmp"), random_seed=seed)
+    engine.de_maxiter = maxiter
+    engine.de_popsize = 10
+    opt = engine._run_de(obj, bounds, maxiter=maxiter)
+    return opt.best_x.reshape(N, D) if opt.best_x is not None else np.zeros((N, D))
 
 
 # ---------- Reporting ----------

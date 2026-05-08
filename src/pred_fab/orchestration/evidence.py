@@ -414,16 +414,23 @@ class KernelFieldEstimator(EvidenceEstimator):
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Marginal-joint evidence: ``(E_marginal + E_joint) / 2``.
+        """Marginal-joint evidence with D/(D+1) weighting.
 
-        Marginal: D independent 1D integrals (per-dimension evidence).
-        Joint: D-dimensional shell-probe integral (interaction evidence).
-        ANOVA decomposition at the integration level — standard isotropic
-        kernels used within each integral at the appropriate dimensionality.
+        Marginal: D independent 1D integrals — weighted D/(D+1).
+        Joint: D-dimensional shell-probe integral — weighted 1/(D+1).
+
+        Each marginal integral is one independent piece of per-dimension
+        information; the joint is one piece of full-dimensional information.
+        Equal weight per piece gives D/(D+1) for marginals. At D=1 this
+        reduces to 0.5/0.5; as D→∞ marginals dominate (correct — joint
+        becomes less informative in high-D).
         """
+        D = int(new_centers_SL.shape[2])
+        alpha_marginal = D / (D + 1)
+        alpha_joint = 1.0 / (D + 1)
         e_marginal = self._marginal_evidence_torch(index_old, new_centers_SL, new_weights_SL)
         e_joint = self._joint_evidence_torch(index_old, new_centers_SL, new_weights_SL)
-        return (e_marginal + e_joint) * 0.5
+        return alpha_marginal * e_marginal + alpha_joint * e_joint
 
     def _marginal_evidence_torch(
         self,

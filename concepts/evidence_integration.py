@@ -16,7 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
-from scipy.stats import qmc
+import torch
 
 from pred_fab.orchestration.evidence import (
     DEFAULT_RADII,
@@ -54,7 +54,7 @@ def _kf_offsets(D: int, sigma: float) -> np.ndarray:
 def _sobol_offsets(D: int, n: int, sigma: float, seed: int = 0) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=UserWarning)
-        unit = qmc.Sobol(d=D, scramble=True, rng=seed).random(n=n)
+        unit = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=seed).draw(n).numpy()
     box = 2.0 * SOBOL_HALF_EXTENT * sigma
     return box * (unit - 0.5)
 
