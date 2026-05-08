@@ -262,19 +262,38 @@ def main():
 
 
 def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
-    """Evidence gain topology with existing points and optimal Z_new."""
+    """Evidence gain topology computed via real KernelField ΔE."""
     apply_style()
-    cm = cmap("evidence_gain")
-    norm = Normalize(vmin=0, vmax=gain_2d.max())
+    import torch
+    from pred_fab.orchestration.evidence import KernelIndex, KernelFieldEstimator
 
-    # Find optimal placement (argmax of gain)
-    idx_flat = np.argmax(gain_2d)
-    iy, ix = np.unravel_index(idx_flat, gain_2d.shape)
+    kf = KernelFieldEstimator()
+    index_old = KernelIndex(CENTERS, np.ones(len(CENTERS)), sigma)
+
+    # Compute real ΔE at each grid point
+    res = len(xs)
+    gain_real = np.zeros((res, res))
+    for j in range(res):
+        # Batch all x values for this y row
+        row_pts = np.stack([xs, np.full(res, xs[j])], axis=-1)  # (res, 2)
+        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)  # (res, 1, 2)
+        weights_t = torch.ones(res, 1, dtype=torch.float64)
+        de = kf.integrated_evidence_perturbed_batched_joint_torch(
+            index_old, row_pts_t, weights_t,
+        )
+        gain_real[j, :] = de.detach().cpu().numpy()
+
+    cm = cmap("evidence_gain")
+    norm = Normalize(vmin=0, vmax=gain_real.max())
+
+    # Find optimal Z_new from real ΔE
+    idx_flat = np.argmax(gain_real)
+    iy, ix = np.unravel_index(idx_flat, gain_real.shape)
     z_new = np.array([xs[ix], xs[iy]])
 
     fig, ax = plt.subplots(figsize=(6, 5.5))
-    ax.contourf(xs, xs, gain_2d, levels=18, cmap=cm, norm=norm)
-    ax.contour(xs, xs, gain_2d, levels=8, colors=["white"], linewidths=0.4, alpha=0.5)
+    ax.contourf(xs, xs, gain_real, levels=18, cmap=cm, norm=norm)
+    ax.contour(xs, xs, gain_real, levels=8, colors=["white"], linewidths=0.4, alpha=0.5)
 
     # Existing points
     m = MARKERS["sample"]
@@ -302,7 +321,7 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
     ax.set_aspect("equal")
     ax.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
     ax.set_ylabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
-    subplot_label(ax, "Evidence gain  1/(1+E)  —  where to explore next")
+    subplot_label(ax, "Evidence gain  ΔE")
     clean_spines(ax)
 
     path = PLOTS_DIR / "marginal_joint_evidence_gain.png"
