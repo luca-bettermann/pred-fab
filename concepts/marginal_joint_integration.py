@@ -284,7 +284,7 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
         gain_real[j, :] = de.detach().cpu().numpy()
 
     cm = cmap("evidence_gain")
-    norm = Normalize(vmin=0, vmax=gain_real.max())
+    norm = Normalize(vmin=gain_real.min(), vmax=gain_real.max())
 
     # Find optimal Z_new from real ΔE
     idx_flat = np.argmax(gain_real)
