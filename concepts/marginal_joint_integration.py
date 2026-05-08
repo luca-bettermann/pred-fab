@@ -64,7 +64,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     """Draw the 2D panel with KernelField probes and projection lines."""
     surf = get_surface(surface_name)
     cm = cmap(surface_name)
-    norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
+    norm = Normalize(vmin=0, vmax=field_2d.max())
 
     ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm)
     ax.contour(xs, xs, field_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
@@ -75,23 +75,19 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
 
     probe_d2 = np.sum(offsets ** 2, axis=-1)
     probe_density = np.exp(-probe_d2 / (2 * sigma ** 2))
-    probe_vis = np.clip(probe_density, 0.25, 1.0)  # minimum 25% visibility
+    probe_vis = np.clip(probe_density, 0.4, 1.0)  # minimum 40% visibility
 
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
         # Shell radii in current surface colormap
         add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=False,
                             base_color=ZINC_400)
-        # Probes — use contrasting color on Greys, cmap-matched otherwise
+        # Probes colored by inverted density (outer=dark, inner=light)
         pts = c + offsets
-        if surface_name == "density":
-            from pred_fab.plotting._style import STEEL_500
-            ax.scatter(pts[1:, 0], pts[1:, 1], c=STEEL_500,
-                       s=MARKERS["probe"].size, alpha=0.7, edgecolors="none", zorder=4)
-        else:
-            probe_norm = Normalize(vmin=0, vmax=1)
-            ax.scatter(pts[1:, 0], pts[1:, 1],
-                       c=probe_vis[1:], cmap=cm, norm=probe_norm,
-                       s=MARKERS["probe"].size, alpha=0.8, edgecolors="none", zorder=4)
+        probe_inv = 1.0 - probe_vis[1:]
+        probe_norm = Normalize(vmin=0, vmax=1)
+        ax.scatter(pts[1:, 0], pts[1:, 1],
+                   c=probe_inv, cmap=cm, norm=probe_norm,
+                   s=MARKERS["probe"].size + 2, alpha=0.9, edgecolors="none", zorder=4)
         # Centre (red)
         m = MARKERS["sample"]
         ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
@@ -161,7 +157,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
         curve_norm = curve / y_max if y_max > 0 else curve
         gradient = gradient * curve_norm[None, :]
         ax.imshow(gradient, aspect="auto", origin="lower", extent=extent,
-                  cmap=cm_obj, norm=norm_fill, alpha=0.4, zorder=0)
+                  cmap=cm_obj, norm=norm_fill, alpha=0.7, zorder=0)
         # Mask above the curve
         ax.fill_between(xs, curve, y_max, color="white", zorder=1)
 
