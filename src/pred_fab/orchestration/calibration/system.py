@@ -1321,6 +1321,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
         static_delta_norms_list = state.static_delta_norms
         sched_delta_norms_list = state.sched_delta_norms
+        sched_delta_t = torch.tensor(sched_delta_norms_list, dtype=torch.float64) if sched_delta_norms_list else torch.zeros(D_sched, dtype=torch.float64)
         kappa = 1.0
 
         def _build_fixed_rows(exclude_idx: int) -> torch.Tensor:
@@ -1350,15 +1351,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 S = int(x_S.shape[0])
                 stat = x_S[:, :D_static]
 
-                # Delta reparameterization: step0 + cumsum(deltas) → absolute
+                # Range-mapping reparameterization: d_k ∈ [0,1] maps to
+                # [max(0, x_{k-1} - δ), min(1, x_{k-1} + δ)].
+                # Bounds-safe by construction — no clamp needed.
                 step0 = x_S[:, D_static:D_static + D_sched]
                 traj = torch.zeros(S, L_i, D_sched, dtype=x_S.dtype)
                 traj[:, 0, :] = step0
                 if L_i > 1:
-                    deltas = x_S[:, D_static + D_sched:].reshape(S, L_i - 1, D_sched)
-                    traj[:, 1:, :] = step0.unsqueeze(1) + deltas.cumsum(dim=1)
-                # No clamp — sigmoid reparam in run_acquisition_gradient
-                # enforces bounds; clamping would kill gradients.
+                    d_vars = x_S[:, D_static + D_sched:].reshape(S, L_i - 1, D_sched)
+                    prev = step0
+                    for k in range(L_i - 1):
+                        lo_k = (prev - sched_delta_t).clamp(min=0.0)
+                        hi_k = (prev + sched_delta_t).clamp(max=1.0)
+                        traj[:, k + 1, :] = lo_k + d_vars[:, k, :] * (hi_k - lo_k)
+                        prev = traj[:, k + 1, :]
 
                 cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
@@ -1448,13 +1454,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     c = float(state.schedule_norms[exp_idx][0, si])
                     d = sched_delta_norms_list[si]
                     bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
+                # d_k ∈ [0, 1]: position within available range
                 for _k in range(1, L_i):
-                    for si in range(D_sched):
-                        d = sched_delta_norms_list[si]
-                        bounds_i.append((-d, d))
+                    for _si in range(D_sched):
+                        bounds_i.append((0.0, 1.0))
 
-                # Warm start: step0 from Global, small random deltas to break
-                # the zero-gradient saddle point at the flat trajectory.
+                # Warm start: step0 from Global, d_k = 0.5 (= previous value)
+                # with small noise to break the zero-gradient saddle.
                 rng = self.engine.rng
                 x0_i = np.zeros(D_exp)
                 x0_i[:D_static] = state.static_norms[exp_idx]
@@ -1463,8 +1469,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     n_deltas = (L_i - 1) * D_sched
                     delta_start = D_static + D_sched
                     for di in range(n_deltas):
-                        d_bound = bounds_i[delta_start + di][1]  # symmetric ±d
-                        x0_i[delta_start + di] = rng.uniform(-0.1 * d_bound, 0.1 * d_bound)
+                        x0_i[delta_start + di] = 0.5 + rng.uniform(-0.05, 0.05)
 
                 opt = self.engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
@@ -1476,13 +1481,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 if opt.best_x is not None:
                     new_static = opt.best_x[:D_static]
-                    # Decode step0 + cumsum(deltas) → absolute schedule
-                    step0 = opt.best_x[D_static:D_static + D_sched]
+                    # Decode d_k ∈ [0,1] → absolute via range-mapping
+                    step0_val = opt.best_x[D_static:D_static + D_sched]
                     new_sched = np.zeros((L_i, D_sched))
-                    new_sched[0] = step0
+                    new_sched[0] = step0_val
                     if L_i > 1:
-                        deltas = opt.best_x[D_static + D_sched:].reshape(L_i - 1, D_sched)
-                        new_sched[1:] = step0 + np.cumsum(deltas, axis=0)
+                        d_vars = opt.best_x[D_static + D_sched:].reshape(L_i - 1, D_sched)
+                        sched_deltas_np = np.array(sched_delta_norms_list)
+                        prev = step0_val.copy()
+                        for k in range(L_i - 1):
+                            lo_k = np.maximum(0.0, prev - sched_deltas_np)
+                            hi_k = np.minimum(1.0, prev + sched_deltas_np)
+                            new_sched[k + 1] = lo_k + d_vars[k] * (hi_k - lo_k)
+                            prev = new_sched[k + 1].copy()
                     if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
                        not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
                         improved_this_round = True
