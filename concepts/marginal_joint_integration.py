@@ -17,10 +17,11 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
 from _style import (
-    apply_style, clean_spines, subplot_label, cmap,
+    apply_style, clean_spines, subplot_label, cmap, style_colorbar,
     add_kernel_radii_2d,
     ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
@@ -96,15 +97,27 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
         ax.text(c[0] + dx, c[1] + 0.04, lab, fontsize=FONT["annotation"],
                 color=ZINC_600, zorder=11)
 
-    # Projection lines to axes
+    # Projection lines to axes with labelled intersection points
     proj = LINES["projection"]
-    for c in centers:
+    proj_color_x = ZINC_500
+    proj_color_y = ZINC_400
+    for ci, (c, lab) in enumerate(zip(centers, LABELS)):
+        # Vertical projection to x-axis
         ax.plot([c[0], c[0]], [0, c[1]],
-                color=ZINC_300, lw=proj.linewidth, linestyle=proj.linestyle,
-                alpha=proj.alpha, zorder=1)
+                color=proj_color_x, lw=0.8, linestyle=proj.linestyle,
+                alpha=0.5, zorder=1)
+        ax.scatter([c[0]], [0], c=proj_color_x, s=18, edgecolors="white",
+                   linewidth=0.5, zorder=8, clip_on=False)
+        ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
+                ha="center", va="top", zorder=9, clip_on=False)
+        # Horizontal projection to y-axis
         ax.plot([0, c[0]], [c[1], c[1]],
-                color=ZINC_400, lw=proj.linewidth, linestyle=proj.linestyle,
-                alpha=proj.alpha, zorder=1)
+                color=proj_color_y, lw=0.8, linestyle=proj.linestyle,
+                alpha=0.5, zorder=1)
+        ax.scatter([0], [c[1]], c=proj_color_y, s=18, edgecolors="white",
+                   linewidth=0.5, zorder=8, clip_on=False)
+        ax.text(-0.04, c[1], f"{lab}ᵧ", fontsize=7, color=proj_color_y,
+                ha="right", va="center", zorder=9, clip_on=False)
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -112,6 +125,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     ax.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
     ax.set_ylabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax)
+    return cm, norm
 
 
 def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_name):
@@ -123,13 +137,22 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
     line_color = cm(0.7)
     fill_color = cm(0.5)
 
+    proj_color_x = ZINC_500
+    proj_color_y = ZINC_400
+
     # X marginal (top)
     ax_x.fill_between(xs, 0, curve_x, alpha=FILL_ALPHA["area"], color=fill_color)
     ax_x.plot(xs, curve_x, color=line_color, linewidth=1.5)
-    for c in centers:
-        m = MARKERS["sample"]
-        ax_x.scatter([c[0]], [0], c=m.color, s=m.size * 0.6, edgecolors=m.edgecolor,
-                     linewidth=m.linewidth, zorder=10, clip_on=False)
+    for ci, (c, lab) in enumerate(zip(centers, LABELS)):
+        val_at_x = np.interp(c[0], xs, curve_x)
+        ax_x.plot([c[0], c[0]], [0, val_at_x],
+                  color=proj_color_x, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
+        ax_x.scatter([c[0]], [0], c=proj_color_x, s=18, edgecolors="white",
+                     linewidth=0.5, zorder=10, clip_on=False)
+        ax_x.scatter([c[0]], [val_at_x], c=proj_color_x, s=18, edgecolors="white",
+                     linewidth=0.5, zorder=10)
+        ax_x.text(c[0], -0.06 * curve_x.max(), f"{lab}ₓ", fontsize=7,
+                  color=proj_color_x, ha="center", va="top", zorder=11, clip_on=False)
     ax_x.set_xlim(0, 1)
     ax_x.set_ylim(0, None)
     ax_x.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
@@ -138,10 +161,16 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
     # Y marginal (bottom)
     ax_y.fill_between(xs, 0, curve_y, alpha=FILL_ALPHA["area"], color=fill_color)
     ax_y.plot(xs, curve_y, color=line_color, linewidth=1.5)
-    for c in centers:
-        m = MARKERS["sample"]
-        ax_y.scatter([c[1]], [0], c=m.color, s=m.size * 0.6, edgecolors=m.edgecolor,
-                     linewidth=m.linewidth, zorder=10, clip_on=False)
+    for ci, (c, lab) in enumerate(zip(centers, LABELS)):
+        val_at_y = np.interp(c[1], xs, curve_y)
+        ax_y.plot([c[1], c[1]], [0, val_at_y],
+                  color=proj_color_y, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
+        ax_y.scatter([c[1]], [0], c=proj_color_y, s=18, edgecolors="white",
+                     linewidth=0.5, zorder=10, clip_on=False)
+        ax_y.scatter([c[1]], [val_at_y], c=proj_color_y, s=18, edgecolors="white",
+                     linewidth=0.5, zorder=10)
+        ax_y.text(c[1], -0.06 * curve_y.max(), f"{lab}ᵧ", fontsize=7,
+                  color=proj_color_y, ha="center", va="top", zorder=11, clip_on=False)
     ax_y.set_xlim(0, 1)
     ax_y.set_ylim(0, None)
     ax_y.set_xlabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
@@ -160,8 +189,13 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     ax_mx = fig.add_subplot(gs[0, 1])
     ax_my = fig.add_subplot(gs[1, 1])
 
-    _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
+    cm, norm = _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
     subplot_label(ax_joint, title_2d)
+
+    # Colorbar for the 2D panel
+    sm = ScalarMappable(norm=norm, cmap=cm)
+    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.7, pad=0.02)
+    style_colorbar(cbar)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
