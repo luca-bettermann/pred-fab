@@ -77,14 +77,19 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     kf = KernelFieldEstimator()
     offsets, _, _ = kf._probes_weights_self(2, sigma)
 
+    probe_d2 = np.sum(offsets ** 2, axis=-1)
+    probe_density = np.exp(-probe_d2 / (2 * sigma ** 2))
+    probe_vis = np.clip(probe_density, 0.25, 1.0)  # minimum 25% visibility
+
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
         # Shell radii
         add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=True)
-        # Probes — fixed color with consistent visibility
+        # Probes colored by density with minimum visibility floor
         pts = c + offsets
+        probe_norm = Normalize(vmin=0, vmax=1)
         ax.scatter(pts[1:, 0], pts[1:, 1],
-                   c=ZINC_500, s=MARKERS["probe"].size,
-                   alpha=0.7, edgecolors="none", zorder=4)
+                   c=probe_vis[1:], cmap=cm, norm=probe_norm,
+                   s=MARKERS["probe"].size, alpha=0.8, edgecolors="none", zorder=4)
         # Centre (red)
         m = MARKERS["sample"]
         ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
