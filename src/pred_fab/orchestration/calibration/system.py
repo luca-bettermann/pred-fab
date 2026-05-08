@@ -1453,10 +1453,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         d = sched_delta_norms_list[si]
                         bounds_i.append((-d, d))
 
-                # Warm start: step0 from Global, deltas = 0 (flat)
+                # Warm start: step0 from Global, small random deltas to break
+                # the zero-gradient saddle point at the flat trajectory.
+                rng = self.engine.rng
                 x0_i = np.zeros(D_exp)
                 x0_i[:D_static] = state.static_norms[exp_idx]
                 x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][0]
+                if L_i > 1 and D_sched > 0:
+                    n_deltas = (L_i - 1) * D_sched
+                    delta_start = D_static + D_sched
+                    for di in range(n_deltas):
+                        d_bound = bounds_i[delta_start + di][1]  # symmetric ±d
+                        x0_i[delta_start + di] = rng.uniform(-0.1 * d_bound, 0.1 * d_bound)
 
                 opt = self.engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
