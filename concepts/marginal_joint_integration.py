@@ -1,16 +1,15 @@
-"""Marginal-joint integration — two concept figures.
+"""Marginal-joint integration — three concept figures.
 
-Figure 1 (density): What the evidence field looks like.
-    Left:  2D joint density with KernelField probes (red centres, probe dots)
-           + subtle projection lines to axes
-    Right: Two stacked 1D marginal density plots (x on top, y on bottom)
+Figure 1 (density):     Joint density ρ + marginal densities ρ_x, ρ_y
+Figure 2 (evidence):    Joint evidence E=D/(1+D) + marginal evidence
+Figure 3 (evidence gain): Joint ΔE surface + marginal ΔE curves
 
-Figure 2 (evidence): What the optimizer sees.
-    Left:  2D evidence gain surface 1/(1+ρ)
-    Right: Two stacked 1D marginal evidence curves 1/(1+ρ_d)
+All use three kernels where A and B share near-identical x-values —
+the marginal integral detects this overlap while the joint integral doesn't.
 
-Both use three kernels where A and B share the same x-value — the
-marginal integral detects this overlap while the joint integral doesn't.
+Layout per figure:
+    Left (wide):   2D field with KernelField probes + projection lines
+    Right (stack): Two 1D marginal plots (x on top, y on bottom)
 """
 from __future__ import annotations
 
@@ -18,37 +17,41 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
 from _style import (
-    apply_style, clean_spines, subplot_label, cmap, style_colorbar,
+    apply_style, clean_spines, subplot_label, cmap,
     add_kernel_radii_2d,
-    STEEL_500, EMERALD_500, ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600, RED,
+    ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
 from _config import SIGMA
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
+from pred_fab.plotting._style import (
+    SURFACES, MARKERS, LINES, FILL_ALPHA, FONT, RED,
+    surface as get_surface,
+)
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
 
+# A and B near-identical x (offset slightly for visibility), C separate.
 CENTERS = np.array([
-    [0.30, 0.20],   # A
-    [0.30, 0.75],   # B — same x as A
-    [0.75, 0.50],   # C
+    [0.28, 0.20],
+    [0.32, 0.75],
+    [0.75, 0.50],
 ])
 LABELS = ["A", "B", "C"]
 SIGMA_VIS = 0.08
 
 
-def _density_1d(xs: np.ndarray, centers_1d: np.ndarray, sigma: float) -> np.ndarray:
+def _density_1d(xs, centers_1d, sigma):
     rho = np.zeros_like(xs)
     for c in centers_1d:
         rho += np.exp(-(xs - c) ** 2 / (2 * sigma ** 2))
     return rho
 
 
-def _density_2d(xx: np.ndarray, yy: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
+def _density_2d(xx, yy, centers, sigma):
     rho = np.zeros_like(xx)
     for c in centers:
         d2 = (xx - c[0]) ** 2 + (yy - c[1]) ** 2
@@ -56,157 +59,154 @@ def _density_2d(xx: np.ndarray, yy: np.ndarray, centers: np.ndarray, sigma: floa
     return rho
 
 
-def _draw_joint_panel(ax, centers, sigma, field, xs, cm, norm, show_evidence: bool = False):
-    """Draw the 2D panel — density or evidence."""
-    label_text = "Evidence gain  1/(1+ρ)" if show_evidence else "Joint density  ρ(x, y)"
-    cmap_name = cm
+def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
+    """Draw the 2D panel with KernelField probes and projection lines."""
+    surf = get_surface(surface_name)
+    cm = cmap(surface_name)
+    if surf.bounded:
+        norm = Normalize(vmin=surf.vmin, vmax=surf.vmax)
+    else:
+        norm = Normalize(vmin=field_2d.min(), vmax=field_2d.max())
 
-    levels = 18
-    ax.contourf(xs, xs, field, levels=levels, cmap=cmap_name, norm=norm, alpha=0.5)
-    ax.contour(xs, xs, field, levels=8, colors=[ZINC_300], linewidths=0.4)
+    ax.contourf(xs, xs, field_2d, levels=18, cmap=cm, norm=norm,
+                alpha=FILL_ALPHA["contour"])
+    ax.contour(xs, xs, field_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
 
-    # KernelField probes around each centre
+    # KernelField probes
     kf = KernelFieldEstimator()
     offsets, _, _ = kf._probes_weights_self(2, sigma)
-    probe_density = np.exp(-np.sum(offsets ** 2, axis=-1) / (2 * sigma ** 2))
-    probe_cm = cmap("evidence")
+    probe_d2 = np.sum(offsets ** 2, axis=-1)
+    probe_vals = np.exp(-probe_d2 / (2 * sigma ** 2))
     probe_norm = Normalize(vmin=0, vmax=1)
 
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
-        # Shell probes
+        # Shell radii
+        add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=True)
+        # Probes coloured by density fraction
         pts = c + offsets
         ax.scatter(pts[1:, 0], pts[1:, 1],
-                   c=probe_density[1:], cmap=probe_cm, norm=probe_norm,
-                   s=8, alpha=0.5, edgecolors="none", zorder=4)
-        # Centre
-        ax.scatter([c[0]], [c[1]], c=RED, s=40, edgecolors="white",
-                   linewidth=0.8, zorder=10)
+                   c=probe_vals[1:], cmap=cm, norm=probe_norm,
+                   s=MARKERS["probe"].size, alpha=0.6, edgecolors="none", zorder=4)
+        # Centre (red)
+        m = MARKERS["sample"]
+        ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
+                   linewidth=m.linewidth, zorder=10)
         # Label
-        offset_x = 0.04 if ci != 1 else -0.06
-        ax.text(c[0] + offset_x, c[1] + 0.04, lab, fontsize=9,
-                color=ZINC_600, fontweight="bold", zorder=11)
+        dx = 0.05 if ci != 1 else -0.07
+        ax.text(c[0] + dx, c[1] + 0.04, lab, fontsize=FONT["annotation"],
+                color=ZINC_600, zorder=11)
 
     # Projection lines to axes
+    proj = LINES["projection"]
     for c in centers:
-        ax.plot([c[0], c[0]], [0, c[1]], color=ZINC_300, lw=0.6,
-                linestyle=":", alpha=0.6, zorder=1)
-        ax.plot([0, c[0]], [c[1], c[1]], color=ZINC_400, lw=0.6,
-                linestyle=":", alpha=0.6, zorder=1)
+        ax.plot([c[0], c[0]], [0, c[1]],
+                color=ZINC_300, lw=proj.linewidth, linestyle=proj.linestyle,
+                alpha=proj.alpha, zorder=1)
+        ax.plot([0, c[0]], [c[1], c[1]],
+                color=ZINC_400, lw=proj.linewidth, linestyle=proj.linestyle,
+                alpha=proj.alpha, zorder=1)
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_aspect("equal")
-    ax.set_xlabel("x", fontsize=9, color=ZINC_600)
-    ax.set_ylabel("y", fontsize=9, color=ZINC_600)
-    subplot_label(ax, label_text)
+    ax.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
+    ax.set_ylabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax)
 
 
-def _draw_marginal_panels(ax_x, ax_y, centers, sigma, show_evidence: bool = False):
+def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_name):
     """Draw the two stacked 1D marginal panels."""
     res = 200
     xs = np.linspace(0, 1, res)
-
-    rho_x = _density_1d(xs, centers[:, 0], sigma)
-    rho_y = _density_1d(xs, centers[:, 1], sigma)
-
-    if show_evidence:
-        curve_x = 1.0 / (1.0 + rho_x)
-        curve_y = 1.0 / (1.0 + rho_y)
-        fill_color = EMERALD_500
-        line_color = EMERALD_500
-        label_x = "Marginal evidence  1/(1+ρ_x)"
-        label_y = "Marginal evidence  1/(1+ρ_y)"
-    else:
-        curve_x = rho_x
-        curve_y = rho_y
-        fill_color = STEEL_500
-        line_color = STEEL_500
-        label_x = "Marginal density  ρ_x"
-        label_y = "Marginal density  ρ_y"
+    surf = get_surface(surface_name)
+    cm = cmap(surface_name)
+    line_color = cm(0.7)
+    fill_color = cm(0.5)
 
     # X marginal (top)
-    ax_x.fill_between(xs, 0, curve_x, alpha=0.15, color=fill_color)
+    ax_x.fill_between(xs, 0, curve_x, alpha=FILL_ALPHA["area"], color=fill_color)
     ax_x.plot(xs, curve_x, color=line_color, linewidth=1.5)
-    for c, lab in zip(centers, LABELS):
-        ax_x.scatter([c[0]], [0], c=RED, s=30, edgecolors="white",
-                     linewidth=0.6, zorder=10, clip_on=False)
+    for c in centers:
+        m = MARKERS["sample"]
+        ax_x.scatter([c[0]], [0], c=m.color, s=m.size * 0.6, edgecolors=m.edgecolor,
+                     linewidth=m.linewidth, zorder=10, clip_on=False)
     ax_x.set_xlim(0, 1)
     ax_x.set_ylim(0, None)
-    ax_x.set_xlabel("x", fontsize=9, color=ZINC_600)
-    subplot_label(ax_x, label_x)
+    ax_x.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax_x)
 
     # Y marginal (bottom)
-    ax_y.fill_between(xs, 0, curve_y, alpha=0.15, color=fill_color)
+    ax_y.fill_between(xs, 0, curve_y, alpha=FILL_ALPHA["area"], color=fill_color)
     ax_y.plot(xs, curve_y, color=line_color, linewidth=1.5)
-    for c, lab in zip(centers, LABELS):
-        ax_y.scatter([c[1]], [0], c=RED, s=30, edgecolors="white",
-                     linewidth=0.6, zorder=10, clip_on=False)
+    for c in centers:
+        m = MARKERS["sample"]
+        ax_y.scatter([c[1]], [0], c=m.color, s=m.size * 0.6, edgecolors=m.edgecolor,
+                     linewidth=m.linewidth, zorder=10, clip_on=False)
     ax_y.set_xlim(0, 1)
     ax_y.set_ylim(0, None)
-    ax_y.set_xlabel("y", fontsize=9, color=ZINC_600)
-    subplot_label(ax_y, label_y)
+    ax_y.set_xlabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax_y)
 
 
-def figure_density() -> Path:
-    """Figure 1: density field — what the evidence field looks like."""
+def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, curve_y, filename):
     apply_style()
     sigma = SIGMA_VIS
     res = 200
     xs = np.linspace(0, 1, res)
-    xx, yy = np.meshgrid(xs, xs)
-    rho_2d = _density_2d(xx, yy, CENTERS, sigma)
-
-    cm = cmap("evidence")
-    norm = Normalize(vmin=0, vmax=rho_2d.max())
 
     fig = plt.figure(figsize=(10, 5))
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.4, wspace=0.3)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_mx = fig.add_subplot(gs[0, 1])
     ax_my = fig.add_subplot(gs[1, 1])
 
-    _draw_joint_panel(ax_joint, CENTERS, sigma, rho_2d, xs, cm, norm, show_evidence=False)
-    _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, show_evidence=False)
+    _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
+    subplot_label(ax_joint, title_2d)
 
-    path = PLOTS_DIR / "marginal_joint_density.png"
+    _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
+    subplot_label(ax_mx, title_x)
+    subplot_label(ax_my, title_y)
+
+    path = PLOTS_DIR / filename
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {path}")
     return path
 
 
-def figure_evidence() -> Path:
-    """Figure 2: evidence gain — what the optimizer sees."""
-    apply_style()
+def main():
     sigma = SIGMA_VIS
     res = 200
     xs = np.linspace(0, 1, res)
     xx, yy = np.meshgrid(xs, xs)
+
     rho_2d = _density_2d(xx, yy, CENTERS, sigma)
-    evidence_2d = 1.0 / (1.0 + rho_2d)
+    rho_x = _density_1d(xs, CENTERS[:, 0], sigma)
+    rho_y = _density_1d(xs, CENTERS[:, 1], sigma)
 
-    cm = "YlGn"
-    norm = Normalize(vmin=evidence_2d.min(), vmax=1.0)
+    evidence_2d = rho_2d / (1.0 + rho_2d)
+    evidence_x = rho_x / (1.0 + rho_x)
+    evidence_y = rho_y / (1.0 + rho_y)
 
-    fig = plt.figure(figsize=(10, 5))
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
-    ax_joint = fig.add_subplot(gs[:, 0])
-    ax_mx = fig.add_subplot(gs[0, 1])
-    ax_my = fig.add_subplot(gs[1, 1])
+    gain_2d = 1.0 / (1.0 + rho_2d)
+    gain_x = 1.0 / (1.0 + rho_x)
+    gain_y = 1.0 / (1.0 + rho_y)
 
-    _draw_joint_panel(ax_joint, CENTERS, sigma, evidence_2d, xs, cm, norm, show_evidence=True)
-    _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, show_evidence=True)
+    _make_figure("density",
+                 "Joint density  ρ(x, y)", "Marginal density  ρ(x)", "Marginal density  ρ(y)",
+                 rho_2d, rho_x, rho_y,
+                 "marginal_joint_density.png")
 
-    path = PLOTS_DIR / "marginal_joint_evidence.png"
-    fig.savefig(path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {path}")
-    return path
+    _make_figure("evidence",
+                 "Joint evidence  E(x, y)", "Marginal evidence  E(x)", "Marginal evidence  E(y)",
+                 evidence_2d, evidence_x, evidence_y,
+                 "marginal_joint_evidence.png")
+
+    _make_figure("evidence_gain",
+                 "Joint evidence gain  1/(1+ρ)", "Marginal evidence gain  1/(1+ρ_x)", "Marginal evidence gain  1/(1+ρ_y)",
+                 gain_2d, gain_x, gain_y,
+                 "marginal_joint_evidence_gain.png")
 
 
 if __name__ == "__main__":
-    figure_density()
-    figure_evidence()
+    main()
