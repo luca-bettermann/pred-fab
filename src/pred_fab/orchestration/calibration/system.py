@@ -116,6 +116,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_exp_ids: list[int] | None = None
         self.trajectory_locked_static: set[str] = set()
         self.smoothness_weight: float = 0.01
+        self.max_trajectory_rounds: int = 5
         self.trajectory_step_callback: Callable[[int, int, '_ScheduleState'], None] | None = None
 
         # Set ordered weights
@@ -1419,7 +1420,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     params_list.append(p)
             return params_list
 
-        max_rounds = min(5, max(1, self.engine.gradient_n_iters // max(n, 1)))
+        max_rounds = min(self.max_trajectory_rounds, max(1, self.engine.gradient_n_iters // max(n, 1)))
         total_iters = 0
         can_push = self._push_virtual_fn is not None and self._pop_virtual_fn is not None
         baseline_dm = self._active_datamodule
