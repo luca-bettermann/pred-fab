@@ -7,8 +7,15 @@ any specific schema or domain.
 
 from ._style import (
     AxisSpec,
+    SemanticSurface,
     save_fig,
     cmap,
+    surface,
+    SURFACES,
+    MARKERS,
+    LINES,
+    FILL_ALPHA,
+    FONT,
     apply_style,
     clean_spines,
     clean_3d_panes,

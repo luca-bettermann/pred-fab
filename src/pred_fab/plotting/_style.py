@@ -1,12 +1,6 @@
 """Shared style utilities, palette, and semantic colormaps for PFAB plots.
 
-Single source of truth for visual identity across pred-fab and pred-fab-mock.
-Five semantic colormaps:
-    density        -> Greys     raw kernel sum (unbounded)
-    evidence       -> Blues     saturated D/(1+D) ∈ [0, 1)
-    evidence_gain  -> Purples   ΔI acquisition signal
-    performance    -> RdYlGn    perf score, bad → good
-    mixed          -> cividis   (1−κ)·perf + κ·ΔI, distinct from components
+Single source of truth for visual identity across pred-fab and all consumers.
 """
 
 from __future__ import annotations
@@ -51,27 +45,89 @@ YELLOW = ACCENT_YELLOW
 
 
 # ---------------------------------------------------------------------------
-# Colormap registry
+# Semantic style registry
 # ---------------------------------------------------------------------------
+# Colormaps: one per semantic surface type.
+# Bounded: whether the values are in [0, 1] (True) or fit to data (False).
+# All consumers use `cmap("evidence")` etc. — never hardcode cmap names.
 
-_CMAP_REGISTRY: dict[str, str] = {
-    "density": "Greys",
-    "evidence": "Blues",
-    "evidence_gain": "Purples",
-    "performance": "RdYlGn",
-    "mixed": "cividis",
+@dataclass(frozen=True)
+class SemanticSurface:
+    """Visual mapping for one type of data surface."""
+    cmap_name: str
+    bounded: bool
+    vmin: float = 0.0
+    vmax: float = 1.0
+
+SURFACES: dict[str, SemanticSurface] = {
+    "density":       SemanticSurface("Greys",  bounded=False),
+    "evidence":      SemanticSurface("Blues",   bounded=True),
+    "evidence_gain": SemanticSurface("YlGn",   bounded=True),
+    "performance":   SemanticSurface("RdYlGn", bounded=True),
+    "acquisition":   SemanticSurface("magma",  bounded=True),
+}
+
+# Markers: semantic point types.
+@dataclass(frozen=True)
+class MarkerStyle:
+    color: str
+    size: float
+    edgecolor: str
+    linewidth: float
+
+MARKERS: dict[str, MarkerStyle] = {
+    "sample":   MarkerStyle(color=ACCENT_RED,    size=40, edgecolor="white", linewidth=0.8),
+    "proposed": MarkerStyle(color=ACCENT_YELLOW, size=50, edgecolor="white", linewidth=1.0),
+    "existing": MarkerStyle(color=ZINC_400,      size=30, edgecolor="none",  linewidth=0),
+    "probe":    MarkerStyle(color=STEEL_500,     size=8,  edgecolor="none",  linewidth=0),
+}
+
+# Lines: semantic line types.
+@dataclass(frozen=True)
+class LineStyle:
+    color: str
+    linewidth: float
+    linestyle: str
+    alpha: float
+
+LINES: dict[str, LineStyle] = {
+    "trajectory":  LineStyle(color=STEEL_500, linewidth=1.5, linestyle="-",  alpha=0.8),
+    "projection":  LineStyle(color=ZINC_300,  linewidth=0.6, linestyle=":",  alpha=0.6),
+    "boundary":    LineStyle(color=ZINC_400,  linewidth=0.8, linestyle="--", alpha=0.5),
+    "grid":        LineStyle(color=ZINC_200,  linewidth=0.5, linestyle="-",  alpha=0.2),
+}
+
+# Fill alphas for consistent transparency.
+FILL_ALPHA: dict[str, float] = {
+    "contour":    0.5,
+    "area":       0.15,
+    "background": 0.18,
+}
+
+# Font sizes.
+FONT: dict[str, int] = {
+    "title":      11,
+    "axis_label": 9,
+    "tick":       8,
+    "annotation": 8,
+    "legend":     8,
 }
 
 
 def cmap(name: str) -> Colormap:
-    """Return the canonical matplotlib colormap for a semantic surface.
-
-    Valid names: density, evidence, evidence_gain, performance, mixed.
-    """
-    if name not in _CMAP_REGISTRY:
-        valid = ", ".join(sorted(_CMAP_REGISTRY))
+    """Return the canonical matplotlib colormap for a semantic surface."""
+    if name not in SURFACES:
+        valid = ", ".join(sorted(SURFACES))
         raise ValueError(f"unknown cmap {name!r}; expected one of: {valid}")
-    return plt.get_cmap(_CMAP_REGISTRY[name])
+    return plt.get_cmap(SURFACES[name].cmap_name)
+
+
+def surface(name: str) -> SemanticSurface:
+    """Return the full semantic surface config (cmap, bounds, etc.)."""
+    if name not in SURFACES:
+        valid = ", ".join(sorted(SURFACES))
+        raise ValueError(f"unknown surface {name!r}; expected one of: {valid}")
+    return SURFACES[name]
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +331,7 @@ def style_colorbar(cbar) -> None:
 
 def _resolve_cmap(name: str):
     """Resolve a colormap by semantic registry name first, then fall back to mpl."""
-    if name in _CMAP_REGISTRY:
+    if name in SURFACES:
         return cmap(name)
     return plt.get_cmap(name)
 
