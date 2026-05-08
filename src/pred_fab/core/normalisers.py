@@ -210,31 +210,21 @@ class RobustScalerModule(NormaliserModule):
 
 
 def make_normaliser(method: NormMethod, data) -> NormaliserModule:
-    """Fit a normaliser to ``data`` (numpy array or tensor) and return the module.
-
-    Replaces the legacy ``DataModule._compute_normalization_stats``.
-    """
+    """Fit a normaliser to ``data`` (numpy array or tensor) and return the module."""
     if method == NormMethod.NONE:
         return IdentityNormaliser()
 
-    if isinstance(data, torch.Tensor):
-        data_np = data.detach().cpu().numpy()
-    else:
-        import numpy as np
-        data_np = np.asarray(data)
+    t = torch.as_tensor(data, dtype=torch.float64).detach()
 
     if method == NormMethod.STANDARD:
-        import numpy as np
-        return StandardScalerModule(mean=float(np.mean(data_np)), std=float(np.std(data_np)))
+        return StandardScalerModule(mean=float(t.mean()), std=float(t.std(correction=0)))
     if method == NormMethod.MIN_MAX:
-        import numpy as np
-        return MinMaxScalerModule(min_val=float(np.min(data_np)), max_val=float(np.max(data_np)))
+        return MinMaxScalerModule(min_val=float(t.min()), max_val=float(t.max()))
     if method == NormMethod.ROBUST:
-        import numpy as np
         return RobustScalerModule(
-            median=float(np.median(data_np)),
-            q1=float(np.percentile(data_np, 25)),
-            q3=float(np.percentile(data_np, 75)),
+            median=float(t.median()),
+            q1=float(torch.quantile(t.to(torch.float64), 0.25)),
+            q3=float(torch.quantile(t.to(torch.float64), 0.75)),
         )
     raise ValueError(f"Unknown normalisation method: {method}")
 

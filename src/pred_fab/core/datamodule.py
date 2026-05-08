@@ -284,8 +284,7 @@ class DataModule:
                 continue
             if col not in X_dict:
                 continue
-            col_arr = X_dict[col].cpu().numpy()
-            self._parameter_stats[col] = make_normaliser(method, col_arr)
+            self._parameter_stats[col] = make_normaliser(method, X_dict[col])
 
         # Fit y — tensor-native: read each output col tensor from exported.y.
         # Skip cells where the value is NaN (missing measurement) when fitting.
@@ -296,9 +295,9 @@ class DataModule:
                 continue
             if col not in exported.y:
                 continue
-            col_arr = exported.y[col].cpu().numpy()
-            valid = col_arr[~np.isnan(col_arr)]
-            if valid.size == 0:
+            col_t = exported.y[col]
+            valid = col_t[~torch.isnan(col_t)]
+            if valid.numel() == 0:
                 continue
             self._feature_stats[col] = make_normaliser(method, valid)
 
