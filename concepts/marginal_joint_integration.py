@@ -279,10 +279,11 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
     )[0].item())
 
     # Compute E(old ∪ new) at each grid point → ΔE = E(old ∪ new) - E_old
-    res = len(xs)
+    res = 80  # higher resolution for smooth contours
+    xs_gain = np.linspace(0, 1, res)
     gain_real = np.zeros((res, res))
     for j in range(res):
-        row_pts = np.stack([xs, np.full(res, xs[j])], axis=-1)
+        row_pts = np.stack([xs_gain, np.full(res, xs_gain[j])], axis=-1)
         row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
         weights_t = torch.ones(res, 1, dtype=torch.float64)
         e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
@@ -296,11 +297,11 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
     # Find optimal Z_new from real ΔE
     idx_flat = np.argmax(gain_real)
     iy, ix = np.unravel_index(idx_flat, gain_real.shape)
-    z_new = np.array([xs[ix], xs[iy]])
+    z_new = np.array([xs_gain[ix], xs_gain[iy]])
 
     fig, ax = plt.subplots(figsize=(6, 5.5))
-    ax.contourf(xs, xs, gain_real, levels=18, cmap=cm, norm=norm)
-    ax.contour(xs, xs, gain_real, levels=8, colors=["white"], linewidths=0.4, alpha=0.5)
+    ax.contourf(xs_gain, xs_gain, gain_real, levels=24, cmap=cm, norm=norm)
+    ax.contour(xs_gain, xs_gain, gain_real, levels=12, colors=["white"], linewidths=0.3, alpha=0.4)
 
     # Existing points
     m = MARKERS["sample"]
