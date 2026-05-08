@@ -732,21 +732,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             truncation_threshold=self._estimator_config.truncation_threshold,
         )
 
-    def _encode_batch_from_norm_for_model(
-        self, model: IPredictionModel, X_norm_batch: np.ndarray, active_mask: np.ndarray,
-    ) -> np.ndarray:
-        """No-grad numpy shim around `_encode_batch_from_norm_for_model_tensor`.
-
-        Returns ``(S, n_active)`` — the active-mask-filtered latent activations.
-        """
-        if X_norm_batch.ndim == 1:
-            X_norm_batch = X_norm_batch.reshape(1, -1)
-        with torch.no_grad():
-            z_t = self._encode_batch_from_norm_for_model_tensor(
-                model, torch.from_numpy(np.ascontiguousarray(X_norm_batch)).float(), active_mask,
-            )
-        return z_t.detach().cpu().numpy()
-
     def _encode_batch_from_norm_for_model_tensor(
         self, model: IPredictionModel, X_norm_batch: torch.Tensor, active_mask: np.ndarray,
     ) -> torch.Tensor:
