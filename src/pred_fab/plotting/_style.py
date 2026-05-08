@@ -82,6 +82,11 @@ MARKERS: dict[str, MarkerStyle] = {
     "probe":    MarkerStyle(color=STEEL_500,     size=8,  edgecolor="none",  linewidth=0),
 }
 
+# Probe coloring rule: when probes sit on a topology (contourf), invert
+# their density values (1 - density) so they contrast against the field.
+# When standalone (faint background only), use normal density coloring.
+PROBE_INVERT_ON_TOPOLOGY: bool = True
+
 # Lines: semantic line types.
 @dataclass(frozen=True)
 class LineStyle:
