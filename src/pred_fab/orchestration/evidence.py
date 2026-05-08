@@ -114,15 +114,19 @@ class KernelIndex:
         cutoff_sigmas: float = 5.0,
         truncation_threshold: int = 10,
     ):
-        self.centers_np = np.asarray(centers if isinstance(centers, np.ndarray) else centers.cpu().numpy(), dtype=float)
-        self.weights_np = np.asarray(weights if isinstance(weights, np.ndarray) else weights.cpu().numpy(), dtype=float)
-        self.centers = torch.as_tensor(self.centers_np, dtype=torch.float64)
-        self.weights = torch.as_tensor(self.weights_np, dtype=torch.float64)
+        self.centers = torch.as_tensor(
+            centers if isinstance(centers, torch.Tensor) else np.asarray(centers, dtype=float),
+            dtype=torch.float64,
+        )
+        self.weights = torch.as_tensor(
+            weights if isinstance(weights, torch.Tensor) else np.asarray(weights, dtype=float),
+            dtype=torch.float64,
+        )
         self.sigma = float(sigma)
         self.cutoff_sigmas = float(cutoff_sigmas)
         self.truncation_threshold = int(truncation_threshold)
-        self._n = len(self.centers_np)
-        self._D = int(self.centers_np.shape[1]) if self.centers_np.ndim == 2 and self._n else 0
+        self._n = len(self.centers)
+        self._D = int(self.centers.shape[1]) if self.centers.ndim == 2 and self._n else 0
 
     @property
     def is_empty(self) -> bool:
@@ -132,30 +136,6 @@ class KernelIndex:
     def cutoff(self) -> float:
         return self.cutoff_sigmas * self.sigma
 
-    def density_at(self, points: np.ndarray | torch.Tensor, exclude_idx: int | None = None) -> np.ndarray:
-        """D(z) = Σⱼ wⱼ · exp(−‖z−zⱼ‖²/2σ²) at each row of `points`."""
-        pts = torch.as_tensor(points, dtype=torch.float64)
-        if pts.ndim == 1:
-            pts = pts.unsqueeze(0)
-        M = pts.shape[0]
-        if self.is_empty or self._D == 0:
-            return np.zeros(M)
-
-        inv_2sig2 = 1.0 / (2.0 * self.sigma ** 2)
-        diff = pts[:, None, :] - self.centers[None, :, :]
-        d2 = (diff * diff).sum(dim=-1)
-
-        if self._n >= self.truncation_threshold:
-            cutoff_d2 = (self.cutoff_sigmas * self.sigma) ** 2
-            exp_term = torch.where(d2 <= cutoff_d2, torch.exp(-d2 * inv_2sig2), torch.zeros_like(d2))
-        else:
-            exp_term = torch.exp(-d2 * inv_2sig2)
-
-        if exclude_idx is not None:
-            keep = torch.ones(self._n, dtype=torch.bool)
-            keep[exclude_idx] = False
-            return (exp_term[:, keep] * self.weights[keep]).sum(dim=-1).cpu().numpy()
-        return (exp_term * self.weights).sum(dim=-1).cpu().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -243,12 +223,8 @@ def kernel_field_probe_count(
     return 1 + len(radii) * _angular_gap_n_dirs(D, angular_gap_deg)
 
 
-def _in_unit_cube(points: np.ndarray) -> np.ndarray:
-    return np.all((points >= 0.0) & (points <= 1.0), axis=-1)
-
-
 def _in_unit_cube_torch(points: torch.Tensor) -> torch.Tensor:
-    """Tensor mirror of ``_in_unit_cube`` — boolean mask over the last dim."""
+    """Boolean mask: all dims in [0, 1]."""
     return ((points >= 0.0) & (points <= 1.0)).all(dim=-1)
 
 
@@ -260,36 +236,14 @@ class EvidenceEstimator(ABC):
     """Estimator for ∫_{[0,1]^D} D/(1+D) dz via per-kernel self-integrals."""
 
     @abstractmethod
-    def self_integral(
-        self, center: np.ndarray, index: KernelIndex, kernel_idx: int | None = None,
-    ) -> float:
-        """𝔼_{z~N(center, σ²I)} [1/(1+D(z)) · 1_{z ∈ [0,1]^D}].
-
-        `kernel_idx` (when given) tells the estimator which kernel inside `index`
-        owns this `center`, enabling self-density caching to skip a redundant
-        kernel-tree query.
-        """
-        ...
-
-    def integrated_evidence(self, index: KernelIndex) -> float:
-        """I = Σⱼ wⱼ · self_integral(center_j)."""
-        if index.is_empty:
-            return 0.0
-        total = 0.0
-        for j in range(len(index.centers_np)):
-            total += float(index.weights_np[j]) * self.self_integral(
-                index.centers_np[j], index, kernel_idx=j,
-            )
-        return total
-
     def integrated_evidence_perturbed_batched_joint_torch(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Torch path — subclasses override for autograd-compatible vectorised Δ∫E."""
-        raise NotImplementedError("Subclass must implement torch joint batched path")
+        """Per-candidate joint ∫E ``(S,)`` with autograd through ``new_centers_SL``."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +259,6 @@ class KernelFieldEstimator(EvidenceEstimator):
 
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
     _cache_torch: dict = field(default_factory=dict, repr=False, compare=False)
-
-    def _probes_and_weights(self, D: int, sigma: float) -> tuple[np.ndarray, np.ndarray]:
-        """Probe offsets (relative to any centre) and quadrature weights."""
-        offsets, weights, _ = self._probes_weights_self(D, sigma)
-        return offsets, weights
 
     def _probes_weights_self(
         self, D: int, sigma: float,
@@ -360,22 +309,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         self_density = torch.from_numpy(self_density_np).to(device=device, dtype=dtype)
         self._cache_torch[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
-
-    def self_integral(
-        self, center: np.ndarray, index: KernelIndex, kernel_idx: int | None = None,
-    ) -> float:
-        D = int(center.shape[-1])
-        offsets, weights, self_density = self._probes_weights_self(D, index.sigma)
-        probes = offsets + center
-        in_domain = _in_unit_cube(probes).astype(float)
-        if kernel_idx is not None:
-            rho_other = index.density_at(probes, exclude_idx=kernel_idx)
-            rho = self_density * float(index.weights[kernel_idx]) + rho_other
-        else:
-            rho = index.density_at(probes)
-        integrand = 1.0 / (1.0 + rho)
-        return float(np.sum(weights * integrand * in_domain))
-
 
     def integrated_evidence_perturbed_batched_joint_torch(
         self,
@@ -656,33 +589,6 @@ class SobolLocalEstimator(EvidenceEstimator):
             )
             unit = engine.draw(n).to(dtype=dtype, device=device)
         return box_side * (unit - 0.5)  # (n, D)
-
-    def self_integral(
-        self, center: np.ndarray, index: KernelIndex, kernel_idx: int | None = None,
-    ) -> float:
-        del kernel_idx  # Sobol regenerates per call; self-density caching not applicable.
-        D = int(center.shape[-1])
-        sigma = index.sigma
-        box_side = 2.0 * self.box * sigma
-        volume = box_side ** D
-        n = self._resolve_n_samples(D)
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning)
-            engine = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=self.seed)
-            unit = engine.draw(n).numpy().astype(np.float64)
-        samples = center + box_side * (unit - 0.5)
-
-        # ρⱼ(z; center) — peak-1 Gaussian, no weight (caller scales by w_j)
-        d2 = np.sum((samples - center) ** 2, axis=-1)
-        rho_j = np.exp(-d2 / (2.0 * sigma * sigma))
-
-        D_vals = index.density_at(samples)
-        in_domain = _in_unit_cube(samples).astype(float)
-
-        # ∫ρⱼ/(1+D) dz ≈ volume · mean[ρⱼ/(1+D) · 1_cube]
-        integrand = rho_j / (1.0 + D_vals) * in_domain
-        return volume * float(integrand.mean())
 
     def integrated_evidence_perturbed_batched_joint_torch(
         self,

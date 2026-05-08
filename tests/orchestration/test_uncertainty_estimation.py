@@ -592,23 +592,30 @@ def test_peak1_gaussian_integral_matches_analytic(tmp_path):
         assert float(mass) == pytest.approx(expected, rel=1e-2)
 
 
-def _make_estimator_and_index_helper():
-    from pred_fab.orchestration.evidence import (
-        KernelIndex, SobolLocalEstimator,
-    )
-    return KernelIndex, SobolLocalEstimator
+def _integrated_evidence_torch(estimator, index):
+    """Compute ∫E via the torch path: pass all kernels as 'new' against an empty index."""
+    import torch
+    from pred_fab.orchestration.evidence import KernelIndex
+    if index.is_empty:
+        return 0.0
+    empty = KernelIndex(torch.empty(0, index._D), torch.empty(0), index.sigma)
+    centers = index.centers.unsqueeze(0)  # (1, N, D)
+    weights = index.weights.unsqueeze(0)  # (1, N)
+    with torch.no_grad():
+        result = estimator.integrated_evidence_perturbed_batched_joint_torch(empty, centers, weights)
+    return float(result[0].item())
 
 
 def test_integrated_evidence_grows_with_data():
     """∫E dz grows monotonically as more centers are added."""
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     rng = np.random.default_rng(0)
     D = 3
     sigma = 0.15 * float(np.sqrt(D))
     estimator = SobolLocalEstimator(box=3.0, n_samples=256)
 
     index_empty = KernelIndex(np.empty((0, D)), np.empty((0,)), sigma)
-    E_prev = estimator.integrated_evidence(index_empty)
+    E_prev = _integrated_evidence_torch(estimator, index_empty)
     assert E_prev == pytest.approx(0.0)
 
     centers: list[np.ndarray] = []
@@ -617,27 +624,27 @@ def test_integrated_evidence_grows_with_data():
         arr = np.stack(centers)
         w = np.ones(len(arr))
         index = KernelIndex(arr, w, sigma)
-        E_new = estimator.integrated_evidence(index)
-        assert E_new > E_prev - 1e-8  # monotone non-decreasing
+        E_new = _integrated_evidence_torch(estimator, index)
+        assert E_new > E_prev - 1e-8
         E_prev = E_new
 
 
 def test_integrated_evidence_saturates():
     """∫E dz stays bounded by the unit-cube volume even with many stacked kernels."""
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     D = 2
     sigma = 0.1
     estimator = SobolLocalEstimator(box=3.0, n_samples=256)
     centers = np.tile(np.array([[0.5, 0.5]]), (50, 1))
     weights = np.ones(50)
     index = KernelIndex(centers, weights, sigma)
-    E = estimator.integrated_evidence(index)
+    E = _integrated_evidence_torch(estimator, index)
     assert 0.0 < E < 1.0
 
 
 def test_integrated_evidence_prefers_interior_over_corner():
     """Corner kernel leaks half its mass outside [0,1]^D → smaller ∫E than a centered kernel."""
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     D = 3
     sigma = 0.15 * float(np.sqrt(D))
     estimator = SobolLocalEstimator(box=3.0, n_samples=512)
@@ -645,8 +652,8 @@ def test_integrated_evidence_prefers_interior_over_corner():
 
     index_center = KernelIndex(np.array([[0.5, 0.5, 0.5]]), w, sigma)
     index_corner = KernelIndex(np.array([[0.0, 0.0, 0.0]]), w, sigma)
-    E_center = estimator.integrated_evidence(index_center)
-    E_corner = estimator.integrated_evidence(index_corner)
+    E_center = _integrated_evidence_torch(estimator, index_center)
+    E_corner = _integrated_evidence_torch(estimator, index_corner)
     assert E_center > E_corner
 
 
@@ -663,7 +670,7 @@ def test_integrated_evidence_prefers_interior_over_corner():
 def test_sobol_local_torch_returns_finite_S_tensor():
     """integrated_evidence_perturbed_batched_joint_torch returns finite (S,) values."""
     import torch
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     rng = np.random.default_rng(0)
     D = 3
     sigma = 0.15 * float(np.sqrt(D))
@@ -686,7 +693,7 @@ def test_sobol_local_torch_returns_finite_S_tensor():
 def test_sobol_local_torch_grad_flows_through_new_centers():
     """new_centers_SL.requires_grad=True → backward produces finite gradients."""
     import torch
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     rng = np.random.default_rng(0)
     D = 3
     sigma = 0.15 * float(np.sqrt(D))
@@ -714,7 +721,7 @@ def test_sobol_local_torch_grad_flows_through_new_centers():
 def test_sobol_local_torch_handles_empty_old_index():
     """Empty old index — only new kernels contribute."""
     import torch
-    KernelIndex, SobolLocalEstimator = _make_estimator_and_index_helper()
+    from pred_fab.orchestration.evidence import KernelIndex, SobolLocalEstimator
     D = 3
     sigma = 0.075
     estimator = SobolLocalEstimator(box=3.0, n_samples=64)
