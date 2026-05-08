@@ -82,8 +82,9 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     probe_vis = np.clip(probe_density, 0.25, 1.0)  # minimum 25% visibility
 
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
-        # Shell radii
-        add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=True)
+        # Shell radii in current surface colormap
+        add_kernel_radii_2d(ax, c, sigma, DEFAULT_RADII, color_scale=False,
+                            base_color=ZINC_400)
         # Probes colored by density with minimum visibility floor
         pts = c + offsets
         probe_norm = Normalize(vmin=0, vmax=1)
@@ -108,7 +109,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
         ax.plot([c[0], c[0]], [0, c[1]],
                 color=proj_color_x, lw=0.8, linestyle=proj.linestyle,
                 alpha=0.5, zorder=1)
-        ax.scatter([c[0]], [0], c=proj_color_x, s=18, edgecolors="white",
+        ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
         ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
                 ha="center", va="top", zorder=9, clip_on=False)
@@ -116,7 +117,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
         ax.plot([0, c[0]], [c[1], c[1]],
                 color=proj_color_y, lw=0.8, linestyle=proj.linestyle,
                 alpha=0.5, zorder=1)
-        ax.scatter([0], [c[1]], c=proj_color_y, s=18, edgecolors="white",
+        ax.scatter([0], [c[1]], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
         ax.text(-0.04, c[1], f"{lab}ᵧ", fontsize=7, color=proj_color_y,
                 ha="right", va="center", zorder=9, clip_on=False)
@@ -149,10 +150,8 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
         val_at_x = np.interp(c[0], xs, curve_x)
         ax_x.plot([c[0], c[0]], [0, val_at_x],
                   color=proj_color_x, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
-        ax_x.scatter([c[0]], [0], c=proj_color_x, s=18, edgecolors="white",
+        ax_x.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                      linewidth=0.5, zorder=10, clip_on=False)
-        ax_x.scatter([c[0]], [val_at_x], c=proj_color_x, s=18, edgecolors="white",
-                     linewidth=0.5, zorder=10)
         ax_x.text(c[0], -0.06 * curve_x.max(), f"{lab}ₓ", fontsize=7,
                   color=proj_color_x, ha="center", va="top", zorder=11, clip_on=False)
     ax_x.set_xlim(0, 1)
@@ -167,10 +166,8 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
         val_at_y = np.interp(c[1], xs, curve_y)
         ax_y.plot([c[1], c[1]], [0, val_at_y],
                   color=proj_color_y, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
-        ax_y.scatter([c[1]], [0], c=proj_color_y, s=18, edgecolors="white",
+        ax_y.scatter([c[1]], [0], c=RED, s=18, edgecolors="white",
                      linewidth=0.5, zorder=10, clip_on=False)
-        ax_y.scatter([c[1]], [val_at_y], c=proj_color_y, s=18, edgecolors="white",
-                     linewidth=0.5, zorder=10)
         ax_y.text(c[1], -0.06 * curve_y.max(), f"{lab}ᵧ", fontsize=7,
                   color=proj_color_y, ha="center", va="top", zorder=11, clip_on=False)
     ax_y.set_xlim(0, 1)
@@ -185,18 +182,19 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     res = 200
     xs = np.linspace(0, 1, res)
 
-    fig = plt.figure(figsize=(10, 5))
-    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.4, wspace=0.3)
+    fig = plt.figure(figsize=(11, 5), constrained_layout=True)
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.35, wspace=0.15)
     ax_joint = fig.add_subplot(gs[:, 0])
-    ax_mx = fig.add_subplot(gs[0, 1])
-    ax_my = fig.add_subplot(gs[1, 1])
+    ax_cbar = fig.add_subplot(gs[:, 1])
+    ax_mx = fig.add_subplot(gs[0, 2])
+    ax_my = fig.add_subplot(gs[1, 2])
 
     cm, norm = _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
     subplot_label(ax_joint, title_2d)
 
-    # Colorbar for the 2D panel
+    # Colorbar in its own thin column — aligned with the 2D panel
     sm = ScalarMappable(norm=norm, cmap=cm)
-    cbar = fig.colorbar(sm, ax=ax_joint, location="right", shrink=0.7, pad=0.02)
+    cbar = fig.colorbar(sm, cax=ax_cbar)
     style_colorbar(cbar)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
