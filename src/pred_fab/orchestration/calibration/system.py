@@ -15,14 +15,6 @@ from .bounds import BoundsManager
 from .space import SolutionSpace
 
 
-# How far static params can drift from their Phase-2 warm start during the
-# Schedule phase, as a fraction of normalised range. Internal heuristic that
-# anchors per-experiment refinement near Process's globally-coherent placement;
-# intentionally not user-exposed (distinct concept from the per-step
-# ``trust_regions`` configured for runtime params).
-_STATIC_DRIFT_FRAC = 0.2
-
-
 @dataclass
 class EvidenceBackend:
     """Δ∫E callbacks the acquisition objective dispatches to.
@@ -50,6 +42,7 @@ class _ScheduleState:
     per_exp_L: list[int]
     primary_dim_code: str
     sched_delta_norms: list[float]
+    static_delta_norms: list[float]
 
     # Mutable state — updated each pass.
     static_norms: np.ndarray              # (n, D_static)
@@ -1192,8 +1185,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Decision vector: ``(D_static + L_i × D_sched)`` per experiment, all
         concatenated → ``Σᵢ (D_static + L_i × D_sched)`` total dims.
-        Per-dim bounds: each experiment's static drifts around its
-        Phase-1 anchor (``±_STATIC_DRIFT_FRAC``); schedule values are
+        Per-dim bounds: static params drift within the same trust-region
+        band used for schedule params; schedule values are
         ``[0, 1]`` (sigmoid-reparam'd inside ``run_acquisition_gradient``).
         Per-experiment delta constraints are smooth quadratic penalties on
         adjacent step differences.
@@ -1235,6 +1228,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sched_delta_norms = [
             (self.trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
             for code, lo, hi in sched_params
+        ]
+        static_delta_norms = [
+            (self.trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
+            for code, lo, hi in static_params
         ]
 
         # Phase-2 warm starts — step 0 is now optimisable; static is the trust-region centre.
@@ -1283,7 +1280,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             n=n, flat_specs=flat_specs,
             sched_params=sched_params, static_params=static_params,
             per_exp_L=per_exp_L, primary_dim_code=primary_dim_code,
-            sched_delta_norms=sched_delta_norms,
+            sched_delta_norms=sched_delta_norms, static_delta_norms=static_delta_norms,
             static_norms=static_norms, schedule_norms=schedule_norms,
             n_dm_cols=n_dm_cols, exp_base_rows=exp_base_rows,
             sched_col_map=sched_col_map, static_col_map=static_col_map,
@@ -1328,6 +1325,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         sched_col_idxs = torch.tensor(
             [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
         )
+        static_delta_norms_list = state.static_delta_norms
         sched_delta_t = (
             torch.tensor(state.sched_delta_norms, dtype=torch.float64)
             if state.sched_delta_norms else torch.zeros(D_sched, dtype=torch.float64)
@@ -1446,7 +1444,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 bounds_i: list[tuple[float, float]] = []
                 for si in range(D_static):
                     c = float(state.static_norms[exp_idx, si])
-                    bounds_i.append((max(0.0, c - _STATIC_DRIFT_FRAC), min(1.0, c + _STATIC_DRIFT_FRAC)))
+                    d = static_delta_norms_list[si]
+                    bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
                 for _k in range(L_i):
                     for _si in range(D_sched):
                         bounds_i.append((0.0, 1.0))
