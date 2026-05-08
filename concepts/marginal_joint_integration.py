@@ -270,18 +270,25 @@ def _figure_acquisition(xs, xx, yy, gain_2d, sigma):
     kf = KernelFieldEstimator()
     index_old = KernelIndex(CENTERS, np.ones(len(CENTERS)), sigma)
 
-    # Compute real ΔE at each grid point
+    # Compute E_old via same ANOVA path (existing kernels as "new" to empty index)
+    empty_index = KernelIndex(np.empty((0, 2)), np.empty(0), sigma)
+    old_centers_t = index_old.centers.unsqueeze(0).double()
+    old_weights_t = index_old.weights.unsqueeze(0).double()
+    E_old = float(kf.integrated_evidence_perturbed_batched_joint_torch(
+        empty_index, old_centers_t, old_weights_t,
+    )[0].item())
+
+    # Compute E(old ∪ new) at each grid point → ΔE = E(old ∪ new) - E_old
     res = len(xs)
     gain_real = np.zeros((res, res))
     for j in range(res):
-        # Batch all x values for this y row
-        row_pts = np.stack([xs, np.full(res, xs[j])], axis=-1)  # (res, 2)
-        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)  # (res, 1, 2)
+        row_pts = np.stack([xs, np.full(res, xs[j])], axis=-1)
+        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
         weights_t = torch.ones(res, 1, dtype=torch.float64)
-        de = kf.integrated_evidence_perturbed_batched_joint_torch(
+        e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
             index_old, row_pts_t, weights_t,
         )
-        gain_real[j, :] = de.detach().cpu().numpy()
+        gain_real[j, :] = (e_new.detach().cpu().numpy() - E_old)
 
     cm = cmap("evidence_gain")
     norm = Normalize(vmin=gain_real.min(), vmax=gain_real.max())
