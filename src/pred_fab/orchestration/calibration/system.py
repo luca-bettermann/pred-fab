@@ -1320,11 +1320,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
         )
         static_delta_norms_list = state.static_delta_norms
-        sched_delta_t = (
-            torch.tensor(state.sched_delta_norms, dtype=torch.float64)
-            if state.sched_delta_norms else torch.zeros(D_sched, dtype=torch.float64)
-        )
-        delta_active = bool((sched_delta_t > 0).any().item()) if D_sched > 0 else False
+        sched_delta_norms_list = state.sched_delta_norms
         kappa = 1.0
 
         def _build_fixed_rows(exclude_idx: int) -> torch.Tensor:
@@ -1347,12 +1343,22 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         def _make_per_exp_objective(exp_idx: int):
             L_i = per_exp_L[exp_idx]
+            # Layout: [D_static | D_sched (step0) | (L_i-1)*D_sched (deltas)]
             D_exp = D_static + L_i * D_sched
 
             def _objective(x_S: torch.Tensor) -> torch.Tensor:
                 S = int(x_S.shape[0])
                 stat = x_S[:, :D_static]
-                traj = x_S[:, D_static:].reshape(S, L_i, D_sched)
+
+                # Delta reparameterization: step0 + cumsum(deltas) → absolute
+                step0 = x_S[:, D_static:D_static + D_sched]
+                traj = torch.zeros(S, L_i, D_sched, dtype=x_S.dtype)
+                traj[:, 0, :] = step0
+                if L_i > 1:
+                    deltas = x_S[:, D_static + D_sched:].reshape(S, L_i - 1, D_sched)
+                    traj[:, 1:, :] = step0.unsqueeze(1) + deltas.cumsum(dim=1)
+                # No clamp — sigmoid reparam in run_acquisition_gradient
+                # enforces bounds; clamping would kill gradients.
 
                 cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
@@ -1361,29 +1367,26 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 if D_sched > 0:
                     cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
 
-                # Only this experiment's layers — others are in the KDE via virtual points
                 full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
                 scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
 
-                # Delta constraint
-                if D_sched > 0 and delta_active and L_i > 1:
-                    step_diffs = (traj[:, 1:, :] - traj[:, :-1, :]).abs()
-                    excess = (step_diffs - sched_delta_t).clamp(min=0.0) * (sched_delta_t > 0).to(dtype=traj.dtype)
-                    scores_neg = scores_neg + 10.0 * (excess ** 2).sum(dim=(1, 2))
-
-                # R² smoothness
+                # R² smoothness (delta bounds replace the old soft delta constraint)
                 if D_sched > 0 and L_i > 2:
                     t = torch.arange(L_i, dtype=x_S.dtype)
                     t_mean = t.mean()
                     t_var = ((t - t_mean) ** 2).sum()
                     y_mean = traj.mean(dim=1, keepdim=True)
-                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)
-                    cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
-                    slope = cov / t_var.clamp(min=1e-12)
-                    y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
-                    ss_res = ((traj - y_hat) ** 2).sum(dim=1)
-                    r2 = 1.0 - ss_res / ss_tot.clamp(min=1e-12)
-                    scores_neg = scores_neg + self.smoothness_weight * (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
+                    # Only penalize when trajectory has meaningful variation;
+                    # near-flat ss_tot ≈ 0 makes the ratio pathological.
+                    has_variation = ss_tot > 1e-6
+                    if bool(has_variation.any().item()):
+                        cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
+                        slope = cov / t_var.clamp(min=1e-12)
+                        y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
+                        ss_res = ((traj - y_hat) ** 2).sum(dim=1)
+                        r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
+                        scores_neg = scores_neg + self.smoothness_weight * (1.0 - r2).clamp(min=0.0).sum(dim=-1)
 
                 return scores_neg
 
@@ -1434,20 +1437,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 objective, D_exp = _make_per_exp_objective(exp_idx)
 
-                # Bounds for this experiment
+                # Bounds: [static drift | step0 drift | deltas]
                 bounds_i: list[tuple[float, float]] = []
                 for si in range(D_static):
                     c = float(state.static_norms[exp_idx, si])
                     d = static_delta_norms_list[si]
                     bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
-                for _k in range(L_i):
-                    for _si in range(D_sched):
-                        bounds_i.append((0.0, 1.0))
+                for si in range(D_sched):
+                    c = float(state.schedule_norms[exp_idx][0, si])
+                    d = sched_delta_norms_list[si]
+                    bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
+                for _k in range(1, L_i):
+                    for si in range(D_sched):
+                        d = sched_delta_norms_list[si]
+                        bounds_i.append((-d, d))
 
-                # Warm start
+                # Warm start: step0 from Global, deltas = 0 (flat)
                 x0_i = np.zeros(D_exp)
                 x0_i[:D_static] = state.static_norms[exp_idx]
-                x0_i[D_static:] = state.schedule_norms[exp_idx].ravel()
+                x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][0]
 
                 opt = self.engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
@@ -1459,7 +1467,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 if opt.best_x is not None:
                     new_static = opt.best_x[:D_static]
-                    new_sched = opt.best_x[D_static:].reshape(L_i, D_sched)
+                    # Decode step0 + cumsum(deltas) → absolute schedule
+                    step0 = opt.best_x[D_static:D_static + D_sched]
+                    new_sched = np.zeros((L_i, D_sched))
+                    new_sched[0] = step0
+                    if L_i > 1:
+                        deltas = opt.best_x[D_static + D_sched:].reshape(L_i - 1, D_sched)
+                        new_sched[1:] = step0 + np.cumsum(deltas, axis=0)
                     if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
                        not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
                         improved_this_round = True
