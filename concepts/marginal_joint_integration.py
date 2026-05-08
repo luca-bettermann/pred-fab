@@ -1,17 +1,16 @@
-"""Marginal-joint integration decomposition — the ANOVA KernelField.
+"""Marginal-joint integration — two concept figures.
 
-Shows how the evidence integral decomposes into independent 1D marginal
-integrals (one per dimension) and one D-dimensional joint integral:
+Figure 1 (density): What the evidence field looks like.
+    Left:  2D joint density with KernelField probes (red centres, probe dots)
+           + subtle projection lines to axes
+    Right: Two stacked 1D marginal density plots (x on top, y on bottom)
 
-    E = (1/2D) Σ_d ∫₀¹ 1/(1+ρ_d) dx_d  +  (1/2) ∫ 1/(1+ρ) dx
+Figure 2 (evidence): What the optimizer sees.
+    Left:  2D evidence gain surface 1/(1+ρ)
+    Right: Two stacked 1D marginal evidence curves 1/(1+ρ_d)
 
-Three panels for a 2D example with 3 kernels:
-    Left   — Marginal integral on x: 1D density + shaded evidence area
-    Centre — Marginal integral on y: 1D density + shaded evidence area
-    Right  — Joint integral: 2D contour with shell probes
-
-Annotated with computed values showing how marginals detect per-dimension
-gaps that the joint integral misses.
+Both use three kernels where A and B share the same x-value — the
+marginal integral detects this overlap while the joint integral doesn't.
 """
 from __future__ import annotations
 
@@ -19,32 +18,30 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 
 from _style import (
-    apply_style, clean_spines, subplot_label,
-    STEEL_500, EMERALD_500, ZINC_200, ZINC_300, ZINC_400, ZINC_600, ZINC_700,
+    apply_style, clean_spines, subplot_label, cmap, style_colorbar,
+    add_kernel_radii_2d,
+    STEEL_500, EMERALD_500, ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600, RED,
 )
 from _config import SIGMA
+from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
 
-# Three kernels placed to illustrate the key insight:
-# Kernels A and B share the same x-value (0.3) but differ in y.
-# Kernel C is at a different x. The marginal x-integral sees the
-# A/B overlap; the joint integral doesn't (they're far in 2D).
 CENTERS = np.array([
-    [0.30, 0.25],   # A
-    [0.30, 0.75],   # B — same x as A!
+    [0.30, 0.20],   # A
+    [0.30, 0.75],   # B — same x as A
     [0.75, 0.50],   # C
 ])
 LABELS = ["A", "B", "C"]
-SIGMA_VIS = 0.08  # slightly larger than production for visibility
+SIGMA_VIS = 0.08
 
 
 def _density_1d(xs: np.ndarray, centers_1d: np.ndarray, sigma: float) -> np.ndarray:
-    """1D Gaussian density from multiple kernels."""
     rho = np.zeros_like(xs)
     for c in centers_1d:
         rho += np.exp(-(xs - c) ** 2 / (2 * sigma ** 2))
@@ -52,7 +49,6 @@ def _density_1d(xs: np.ndarray, centers_1d: np.ndarray, sigma: float) -> np.ndar
 
 
 def _density_2d(xx: np.ndarray, yy: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-    """2D isotropic Gaussian density from multiple kernels."""
     rho = np.zeros_like(xx)
     for c in centers:
         d2 = (xx - c[0]) ** 2 + (yy - c[1]) ** 2
@@ -60,116 +56,157 @@ def _density_2d(xx: np.ndarray, yy: np.ndarray, centers: np.ndarray, sigma: floa
     return rho
 
 
-def main() -> None:
+def _draw_joint_panel(ax, centers, sigma, field, xs, cm, norm, show_evidence: bool = False):
+    """Draw the 2D panel — density or evidence."""
+    label_text = "Evidence gain  1/(1+ρ)" if show_evidence else "Joint density  ρ(x, y)"
+    cmap_name = cm
+
+    levels = 18
+    ax.contourf(xs, xs, field, levels=levels, cmap=cmap_name, norm=norm, alpha=0.5)
+    ax.contour(xs, xs, field, levels=8, colors=[ZINC_300], linewidths=0.4)
+
+    # KernelField probes around each centre
+    kf = KernelFieldEstimator()
+    offsets, _, _ = kf._probes_weights_self(2, sigma)
+    probe_density = np.exp(-np.sum(offsets ** 2, axis=-1) / (2 * sigma ** 2))
+    probe_cm = cmap("evidence")
+    probe_norm = Normalize(vmin=0, vmax=1)
+
+    for ci, (c, lab) in enumerate(zip(centers, LABELS)):
+        # Shell probes
+        pts = c + offsets
+        ax.scatter(pts[1:, 0], pts[1:, 1],
+                   c=probe_density[1:], cmap=probe_cm, norm=probe_norm,
+                   s=8, alpha=0.5, edgecolors="none", zorder=4)
+        # Centre
+        ax.scatter([c[0]], [c[1]], c=RED, s=40, edgecolors="white",
+                   linewidth=0.8, zorder=10)
+        # Label
+        offset_x = 0.04 if ci != 1 else -0.06
+        ax.text(c[0] + offset_x, c[1] + 0.04, lab, fontsize=9,
+                color=ZINC_600, fontweight="bold", zorder=11)
+
+    # Projection lines to axes
+    for c in centers:
+        ax.plot([c[0], c[0]], [0, c[1]], color=ZINC_300, lw=0.6,
+                linestyle=":", alpha=0.6, zorder=1)
+        ax.plot([0, c[0]], [c[1], c[1]], color=ZINC_400, lw=0.6,
+                linestyle=":", alpha=0.6, zorder=1)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x", fontsize=9, color=ZINC_600)
+    ax.set_ylabel("y", fontsize=9, color=ZINC_600)
+    subplot_label(ax, label_text)
+    clean_spines(ax)
+
+
+def _draw_marginal_panels(ax_x, ax_y, centers, sigma, show_evidence: bool = False):
+    """Draw the two stacked 1D marginal panels."""
+    res = 200
+    xs = np.linspace(0, 1, res)
+
+    rho_x = _density_1d(xs, centers[:, 0], sigma)
+    rho_y = _density_1d(xs, centers[:, 1], sigma)
+
+    if show_evidence:
+        curve_x = 1.0 / (1.0 + rho_x)
+        curve_y = 1.0 / (1.0 + rho_y)
+        fill_color = EMERALD_500
+        line_color = EMERALD_500
+        label_x = "Marginal evidence  1/(1+ρ_x)"
+        label_y = "Marginal evidence  1/(1+ρ_y)"
+    else:
+        curve_x = rho_x
+        curve_y = rho_y
+        fill_color = STEEL_500
+        line_color = STEEL_500
+        label_x = "Marginal density  ρ_x"
+        label_y = "Marginal density  ρ_y"
+
+    # X marginal (top)
+    ax_x.fill_between(xs, 0, curve_x, alpha=0.15, color=fill_color)
+    ax_x.plot(xs, curve_x, color=line_color, linewidth=1.5)
+    for c, lab in zip(centers, LABELS):
+        ax_x.scatter([c[0]], [0], c=RED, s=30, edgecolors="white",
+                     linewidth=0.6, zorder=10, clip_on=False)
+    ax_x.set_xlim(0, 1)
+    ax_x.set_ylim(0, None)
+    ax_x.set_xlabel("x", fontsize=9, color=ZINC_600)
+    subplot_label(ax_x, label_x)
+    clean_spines(ax_x)
+
+    # Y marginal (bottom)
+    ax_y.fill_between(xs, 0, curve_y, alpha=0.15, color=fill_color)
+    ax_y.plot(xs, curve_y, color=line_color, linewidth=1.5)
+    for c, lab in zip(centers, LABELS):
+        ax_y.scatter([c[1]], [0], c=RED, s=30, edgecolors="white",
+                     linewidth=0.6, zorder=10, clip_on=False)
+    ax_y.set_xlim(0, 1)
+    ax_y.set_ylim(0, None)
+    ax_y.set_xlabel("y", fontsize=9, color=ZINC_600)
+    subplot_label(ax_y, label_y)
+    clean_spines(ax_y)
+
+
+def figure_density() -> Path:
+    """Figure 1: density field — what the evidence field looks like."""
     apply_style()
     sigma = SIGMA_VIS
     res = 200
     xs = np.linspace(0, 1, res)
+    xx, yy = np.meshgrid(xs, xs)
+    rho_2d = _density_2d(xx, yy, CENTERS, sigma)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    cm = cmap("evidence")
+    norm = Normalize(vmin=0, vmax=rho_2d.max())
 
-    # === Panel 1: Marginal integral on x ===
-    ax = axes[0]
-    rho_x = _density_1d(xs, CENTERS[:, 0], sigma)
-    evidence_x = 1.0 / (1.0 + rho_x)
+    fig = plt.figure(figsize=(10, 5))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
+    ax_joint = fig.add_subplot(gs[:, 0])
+    ax_mx = fig.add_subplot(gs[0, 1])
+    ax_my = fig.add_subplot(gs[1, 1])
 
-    ax.fill_between(xs, 0, rho_x, alpha=0.15, color=STEEL_500, label="ρ_x (density)")
-    ax.plot(xs, rho_x, color=STEEL_500, linewidth=1.5)
-    ax.fill_between(xs, 0, evidence_x, alpha=0.2, color=EMERALD_500, label="1/(1+ρ_x)")
-    ax.plot(xs, evidence_x, color=EMERALD_500, linewidth=1.5)
+    _draw_joint_panel(ax_joint, CENTERS, sigma, rho_2d, xs, cm, norm, show_evidence=False)
+    _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, show_evidence=False)
 
-    for c, lab in zip(CENTERS, LABELS):
-        ax.axvline(c[0], color=ZINC_400, linewidth=0.8, linestyle="--", alpha=0.6)
-        ax.text(c[0], max(rho_x) * 1.05, lab, ha="center", fontsize=9, color=ZINC_600)
+    path = PLOTS_DIR / "marginal_joint_density.png"
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {path}")
+    return path
 
-    # Highlight the overlap: A and B at x=0.3
-    ax.annotate("A & B overlap\n(same x)", xy=(0.30, rho_x[int(0.30 * res)]),
-                xytext=(0.48, max(rho_x) * 0.85),
-                arrowprops=dict(arrowstyle="->", color=ZINC_600, lw=1),
-                fontsize=8, color=ZINC_600, ha="center")
 
-    E_x = float(np.trapezoid(evidence_x, xs))
-    ax.set_xlabel("x (dimension 1)", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("Value", fontsize=9, color=ZINC_700)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, None)
-    ax.legend(fontsize=7, frameon=False, loc="upper right")
-    subplot_label(ax, f"Marginal x:  E_x = {E_x:.3f}")
-    clean_spines(ax)
-
-    # === Panel 2: Marginal integral on y ===
-    ax = axes[1]
-    rho_y = _density_1d(xs, CENTERS[:, 1], sigma)
-    evidence_y = 1.0 / (1.0 + rho_y)
-
-    ax.fill_between(xs, 0, rho_y, alpha=0.15, color=STEEL_500, label="ρ_y (density)")
-    ax.plot(xs, rho_y, color=STEEL_500, linewidth=1.5)
-    ax.fill_between(xs, 0, evidence_y, alpha=0.2, color=EMERALD_500, label="1/(1+ρ_y)")
-    ax.plot(xs, evidence_y, color=EMERALD_500, linewidth=1.5)
-
-    for c, lab in zip(CENTERS, LABELS):
-        ax.axvline(c[1], color=ZINC_400, linewidth=0.8, linestyle="--", alpha=0.6)
-        ax.text(c[1], max(rho_y) * 1.05, lab, ha="center", fontsize=9, color=ZINC_600)
-
-    # Highlight: A, B, C are all at different y → good marginal coverage
-    ax.annotate("All separated\n(good y-coverage)", xy=(0.50, evidence_y[int(0.50 * res)]),
-                xytext=(0.50, max(rho_y) * 0.85),
-                fontsize=8, color=ZINC_600, ha="center")
-
-    E_y = float(np.trapezoid(evidence_y, xs))
-    ax.set_xlabel("y (dimension 2)", fontsize=9, color=ZINC_700)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, None)
-    ax.legend(fontsize=7, frameon=False, loc="upper right")
-    subplot_label(ax, f"Marginal y:  E_y = {E_y:.3f}")
-    clean_spines(ax)
-
-    # === Panel 3: Joint integral (2D) ===
-    ax = axes[2]
+def figure_evidence() -> Path:
+    """Figure 2: evidence gain — what the optimizer sees."""
+    apply_style()
+    sigma = SIGMA_VIS
+    res = 200
+    xs = np.linspace(0, 1, res)
     xx, yy = np.meshgrid(xs, xs)
     rho_2d = _density_2d(xx, yy, CENTERS, sigma)
     evidence_2d = 1.0 / (1.0 + rho_2d)
 
-    levels = np.linspace(0, rho_2d.max(), 12)
-    ax.contourf(xx, yy, rho_2d, levels=levels, cmap="Blues", alpha=0.6)
-    ax.contour(xx, yy, rho_2d, levels=levels[1::2], colors=[ZINC_300], linewidths=0.5)
+    cm = "YlGn"
+    norm = Normalize(vmin=evidence_2d.min(), vmax=1.0)
 
-    for c, lab in zip(CENTERS, LABELS):
-        ax.scatter(c[0], c[1], s=60, c="white", edgecolors=STEEL_500, linewidth=1.5, zorder=5)
-        ax.text(c[0] + 0.04, c[1] + 0.04, lab, fontsize=9, color=ZINC_600, zorder=6)
+    fig = plt.figure(figsize=(10, 5))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.2, 1], hspace=0.35, wspace=0.3)
+    ax_joint = fig.add_subplot(gs[:, 0])
+    ax_mx = fig.add_subplot(gs[0, 1])
+    ax_my = fig.add_subplot(gs[1, 1])
 
-    # Draw shell probes around kernel A
-    from pred_fab.orchestration.evidence import KernelFieldEstimator
-    kf = KernelFieldEstimator()
-    offsets_np, _, _ = kf._probes_weights_self(2, sigma)
-    for off in offsets_np[1:]:  # skip centre
-        ax.plot(CENTERS[0, 0] + off[0], CENTERS[0, 1] + off[1], ".",
-                color=ZINC_400, markersize=3, alpha=0.5, zorder=4)
+    _draw_joint_panel(ax_joint, CENTERS, sigma, evidence_2d, xs, cm, norm, show_evidence=True)
+    _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, show_evidence=True)
 
-    E_joint = float(np.trapezoid(np.trapezoid(evidence_2d, xs, axis=1), xs))
-    ax.set_xlabel("x", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("y", fontsize=9, color=ZINC_700)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect("equal")
-    subplot_label(ax, f"Joint (2D):  E_joint = {E_joint:.3f}")
-    clean_spines(ax)
-
-    # === Bottom annotation: the formula ===
-    E_marginal = (E_x + E_y) / 2
-    E_total = (E_marginal + E_joint) / 2
-    fig.text(0.5, -0.02,
-             f"E = (E_marginal + E_joint) / 2 = ({E_marginal:.3f} + {E_joint:.3f}) / 2 = {E_total:.3f}\n"
-             f"Marginal detects A/B x-overlap (E_x = {E_x:.3f} < E_y = {E_y:.3f})  ·  "
-             f"Joint sees them as well-separated in 2D",
-             ha="center", fontsize=9, color=ZINC_600)
-
-    fig.tight_layout()
-    path = PLOTS_DIR / "marginal_joint_integration.png"
+    path = PLOTS_DIR / "marginal_joint_evidence.png"
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {path}")
+    return path
 
 
 if __name__ == "__main__":
-    main()
+    figure_density()
+    figure_evidence()
