@@ -111,7 +111,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
                 alpha=0.5, zorder=1)
         ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
-        _bbox = dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.85)
+        _bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
         ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
                 ha="center", va="top", zorder=9, clip_on=False, bbox=_bbox)
         # Horizontal projection to y-axis
@@ -143,7 +143,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
 
     proj_color_x = ZINC_500
     proj_color_y = ZINC_400
-    bbox = dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.85)
+    bbox = dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=1.0)
 
     # Y-axis limits: bounded [0,1]; density: shared max so scale differences are visible
     if surf.bounded:
@@ -151,8 +151,23 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
     else:
         y_max = max(curve_x.max(), curve_y.max()) * 1.15
 
+    def _gradient_fill(ax, xs, curve, y_max, cm_obj, norm_fill):
+        """Fill under curve with a vertical gradient matching the surface cmap."""
+        res_y = 100
+        extent = [0, 1, 0, y_max]
+        gradient = np.linspace(0, 1, res_y).reshape(-1, 1) * np.ones((1, len(xs)))
+        # Scale gradient by the curve value at each x
+        curve_norm = curve / y_max if y_max > 0 else curve
+        gradient = gradient * curve_norm[None, :]
+        ax.imshow(gradient, aspect="auto", origin="lower", extent=extent,
+                  cmap=cm_obj, norm=norm_fill, alpha=0.4, zorder=0)
+        # Mask above the curve
+        ax.fill_between(xs, curve, y_max, color="white", zorder=1)
+
+    fill_norm = Normalize(vmin=0, vmax=1)
+
     # X marginal (top)
-    ax_x.fill_between(xs, 0, curve_x, alpha=FILL_ALPHA["area"], color=fill_color)
+    _gradient_fill(ax_x, xs, curve_x, y_max, cm, fill_norm)
     ax_x.plot(xs, curve_x, color=line_color, linewidth=1.5)
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
         val_at_x = np.interp(c[0], xs, curve_x)
@@ -169,7 +184,7 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
     clean_spines(ax_x)
 
     # Y marginal (bottom)
-    ax_y.fill_between(xs, 0, curve_y, alpha=FILL_ALPHA["area"], color=fill_color)
+    _gradient_fill(ax_y, xs, curve_y, y_max, cm, fill_norm)
     ax_y.plot(xs, curve_y, color=line_color, linewidth=1.5)
     for ci, (c, lab) in enumerate(zip(centers, LABELS)):
         val_at_y = np.interp(c[1], xs, curve_y)
@@ -193,20 +208,23 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5))
-    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.5, wspace=0.15,
+    gs = fig.add_gridspec(2, 4, width_ratios=[1.2, 0.04, 0.08, 1], hspace=0.5, wspace=0.05,
                           left=0.06, right=0.95, top=0.92, bottom=0.12)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_cbar = fig.add_subplot(gs[:, 1])
-    ax_mx = fig.add_subplot(gs[0, 2])
-    ax_my = fig.add_subplot(gs[1, 2])
+    ax_mx = fig.add_subplot(gs[0, 3])
+    ax_my = fig.add_subplot(gs[1, 3])
 
     cm, norm = _draw_2d_panel(ax_joint, CENTERS, sigma, field_2d, xs, surface_name)
     subplot_label(ax_joint, title_2d)
 
-    # Colorbar in its own thin column — aligned with the 2D panel
+    # Colorbar tight against the joint plot
     sm = ScalarMappable(norm=norm, cmap=cm)
     cbar = fig.colorbar(sm, cax=ax_cbar)
     style_colorbar(cbar)
+
+    # Blank spacer column
+    fig.add_subplot(gs[:, 2]).set_visible(False)
 
     _draw_marginal_panels(ax_mx, ax_my, CENTERS, sigma, curve_x, curve_y, surface_name)
     subplot_label(ax_mx, title_x)
