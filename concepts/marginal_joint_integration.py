@@ -111,8 +111,9 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
                 alpha=0.5, zorder=1)
         ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
+        _bbox = dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.85)
         ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=proj_color_x,
-                ha="center", va="top", zorder=9, clip_on=False)
+                ha="center", va="top", zorder=9, clip_on=False, bbox=_bbox)
         # Horizontal projection to y-axis
         ax.plot([0, c[0]], [c[1], c[1]],
                 color=proj_color_y, lw=0.8, linestyle=proj.linestyle,
@@ -120,7 +121,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
         ax.scatter([0], [c[1]], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
         ax.text(-0.04, c[1], f"{lab}ᵧ", fontsize=7, color=proj_color_y,
-                ha="right", va="center", zorder=9, clip_on=False)
+                ha="right", va="center", zorder=9, clip_on=False, bbox=_bbox)
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
@@ -131,7 +132,7 @@ def _draw_2d_panel(ax, centers, sigma, field_2d, xs, surface_name):
     return cm, norm
 
 
-def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_name):
+def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_name, res=200):
     """Draw the two stacked 1D marginal panels."""
     res = 200
     xs = np.linspace(0, 1, res)
@@ -142,6 +143,13 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
 
     proj_color_x = ZINC_500
     proj_color_y = ZINC_400
+    bbox = dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="none", alpha=0.85)
+
+    # Y-axis limits: bounded [0,1]; density: shared max so scale differences are visible
+    if surf.bounded:
+        y_max = surf.vmax
+    else:
+        y_max = max(curve_x.max(), curve_y.max()) * 1.15
 
     # X marginal (top)
     ax_x.fill_between(xs, 0, curve_x, alpha=FILL_ALPHA["area"], color=fill_color)
@@ -152,10 +160,11 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
                   color=proj_color_x, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
         ax_x.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                      linewidth=0.5, zorder=10, clip_on=False)
-        ax_x.text(c[0], -0.06 * curve_x.max(), f"{lab}ₓ", fontsize=7,
-                  color=proj_color_x, ha="center", va="top", zorder=11, clip_on=False)
+        ax_x.text(c[0], -0.08 * y_max, f"{lab}ₓ", fontsize=7,
+                  color=proj_color_x, ha="center", va="top", zorder=11,
+                  clip_on=False, bbox=bbox)
     ax_x.set_xlim(0, 1)
-    ax_x.set_ylim(0, None)
+    ax_x.set_ylim(0, y_max)
     ax_x.set_xlabel("x", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax_x)
 
@@ -168,10 +177,11 @@ def _draw_marginal_panels(ax_x, ax_y, centers, sigma, curve_x, curve_y, surface_
                   color=proj_color_y, lw=0.8, linestyle=":", alpha=0.5, zorder=3)
         ax_y.scatter([c[1]], [0], c=RED, s=18, edgecolors="white",
                      linewidth=0.5, zorder=10, clip_on=False)
-        ax_y.text(c[1], -0.06 * curve_y.max(), f"{lab}ᵧ", fontsize=7,
-                  color=proj_color_y, ha="center", va="top", zorder=11, clip_on=False)
+        ax_y.text(c[1], -0.08 * y_max, f"{lab}ᵧ", fontsize=7,
+                  color=proj_color_y, ha="center", va="top", zorder=11,
+                  clip_on=False, bbox=bbox)
     ax_y.set_xlim(0, 1)
-    ax_y.set_ylim(0, None)
+    ax_y.set_ylim(0, y_max)
     ax_y.set_xlabel("y", fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax_y)
 
@@ -183,7 +193,7 @@ def _make_figure(surface_name, title_2d, title_x, title_y, field_2d, curve_x, cu
     xs = np.linspace(0, 1, res)
 
     fig = plt.figure(figsize=(11, 5), constrained_layout=True)
-    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.35, wspace=0.15)
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.2, 0.05, 1], hspace=0.45, wspace=0.15)
     ax_joint = fig.add_subplot(gs[:, 0])
     ax_cbar = fig.add_subplot(gs[:, 1])
     ax_mx = fig.add_subplot(gs[0, 2])
