@@ -143,16 +143,24 @@ def main():
                 c=RED, s=42, edgecolors="none",
                 depthshade=False, zorder=10)
 
-    pad_3d = 2.2 * sigma
+    pad_3d = 1.8 * sigma
     lo3 = 0.5 - pad_3d
     hi3 = 0.5 + pad_3d
     ax3.set_xlim(lo3, hi3)
     ax3.set_ylim(lo3, hi3)
     ax3.set_zlim(lo3, hi3)  # type: ignore[attr-defined]
 
-    # Vertical z-spine at the back corner where x and y axes meet
-    ax3.plot([lo3, lo3], [hi3, hi3], [lo3, hi3],  # type: ignore[arg-type]
-             color=ZINC_300, lw=0.8, zorder=0)
+    # Coordinate frame axes from centre — same Steel color as 2D radii
+    from pred_fab.plotting._style import STEEL_500
+    axis_len = 2.0 * sigma
+    cx, cy, cz = 0.5, 0.5, 0.5
+    for dx, dy, dz, label in [
+        (axis_len, 0, 0, "z₁"),
+        (0, axis_len, 0, "z₂"),
+        (0, 0, axis_len, "z₃"),
+    ]:
+        ax3.plot([cx, cx + dx], [cy, cy + dy], [cz, cz + dz],  # type: ignore[arg-type]
+                 color=STEEL_500, lw=1.0, alpha=0.6, zorder=1)
     ax3.set_xticks(ticks)
     ax3.set_yticks(ticks)
     ax3.set_zticks(ticks)  # type: ignore[attr-defined]
