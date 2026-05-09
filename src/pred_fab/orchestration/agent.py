@@ -709,41 +709,24 @@ class PfabAgent:
     def configure_optimizer(
         self,
         *,
-        de_maxiter: int | None = None,
-        de_popsize: int | None = None,
         n_starts: int | None = None,
         n_iters: int | None = None,
         lr: float | None = None,
-        convergence_window: float | None = None,
-        convergence_eps: float | None = None,
         gradient_method: str | None = None,
         raw_samples: int | None = None,
         init_eta: float | None = None,
         smoothness_weight: float | None = None,
         max_trajectory_rounds: int | None = None,
     ) -> None:
-        """Set optimiser tuning parameters.
-
-        ``de_maxiter`` / ``de_popsize`` control the global DE phase;
-        ``n_starts`` / ``n_iters`` / ``lr`` control the local phase.
-        ``convergence_window`` / ``convergence_eps`` control early stopping.
-        """
+        """Set optimiser tuning parameters."""
         self._assert_initialized()
         cal = self.calibration_system
-        if de_maxiter is not None:
-            cal.de_maxiter = de_maxiter
-        if de_popsize is not None:
-            cal.de_popsize = de_popsize
         if n_starts is not None:
             cal.engine.gradient_n_starts = n_starts
         if n_iters is not None:
             cal.engine.gradient_n_iters = n_iters
         if lr is not None:
             cal.engine.gradient_lr = lr
-        if convergence_window is not None:
-            cal.engine.convergence_window_frac = convergence_window
-        if convergence_eps is not None:
-            cal.engine.convergence_eps_frac = convergence_eps
         if gradient_method is not None:
             cal.engine.gradient_method = gradient_method
         if raw_samples is not None:

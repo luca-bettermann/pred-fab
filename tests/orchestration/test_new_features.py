@@ -21,16 +21,6 @@ def _setup_trained_agent(tmp_path):
 class TestOptimizerConfig:
     """agent.configure_optimizer() sets optimizer parameters."""
 
-    def test_configure_de_maxiter(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(de_maxiter=200)
-        assert agent.calibration_system.de_maxiter == 200
-
-    def test_configure_de_popsize(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        agent.configure_optimizer(de_popsize=20)
-        assert agent.calibration_system.de_popsize == 20
-
     def test_configure_n_starts(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(n_starts=8)

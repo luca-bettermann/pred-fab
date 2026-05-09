@@ -172,27 +172,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self.bounds.trajectory_configs
 
     # ------------------------------------------------------------------
-    # Proxy properties for engine config (used by agent.py)
-    # ------------------------------------------------------------------
-
-    @property
-    def de_maxiter(self) -> int:
-        return self.engine.de_maxiter
-
-    @de_maxiter.setter
-    def de_maxiter(self, value: int) -> None:
-        self.engine.de_maxiter = value
-
-    @property
-    def de_popsize(self) -> int:
-        return self.engine.de_popsize
-
-    @de_popsize.setter
-    def de_popsize(self, value: int) -> None:
-        self.engine.de_popsize = value
-
-
-
     # ------------------------------------------------------------------
     # random_seed property
     # ------------------------------------------------------------------
@@ -998,15 +977,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         console = self.logger._console_output_enabled
 
-        init_de = init_norm.copy()
-        for d in int_set:
-            if d < init_de.shape[1]:
-                init_de[:, d] = np.round(init_de[:, d] * int_ranges_map[d])
-
         space = SolutionSpace(
             n_experiments=n,
             static_params=all_static_tuples,
-            trust_regions={},
             int_set=all_int_set,
             int_ranges_map=all_int_ranges,
         )
@@ -1052,105 +1025,44 @@ class CalibrationSystem(BaseOrchestrationSystem):
             [s for s, _ in phase_col_map], dtype=torch.long,
         ) if phase_col_map else None
 
-        def _acquisition_batch_objective_vec(x_flat_DS: np.ndarray) -> np.ndarray:
-            """Vectorised: ``(D, S) → (S,)`` — one negated ΔE per population member."""
-            x_flat_SD = torch.from_numpy(x_flat_DS.T).double()  # (S, total_vars)
-            S = int(x_flat_SD.shape[0])
-            pts_S = x_flat_SD.reshape(S, n, d_phase)
-            X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone()
-            if phase_cols_t is not None and phase_si_t is not None:
-                src = pts_S.index_select(-1, phase_si_t)
-                X_batch_S[:, :, phase_cols_t] = src
-            full_S_NL = X_batch_S.unsqueeze(2)  # (S, N, 1, D)
-            with torch.no_grad():
-                scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None)
-            return scores_neg.cpu().numpy()
-
-        # Build init_norm for the phase-local space (remap original indices)
-        merged_init = np.zeros((n, len(all_phase_params)))
-        for si, (d_i, _, _, _) in enumerate(all_phase_params):
-            if d_i < init_de.shape[1]:
-                merged_init[:, si] = init_de[:, d_i]
-
-        init_pop = space.build_init_population(self.engine.rng, merged_init)
-
         self.logger.info(
             f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
-            f"D_sched=0, total_vars={space.total_vars}, maxiter={self.engine.de_maxiter}"
-        )
-
-        # Gradient when tensor evidence is wired + no integer dims.
-        # DE fallback handles integer/categorical phases where gradients
-        # don't apply. With ANOVA kernel, baseline evidence has strong
-        # per-dimension gradients — no need for DE on continuous params.
-        use_gradient = (
-            self.evidence.joint_batched_tensor is not None
-            and not (space.integrality is not None and any(space.integrality))
+            f"D_sched=0, total_vars={space.total_vars}"
         )
 
         def _acquisition_batch_objective_tensor(x_flat_S: torch.Tensor) -> torch.Tensor:
             S = int(x_flat_S.shape[0])
             pts_S = x_flat_S.reshape(S, n, d_phase)
-            # Out-of-place column replacement to preserve autograd.
-            # Start from prior_fill (constant), then replace phase columns
-            # with optimised values via index arithmetic (no in-place ops).
             X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=x_flat_S.dtype)
             if phase_cols_t is not None and phase_si_t is not None:
+                # STE rounding for integer dims: forward rounds, backward passes gradient through
                 src = pts_S.index_select(-1, phase_si_t)
+                if all_int_set:
+                    for si_local in all_int_set:
+                        if si_local < src.shape[-1]:
+                            col_val = src[:, :, si_local]
+                            src = src.clone()
+                            src[:, :, si_local] = col_val + (col_val.round() - col_val).detach()
                 idx = phase_cols_t.unsqueeze(0).unsqueeze(0).expand(S, n, -1)
                 X_batch_S = X_batch_S.scatter(-1, idx, src)
-            de = self.evidence.joint_batched_tensor(X_batch_S)  # type: ignore[misc]
-            return -de.to(dtype=x_flat_S.dtype)
+            if self.evidence.joint_batched_tensor is not None:
+                de = self.evidence.joint_batched_tensor(X_batch_S)
+                return -de.to(dtype=x_flat_S.dtype)
+            return torch.zeros(S, dtype=x_flat_S.dtype)
 
-        if use_gradient:
-            opt = self.engine.run_acquisition_gradient(
-                _acquisition_batch_objective_tensor,
-                space.bounds,
-                label=label,
-                show_progress=console,
-            )
-            self.convergence_history[label] = opt.convergence_history
-        else:
-            opt = self.engine._run_de(
-                _acquisition_batch_objective_vec, space.bounds, init_pop=init_pop,
-                integrality=space.integrality, label=label, show_progress=console,
-                maxiter=self.engine.de_maxiter, vectorized=True,
-            )
-            self.convergence_history[label] = opt.convergence_history
-            # Snapshot DE params before refinement (deep copy as plain dicts)
-            de_best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
-            de_specs = space.decode_to_specs(
-                de_best_x,
-                fixed_params=dict(self.fixed_params),
-                cat_codes=cat_codes,
-                cat_assignments=cat_assignments,
-                structural_values=structural_values,
-                primary_dim_code="",
-                schema_sanitize=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
-                integer_params=integer_params,
-                source_step=SourceStep.BASELINE,
-            )
-            self.last_de_params = [dict(s.initial_params.to_dict()) for s in de_specs]
-            # Refinement: gradient polish from DE warm start (continuous dims only)
-            has_int = space.integrality is not None and any(space.integrality)
-            if not has_int and self.evidence.joint_batched_tensor is not None and opt.best_x is not None:
-                refine_label = f"Refine (D={d_phase}, V={space.total_vars})"
-                refine_opt = self.engine.run_acquisition_gradient(
-                    _acquisition_batch_objective_tensor,
-                    space.bounds,
-                    x0=opt.best_x,
-                    label=refine_label,
-                    show_progress=console,
-                )
-                self.convergence_history[refine_label] = refine_opt.convergence_history
-                if refine_opt.best_x is not None and refine_opt.score >= opt.score:
-                    opt = refine_opt
+        opt = self.engine.run_acquisition_gradient(
+            _acquisition_batch_objective_tensor,
+            space.bounds,
+            label=label,
+            show_progress=console,
+        )
+        self.convergence_history[label] = opt.convergence_history
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
         else:
             self.last_baseline_nfev += opt.nfev
 
-        best_x = opt.best_x if opt.best_x is not None else merged_init.ravel()
+        best_x = opt.best_x if opt.best_x is not None else np.full(space.total_vars, 0.5)
         specs = space.decode_to_specs(
             best_x,
             fixed_params=dict(self.fixed_params),
@@ -1789,33 +1701,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     if code in code_to_idx:
                         prefill_per_n[i, code_to_idx[code]] = float(val)
 
-        # DE bounds: phase_bounds_per_unit replicated N×L times
-        # (flat layout: [unit_0, unit_1, ..., unit_{N*L-1}], each unit = D_phase dims)
-        de_bounds = phase_bounds_per_unit * (n_proposals * n_schedule_steps)
+        phase_bounds = phase_bounds_per_unit * (n_proposals * n_schedule_steps)
+        prefill_t = torch.from_numpy(prefill_per_n).to(dtype=torch.float64)
+        phase_idxs_t = torch.tensor(phase_idxs, dtype=torch.long)
 
-        def _vec_obj(X_DS: np.ndarray) -> np.ndarray:
-            """X_DS: (D_phase × N × L, S) → (S,) via decode, inject, joint κ-acquisition."""
-            S = X_DS.shape[1]
-            # Reshape: (D_phase * N * L, S) → (S, N, L, D_phase)
-            candidates = X_DS.T.reshape(S, n_proposals, n_schedule_steps, D_phase)
-            # Build full (S, N, L, n_input) by injecting candidates into prefill_per_n
-            full_S_NL = np.broadcast_to(
-                prefill_per_n[None, :, None, :],
-                (S, n_proposals, n_schedule_steps, n_input),
-            ).copy()
-            full_S_NL[..., phase_idxs_arr] = candidates
-            return self._acquisition_joint_batched_objective(full_S_NL, kappa, perf_range)
+        def _tensor_obj(x_flat_S: torch.Tensor) -> torch.Tensor:
+            S = int(x_flat_S.shape[0])
+            candidates = x_flat_S.reshape(S, n_proposals, n_schedule_steps, D_phase)
+            full_S_NL = prefill_t.unsqueeze(0).unsqueeze(2).expand(
+                S, n_proposals, n_schedule_steps, n_input,
+            ).clone().to(dtype=x_flat_S.dtype)
+            idx = phase_idxs_t.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
+                S, n_proposals, n_schedule_steps, D_phase,
+            )
+            full_S_NL = full_S_NL.scatter(-1, idx, candidates)
+            return self._acquisition_joint_batched_tensor(full_S_NL, kappa, perf_range)
 
-        opt = self.engine.run_acquisition_vectorized(
-            _vec_obj,
-            de_bounds,
+        opt = self.engine.run_acquisition_gradient(
+            _tensor_obj,
+            phase_bounds,
             label=label,
             show_progress=show_progress,
         )
 
         # Decode best_x → (N, L, D_phase) → list[list[dict]]
         if opt.best_x is None:
-            result_x = np.array([0.5 * (lo + hi) for (lo, hi) in de_bounds])
+            result_x = np.array([0.5 * (lo + hi) for (lo, hi) in phase_bounds])
         else:
             result_x = opt.best_x
         decoded = result_x.reshape(n_proposals, n_schedule_steps, D_phase)
@@ -2196,10 +2107,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _eff_kappa = 0.0 if mode == Mode.INFERENCE else kappa
             _perf_range, _ = self._get_acquisition_ranges()
 
-            # Phase-decomposed acquisition (Domain → Process). Splitting bounds
-            # the per-phase DE budget at O(D_domain²) + O(D_process²) instead
-            # of O(D_total²) under de_maxiter, which empirically times out
-            # at >5 minutes for joint regimes at typical N. Codes whose bounds
+            # Phase-decomposed acquisition (Domain → Process). Splitting keeps
+            # each phase's search space smaller. Codes whose bounds
             # collapse (trust-region pin, fixed_params, schema constants) drop
             # out of both buckets; either bucket may be empty without breaking
             # the flow.
