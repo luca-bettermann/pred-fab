@@ -1322,25 +1322,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return _objective, D_exp
 
-        def _build_virtual_params(exclude_idx: int = -1) -> list[dict[str, Any]]:
-            """Build param dicts for all experiments except exclude_idx (-1 = include all)."""
+        def _build_virtual_params(exclude_idx: int = -1) -> tuple[list[dict[str, Any]], list[float]]:
+            """Build param dicts and weights for all experiments except exclude_idx."""
             params_list: list[dict[str, Any]] = []
+            weights_list: list[float] = []
             for j in range(n):
                 if j == exclude_idx and exclude_idx >= 0:
                     continue
-                for k in range(per_exp_L[j]):
+                L_j = per_exp_L[j]
+                w = 1.0 / L_j
+                for k in range(L_j):
                     p: dict[str, Any] = {}
                     for si, (code, lo, hi) in enumerate(state.static_params):
                         p[code] = float(state.static_norms[j, si] * (hi - lo) + lo)
                     for si, (code, lo, hi) in enumerate(state.sched_params):
                         p[code] = float(state.schedule_norms[j][k, si] * (hi - lo) + lo)
-                    # Add fixed params
                     base_dict = state.flat_specs[j].initial_params.to_dict()
                     for code, val in base_dict.items():
                         if code not in p:
                             p[code] = val
                     params_list.append(p)
-            return params_list
+                    weights_list.append(w)
+            return params_list, weights_list
 
         max_rounds = min(self.max_trajectory_rounds, max(1, self.engine.gradient_n_iters // max(n, 1)))
         total_iters = 0
@@ -1349,9 +1352,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Push ALL experiments as virtual points initially
         if can_push:
-            all_virtual = _build_virtual_params(-1)  # -1 = exclude none
+            all_virtual, all_weights = _build_virtual_params(-1)
             if all_virtual:
-                self._push_virtual_fn(all_virtual, None, baseline_dm)  # type: ignore[misc]
+                self._push_virtual_fn(all_virtual, all_weights, baseline_dm)  # type: ignore[misc]
 
         for round_idx in range(max_rounds):
             improved_this_round = False
@@ -1361,9 +1364,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # Pop current experiment's layers, keep all others
                 if can_push:
                     self._pop_virtual_fn()  # type: ignore[misc]
-                    others = _build_virtual_params(exp_idx)
+                    others, others_w = _build_virtual_params(exp_idx)
                     if others:
-                        self._push_virtual_fn(others, None, baseline_dm)  # type: ignore[misc]
+                        self._push_virtual_fn(others, others_w, baseline_dm)  # type: ignore[misc]
 
                 objective, D_exp = _make_per_exp_objective(exp_idx)
 
@@ -1426,9 +1429,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 # Push updated experiment back into virtual points
                 if can_push:
                     self._pop_virtual_fn()  # type: ignore[misc]
-                    all_current = _build_virtual_params(-1)
+                    all_current, all_current_w = _build_virtual_params(-1)
                     if all_current:
-                        self._push_virtual_fn(all_current, None, baseline_dm)  # type: ignore[misc]
+                        self._push_virtual_fn(all_current, all_current_w, baseline_dm)  # type: ignore[misc]
 
                 if self.trajectory_step_callback is not None:
                     self.trajectory_step_callback(round_idx, exp_idx, state)
