@@ -103,9 +103,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
-    # ------------------------------------------------------------------
-    # Proxy properties for backward compatibility
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # § Properties — proxy to BoundsManager
+    # ==================================================================
 
     @property
     def data_objects(self) -> dict[str, DataObject]:
@@ -131,10 +131,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def trajectory_configs(self) -> dict[str, str]:
         return self.bounds.trajectory_configs
 
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
-    # random_seed property
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # § Configuration
+    # ==================================================================
 
     @property
     def random_seed(self) -> int | None:
@@ -147,9 +146,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.engine._random_seed = value
         self.engine.rng = np.random.RandomState(value)
 
-    # ------------------------------------------------------------------
-    # Delegated config methods
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # § Delegated config methods
+    # ==================================================================
 
     def configure_param_bounds(self, bounds: dict[str, tuple[float, float]], force: bool = False) -> None:
         """Configure parameter ranges for offline calibration."""
@@ -217,7 +216,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             else:
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
 
-    # === OBJECTIVE FUNCTIONS ===
+    # ==================================================================
+    # § Acquisition objectives — κ-blended evidence + performance
+    # ==================================================================
     #
     # Unified acquisition (higher is better):
     #
@@ -468,7 +469,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         }
         return combined_score(perf_dict, self.performance_weights)
 
-    # === PRIVATE HELPERS ===
+    # ==================================================================
+    # § Helpers — spec construction, datamodule, perf range
+    # ==================================================================
 
     def update_perf_range(self, datamodule: DataModule) -> None:
         """Update performance normalization range from training data.
@@ -625,7 +628,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         datamodule.fit_without_data()
         return datamodule
 
-    # === OPTIMIZATION WORKFLOW ===
+    # ==================================================================
+    # § Baseline — batch proposal generation (run_baseline)
+    # ==================================================================
 
     def run_baseline(self, n: int) -> list["ExperimentSpec"]:
         """Generate n baseline proposals via batch acquisition (κ=1, joint over N points).
@@ -1337,6 +1342,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return result, opt
 
+    # ==================================================================
+    # § Online calibration — run_calibration (exploration / inference)
+    # ==================================================================
+
     def run_calibration(
         self,
         datamodule: DataModule,
@@ -1824,7 +1833,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return self._build_experiment_spec(proposals, step_grid, source_step)
 
-    # === WRAPPERS ===
+    # ==================================================================
+    # § Model wrappers
+    # ==================================================================
 
     def get_models(self) -> list[Any]:
         """Return empty list (no internal ML models owned by CalibrationSystem)."""
