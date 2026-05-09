@@ -13,6 +13,7 @@ from ..base_system import BaseOrchestrationSystem
 from .engine import OptimizationEngine, _OptResult
 from .bounds import BoundsManager
 from .space import SolutionSpace
+from .trajectory import TrajectoryOptimizer, TrajectoryState, init_trajectory_state
 
 
 @dataclass
@@ -26,41 +27,6 @@ class EvidenceBackend:
     """
     batched_tensor: Callable[..., torch.Tensor] | None = None
     joint_batched_tensor: Callable[..., torch.Tensor] | None = None
-
-
-@dataclass
-class _ScheduleState:
-    """Per-call state for the Trajectory phase.
-
-    Holds warm-starts, mutable optimisation state, and pre-computed lookups
-    that the inner-DE machinery reads on every per-experiment call.
-    """
-    n: int
-    flat_specs: list[ExperimentSpec]
-    sched_params: list[tuple[str, float, float]]
-    static_params: list[tuple[str, float, float]]
-    per_exp_L: list[int]
-    primary_dim_code: str
-    sched_delta_norms: list[float]
-    static_delta_norms: list[float]
-
-    # Mutable state — updated each pass.
-    static_norms: np.ndarray              # (n, D_static)
-    schedule_norms: list[np.ndarray]      # n × (L_i, D_sched)
-
-    # Pre-computed lookups for X_batch construction.
-    n_dm_cols: int
-    exp_base_rows: list[np.ndarray]       # n × (n_dm_cols,)
-    sched_col_map: list[tuple[int, int]]  # (sched_idx, dm_col_idx)
-    static_col_map: list[tuple[int, int]] # (static_idx, dm_col_idx)
-
-    @property
-    def D_sched(self) -> int:
-        return len(self.sched_params)
-
-    @property
-    def D_static(self) -> int:
-        return len(self.static_params)
 
 
 # ======================================================================
@@ -117,7 +83,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.trajectory_locked_static: set[str] = set()
         self.smoothness_weight: float = 0.01
         self.max_trajectory_rounds: int = 5
-        self.trajectory_step_callback: Callable[[int, int, '_ScheduleState'], None] | None = None
+        self.trajectory_step_callback: Callable[[int, int, TrajectoryState], None] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -125,12 +91,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.performance_weights: dict[str, float] = {perf: 1.0 for perf in self.perf_names_order}
         self.parameters = schema.parameters
 
-        # Backend is phase-deterministic — no user-facing optimizer choice:
-        # Global (joint DE over all dims) = DE (handles
-        # integers/cats natively). Refine (continuous LBFGS) and Trajectory
-        # (trajectory) = LBFGS multi-start. The Domain → Process split inside
-        # Global keeps each DE call small (joint over all dims at full DE
-        # budget timed out at >5 min for N=5 + ~3 numeric params).
 
         # Persistent κ default for acquisition_step / exploration_step. Overridable
         # per call. inference_step ignores it (κ=0 is the inference semantic).
@@ -1091,413 +1051,46 @@ class CalibrationSystem(BaseOrchestrationSystem):
         structural_values: list[dict[str, int]] | None,
         static_params: list[tuple[str, float, float]] | None = None,
     ) -> list[ExperimentSpec]:
-        """Trajectory: joint multi-start LBFGS over all N experiments' trajectories.
-
-        Decision vector: ``(D_static + L_i × D_sched)`` per experiment, all
-        concatenated → ``Σᵢ (D_static + L_i × D_sched)`` total dims.
-        Per-dim bounds: static params drift within the same trust-region
-        band used for schedule params; schedule values are
-        ``[0, 1]`` (sigmoid-reparam'd inside ``run_acquisition_gradient``).
-        Per-experiment delta constraints are smooth quadratic penalties on
-        adjacent step differences.
-
-        Multi-start covers the trajectory-shape axis: Global's warm start
-        anchors the static dims (and step-0 schedule values) but the
-        trajectory shape over ``k=1..L-1`` is otherwise unspecified, so
-        diverse starting shapes converge to different basins and we pick
-        the best.
-        """
+        """Delegate trajectory optimization to TrajectoryOptimizer."""
         if len(sched_params) == 0 or max(per_exp_L) <= 1:
             return flat_specs
 
-        state = self._init_trajectory_state(
-            n, flat_specs, sched_params, static_params or [],
+        baseline_dm = self._active_datamodule
+        if baseline_dm is None:
+            return flat_specs
+
+        state = init_trajectory_state(
+            flat_specs, sched_params, static_params or [],
             per_exp_L, primary_dim_code,
+            dict(self.trust_regions), baseline_dm,
+            self.bounds._get_hierarchical_bounds_for_code,
         )
         if state is None:
             return flat_specs
 
-        self._run_joint_trajectory_optimisation(state)
-        return self._decode_trajectory_specs(state)
-
-    def _init_trajectory_state(
-        self,
-        n: int,
-        flat_specs: list[ExperimentSpec],
-        sched_params: list[tuple[str, float, float]],
-        static_params: list[tuple[str, float, float]],
-        per_exp_L: list[int],
-        primary_dim_code: str,
-    ) -> _ScheduleState | None:
-        """Build warm-starts, base rows, and column maps for the Schedule phase."""
-        baseline_dm = self._active_datamodule
-        if baseline_dm is None:
-            return None
-
-        # Trust-region delta in normalised space per sched param.
-        sched_delta_norms = [
-            (self.trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
-            for code, lo, hi in sched_params
-        ]
-        static_delta_norms = [
-            (self.trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
-            for code, lo, hi in static_params
-        ]
-
-        # Phase-2 warm starts — step 0 is now optimisable; static is the trust-region centre.
-        step0_warmstart = self._warmstart_from_specs(flat_specs, sched_params, n)
-        static_warmstart = self._warmstart_from_specs(flat_specs, static_params, n)
-
-        # Initial state — schedule starts flat at the step-0 warm start.
-        static_norms = static_warmstart.copy()
-        schedule_norms = [
-            np.tile(step0_warmstart[i], (per_exp_L[i], 1)) for i in range(n)
-        ]
-
-        # Datamodule column index maps for X_batch construction.
-        n_dm_cols = len(baseline_dm.input_columns)
-        sched_col_map = [
-            (si, baseline_dm.input_columns.index(code))
-            for si, (code, _, _) in enumerate(sched_params)
-            if code in baseline_dm.input_columns
-        ]
-        static_col_map = [
-            (si, baseline_dm.input_columns.index(code))
-            for si, (code, _, _) in enumerate(static_params)
-            if code in baseline_dm.input_columns
-        ]
-
-        # Base rows hold frozen columns (integer static, fixed params).
-        # Continuous static + sched columns are overlaid per-call.
-        sched_code_set = {code for code, _, _ in sched_params}
-        static_code_set = {code for code, _, _ in static_params}
-        exp_base_rows: list[np.ndarray] = []
-        for i_exp in range(n):
-            row = np.full(n_dm_cols, 0.5)
-            static_dict = flat_specs[i_exp].initial_params.to_dict()
-            for c_idx, col in enumerate(baseline_dm.input_columns):
-                if col in static_dict and col not in sched_code_set and col not in static_code_set:
-                    val = static_dict[col]
-                    try:
-                        lo_s, hi_s = self.bounds._get_hierarchical_bounds_for_code(col)
-                        span_s = hi_s - lo_s
-                        row[c_idx] = (float(val) - lo_s) / span_s if span_s > 0 else 0.5
-                    except (ValueError, KeyError):
-                        row[c_idx] = 0.5
-            exp_base_rows.append(row)
-
-        return _ScheduleState(
-            n=n, flat_specs=flat_specs,
-            sched_params=sched_params, static_params=static_params,
-            per_exp_L=per_exp_L, primary_dim_code=primary_dim_code,
-            sched_delta_norms=sched_delta_norms, static_delta_norms=static_delta_norms,
-            static_norms=static_norms, schedule_norms=schedule_norms,
-            n_dm_cols=n_dm_cols, exp_base_rows=exp_base_rows,
-            sched_col_map=sched_col_map, static_col_map=static_col_map,
+        optimizer = TrajectoryOptimizer(
+            engine=self.engine,
+            acquisition_fn=self._acquisition_joint_batched_tensor,
+            push_virtual_fn=self._push_virtual_fn,
+            pop_virtual_fn=self._pop_virtual_fn,
+            sanitize_fn=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
+            smoothness_weight=self.smoothness_weight,
+            max_rounds=self.max_trajectory_rounds,
+            step_callback=self.trajectory_step_callback,
         )
 
-    @staticmethod
-    def _warmstart_from_specs(
-        flat_specs: list[ExperimentSpec],
-        params: list[tuple[str, float, float]],
-        n: int,
-    ) -> np.ndarray:
-        """Extract normalised values from Phase-2 specs as a warm start."""
-        out = np.zeros((n, len(params)))
-        for i, spec in enumerate(flat_specs):
-            p_dict = spec.initial_params.to_dict()
-            for si, (code, lo, hi) in enumerate(params):
-                raw_val = float(p_dict.get(code, (lo + hi) / 2.0))
-                span = hi - lo
-                out[i, si] = (raw_val - lo) / span if span > 0 else 0.5
-        return out
+        specs = optimizer.optimize(state, baseline_dm, self.logger._console_output_enabled)
 
-    def _run_joint_trajectory_optimisation(self, state: _ScheduleState) -> None:
-        """Coordinate descent over N experiments' trajectories.
+        # Copy output state back for plotting/display
+        self.last_trajectory_points = optimizer.last_trajectory_points
+        self.last_trajectory_exp_ids = optimizer.last_trajectory_exp_ids
+        self.last_trajectory_schedule_norms = optimizer.last_trajectory_schedule_norms
+        self.last_trajectory_sched_params = optimizer.last_trajectory_sched_params
+        self.last_trajectory_per_exp_L = optimizer.last_trajectory_per_exp_L
+        self.last_baseline_nfev += optimizer.total_iters
+        self.convergence_history["Trajectory"] = optimizer.convergence_history
 
-        Each round optimises one experiment at a time (~D_static + L×D_sched
-        dims) while holding all others fixed. Iterates rounds until convergence
-        or maxiter budget is exhausted.
-
-        Mutates ``state.static_norms`` and ``state.schedule_norms`` in place.
-        """
-        n = state.n
-        D_static = state.D_static
-        D_sched = state.D_sched
-        per_exp_L = list(state.per_exp_L)
-        console = self.logger._console_output_enabled
-
-        base_rows_t = torch.from_numpy(np.stack(state.exp_base_rows)).to(dtype=torch.float64)
-        n_dm_cols = base_rows_t.shape[1]
-        static_col_idxs = torch.tensor(
-            [col_idx for _, col_idx in state.static_col_map], dtype=torch.long,
-        )
-        sched_col_idxs = torch.tensor(
-            [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
-        )
-        static_delta_norms_list = state.static_delta_norms
-        sched_delta_norms_list = state.sched_delta_norms
-        sched_delta_t = torch.tensor(sched_delta_norms_list, dtype=torch.float64) if sched_delta_norms_list else torch.zeros(D_sched, dtype=torch.float64)
-        kappa = 1.0
-
-        def _build_fixed_rows(exclude_idx: int) -> torch.Tensor:
-            """Build (NL_fixed, n_dm_cols) for all experiments except exclude_idx."""
-            blocks: list[torch.Tensor] = []
-            for j in range(n):
-                if j == exclude_idx:
-                    continue
-                L_j = per_exp_L[j]
-                row_j = base_rows_t[j].unsqueeze(0).expand(L_j, n_dm_cols).clone()
-                if D_static > 0:
-                    stat_j = torch.from_numpy(state.static_norms[j]).to(dtype=torch.float64)
-                    row_j = row_j.scatter(-1, static_col_idxs.unsqueeze(0).expand(L_j, -1),
-                                          stat_j.unsqueeze(0).expand(L_j, -1))
-                if D_sched > 0:
-                    sched_j = torch.from_numpy(state.schedule_norms[j]).to(dtype=torch.float64)
-                    row_j = row_j.scatter(-1, sched_col_idxs.unsqueeze(0).expand(L_j, -1), sched_j)
-                blocks.append(row_j)
-            return torch.cat(blocks, dim=0) if blocks else torch.empty(0, n_dm_cols, dtype=torch.float64)
-
-        def _make_per_exp_objective(exp_idx: int):
-            L_i = per_exp_L[exp_idx]
-            # Layout: [D_static | D_sched (step0) | (L_i-1)*D_sched (deltas)]
-            D_exp = D_static + L_i * D_sched
-
-            def _objective(x_S: torch.Tensor) -> torch.Tensor:
-                S = int(x_S.shape[0])
-                stat = x_S[:, :D_static]
-
-                # Range-mapping reparameterization: d_k ∈ [0,1] maps to
-                # [max(0, x_{k-1} - δ), min(1, x_{k-1} + δ)].
-                # Bounds-safe by construction — no clamp needed.
-                step0 = x_S[:, D_static:D_static + D_sched]
-                traj = torch.zeros(S, L_i, D_sched, dtype=x_S.dtype)
-                traj[:, 0, :] = step0
-                if L_i > 1:
-                    d_vars = x_S[:, D_static + D_sched:].reshape(S, L_i - 1, D_sched)
-                    prev = step0
-                    for k in range(L_i - 1):
-                        lo_k = (prev - sched_delta_t).clamp(min=0.0)
-                        hi_k = (prev + sched_delta_t).clamp(max=1.0)
-                        traj[:, k + 1, :] = lo_k + d_vars[:, k, :] * (hi_k - lo_k)
-                        prev = traj[:, k + 1, :]
-
-                cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
-                if D_static > 0:
-                    cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1),
-                                            stat.unsqueeze(1).expand(S, L_i, D_static))
-                if D_sched > 0:
-                    cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
-
-                full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
-                scores_neg = self._acquisition_joint_batched_tensor(full_S_NL, kappa, None)
-
-                # Smoothness penalties (per sched dimension, objective-relative).
-                if D_sched > 0 and L_i > 2:
-                    obj_scale = scores_neg.detach().abs()
-                    diffs = traj[:, 1:, :] - traj[:, :-1, :]  # (S, L_i-1, D_sched)
-
-                    # Reversal penalty: adjacent steps pulling opposite directions.
-                    products = diffs[:, 1:, :] * diffs[:, :-1, :]  # (S, L_i-2, D_sched)
-                    reversal_penalty = (-products).clamp(min=0.0).sum(dim=(1, 2))
-                    scores_neg = scores_neg + obj_scale * self.smoothness_weight * reversal_penalty
-
-                    # R² penalty: non-linearity per dimension.
-                    t = torch.arange(L_i, dtype=x_S.dtype)
-                    t_mean = t.mean()
-                    t_var = ((t - t_mean) ** 2).sum()
-                    y_mean = traj.mean(dim=1, keepdim=True)
-                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)  # (S, D_sched)
-                    has_variation = ss_tot > 1e-6
-                    if bool(has_variation.any().item()):
-                        cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
-                        slope = cov / t_var.clamp(min=1e-12)
-                        y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
-                        ss_res = ((traj - y_hat) ** 2).sum(dim=1)
-                        r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
-                        r2_penalty = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-                        scores_neg = scores_neg + obj_scale * self.smoothness_weight * r2_penalty
-
-                return scores_neg
-
-            return _objective, D_exp
-
-        def _build_virtual_params(exclude_idx: int = -1) -> tuple[list[dict[str, Any]], list[float]]:
-            """Build param dicts and weights for all experiments except exclude_idx."""
-            params_list: list[dict[str, Any]] = []
-            weights_list: list[float] = []
-            for j in range(n):
-                if j == exclude_idx and exclude_idx >= 0:
-                    continue
-                L_j = per_exp_L[j]
-                w = 1.0 / L_j
-                for k in range(L_j):
-                    p: dict[str, Any] = {}
-                    for si, (code, lo, hi) in enumerate(state.static_params):
-                        p[code] = float(state.static_norms[j, si] * (hi - lo) + lo)
-                    for si, (code, lo, hi) in enumerate(state.sched_params):
-                        p[code] = float(state.schedule_norms[j][k, si] * (hi - lo) + lo)
-                    base_dict = state.flat_specs[j].initial_params.to_dict()
-                    for code, val in base_dict.items():
-                        if code not in p:
-                            p[code] = val
-                    params_list.append(p)
-                    weights_list.append(w)
-            return params_list, weights_list
-
-        max_rounds = min(self.max_trajectory_rounds, max(1, self.engine.gradient_n_iters // max(n, 1)))
-        total_iters = 0
-        can_push = self._push_virtual_fn is not None and self._pop_virtual_fn is not None
-        baseline_dm = self._active_datamodule
-
-        # Push ALL experiments as virtual points initially
-        if can_push:
-            all_virtual, all_weights = _build_virtual_params(-1)
-            if all_virtual:
-                self._push_virtual_fn(all_virtual, all_weights, baseline_dm)  # type: ignore[misc]
-
-        for round_idx in range(max_rounds):
-            improved_this_round = False
-            for exp_idx in range(n):
-                L_i = per_exp_L[exp_idx]
-
-                # Pop current experiment's layers, keep all others
-                if can_push:
-                    self._pop_virtual_fn()  # type: ignore[misc]
-                    others, others_w = _build_virtual_params(exp_idx)
-                    if others:
-                        self._push_virtual_fn(others, others_w, baseline_dm)  # type: ignore[misc]
-
-                objective, D_exp = _make_per_exp_objective(exp_idx)
-
-                # Bounds: [static drift | step0 drift | deltas]
-                bounds_i: list[tuple[float, float]] = []
-                for si in range(D_static):
-                    c = float(state.static_norms[exp_idx, si])
-                    d = static_delta_norms_list[si]
-                    bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
-                for si in range(D_sched):
-                    c = float(state.schedule_norms[exp_idx][0, si])
-                    d = sched_delta_norms_list[si]
-                    bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
-                # d_k ∈ [0, 1]: position within available range
-                for _k in range(1, L_i):
-                    for _si in range(D_sched):
-                        bounds_i.append((0.0, 1.0))
-
-                # Warm start: step0 from Global, d_k = 0.5 (= previous value)
-                # with small noise to break the zero-gradient saddle.
-                rng = self.engine.rng
-                x0_i = np.zeros(D_exp)
-                x0_i[:D_static] = state.static_norms[exp_idx]
-                x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][0]
-                if L_i > 1 and D_sched > 0:
-                    n_deltas = (L_i - 1) * D_sched
-                    delta_start = D_static + D_sched
-                    for di in range(n_deltas):
-                        x0_i[delta_start + di] = 0.5 + rng.uniform(-0.05, 0.05)
-
-                opt = self.engine.run_acquisition_gradient(
-                    objective, bounds_i, x0=x0_i,
-                    label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
-                    show_progress=console,
-                    n_starts=1,
-                )
-                total_iters += len(opt.convergence_history)
-
-                if opt.best_x is not None:
-                    new_static = opt.best_x[:D_static]
-                    # Decode d_k ∈ [0,1] → absolute via range-mapping
-                    step0_val = opt.best_x[D_static:D_static + D_sched]
-                    new_sched = np.zeros((L_i, D_sched))
-                    new_sched[0] = step0_val
-                    if L_i > 1:
-                        d_vars = opt.best_x[D_static + D_sched:].reshape(L_i - 1, D_sched)
-                        sched_deltas_np = np.array(sched_delta_norms_list)
-                        prev = step0_val.copy()
-                        for k in range(L_i - 1):
-                            lo_k = np.maximum(0.0, prev - sched_deltas_np)
-                            hi_k = np.minimum(1.0, prev + sched_deltas_np)
-                            new_sched[k + 1] = lo_k + d_vars[k] * (hi_k - lo_k)
-                            prev = new_sched[k + 1].copy()
-                    if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
-                       not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
-                        improved_this_round = True
-                    state.static_norms[exp_idx] = new_static.copy()
-                    state.schedule_norms[exp_idx] = new_sched.copy()
-
-                # Push updated experiment back into virtual points
-                if can_push:
-                    self._pop_virtual_fn()  # type: ignore[misc]
-                    all_current, all_current_w = _build_virtual_params(-1)
-                    if all_current:
-                        self._push_virtual_fn(all_current, all_current_w, baseline_dm)  # type: ignore[misc]
-
-                if self.trajectory_step_callback is not None:
-                    self.trajectory_step_callback(round_idx, exp_idx, state)
-
-            if not improved_this_round:
-                break
-
-        # Clean up virtual points
-        if can_push:
-            self._pop_virtual_fn()  # type: ignore[misc]
-
-        self.last_baseline_nfev += total_iters
-        self.convergence_history["Trajectory"] = []
-
-
-
-    def _decode_trajectory_specs(
-        self,
-        state: _ScheduleState,
-    ) -> list[ExperimentSpec]:
-        """Decode final state into a list of ExperimentSpec + emit per-layer console summary."""
-        # Cache for plot validation.
-        self.last_trajectory_points = np.concatenate(state.schedule_norms, axis=0)
-        exp_ids: list[int] = []
-        for i in range(state.n):
-            exp_ids.extend([i] * state.per_exp_L[i])
-        self.last_trajectory_exp_ids = exp_ids
-
-        specs_out: list[ExperimentSpec] = []
-        for i in range(state.n):
-            L_i = state.per_exp_L[i]
-            base_params = dict(state.flat_specs[i].initial_params.to_dict())
-            traj = state.schedule_norms[i]
-
-            # Apply schedule-phase refinement of continuous static params.
-            for si, (code, lo, hi) in enumerate(state.static_params):
-                base_params[code] = float(state.static_norms[i, si] * (hi - lo) + lo)
-            # Update initial params with step-0 sched values.
-            for si, (code, lo, hi) in enumerate(state.sched_params):
-                base_params[code] = float(traj[0, si] * (hi - lo) + lo)
-
-            base_params = self.schema.parameters.sanitize_values(base_params, ignore_unknown=True)
-            initial = ParameterProposal.from_dict(base_params, source_step=SourceStep.BASELINE)
-
-            entries: list[tuple[int, ParameterProposal]] = []
-            for k in range(1, L_i):
-                sp: dict[str, Any] = {}
-                for si, (code, lo, hi) in enumerate(state.sched_params):
-                    sp[code] = float(traj[k, si] * (hi - lo) + lo)
-                sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
-                entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
-
-            trajectories: dict[str, ParameterTrajectory] = {}
-            if entries:
-                trajectories[state.primary_dim_code] = ParameterTrajectory(
-                    dimension=state.primary_dim_code, entries=entries
-                )
-
-            specs_out.append(ExperimentSpec(initial_params=initial, trajectories=trajectories))
-
-        # Store trajectory data for callers to display
-        self.last_trajectory_schedule_norms = [s.copy() for s in state.schedule_norms]
-        self.last_trajectory_sched_params = list(state.sched_params)
-        self.last_trajectory_per_exp_L = list(state.per_exp_L)
-
-        return specs_out
+        return specs
 
     @staticmethod
     def _recursive_split(
