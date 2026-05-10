@@ -73,19 +73,19 @@ def _draw_existing_points(ax, centers, labels, label_color="white"):
 def _draw_projections(ax, centers, labels):
     """Project existing points onto x and y axes with labelled dots."""
     proj = LINES["projection"]
-    bbox = dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="none", alpha=1.0)
+    bbox = dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="none", alpha=1.0)
     for c, lab in zip(centers, labels):
         ax.plot([c[0], c[0]], [0, c[1]],
                 color=ZINC_500, lw=0.8, linestyle=proj.linestyle, alpha=0.5, zorder=1)
         ax.scatter([c[0]], [0], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
-        ax.text(c[0], -0.04, f"{lab}ₓ", fontsize=7, color=ZINC_500,
+        ax.text(c[0], -0.05, f"{lab}ₓ", fontsize=7, color=ZINC_500,
                 ha="center", va="top", zorder=9, clip_on=False, bbox=bbox)
         ax.plot([0, c[0]], [c[1], c[1]],
                 color=ZINC_400, lw=0.8, linestyle=proj.linestyle, alpha=0.5, zorder=1)
         ax.scatter([0], [c[1]], c=RED, s=18, edgecolors="white",
                    linewidth=0.5, zorder=8, clip_on=False)
-        ax.text(-0.04, c[1], f"{lab}ᵧ", fontsize=7, color=ZINC_400,
+        ax.text(-0.05, c[1], f"{lab}ᵧ", fontsize=7, color=ZINC_400,
                 ha="right", va="center", zorder=9, clip_on=False, bbox=bbox)
 
 
@@ -221,7 +221,9 @@ def main():
     fig1, ax1 = plt.subplots(figsize=(6, 5.5))
     cm_d = cmap("density")
     norm_d = Normalize(vmin=0.0, vmax=float(rho_2d.max()))
-    ax1.contourf(xs, xs, rho_2d, levels=18, cmap=cm_d, norm=norm_d)
+    ax1.set_facecolor("white")
+    levels_d = np.linspace(0.02, float(rho_2d.max()), 18)
+    ax1.contourf(xs, xs, rho_2d, levels=levels_d, cmap=cm_d, norm=norm_d, extend="neither")
     ax1.contour(xs, xs, rho_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
     _draw_existing_points(ax1, CENTERS, LABELS)
     subplot_label(ax1, r"Joint density  $\rho(x, y)$")
@@ -247,7 +249,9 @@ def main():
 
     cm_e = cmap("evidence")
     norm_e = Normalize(vmin=0, vmax=evidence_2d.max())
-    ax_joint.contourf(xs, xs, evidence_2d, levels=18, cmap=cm_e, norm=norm_e)
+    ax_joint.set_facecolor("white")
+    levels_e = np.linspace(0.02, float(evidence_2d.max()), 18)
+    ax_joint.contourf(xs, xs, evidence_2d, levels=levels_e, cmap=cm_e, norm=norm_e, extend="neither")
     ax_joint.contour(xs, xs, evidence_2d, levels=8, colors=[ZINC_300], linewidths=0.4)
     _draw_existing_points(ax_joint, CENTERS, LABELS)
     _draw_projections(ax_joint, CENTERS, LABELS)
