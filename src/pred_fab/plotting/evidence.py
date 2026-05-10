@@ -1,0 +1,259 @@
+"""Evidence density panels — reusable grid + scatter + trajectory plotting.
+
+Three panel types built on a single grid computation core:
+  - ``plot_density_panel``       — raw kernel density D(z)
+  - ``plot_evidence_panel``      — evidence integrand 1/(1+D)
+  - ``plot_evidence_gain_panel`` — ΔE between two point sets
+
+All accept ``ExperimentSpec`` lists directly and handle trajectory
+expansion (1/L weighting) automatically.
+"""
+from __future__ import annotations
+
+from typing import Any, Callable
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from ._style import (
+    AxisSpec,
+    apply_style,
+    clean_spines,
+    subplot_label,
+    subplot_topology,
+    save_fig,
+    STEEL_500,
+    ZINC_400,
+)
+
+
+# ======================================================================
+# Experiment expansion — specs → flat points with trajectory weights
+# ======================================================================
+
+def expand_experiments(
+    experiments: list[Any],
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[int], list[float]]:
+    """Expand experiments into flat point lists with per-layer 1/L weights.
+
+    Accepts ``list[ExperimentSpec]`` (with ``.initial_params``,
+    ``.trajectories``) or ``list[dict]`` (plain param dicts, no trajectories).
+    ``param_transform`` optionally maps each param dict (e.g. to add derived
+    dimensions or rename codes).
+    """
+    transform = param_transform or (lambda d: d)
+    all_pts: list[dict[str, Any]] = []
+    exp_ids: list[int] = []
+    weights: list[float] = []
+
+    for i, exp in enumerate(experiments):
+        if hasattr(exp, "initial_params"):
+            base = dict(exp.initial_params.to_dict())
+            layers: list[dict[str, Any]] = [transform(base)]
+            for _dim, traj in exp.trajectories.items():
+                for _step, proposal in traj.entries:
+                    layer_p = dict(base)
+                    layer_p.update(transform(proposal.to_dict()))
+                    layers.append(layer_p)
+        else:
+            layers = [transform(dict(exp))]
+
+        w = 1.0 / len(layers)
+        for lp in layers:
+            all_pts.append(lp)
+            exp_ids.append(i)
+            weights.append(w)
+
+    return all_pts, exp_ids, weights
+
+
+# ======================================================================
+# Grid computation — single core with pluggable cell function
+# ======================================================================
+
+def _compute_grid(
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    points: list[dict[str, Any]],
+    weights: list[float],
+    sigma: float,
+    cell_fn: Callable[[float], float],
+    resolution: int = 40,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute a 2D grid by evaluating ``cell_fn(density)`` at each cell.
+
+    ``cell_fn`` maps density array ``D`` (one value per point set) to the
+    displayed quantity. For raw density: ``lambda D: D``. For evidence:
+    ``lambda D: 1/(1+D)``.
+    """
+    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
+    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
+    xs = np.linspace(x_lo, x_hi, resolution)
+    ys = np.linspace(y_lo, y_hi, resolution)
+    x_range = x_hi - x_lo
+    y_range = y_hi - y_lo
+
+    px = np.array([p.get(x_axis.key, 0) for p in points])
+    py = np.array([p.get(y_axis.key, 0) for p in points])
+    w = np.array(weights)
+    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+
+    grid = np.zeros((resolution, resolution))
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
+            density = np.sum(w * np.exp(-d2 * inv_2s2))
+            grid[j, i] = cell_fn(density)
+
+    return xs, ys, grid
+
+
+def _density_fn(D: float) -> float:
+    return D
+
+def _evidence_fn(D: float) -> float:
+    return 1.0 / (1.0 + D)
+
+
+# ======================================================================
+# Scatter + trajectory overlay
+# ======================================================================
+
+def _overlay_points(
+    ax: plt.Axes,  # type: ignore[name-defined]
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    points: list[dict[str, Any]],
+    exp_ids: list[int],
+) -> None:
+    """Draw scatter points with trajectory lines and experiment labels."""
+    px = [float(p.get(x_axis.key, 0)) for p in points]
+    py = [float(p.get(y_axis.key, 0)) for p in points]
+
+    n_exp = max(exp_ids) + 1 if exp_ids else 0
+    for eid in range(n_exp):
+        mask = [j for j, e in enumerate(exp_ids) if e == eid]
+        if len(mask) > 1:
+            ex = [px[j] for j in mask]
+            ey = [py[j] for j in mask]
+            ax.plot(ex, ey, color=ZINC_400, linewidth=0.6, alpha=0.4, zorder=1)
+        if mask:
+            ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=7,
+                       ha="center", va="bottom", xytext=(0, 5),
+                       textcoords="offset points", color=ZINC_400)
+
+    ax.scatter(px, py, s=60, c=STEEL_500, edgecolors="white",
+               linewidth=0.8, zorder=5)
+
+
+# ======================================================================
+# Panel functions — one axis pair, one subplot
+# ======================================================================
+
+def plot_density_panel(
+    ax: plt.Axes,  # type: ignore[name-defined]
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    experiments: list[Any],
+    sigma: float,
+    *,
+    label: str | None = None,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    resolution: int = 40,
+) -> None:
+    """Kernel density D(z) panel."""
+    pts, exp_ids, weights = expand_experiments(experiments, param_transform)
+    xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _density_fn, resolution)
+    subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
+                     cmap_name="density", contour_overlay=False, show_colorbar=True)
+    if label:
+        subplot_label(ax, label)
+    _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
+
+
+def plot_evidence_panel(
+    ax: plt.Axes,  # type: ignore[name-defined]
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    experiments: list[Any],
+    sigma: float,
+    *,
+    label: str | None = None,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    resolution: int = 40,
+) -> None:
+    """Evidence integrand 1/(1+D) panel."""
+    pts, exp_ids, weights = expand_experiments(experiments, param_transform)
+    xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _evidence_fn, resolution)
+    subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
+                     cmap_name="evidence", contour_overlay=False, show_colorbar=True)
+    if label:
+        subplot_label(ax, label)
+    _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
+
+
+def plot_evidence_gain_panel(
+    ax: plt.Axes,  # type: ignore[name-defined]
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    experiments_before: list[Any],
+    experiments_after: list[Any],
+    sigma: float,
+    *,
+    label: str | None = None,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    resolution: int = 40,
+) -> None:
+    """Evidence gain ΔE panel — difference between after and before."""
+    pts_b, _, w_b = expand_experiments(experiments_before, param_transform)
+    pts_a, exp_ids_a, w_a = expand_experiments(experiments_after, param_transform)
+
+    _, _, grid_before = _compute_grid(x_axis, y_axis, pts_b, w_b, sigma, _evidence_fn, resolution)
+    _, _, grid_after = _compute_grid(x_axis, y_axis, pts_a, w_a, sigma, _evidence_fn, resolution)
+    xs = np.linspace(x_axis.bounds[0], x_axis.bounds[1], resolution)  # type: ignore[index]
+    ys = np.linspace(y_axis.bounds[0], y_axis.bounds[1], resolution)  # type: ignore[index]
+    grid = grid_after - grid_before
+
+    subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
+                     cmap_name="evidence_gain", contour_overlay=False, show_colorbar=True)
+    if label:
+        subplot_label(ax, label)
+    _overlay_points(ax, x_axis, y_axis, pts_a, exp_ids_a)
+
+
+# ======================================================================
+# Multi-angle composition
+# ======================================================================
+
+def plot_multi_angle(
+    focus_axis: AxisSpec,
+    other_axes: list[AxisSpec],
+    experiments: list[Any],
+    sigma: float,
+    path: str,
+    *,
+    panel_fn: Callable | None = None,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    resolution: int = 40,
+    title: str | None = None,
+) -> None:
+    """Plot ``focus_axis`` against each axis in ``other_axes`` in a single row."""
+    fn = panel_fn or plot_evidence_panel
+    n = len(other_axes)
+    if n == 0:
+        return
+
+    apply_style()
+    fig, axes = plt.subplots(1, n, figsize=(5.5 * n, 4.5))
+    if n == 1:
+        axes = [axes]
+
+    for i, other in enumerate(other_axes):
+        label = f"{focus_axis.label} × {other.label}"
+        fn(axes[i], focus_axis, other, experiments, sigma,
+           label=label, param_transform=param_transform, resolution=resolution)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)

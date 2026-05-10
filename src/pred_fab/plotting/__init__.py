@@ -42,6 +42,13 @@ from .metrics import plot_metric_topology
 from .performance import plot_performance_radar
 from .convergence import plot_convergence
 from .validation import plot_phase_proposals
+from .evidence import (
+    plot_density_panel,
+    plot_evidence_panel,
+    plot_evidence_gain_panel,
+    plot_multi_angle,
+    expand_experiments,
+)
 
 __all__ = [
     "AxisSpec",
@@ -71,4 +78,9 @@ __all__ = [
     "plot_performance_radar",
     "plot_convergence",
     "plot_phase_proposals",
+    "plot_density_panel",
+    "plot_evidence_panel",
+    "plot_evidence_gain_panel",
+    "plot_multi_angle",
+    "expand_experiments",
 ]
