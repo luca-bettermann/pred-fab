@@ -59,15 +59,15 @@ def _density_2d(xx, yy, centers, sigma):
     return rho
 
 
-def _draw_existing_points(ax, centers, labels, ring_color="white", label_color=ZINC_600):
-    """Scatter existing points with labels — red center, colored ring."""
+def _draw_existing_points(ax, centers, labels, label_color="white"):
+    """Scatter existing points with labels."""
+    m = MARKERS["sample"]
     for c, lab in zip(centers, labels):
-        ax.scatter([c[0]], [c[1]], c=ring_color, s=50, edgecolors=ZINC_500,
-                   linewidth=0.8, zorder=10)
-        ax.scatter([c[0]], [c[1]], c=RED, s=14, edgecolors="none", zorder=11)
+        ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
+                   linewidth=m.linewidth, zorder=10)
         dx = 0.05 if lab != "B" else -0.07
         ax.text(c[0] + dx, c[1] + 0.04, lab, fontsize=FONT["annotation"],
-                color=label_color, fontweight="bold", zorder=12)
+                color=label_color, fontweight="bold", zorder=11)
 
 
 def _draw_projections(ax, centers, labels):
@@ -106,13 +106,11 @@ def _draw_candidate_kernelfield(ax, z_candidate, sigma, label="z"):
     ax.scatter(probes[:, 0], probes[:, 1],
                c=probe_vis, cmap=cm, norm=norm,
                s=18, alpha=0.95, edgecolors="none", zorder=6)
-    ax.scatter([z_candidate[0]], [z_candidate[1]], c="white", s=50,
-               edgecolors=ZINC_500, linewidth=0.8, zorder=10)
-    ax.scatter([z_candidate[0]], [z_candidate[1]], c=RED, s=18,
-               edgecolors="none", zorder=11)
+    ax.scatter([z_candidate[0]], [z_candidate[1]], c=RED, s=34,
+               edgecolors="none", zorder=10)
     ax.annotate(label, xy=(z_candidate[0], z_candidate[1]),
-                xytext=(10, 8), textcoords="offset points",
-                fontsize=9, fontweight="bold", color=RED)
+                xytext=(8, 6), textcoords="offset points",
+                fontsize=8, color=RED)
 
 
 def _draw_marginal_panels(ax_x, ax_y, centers, labels, sigma, curve_x, curve_y, surface_name):
@@ -280,7 +278,7 @@ def main():
     ax3.contour(xs_gain, xs_gain, gain_grid, levels=12, colors=["white"], linewidths=0.3, alpha=0.4)
 
     gain_dark = cmap("evidence_gain")(0.95)
-    _draw_existing_points(ax3, CENTERS, LABELS, ring_color=gain_dark, label_color="white")
+    _draw_existing_points(ax3, CENTERS, LABELS, label_color=gain_dark)
 
     ax3.scatter([z_new[0]], [z_new[1]], c=ACCENT_YELLOW, s=80,
                 marker="X", edgecolors="white", linewidth=1.2, zorder=12)
