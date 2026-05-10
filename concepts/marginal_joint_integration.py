@@ -101,9 +101,10 @@ def _draw_candidate_kernelfield(ax, z_candidate, sigma, label="z"):
     add_kernel_radii_2d(ax, z_candidate, sigma, DEFAULT_RADII,
                         color_scale=True, alpha_max=0.85, lw=0.8)
     cm = cmap("evidence")
+    probe_vis = np.clip(probe_density, 0.45, 1.0)
     norm = Normalize(vmin=0.0, vmax=1.0)
     ax.scatter(probes[:, 0], probes[:, 1],
-               c=probe_density, cmap=cm, norm=norm,
+               c=probe_vis, cmap=cm, norm=norm,
                s=18, alpha=0.95, edgecolors="none", zorder=6)
     ax.scatter([z_candidate[0]], [z_candidate[1]], c=RED, s=34,
                edgecolors="none", zorder=10)
