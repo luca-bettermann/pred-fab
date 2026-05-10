@@ -242,13 +242,13 @@ class TrajectoryOptimizer:
                     n_deltas = (L_i - 1) * D_sched
                     delta_start = D_static + D_sched
                     for di in range(n_deltas):
-                        x0_i[delta_start + di] = 0.5 + rng.uniform(-0.05, 0.05)
+                        x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
 
                 opt = self._engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
                     label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
                     show_progress=console,
-                    n_starts=1,
+                    n_starts=3,
                 )
                 total_iters += len(opt.convergence_history)
 
