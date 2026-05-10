@@ -237,6 +237,7 @@ class TrajectoryOptimizer:
                 rng = self._engine.rng
                 n_traj_starts = 3
                 best_opt = None
+                total_nfev = 0
                 for _si in range(n_traj_starts):
                     x0_i = np.zeros(D_exp)
                     x0_i[:D_static] = state.static_norms[exp_idx]
@@ -248,12 +249,23 @@ class TrajectoryOptimizer:
                     trial = self._engine.run_acquisition_gradient(
                         objective, bounds_i, x0=x0_i,
                         label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
-                        show_progress=console and _si == 0,
+                        show_progress=False,
                         n_starts=1, raw_samples=0,
                     )
+                    total_nfev += trial.nfev
                     if best_opt is None or trial.score > best_opt.score:
                         best_opt = trial
                 opt = best_opt  # type: ignore[assignment]
+                if console:
+                    import sys
+                    _G = "\033[32m"; _R = "\033[0m"; _D = "\033[2m"
+                    label_str = f"Traj {exp_idx+1}/{n} (r{round_idx+1})"
+                    bar = "█" * 12
+                    sys.stdout.write(
+                        f"{_G}✓{_R} {label_str:<14s} [{bar}] "
+                        f"{_D}{total_nfev} evals  obj={-opt.score:.3f}{_R}\n"
+                    )
+                    sys.stdout.flush()
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
