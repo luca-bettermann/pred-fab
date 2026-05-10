@@ -113,7 +113,8 @@ def _density_fn(D: float) -> float:
     return D
 
 def _evidence_fn(D: float) -> float:
-    return 1.0 / (1.0 + D)
+    """Evidence saturation D/(1+D) — high where points are, bounded [0, 1]."""
+    return D / (1.0 + D)
 
 
 # ======================================================================
