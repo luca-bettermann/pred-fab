@@ -248,7 +248,7 @@ class TrajectoryOptimizer:
                     objective, bounds_i, x0=x0_i,
                     label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
                     show_progress=console,
-                    n_starts=3,
+                    n_starts=3, raw_samples=0,
                 )
                 total_iters += len(opt.convergence_history)
 
