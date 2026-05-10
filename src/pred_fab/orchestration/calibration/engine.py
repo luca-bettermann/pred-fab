@@ -47,6 +47,7 @@ class OptimizationEngine:
         lr: float | None = None,
         method: str | None = None,
         x0: np.ndarray | None = None,
+        raw_samples: int | None = None,
         compile_objective: bool = False,
         label: str = "Optimizing",
         show_progress: bool = False,
@@ -84,7 +85,8 @@ class OptimizationEngine:
         if x0 is not None:
             x_inits.append(np.clip(x0, bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
 
-        raw_samples = max(int(self.gradient_raw_samples * (D ** 0.5)), 0)
+        _raw_base = raw_samples if raw_samples is not None else self.gradient_raw_samples
+        raw_samples = max(int(_raw_base * (D ** 0.5)), 0)
         eta = float(self.gradient_init_eta)
         n_more = max(n_starts - len(x_inits), 0)
 
