@@ -66,8 +66,8 @@ def _draw_existing_points(ax, centers, labels, label_color="white"):
         ax.scatter([c[0]], [c[1]], c=m.color, s=m.size, edgecolors=m.edgecolor,
                    linewidth=m.linewidth, zorder=10)
         dx = 0.05 if lab != "B" else -0.07
-        ax.text(c[0] + dx, c[1] + 0.04, lab, fontsize=FONT["annotation"],
-                color=label_color, fontweight="bold", zorder=11)
+        ax.text(c[0] + dx, c[1] + 0.04, lab, fontsize=8,
+                color=label_color, zorder=11)
 
 
 def _draw_projections(ax, centers, labels):
@@ -109,7 +109,7 @@ def _draw_candidate_kernelfield(ax, z_candidate, sigma, label="z"):
     ax.scatter([z_candidate[0]], [z_candidate[1]], c=RED, s=34,
                edgecolors="none", zorder=10)
     ax.annotate(label, xy=(z_candidate[0], z_candidate[1]),
-                xytext=(8, 6), textcoords="offset points",
+                xytext=(10, 8), textcoords="offset points",
                 fontsize=8, color=RED)
 
 
@@ -282,8 +282,8 @@ def main():
 
     ax3.scatter([z_new[0]], [z_new[1]], c=ACCENT_YELLOW, s=80,
                 marker="X", edgecolors="white", linewidth=1.2, zorder=12)
-    ax3.text(z_new[0] + 0.03, z_new[1] + 0.03, r"$Z_{new}$", fontsize=FONT["annotation"],
-             color=ACCENT_YELLOW, fontweight="bold", zorder=13)
+    ax3.text(z_new[0] + 0.03, z_new[1] + 0.03, r"$Z_{new}$", fontsize=8,
+             color=ACCENT_YELLOW, zorder=13)
 
     subplot_label(ax3, r"Evidence gain  $\Delta E$")
     _setup_2d_axes(ax3)
