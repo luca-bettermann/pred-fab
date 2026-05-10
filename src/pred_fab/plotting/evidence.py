@@ -188,7 +188,8 @@ def plot_evidence_panel(
     pts, exp_ids, weights = expand_experiments(experiments, param_transform)
     xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _evidence_fn, resolution)
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
-                     cmap_name="evidence", contour_overlay=False, show_colorbar=True)
+                     cmap_name="evidence", contour_overlay=False, show_colorbar=True,
+                     vmin=0.0, vmax=1.0)
     if label:
         subplot_label(ax, label)
     _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
