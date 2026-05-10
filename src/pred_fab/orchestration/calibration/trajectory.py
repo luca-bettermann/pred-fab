@@ -235,21 +235,25 @@ class TrajectoryOptimizer:
                         bounds_i.append((0.0, 1.0))
 
                 rng = self._engine.rng
-                x0_i = np.zeros(D_exp)
-                x0_i[:D_static] = state.static_norms[exp_idx]
-                x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][0]
-                if L_i > 1 and D_sched > 0:
-                    n_deltas = (L_i - 1) * D_sched
-                    delta_start = D_static + D_sched
-                    for di in range(n_deltas):
-                        x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
-
-                opt = self._engine.run_acquisition_gradient(
-                    objective, bounds_i, x0=x0_i,
-                    label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
-                    show_progress=console,
-                    n_starts=3, raw_samples=0,
-                )
+                n_traj_starts = 3
+                best_opt = None
+                for _si in range(n_traj_starts):
+                    x0_i = np.zeros(D_exp)
+                    x0_i[:D_static] = state.static_norms[exp_idx]
+                    x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][0]
+                    if L_i > 1 and D_sched > 0:
+                        delta_start = D_static + D_sched
+                        for di in range((L_i - 1) * D_sched):
+                            x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
+                    trial = self._engine.run_acquisition_gradient(
+                        objective, bounds_i, x0=x0_i,
+                        label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
+                        show_progress=console and _si == 0,
+                        n_starts=1, raw_samples=0,
+                    )
+                    if best_opt is None or trial.score > best_opt.score:
+                        best_opt = trial
+                opt = best_opt  # type: ignore[assignment]
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
