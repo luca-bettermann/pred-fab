@@ -244,12 +244,15 @@ class TrajectoryOptimizer:
                     for di in range(n_deltas):
                         x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
 
+                saved_raw = self._engine.gradient_raw_samples
+                self._engine.gradient_raw_samples = 0
                 opt = self._engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
                     label=f"Traj {exp_idx+1}/{n} (r{round_idx+1})",
                     show_progress=console,
-                    n_starts=3, raw_samples=0,
+                    n_starts=3,
                 )
+                self._engine.gradient_raw_samples = saved_raw
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
