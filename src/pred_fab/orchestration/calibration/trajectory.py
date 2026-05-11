@@ -209,21 +209,39 @@ class TrajectoryOptimizer:
         traj_delta_t = torch.tensor(traj_delta_norms_list, dtype=torch.float64) if traj_delta_norms_list else torch.zeros(D_traj, dtype=torch.float64)
         kappa = 1.0
 
-        def _compute_e_old() -> float:
-            """Evidence of the fixed partition alone (non-active experiments).
+        def _build_all_rows(state: TrajectoryState) -> tuple[torch.Tensor, torch.Tensor]:
+            """Build full-width rows + weights for ALL experiments from current state.
 
-            Computed once per experiment solve. Constant during LBFGS — added
-            back to ΔE so the reported objective is total evidence.
+            Returns (all_rows, all_weights) where all_rows is (total_L, n_dm_cols)
+            and all_weights is (total_L,). Each experiment's layers get weight 1/L_j.
             """
-            dummy = torch.zeros(1, 1, 1, n_dm_cols, dtype=torch.float64)
-            w_zero = torch.zeros(1, 1, dtype=torch.float64)
-            with torch.no_grad():
-                neg_e_old = self._acquisition_fn(dummy, kappa, None, w_zero)
-            return float(neg_e_old[0].item())
+            rows_list: list[torch.Tensor] = []
+            weights_list: list[float] = []
+            for j in range(n):
+                L_j = per_exp_L[j]
+                w_j = 1.0 / L_j
+                rows_j = base_rows_t[j].unsqueeze(0).expand(L_j, n_dm_cols).clone()
+                if D_static > 0:
+                    stat_j = torch.from_numpy(state.static_norms[j]).to(dtype=torch.float64)
+                    rows_j = rows_j.scatter(-1, static_col_idxs.unsqueeze(0).expand(L_j, -1),
+                                            stat_j.unsqueeze(0).expand(L_j, -1))
+                if D_traj > 0:
+                    traj_j = torch.from_numpy(state.traj_norms[j]).to(dtype=torch.float64)
+                    rows_j = rows_j.scatter(-1, traj_col_idxs.unsqueeze(0).expand(L_j, -1), traj_j)
+                rows_list.append(rows_j)
+                weights_list.extend([w_j] * L_j)
+            return torch.cat(rows_list, dim=0), torch.tensor(weights_list, dtype=torch.float64)
 
-        def _make_per_exp_objective(exp_idx: int, e_old_offset: float):
+        def _make_per_exp_objective(exp_idx: int):
             L_i = per_exp_L[exp_idx]
             D_exp = D_static + L_i * D_traj
+
+            # Layer offset for the active experiment within the full tensor
+            active_start = sum(per_exp_L[:exp_idx])
+
+            # Pre-build non-active rows (detached, no grad)
+            all_rows, all_weights = _build_all_rows(state)
+            total_L = int(all_rows.shape[0])
 
             def _objective(x_S: torch.Tensor) -> torch.Tensor:
                 S = int(x_S.shape[0])
@@ -231,6 +249,7 @@ class TrajectoryOptimizer:
                     x_S, D_static, D_traj, L_i, traj_delta_t,
                 )
 
+                # Build active experiment's rows (with grad)
                 cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
                     cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1),
@@ -238,10 +257,13 @@ class TrajectoryOptimizer:
                 if D_traj > 0:
                     cand_i = cand_i.scatter(-1, traj_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
 
-                full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
-                w_layer = torch.full((S, L_i), 1.0 / L_i, dtype=x_S.dtype)
-                # ΔE from acquisition + E_old offset = total evidence
-                scores_neg = self._acquisition_fn(full_S_NL, kappa, None, w_layer) + e_old_offset
+                # All experiments: splice active (with grad) into full tensor
+                full = all_rows.unsqueeze(0).expand(S, total_L, n_dm_cols).clone().to(dtype=x_S.dtype)
+                full[:, active_start:active_start + L_i, :] = cand_i
+                full_S_NL = full.unsqueeze(1)  # (S, 1, total_L, n_dm_cols)
+
+                w = all_weights.unsqueeze(0).expand(S, total_L).to(dtype=x_S.dtype)
+                scores_neg = self._acquisition_fn(full_S_NL, kappa, None, w)
 
                 # Smoothness penalties on the active trajectory
                 if D_traj > 0 and L_i > 2:
@@ -302,14 +324,7 @@ class TrajectoryOptimizer:
                 L_i = per_exp_L[exp_idx]
                 mid_idx = L_i // 2
 
-                # Non-active experiments → fixed partition in KDE
-                self._pop()
-                self._push_others(state, exp_idx, datamodule)
-
-                # E_old: evidence of fixed partition alone (constant during LBFGS)
-                e_old_offset = _compute_e_old()
-
-                objective, D_exp = _make_per_exp_objective(exp_idx, e_old_offset)
+                objective, D_exp = _make_per_exp_objective(exp_idx)
 
                 # Bounds: [static drift | midpoint drift | L-1 deltas ∈ [0,1]]
                 bounds_i: list[tuple[float, float]] = []
@@ -375,9 +390,6 @@ class TrajectoryOptimizer:
 
             if not improved_this_round:
                 break
-
-        # Clean up virtual points
-        self._pop()
 
         self.total_iters = total_iters
         self.convergence_history = []
