@@ -19,7 +19,6 @@ import torch
 
 from ...core import DataModule, ExperimentSpec, ParameterProposal, ParameterTrajectory
 from ...utils.enum import SourceStep
-from ...utils import ProgressBar
 from .engine import OptimizationEngine, _OptResult
 
 
@@ -292,59 +291,37 @@ class TrajectoryOptimizer:
                     for _si in range(D_sched):
                         bounds_i.append((0.0, 1.0))
 
-                # Multi-start: first start = current state, rest add noise
-                rng = self._engine.rng
-                n_traj_starts = 3
-                best_opt = None
-                bar = ProgressBar(
-                    f"Exp {exp_idx+1}/{n}",
-                    max_starts=n_traj_starts,
-                ) if console else None
-                for _si in range(n_traj_starts):
-                    x0_i = np.zeros(D_exp)
-                    x0_i[:D_static] = state.static_norms[exp_idx]
-                    x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][mid_idx]
-                    if L_i > 1 and D_sched > 0:
-                        delta_start = D_static + D_sched
-                        if _si == 0:
-                            # Encode current schedule_norms into d_k variables
-                            # by inverting the range-mapping: d_k = (x_k - lo) / (hi - lo)
-                            cur_sched = state.schedule_norms[exp_idx]
-                            sched_d_np = np.array(sched_delta_norms_list)
-                            prev_val = cur_sched[mid_idx].copy()
-                            for k in range(mid_idx, L_i - 1):
-                                lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                                hi_k = np.minimum(1.0, prev_val + sched_d_np)
-                                span = hi_k - lo_k
-                                d_k = np.where(span > 1e-12, (cur_sched[k + 1] - lo_k) / span, 0.5)
-                                x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
-                                prev_val = cur_sched[k + 1].copy()
-                            prev_val = cur_sched[mid_idx].copy()
-                            for k in range(mid_idx - 1, -1, -1):
-                                lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                                hi_k = np.minimum(1.0, prev_val + sched_d_np)
-                                span = hi_k - lo_k
-                                d_k = np.where(span > 1e-12, (cur_sched[k] - lo_k) / span, 0.5)
-                                x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
-                                prev_val = cur_sched[k].copy()
-                        else:
-                            for di in range((L_i - 1) * D_sched):
-                                x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
-                    trial = self._engine.run_acquisition_gradient(
-                        objective, bounds_i, x0=x0_i,
-                        label=f"Exp {exp_idx+1}/{n}",
-                        show_progress=False,
-                        n_starts=1, raw_samples=0,
-                    )
-                    if best_opt is None or trial.score > best_opt.score:
-                        best_opt = trial
-                    if bar:
-                        bar.step(obj=-best_opt.score)
-                    if _si < n_traj_starts - 1 and bar:
-                        bar.new_start()
-                opt = best_opt  # type: ignore[assignment]
-                if bar:
-                    bar.finish()
+                # Warm start from current state
+                x0_i = np.zeros(D_exp)
+                x0_i[:D_static] = state.static_norms[exp_idx]
+                x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][mid_idx]
+                if L_i > 1 and D_sched > 0:
+                    delta_start = D_static + D_sched
+                    cur_sched = state.schedule_norms[exp_idx]
+                    sched_d_np = np.array(sched_delta_norms_list)
+                    prev_val = cur_sched[mid_idx].copy()
+                    for k in range(mid_idx, L_i - 1):
+                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
+                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        span = hi_k - lo_k
+                        d_k = np.where(span > 1e-12, (cur_sched[k + 1] - lo_k) / span, 0.5)
+                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        prev_val = cur_sched[k + 1].copy()
+                    prev_val = cur_sched[mid_idx].copy()
+                    for k in range(mid_idx - 1, -1, -1):
+                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
+                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        span = hi_k - lo_k
+                        d_k = np.where(span > 1e-12, (cur_sched[k] - lo_k) / span, 0.5)
+                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        prev_val = cur_sched[k].copy()
+
+                opt = self._engine.run_acquisition_gradient(
+                    objective, bounds_i, x0=x0_i,
+                    label=f"Exp {exp_idx+1}/{n}",
+                    show_progress=console,
+                    n_starts=1, raw_samples=0,
+                )
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
