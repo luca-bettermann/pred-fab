@@ -69,6 +69,7 @@ class TrajectoryOptimizer:
         pop_virtual_fn: Callable[[], None] | None = None,
         sanitize_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         smoothness_weight: float = 0.01,
+        acquisition_scale: float = 1000.0,
         max_rounds: int = 5,
         step_callback: Callable[[int, int, TrajectoryState], None] | None = None,
     ):
@@ -78,6 +79,7 @@ class TrajectoryOptimizer:
         self._pop_virtual_fn = pop_virtual_fn
         self._sanitize = sanitize_fn or (lambda d: d)
         self.smoothness_weight = smoothness_weight
+        self.acquisition_scale = acquisition_scale
         self.max_rounds = max_rounds
         self.step_callback = step_callback
 
@@ -207,6 +209,7 @@ class TrajectoryOptimizer:
         static_delta_norms_list = state.static_delta_norms
         traj_delta_norms_list = state.traj_delta_norms
         traj_delta_t = torch.tensor(traj_delta_norms_list, dtype=torch.float64) if traj_delta_norms_list else torch.zeros(D_traj, dtype=torch.float64)
+        acq_scale = self.acquisition_scale
         kappa = 1.0
 
         def _build_all_rows(state: TrajectoryState) -> tuple[torch.Tensor, torch.Tensor]:
@@ -265,15 +268,17 @@ class TrajectoryOptimizer:
                 w = all_weights.unsqueeze(0).expand(S, total_L).to(dtype=x_S.dtype)
                 scores_neg = self._acquisition_fn(full_S_NL, kappa, None, w)
 
-                # Smoothness penalties on the active trajectory
+                # Smoothness penalty: reversal + R², scaled by acquisition_scale
                 if D_traj > 0 and L_i > 2:
-                    obj_scale = scores_neg.detach().abs()
+                    scale = acq_scale
                     diffs = traj[:, 1:, :] - traj[:, :-1, :]
 
+                    # Reversal: penalize adjacent steps pulling opposite directions
                     products = diffs[:, 1:, :] * diffs[:, :-1, :]
-                    reversal_penalty = (-products).clamp(min=0.0).sum(dim=(1, 2))
-                    scores_neg = scores_neg + obj_scale * self.smoothness_weight * reversal_penalty
+                    reversal = (-products).clamp(min=0.0).sum(dim=(1, 2))
 
+                    # R²: penalize non-linearity per dimension
+                    r2_term = torch.zeros(S, dtype=x_S.dtype)
                     t = torch.arange(L_i, dtype=x_S.dtype)
                     t_mean = t.mean()
                     t_var = ((t - t_mean) ** 2).sum()
@@ -286,8 +291,10 @@ class TrajectoryOptimizer:
                         y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
                         ss_res = ((traj - y_hat) ** 2).sum(dim=1)
                         r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
-                        r2_penalty = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-                        scores_neg = scores_neg + obj_scale * self.smoothness_weight * r2_penalty
+                        r2_term = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+
+                    smoothness_penalty = reversal + r2_term
+                    scores_neg = scores_neg + scale * self.smoothness_weight * smoothness_penalty
 
                 return scores_neg
 

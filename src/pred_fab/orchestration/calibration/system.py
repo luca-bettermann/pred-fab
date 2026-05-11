@@ -1074,6 +1074,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             pop_virtual_fn=self._pop_virtual_fn,
             sanitize_fn=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
             smoothness_weight=self.smoothness_weight,
+            acquisition_scale=self.acquisition_scale,
             max_rounds=self.max_trajectory_rounds,
             step_callback=self.trajectory_step_callback,
         )
