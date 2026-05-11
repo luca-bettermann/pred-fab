@@ -262,6 +262,24 @@ class TrajectoryOptimizer:
         max_rounds = min(self.max_rounds, max(1, self._engine.gradient_n_iters // max(n, 1)))
         total_iters = 0
 
+        # Initialize trajectory spread: N(0, trust_region) noise on each layer
+        # relative to the Global midpoint. Midpoint itself stays exact.
+        rng = self._engine.rng
+        sched_d_np = np.array(sched_delta_norms_list)
+        for i in range(n):
+            mid_idx_i = per_exp_L[i] // 2
+            mid_val = state.schedule_norms[i][mid_idx_i].copy()
+            prev = mid_val.copy()
+            for k in range(mid_idx_i + 1, per_exp_L[i]):
+                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in sched_d_np])
+                state.schedule_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
+                prev = state.schedule_norms[i][k].copy()
+            prev = mid_val.copy()
+            for k in range(mid_idx_i - 1, -1, -1):
+                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in sched_d_np])
+                state.schedule_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
+                prev = state.schedule_norms[i][k].copy()
+
         for round_idx in range(max_rounds):
             if console:
                 import sys
@@ -292,40 +310,29 @@ class TrajectoryOptimizer:
                     for _si in range(D_sched):
                         bounds_i.append((0.0, 1.0))
 
-                # Build warm start: midpoint from current state, deltas encoded
-                rng = self._engine.rng
+                # Encode current state into decision vector
                 x0_i = np.zeros(D_exp)
                 x0_i[:D_static] = state.static_norms[exp_idx]
                 x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][mid_idx]
                 if L_i > 1 and D_sched > 0:
                     delta_start = D_static + D_sched
-                    if round_idx == 0:
-                        # First round: N(0, trust_region) noise on deltas to break saddle
-                        sched_d_np = np.array(sched_delta_norms_list)
-                        for di in range((L_i - 1) * D_sched):
-                            si = di % D_sched
-                            noise = rng.normal(0.0, sched_d_np[si]) if sched_d_np[si] > 0 else 0.0
-                            x0_i[delta_start + di] = np.clip(0.5 + noise, 0.0, 1.0)
-                    else:
-                        # Subsequent rounds: encode current schedule_norms
-                        cur_sched = state.schedule_norms[exp_idx]
-                        sched_d_np = np.array(sched_delta_norms_list)
-                        prev_val = cur_sched[mid_idx].copy()
-                        for k in range(mid_idx, L_i - 1):
-                            lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                            hi_k = np.minimum(1.0, prev_val + sched_d_np)
-                            span = hi_k - lo_k
-                            d_k = np.where(span > 1e-12, (cur_sched[k + 1] - lo_k) / span, 0.5)
-                            x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
-                            prev_val = cur_sched[k + 1].copy()
-                        prev_val = cur_sched[mid_idx].copy()
-                        for k in range(mid_idx - 1, -1, -1):
-                            lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                            hi_k = np.minimum(1.0, prev_val + sched_d_np)
-                            span = hi_k - lo_k
-                            d_k = np.where(span > 1e-12, (cur_sched[k] - lo_k) / span, 0.5)
-                            x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
-                            prev_val = cur_sched[k].copy()
+                    cur_sched = state.schedule_norms[exp_idx]
+                    prev_val = cur_sched[mid_idx].copy()
+                    for k in range(mid_idx, L_i - 1):
+                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
+                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        span = hi_k - lo_k
+                        d_k = np.where(span > 1e-12, (cur_sched[k + 1] - lo_k) / span, 0.5)
+                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        prev_val = cur_sched[k + 1].copy()
+                    prev_val = cur_sched[mid_idx].copy()
+                    for k in range(mid_idx - 1, -1, -1):
+                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
+                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        span = hi_k - lo_k
+                        d_k = np.where(span > 1e-12, (cur_sched[k] - lo_k) / span, 0.5)
+                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        prev_val = cur_sched[k].copy()
 
                 opt = self._engine.run_acquisition_gradient(
                     objective, bounds_i, x0=x0_i,
