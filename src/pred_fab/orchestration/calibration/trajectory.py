@@ -271,12 +271,12 @@ class TrajectoryOptimizer:
             mid_val = state.traj_norms[i][mid_idx_i].copy()
             prev = mid_val.copy()
             for k in range(mid_idx_i + 1, per_exp_L[i]):
-                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in traj_d_np])
+                noise = np.array([rng.normal(0.0, 0.1 * d) if d > 0 else 0.0 for d in traj_d_np])
                 state.traj_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
                 prev = state.traj_norms[i][k].copy()
             prev = mid_val.copy()
             for k in range(mid_idx_i - 1, -1, -1):
-                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in traj_d_np])
+                noise = np.array([rng.normal(0.0, 0.1 * d) if d > 0 else 0.0 for d in traj_d_np])
                 state.traj_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
                 prev = state.traj_norms[i][k].copy()
 
