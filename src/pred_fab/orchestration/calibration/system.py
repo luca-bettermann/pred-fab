@@ -84,6 +84,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.smoothness_weight: float = 0.01
         self.max_trajectory_rounds: int = 5
         self.trajectory_step_callback: Callable[[int, int, TrajectoryState], None] | None = None
+        self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -808,6 +809,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_domain_values = list(structural_values) if structural_values is not None else None
 
         self.last_global_specs = list(flat_specs) if flat_specs else []
+
+        if self.post_global_callback is not None:
+            self.post_global_callback(self.last_global_specs)
 
         # --- Derive per_exp_L from domain axis values in Process output ---
         per_exp_L: list[int] | None = None
