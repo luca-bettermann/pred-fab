@@ -82,6 +82,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_exp_ids: list[int] | None = None
         self.trajectory_locked_static: set[str] = set()
         self.smoothness_weight: float = 0.01
+        self.acquisition_scale: float = 1000.0
         self.max_trajectory_rounds: int = 5
         self.trajectory_step_callback: Callable[[int, int, TrajectoryState], None] | None = None
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
@@ -309,21 +310,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
             out = self._acquisition_objective_tensor(X_SD, kappa, perf_range)
         return float(out[0].item())
 
-    @staticmethod
-    def _kappa_blend(scores, perfs, evidences, kappa: float):
-        """Negated κ-weighted blend: −[(1−κ)·perfs + κ·evidences].
-
-        Backend-agnostic — both arms work for numpy ndarrays and torch tensors
-        via operator overloading. ``perfs`` / ``evidences`` may be ``None`` when
-        their respective branch is inactive (κ at boundary, or evidence_fn
-        unavailable). Returns ``-scores`` so callers can directly hand it to
-        a minimiser.
-        """
+    def _kappa_blend(self, scores, perfs, evidences, kappa: float):
+        """Negated κ-weighted blend scaled by ``acquisition_scale``."""
         if perfs is not None and kappa < 1.0:
             scores = scores + (1.0 - kappa) * perfs
         if evidences is not None and kappa > 0.0:
             scores = scores + kappa * evidences
-        return -scores
+        return -scores * self.acquisition_scale
 
     def _per_candidate_perf_tensor(
         self,

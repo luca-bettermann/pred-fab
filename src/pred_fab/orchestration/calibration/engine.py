@@ -131,16 +131,11 @@ class OptimizationEngine:
         def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
             return torch.sigmoid(z_tensor) * span_t + lo_t
 
-        # Scale objective to keep gradients above LBFGS line-search threshold.
-        # Evidence values shrink with dimensionality; scaling preserves the
-        # optimum while making the gradient landscape navigable.
-        obj_scale = float(max(D, 1)) * 1000.0
-
         def _eval_obj(z_tensor: torch.Tensor) -> torch.Tensor:
             x = _decode_x(z_tensor)
             vals = objective_tensor(x)
             nfev[0] += int(z_tensor.shape[0])
-            return vals * obj_scale
+            return vals
 
         with profiler.section("engine.run_acquisition_gradient"):
             if method == "sgd":
@@ -152,7 +147,7 @@ class OptimizationEngine:
                     if loss.requires_grad:
                         loss.backward()
                     optimizer.step()
-                    best_now = float(vals.detach().min().item()) / obj_scale
+                    best_now = float(vals.detach().min().item())
                     history.append(best_now)
                     if bar:
                         bar.step(obj=best_now)
@@ -165,7 +160,7 @@ class OptimizationEngine:
                     if loss.requires_grad:
                         loss.backward()
                     optimizer.step()
-                    best_now = float(vals.detach().min().item()) / obj_scale
+                    best_now = float(vals.detach().min().item())
                     history.append(best_now)
                     if bar:
                         bar.step(obj=best_now)
@@ -182,8 +177,8 @@ class OptimizationEngine:
                     loss = vals.sum()
                     if loss.requires_grad:
                         loss.backward()
-                    cur = float(vals.detach().min().item()) / obj_scale
-                    if cur < _best_obj[0] - 1e-15 / obj_scale or _iter_count[0] == 0:
+                    cur = float(vals.detach().min().item())
+                    if cur < _best_obj[0] - 1e-15 or _iter_count[0] == 0:
                         _iter_count[0] += 1
                         _best_obj[0] = cur
                         history.append(cur)

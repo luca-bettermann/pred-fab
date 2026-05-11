@@ -717,6 +717,7 @@ class PfabAgent:
         init_eta: float | None = None,
         smoothness_weight: float | None = None,
         max_trajectory_rounds: int | None = None,
+        acquisition_scale: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters."""
         self._assert_initialized()
@@ -737,6 +738,8 @@ class PfabAgent:
             cal.smoothness_weight = smoothness_weight
         if max_trajectory_rounds is not None:
             cal.max_trajectory_rounds = max_trajectory_rounds
+        if acquisition_scale is not None:
+            cal.acquisition_scale = acquisition_scale
 
     def configure_trajectory(
         self,
