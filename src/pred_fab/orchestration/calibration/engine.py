@@ -134,7 +134,7 @@ class OptimizationEngine:
         # Scale objective to keep gradients above LBFGS line-search threshold.
         # Evidence values shrink with dimensionality; scaling preserves the
         # optimum while making the gradient landscape navigable.
-        obj_scale = float(max(D, 1)) * 100.0
+        obj_scale = float(max(D, 1)) * 1000.0
 
         def _eval_obj(z_tensor: torch.Tensor) -> torch.Tensor:
             x = _decode_x(z_tensor)

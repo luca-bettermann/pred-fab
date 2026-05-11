@@ -128,14 +128,19 @@ def _overlay_points(
     points: list[dict[str, Any]],
     exp_ids: list[int],
 ) -> None:
-    """Draw scatter points with trajectory lines and experiment labels."""
+    """Draw scatter points with trajectory lines, colored by layer index."""
+    from matplotlib.colors import Normalize as MplNorm
     px = [float(p.get(x_axis.key, 0)) for p in points]
     py = [float(p.get(y_axis.key, 0)) for p in points]
 
+    # Compute per-point layer fraction: 0 = first layer, 1 = last
+    layer_frac = np.zeros(len(points))
     n_exp = max(exp_ids) + 1 if exp_ids else 0
     for eid in range(n_exp):
         mask = [j for j, e in enumerate(exp_ids) if e == eid]
         if len(mask) > 1:
+            for k, j in enumerate(mask):
+                layer_frac[j] = k / (len(mask) - 1)
             ex = [px[j] for j in mask]
             ey = [py[j] for j in mask]
             ax.plot(ex, ey, color=ZINC_400, linewidth=0.6, alpha=0.4, zorder=1)
@@ -144,7 +149,9 @@ def _overlay_points(
                        ha="center", va="bottom", xytext=(0, 5),
                        textcoords="offset points", color=ZINC_400)
 
-    ax.scatter(px, py, s=60, c=STEEL_500, edgecolors="white",
+    cm = plt.get_cmap("Blues")
+    colors = [cm(0.3 + 0.6 * layer_frac[j]) for j in range(len(points))]
+    ax.scatter(px, py, s=60, c=colors, edgecolors="white",
                linewidth=0.8, zorder=5)
 
 
