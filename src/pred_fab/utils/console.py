@@ -55,8 +55,9 @@ class ProgressBar:
         self._i = (self._i + 1) if i is None else i
 
         if obj is not None:
-            improved = self._best_obj is not None and obj < self._best_obj - 1e-15
-            if improved or self._best_obj is None:
+            first = self._best_obj is None
+            improved = first or obj < self._best_obj - 1e-15  # type: ignore[operator]
+            if improved:
                 self._best_obj = obj
                 self._no_improve = 0
             else:

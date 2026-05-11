@@ -210,7 +210,8 @@ class OptimizationEngine:
         best_x = x_final[best_idx]
 
         if bar:
-            bar.finish()
+            bar.finish(suffix=f"{n_starts} starts  {len(history)} iters  obj={best_val:.3f}")
+
 
         return _OptResult(
             best_x=best_x,
