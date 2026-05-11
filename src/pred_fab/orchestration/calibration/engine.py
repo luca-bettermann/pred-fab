@@ -127,6 +127,8 @@ class OptimizationEngine:
         history: list[float] = []
         nfev = [0]
         bar = ProgressBar(label) if show_progress else None
+        if bar:
+            bar._starts = n_starts
 
         def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
             return torch.sigmoid(z_tensor) * span_t + lo_t

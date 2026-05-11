@@ -1205,8 +1205,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         full_S_NL: torch.Tensor,
         kappa: float,
         perf_range: tuple[float, float] | None,
+        weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Negated κ-weighted joint acquisition ``(S,)``, gradient-traversable through ``full_S_NL``."""
+        """Negated κ-weighted joint acquisition ``(S,)``, gradient-traversable.
+
+        ``weights`` shape ``(S, NL)`` — per-point evidence weight. None = 1.0.
+        """
         with profiler.section("acq._acquisition_joint_batched_tensor"):
             S, N, L, D = full_S_NL.shape
             NL = N * L
@@ -1221,7 +1225,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             evidence_S: torch.Tensor | None = None
             if kappa > 0.0 and self.evidence.joint_batched_tensor is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                evidence_S = self.evidence.joint_batched_tensor(flat_per_candidate).to(dtype=dtype)
+                w = weights.reshape(S, NL) if weights is not None else None
+                evidence_S = self.evidence.joint_batched_tensor(flat_per_candidate, w).to(dtype=dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
 
