@@ -238,8 +238,9 @@ class TrajectoryOptimizer:
                 rng = self._engine.rng
                 n_traj_starts = 3
                 best_opt = None
+                total_nfev = 0
                 traj_label = f"Traj {exp_idx+1}/{n} (r{round_idx+1})"
-                bar = ProgressBar(traj_label) if console else None
+                bar = ProgressBar(traj_label, max_iter=n_traj_starts) if console else None
                 for _si in range(n_traj_starts):
                     x0_i = np.zeros(D_exp)
                     x0_i[:D_static] = state.static_norms[exp_idx]
@@ -254,13 +255,14 @@ class TrajectoryOptimizer:
                         show_progress=False,
                         n_starts=1, raw_samples=0,
                     )
+                    total_nfev += trial.nfev
                     if best_opt is None or trial.score > best_opt.score:
                         best_opt = trial
                     if bar:
                         bar.step(obj=-best_opt.score)
                 opt = best_opt  # type: ignore[assignment]
                 if bar:
-                    bar.finish()
+                    bar.finish(suffix=f"{n_traj_starts} starts  {total_nfev} iters  obj={-opt.score:.3f}")
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
