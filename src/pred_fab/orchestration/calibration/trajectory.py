@@ -235,14 +235,50 @@ class TrajectoryOptimizer:
                 weights_list.extend([w_j] * L_j)
             return torch.cat(rows_list, dim=0), torch.tensor(weights_list, dtype=torch.float64)
 
+        def _smoothness_for_traj(traj_SLD: torch.Tensor) -> torch.Tensor:
+            """Reversal + R² penalty for a single trajectory. Returns (S,)."""
+            S = int(traj_SLD.shape[0])
+            L = int(traj_SLD.shape[1])
+            if L <= 2:
+                return torch.zeros(S, dtype=traj_SLD.dtype)
+            diffs = traj_SLD[:, 1:, :] - traj_SLD[:, :-1, :]
+            products = diffs[:, 1:, :] * diffs[:, :-1, :]
+            reversal = (-products).clamp(min=0.0).sum(dim=(1, 2))
+
+            r2_term = torch.zeros(S, dtype=traj_SLD.dtype)
+            t = torch.arange(L, dtype=traj_SLD.dtype)
+            t_mean = t.mean()
+            t_var = ((t - t_mean) ** 2).sum()
+            y_mean = traj_SLD.mean(dim=1, keepdim=True)
+            ss_tot = ((traj_SLD - y_mean) ** 2).sum(dim=1)
+            has_variation = ss_tot > 1e-6
+            if bool(has_variation.any().item()):
+                cov = ((t[None, :, None] - t_mean) * (traj_SLD - y_mean)).sum(dim=1)
+                slope = cov / t_var.clamp(min=1e-12)
+                y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
+                ss_res = ((traj_SLD - y_hat) ** 2).sum(dim=1)
+                r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
+                r2_term = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
+            return reversal + r2_term
+
+        def _total_smoothness(active_traj: torch.Tensor, exp_idx: int) -> torch.Tensor:
+            """Sum smoothness penalty across ALL experiments. Active carries grad, rest detached."""
+            S = int(active_traj.shape[0])
+            total = torch.zeros(S, dtype=active_traj.dtype)
+            for j in range(n):
+                if j == exp_idx:
+                    total = total + _smoothness_for_traj(active_traj)
+                else:
+                    traj_j = torch.from_numpy(state.traj_norms[j]).unsqueeze(0).expand(S, -1, -1).to(dtype=active_traj.dtype)
+                    total = total + _smoothness_for_traj(traj_j)
+            return total
+
         def _make_per_exp_objective(exp_idx: int):
             L_i = per_exp_L[exp_idx]
             D_exp = D_static + L_i * D_traj
 
-            # Layer offset for the active experiment within the full tensor
             active_start = sum(per_exp_L[:exp_idx])
 
-            # Pre-build non-active rows (detached, no grad)
             all_rows, all_weights = _build_all_rows(state)
             total_L = int(all_rows.shape[0])
 
@@ -252,7 +288,6 @@ class TrajectoryOptimizer:
                     x_S, D_static, D_traj, L_i, traj_delta_t,
                 )
 
-                # Build active experiment's rows (with grad)
                 cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
                     cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1),
@@ -260,7 +295,6 @@ class TrajectoryOptimizer:
                 if D_traj > 0:
                     cand_i = cand_i.scatter(-1, traj_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
 
-                # All experiments: splice active (with grad) into full tensor
                 full = all_rows.unsqueeze(0).expand(S, total_L, n_dm_cols).clone().to(dtype=x_S.dtype)
                 full[:, active_start:active_start + L_i, :] = cand_i
                 full_S_NL = full.unsqueeze(1)  # (S, 1, total_L, n_dm_cols)
@@ -268,33 +302,10 @@ class TrajectoryOptimizer:
                 w = all_weights.unsqueeze(0).expand(S, total_L).to(dtype=x_S.dtype)
                 scores_neg = self._acquisition_fn(full_S_NL, kappa, None, w)
 
-                # Smoothness penalty: reversal + R², scaled by acquisition_scale
-                if D_traj > 0 and L_i > 2:
-                    scale = acq_scale
-                    diffs = traj[:, 1:, :] - traj[:, :-1, :]
-
-                    # Reversal: penalize adjacent steps pulling opposite directions
-                    products = diffs[:, 1:, :] * diffs[:, :-1, :]
-                    reversal = (-products).clamp(min=0.0).sum(dim=(1, 2))
-
-                    # R²: penalize non-linearity per dimension
-                    r2_term = torch.zeros(S, dtype=x_S.dtype)
-                    t = torch.arange(L_i, dtype=x_S.dtype)
-                    t_mean = t.mean()
-                    t_var = ((t - t_mean) ** 2).sum()
-                    y_mean = traj.mean(dim=1, keepdim=True)
-                    ss_tot = ((traj - y_mean) ** 2).sum(dim=1)
-                    has_variation = ss_tot > 1e-6
-                    if bool(has_variation.any().item()):
-                        cov = ((t[None, :, None] - t_mean) * (traj - y_mean)).sum(dim=1)
-                        slope = cov / t_var.clamp(min=1e-12)
-                        y_hat = y_mean + slope[:, None, :] * (t[None, :, None] - t_mean)
-                        ss_res = ((traj - y_hat) ** 2).sum(dim=1)
-                        r2 = torch.where(has_variation, 1.0 - ss_res / ss_tot.clamp(min=1e-6), torch.ones_like(ss_tot))
-                        r2_term = (1.0 - r2).clamp(min=0.0).sum(dim=-1)
-
-                    smoothness_penalty = reversal + r2_term
-                    scores_neg = scores_neg + scale * self.smoothness_weight * smoothness_penalty
+                # Smoothness on ALL experiments (active carries grad, rest detached)
+                if D_traj > 0:
+                    penalty = _total_smoothness(traj, exp_idx)
+                    scores_neg = scores_neg + acq_scale * self.smoothness_weight * penalty
 
                 return scores_neg
 
@@ -321,9 +332,25 @@ class TrajectoryOptimizer:
                 state.traj_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
                 prev = state.traj_norms[i][k].copy()
 
+        # Compute and display warm start objective (after noise, before optimization)
+        if console:
+            import sys
+            with torch.no_grad():
+                all_rows_init, all_weights_init = _build_all_rows(state)
+                full_init = all_rows_init.unsqueeze(0).unsqueeze(1)  # (1, 1, total_L, D)
+                w_init = all_weights_init.unsqueeze(0)  # (1, total_L)
+                obj_init = self._acquisition_fn(full_init, kappa, None, w_init)
+                # Add smoothness for all experiments
+                smooth_init = torch.zeros(1, dtype=torch.float64)
+                for j in range(n):
+                    traj_j = torch.from_numpy(state.traj_norms[j]).unsqueeze(0).double()
+                    smooth_init = smooth_init + _smoothness_for_traj(traj_j)
+                obj_total = float((obj_init + acq_scale * self.smoothness_weight * smooth_init)[0].item())
+            sys.stdout.write(f"  \033[2mWarm start obj={obj_total:.3f}\033[0m\n")
+            sys.stdout.flush()
+
         for round_idx in range(max_rounds):
             if console:
-                import sys
                 sys.stdout.write(f"  \033[2mTrajectory round {round_idx+1}\033[0m\n")
                 sys.stdout.flush()
             improved_this_round = False
