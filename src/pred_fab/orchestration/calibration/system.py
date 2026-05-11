@@ -997,7 +997,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             pts_S = x_flat_S.reshape(S, n, d_phase)
             X_batch_S = prior_fill_t.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=x_flat_S.dtype)
             if phase_cols_t is not None and phase_si_t is not None:
-                # STE rounding for integer dims: forward rounds, backward passes gradient through
                 src = pts_S.index_select(-1, phase_si_t)
                 if all_int_set:
                     for si_local in all_int_set:
@@ -1007,10 +1006,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                             src[:, :, si_local] = col_val + (col_val.round() - col_val).detach()
                 idx = phase_cols_t.unsqueeze(0).unsqueeze(0).expand(S, n, -1)
                 X_batch_S = X_batch_S.scatter(-1, idx, src)
-            if self.evidence.joint_batched_tensor is not None:
-                de = self.evidence.joint_batched_tensor(X_batch_S)
-                return -de.to(dtype=x_flat_S.dtype)
-            return torch.zeros(S, dtype=x_flat_S.dtype)
+            full_S_NL = X_batch_S.unsqueeze(2)  # (S, N, 1, D)
+            return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None)
 
         opt = self.engine.run_acquisition_gradient(
             _acquisition_batch_objective_tensor,
