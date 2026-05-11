@@ -562,7 +562,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 key=lambda dc: dim_key_order_spec.get(dc, 999),
             )
             for dim_code in dim_codes:
-                sched_codes = [
+                traj_codes = [
                     c for c, dc in self.trajectory_configs.items() if dc == dim_code
                 ]
                 entries: list[tuple[int, ParameterProposal]] = []
@@ -573,7 +573,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         prev_idx = cur_idx
                         continue
                     if cur_idx != prev_idx:
-                        seg_vals = {c: proposals[flat_i][c] for c in sched_codes if c in proposals[flat_i]}
+                        seg_vals = {c: proposals[flat_i][c] for c in traj_codes if c in proposals[flat_i]}
                         if seg_vals:
                             entries.append((
                                 cur_idx,
@@ -737,7 +737,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 init_norm = np.clip(init_norm + jitter, 0.01, 0.99)
 
         # --- Detect schedule config ---
-        sched_set = set(self.trajectory_configs.keys())
+        traj_set = set(self.trajectory_configs.keys())
         domain_axis_sched_dims: set[str] = set()
 
         if self.trajectory_configs:
@@ -756,8 +756,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         f"Proceeding without schedule for those dimensions."
                     )
                 if not domain_axis_sched_dims:
-                    sched_set = {
-                        code for code in sched_set
+                    traj_set = {
+                        code for code in traj_set
                         if self.trajectory_configs[code] in self.fixed_params
                     }
 
@@ -814,7 +814,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             for spec in flat_specs:
                 p = spec.initial_params.to_dict()
                 per_exp_L.append(max(int(p.get(c, 1)) for c in group_key_codes))
-        elif sched_set:
+        elif traj_set:
             # Fixed dimension schedule case
             fixed_sched = [d for d in set(self.trajectory_configs.values()) if d in self.fixed_params]
             if fixed_sched:
@@ -822,7 +822,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 per_exp_L = [L] * n
 
         # --- Schedule phase (if scheduled params exist and L > 1) ---
-        if sched_set and per_exp_L is not None and max(per_exp_L) > 1:
+        if traj_set and per_exp_L is not None and max(per_exp_L) > 1:
             # Determine primary dimension code: prefer an unfixed domain-axis
             # sched dim; fall back to a fixed-dim sched when --design-intent
             # pins the dimension (e.g. n_layers=4).
@@ -835,21 +835,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
                 primary_dim_code = fixed_dim_codes[0] if fixed_dim_codes else ""
 
-            sched_params_list: list[tuple[str, float, float]] = []
-            for code in sorted(sched_set):
+            traj_params_list: list[tuple[str, float, float]] = []
+            for code in sorted(traj_set):
                 if code in domain_axis_sched_dims:
                     continue
                 lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-                sched_params_list.append((code, lo, hi))
+                traj_params_list.append((code, lo, hi))
 
-            if sched_params_list:
-                locked = sched_set | self.trajectory_locked_static
+            if traj_params_list:
+                locked = traj_set | self.trajectory_locked_static
                 static_params_list = [
                     (code, lo, hi) for code, lo, hi in continuous_params
                     if code not in locked
                 ]
                 specs = self._phase3_trajectory(
-                    n, flat_specs, sched_params_list, per_exp_L,
+                    n, flat_specs, traj_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
                     None,
                     static_params=static_params_list,
@@ -989,7 +989,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         self.logger.info(
             f"Phase ({label}): N={n}, D_static={len(all_phase_params)}, "
-            f"D_sched=0, total_vars={space.total_vars}"
+            f"D_traj=0, total_vars={space.total_vars}"
         )
 
         def _acquisition_batch_objective_tensor(x_flat_S: torch.Tensor) -> torch.Tensor:
@@ -1041,7 +1041,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         n: int,
         flat_specs: list[ExperimentSpec],
-        sched_params: list[tuple[str, float, float]],
+        traj_params: list[tuple[str, float, float]],
         per_exp_L: list[int],
         primary_dim_code: str,
         integer_params: list[tuple[str, int, int]],
@@ -1051,7 +1051,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         static_params: list[tuple[str, float, float]] | None = None,
     ) -> list[ExperimentSpec]:
         """Delegate trajectory optimization to TrajectoryOptimizer."""
-        if len(sched_params) == 0 or max(per_exp_L) <= 1:
+        if len(traj_params) == 0 or max(per_exp_L) <= 1:
             return flat_specs
 
         baseline_dm = self._active_datamodule
@@ -1059,7 +1059,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return flat_specs
 
         state = init_trajectory_state(
-            flat_specs, sched_params, static_params or [],
+            flat_specs, traj_params, static_params or [],
             per_exp_L, primary_dim_code,
             dict(self.trust_regions), baseline_dm,
             self.bounds._get_hierarchical_bounds_for_code,
@@ -1083,8 +1083,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         # Copy output state back for plotting/display
         self.last_trajectory_points = optimizer.last_trajectory_points
         self.last_trajectory_exp_ids = optimizer.last_trajectory_exp_ids
-        self.last_trajectory_schedule_norms = optimizer.last_trajectory_schedule_norms
-        self.last_trajectory_sched_params = optimizer.last_trajectory_sched_params
+        self.last_traj_norms = optimizer.last_traj_norms
+        self.last_traj_params = optimizer.last_traj_params
         self.last_trajectory_per_exp_L = optimizer.last_trajectory_per_exp_L
         self.last_baseline_nfev += optimizer.total_iters
         self.convergence_history["Trajectory"] = optimizer.convergence_history
@@ -1451,25 +1451,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
             # and behave as static (integer) params in the schedule split.
             cat_codes = set(datamodule.categorical_mappings.keys())
             context_codes = set(datamodule.context_feature_codes)
-            sched_set = set(self.trajectory_configs.keys())
+            traj_set = set(self.trajectory_configs.keys())
             static_codes: list[str] = []
-            sched_codes: list[str] = []
+            traj_codes: list[str] = []
 
             for code in datamodule.input_columns:
                 if code in context_codes or code in cat_codes or code in self.fixed_params:
                     static_codes.append(code)
-                elif code in sched_set:
-                    sched_codes.append(code)
+                elif code in traj_set:
+                    traj_codes.append(code)
                 else:
                     static_codes.append(code)
 
             D_static = len(static_codes)
-            D_sched = len(sched_codes)
+            D_traj = len(traj_codes)
             code_to_idx = {c: i for i, c in enumerate(datamodule.input_columns)}
 
             # --- Refine (Process): single-point acquisition, no schedule ---
             # All params (static + sched) treated as flat static for Refine
-            all_p2_codes = static_codes + sched_codes
+            all_p2_codes = static_codes + traj_codes
             D_p2 = len(all_p2_codes)
 
             if is_online:
@@ -1526,12 +1526,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         flat_x[code_to_idx[c]] = v
 
             # --- Trajectory (Schedule): fix static, optimize offsets ---
-            if D_sched > 0:
+            if D_traj > 0:
                 # Build sched DE bounds and delta norms in normalized space
                 sched_de_bounds: list[tuple[float, float]] = []
-                sched_delta_norms: list[float] = []
+                traj_delta_norms: list[float] = []
                 sched_param_tuples: list[tuple[str, float, float]] = []
-                for code in sched_codes:
+                for code in traj_codes:
                     idx = code_to_idx[code]
                     lo_norm, hi_norm = float(all_global_bounds[idx, 0]), float(all_global_bounds[idx, 1])
                     sched_de_bounds.append((lo_norm, hi_norm))
@@ -1540,9 +1540,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     if delta_raw > 0:
                         _, delta_norm = datamodule.normalize_parameter_bounds(code, 0.0, delta_raw)
                         lo_zero, _ = datamodule.normalize_parameter_bounds(code, 0.0, 0.0)
-                        sched_delta_norms.append(abs(delta_norm - lo_zero))
+                        traj_delta_norms.append(abs(delta_norm - lo_zero))
                     else:
-                        sched_delta_norms.append(0.0)
+                        traj_delta_norms.append(0.0)
 
                 # gradient is the only schedule path.
                 # Absolute-step encoding (each step k ∈ [0, 1] strict via sigmoid
@@ -1559,32 +1559,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 def _pts_row_to_dm(pts_row: np.ndarray) -> np.ndarray:
                     """Map a sched-only row + fixed static to datamodule input."""
                     x = flat_x.copy()
-                    for d_s, c in enumerate(sched_codes):
+                    for d_s, c in enumerate(traj_codes):
                         x[code_to_idx[c]] = pts_row[d_s]
                     return x
 
                 sched_perf_range, _ = self._get_acquisition_ranges()
 
-                # Absolute-step encoding: total_vars = L * D_sched.
+                # Absolute-step encoding: total_vars = L * D_traj.
                 abs_bounds: list[tuple[float, float]] = []
                 for _k in range(L):
-                    for d_s in range(D_sched):
+                    for d_s in range(D_traj):
                         abs_bounds.append(sched_de_bounds[d_s])
 
                 flat_x_t = torch.from_numpy(flat_x).float()
                 sched_col_indices = torch.tensor(
-                    [code_to_idx[c] for c in sched_codes], dtype=torch.long,
+                    [code_to_idx[c] for c in traj_codes], dtype=torch.long,
                 )
 
                 self.logger.debug(
                     f"Trajectory schedule optimization (gradient): L={L}, "
-                    f"D_sched={D_sched}, total_vars={L * D_sched}"
+                    f"D_traj={D_traj}, total_vars={L * D_traj}"
                 )
 
                 def _schedule_objective_tensor(x_S: torch.Tensor) -> torch.Tensor:
-                    """Tensor schedule objective — (S, L*D_sched) → (S,) negated scores."""
+                    """Tensor schedule objective — (S, L*D_traj) → (S,) negated scores."""
                     S = int(x_S.shape[0])
-                    steps_SLD = x_S.reshape(S, L, D_sched)
+                    steps_SLD = x_S.reshape(S, L, D_traj)
                     full_S_NL = flat_x_t.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(
                         S, 1, L, n_input,
                     ).clone()
@@ -1593,8 +1593,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         full_S_NL, kappa, sched_perf_range,
                     )
                     # Soft delta-constraint penalty: λ · Σ_k max(0, |Δstep|−delta)²
-                    if D_sched > 0 and L > 1:
-                        sched_delta_t = torch.tensor(sched_delta_norms, dtype=x_S.dtype)
+                    if D_traj > 0 and L > 1:
+                        sched_delta_t = torch.tensor(traj_delta_norms, dtype=x_S.dtype)
                         valid_delta = sched_delta_t > 0
                         if bool(valid_delta.any().item()):
                             step_diffs = (steps_SLD[:, 1:, :] - steps_SLD[:, :-1, :]).abs()
@@ -1617,7 +1617,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 proposals: list[dict[str, Any]] = []
                 if opt.best_x is not None:
                     # Commit 12b: gradient-only — absolute-step decode.
-                    pts = opt.best_x.reshape(L, D_sched)
+                    pts = opt.best_x.reshape(L, D_traj)
                     for k in range(L):
                         step_params = datamodule.array_to_params(_pts_row_to_dm(pts[k]))
                         step_params.update(self.fixed_params)
@@ -1641,7 +1641,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 if opt.best_x is not None:
                     try:
-                        pts0 = opt.best_x.reshape(L, D_sched)[0]
+                        pts0 = opt.best_x.reshape(L, D_traj)[0]
                         x0_step = _pts_row_to_dm(pts0)
                         _params = datamodule.array_to_params(x0_step)
                         self.last_opt_perf = self._compute_normalised_perf_for_params(
@@ -1661,7 +1661,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 )
 
             else:
-                # D_sched == 0: sched params not in datamodule input_columns.
+                # D_traj == 0: sched params not in datamodule input_columns.
                 # Replicate flat result across all steps via non-DM sched param handling.
                 dm_input_set = set(datamodule.input_columns)
                 non_dm_sched = {c for c in self.trajectory_configs if c not in dm_input_set}

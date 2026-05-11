@@ -27,24 +27,24 @@ class TrajectoryState:
     """Mutable state for the coordinate-descent trajectory loop."""
     n: int
     flat_specs: list[ExperimentSpec]
-    sched_params: list[tuple[str, float, float]]
+    traj_params: list[tuple[str, float, float]]
     static_params: list[tuple[str, float, float]]
     per_exp_L: list[int]
     primary_dim_code: str
-    sched_delta_norms: list[float]
+    traj_delta_norms: list[float]
     static_delta_norms: list[float]
 
     static_norms: np.ndarray
-    schedule_norms: list[np.ndarray]
+    traj_norms: list[np.ndarray]
 
     n_dm_cols: int
     exp_base_rows: list[np.ndarray]
-    sched_col_map: list[tuple[int, int]]
+    traj_col_map: list[tuple[int, int]]
     static_col_map: list[tuple[int, int]]
 
     @property
-    def D_sched(self) -> int:
-        return len(self.sched_params)
+    def D_traj(self) -> int:
+        return len(self.traj_params)
 
     @property
     def D_static(self) -> int:
@@ -63,7 +63,7 @@ class TrajectoryOptimizer:
     def __init__(
         self,
         engine: OptimizationEngine,
-        acquisition_fn: Callable[[torch.Tensor, float, Any], torch.Tensor],
+        acquisition_fn: Callable[..., torch.Tensor],
         *,
         push_virtual_fn: Callable[[list[dict[str, Any]], list[float] | None, DataModule | None], None] | None = None,
         pop_virtual_fn: Callable[[], None] | None = None,
@@ -83,8 +83,8 @@ class TrajectoryOptimizer:
 
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
-        self.last_trajectory_schedule_norms: list[np.ndarray] | None = None
-        self.last_trajectory_sched_params: list[tuple[str, float, float]] | None = None
+        self.last_traj_norms: list[np.ndarray] | None = None
+        self.last_traj_params: list[tuple[str, float, float]] | None = None
         self.last_trajectory_per_exp_L: list[int] | None = None
         self.total_iters: int = 0
         self.convergence_history: list[float] = []
@@ -95,7 +95,7 @@ class TrajectoryOptimizer:
         datamodule: DataModule | None,
         console: bool = False,
     ) -> list[ExperimentSpec]:
-        if state.D_sched == 0 or max(state.per_exp_L) <= 1:
+        if state.D_traj == 0 or max(state.per_exp_L) <= 1:
             return list(state.flat_specs)
 
         self._run_coordinate_descent(state, datamodule, console)
@@ -120,8 +120,8 @@ class TrajectoryOptimizer:
                 p: dict[str, Any] = {}
                 for si, (code, lo, hi) in enumerate(state.static_params):
                     p[code] = float(state.static_norms[j, si] * (hi - lo) + lo)
-                for si, (code, lo, hi) in enumerate(state.sched_params):
-                    p[code] = float(state.schedule_norms[j][k, si] * (hi - lo) + lo)
+                for si, (code, lo, hi) in enumerate(state.traj_params):
+                    p[code] = float(state.traj_norms[j][k, si] * (hi - lo) + lo)
                 base_dict = state.flat_specs[j].initial_params.to_dict()
                 for code, val in base_dict.items():
                     if code not in p:
@@ -147,35 +147,35 @@ class TrajectoryOptimizer:
     # ------------------------------------------------------------------
 
     def _decode_trajectory_from_midpoint(
-        self, x_S: torch.Tensor, D_static: int, D_sched: int, L_i: int,
-        sched_delta_t: torch.Tensor,
+        self, x_S: torch.Tensor, D_static: int, D_traj: int, L_i: int,
+        traj_delta_t: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Decode decision vector with Global anchor at midpoint.
 
-        Returns (stat, traj) where traj is (S, L_i, D_sched).
+        Returns (stat, traj) where traj is (S, L_i, D_traj).
         """
         S = int(x_S.shape[0])
         stat = x_S[:, :D_static]
         mid_idx = L_i // 2
-        mid_val = x_S[:, D_static:D_static + D_sched]
+        mid_val = x_S[:, D_static:D_static + D_traj]
 
-        traj = torch.zeros(S, L_i, D_sched, dtype=x_S.dtype)
+        traj = torch.zeros(S, L_i, D_traj, dtype=x_S.dtype)
         traj[:, mid_idx, :] = mid_val
 
         if L_i > 1:
-            d_vars = x_S[:, D_static + D_sched:].reshape(S, L_i - 1, D_sched)
+            d_vars = x_S[:, D_static + D_traj:].reshape(S, L_i - 1, D_traj)
             # Forward from midpoint: layers mid_idx+1 ... L_i-1
             prev = mid_val
             for k in range(mid_idx, L_i - 1):
-                lo_k = (prev - sched_delta_t).clamp(min=0.0)
-                hi_k = (prev + sched_delta_t).clamp(max=1.0)
+                lo_k = (prev - traj_delta_t).clamp(min=0.0)
+                hi_k = (prev + traj_delta_t).clamp(max=1.0)
                 traj[:, k + 1, :] = lo_k + d_vars[:, k, :] * (hi_k - lo_k)
                 prev = traj[:, k + 1, :]
             # Backward from midpoint: layers mid_idx-1 ... 0
             prev = mid_val
             for k in range(mid_idx - 1, -1, -1):
-                lo_k = (prev - sched_delta_t).clamp(min=0.0)
-                hi_k = (prev + sched_delta_t).clamp(max=1.0)
+                lo_k = (prev - traj_delta_t).clamp(min=0.0)
+                hi_k = (prev + traj_delta_t).clamp(max=1.0)
                 traj[:, k, :] = lo_k + d_vars[:, k, :] * (hi_k - lo_k)
                 prev = traj[:, k, :]
 
@@ -193,7 +193,7 @@ class TrajectoryOptimizer:
     ) -> None:
         n = state.n
         D_static = state.D_static
-        D_sched = state.D_sched
+        D_traj = state.D_traj
         per_exp_L = list(state.per_exp_L)
 
         base_rows_t = torch.from_numpy(np.stack(state.exp_base_rows)).to(dtype=torch.float64)
@@ -201,30 +201,30 @@ class TrajectoryOptimizer:
         static_col_idxs = torch.tensor(
             [col_idx for _, col_idx in state.static_col_map], dtype=torch.long,
         )
-        sched_col_idxs = torch.tensor(
-            [col_idx for _, col_idx in state.sched_col_map], dtype=torch.long,
+        traj_col_idxs = torch.tensor(
+            [col_idx for _, col_idx in state.traj_col_map], dtype=torch.long,
         )
         static_delta_norms_list = state.static_delta_norms
-        sched_delta_norms_list = state.sched_delta_norms
-        sched_delta_t = torch.tensor(sched_delta_norms_list, dtype=torch.float64) if sched_delta_norms_list else torch.zeros(D_sched, dtype=torch.float64)
+        traj_delta_norms_list = state.traj_delta_norms
+        traj_delta_t = torch.tensor(traj_delta_norms_list, dtype=torch.float64) if traj_delta_norms_list else torch.zeros(D_traj, dtype=torch.float64)
         kappa = 1.0
 
         def _make_per_exp_objective(exp_idx: int):
             L_i = per_exp_L[exp_idx]
-            D_exp = D_static + L_i * D_sched
+            D_exp = D_static + L_i * D_traj
 
             def _objective(x_S: torch.Tensor) -> torch.Tensor:
                 S = int(x_S.shape[0])
                 stat, traj = self._decode_trajectory_from_midpoint(
-                    x_S, D_static, D_sched, L_i, sched_delta_t,
+                    x_S, D_static, D_traj, L_i, traj_delta_t,
                 )
 
                 cand_i = base_rows_t[exp_idx].unsqueeze(0).unsqueeze(0).expand(S, L_i, n_dm_cols).clone().to(dtype=x_S.dtype)
                 if D_static > 0:
                     cand_i = cand_i.scatter(-1, static_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1),
                                             stat.unsqueeze(1).expand(S, L_i, D_static))
-                if D_sched > 0:
-                    cand_i = cand_i.scatter(-1, sched_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
+                if D_traj > 0:
+                    cand_i = cand_i.scatter(-1, traj_col_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1), traj)
 
                 # Active experiment's layers as candidates; non-active are in KDE via virtual points
                 full_S_NL = cand_i.unsqueeze(1)  # (S, 1, L_i, n_dm_cols)
@@ -232,7 +232,7 @@ class TrajectoryOptimizer:
                 scores_neg = self._acquisition_fn(full_S_NL, kappa, None, w_layer)
 
                 # Smoothness penalties on the active trajectory
-                if D_sched > 0 and L_i > 2:
+                if D_traj > 0 and L_i > 2:
                     obj_scale = scores_neg.detach().abs()
                     diffs = traj[:, 1:, :] - traj[:, :-1, :]
 
@@ -265,20 +265,20 @@ class TrajectoryOptimizer:
         # Initialize trajectory spread: N(0, trust_region) noise on each layer
         # relative to the Global midpoint. Midpoint itself stays exact.
         rng = self._engine.rng
-        sched_d_np = np.array(sched_delta_norms_list)
+        traj_d_np = np.array(traj_delta_norms_list)
         for i in range(n):
             mid_idx_i = per_exp_L[i] // 2
-            mid_val = state.schedule_norms[i][mid_idx_i].copy()
+            mid_val = state.traj_norms[i][mid_idx_i].copy()
             prev = mid_val.copy()
             for k in range(mid_idx_i + 1, per_exp_L[i]):
-                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in sched_d_np])
-                state.schedule_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
-                prev = state.schedule_norms[i][k].copy()
+                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in traj_d_np])
+                state.traj_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
+                prev = state.traj_norms[i][k].copy()
             prev = mid_val.copy()
             for k in range(mid_idx_i - 1, -1, -1):
-                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in sched_d_np])
-                state.schedule_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
-                prev = state.schedule_norms[i][k].copy()
+                noise = np.array([rng.normal(0.0, d) if d > 0 else 0.0 for d in traj_d_np])
+                state.traj_norms[i][k] = np.clip(prev + noise, 0.0, 1.0)
+                prev = state.traj_norms[i][k].copy()
 
         for round_idx in range(max_rounds):
             if console:
@@ -302,36 +302,36 @@ class TrajectoryOptimizer:
                     c = float(state.static_norms[exp_idx, si])
                     d = static_delta_norms_list[si]
                     bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
-                for si in range(D_sched):
-                    c = float(state.schedule_norms[exp_idx][mid_idx, si])
-                    d = sched_delta_norms_list[si]
+                for si in range(D_traj):
+                    c = float(state.traj_norms[exp_idx][mid_idx, si])
+                    d = traj_delta_norms_list[si]
                     bounds_i.append((max(0.0, c - d), min(1.0, c + d)))
                 for _k in range(L_i - 1):
-                    for _si in range(D_sched):
+                    for _si in range(D_traj):
                         bounds_i.append((0.0, 1.0))
 
                 # Encode current state into decision vector
                 x0_i = np.zeros(D_exp)
                 x0_i[:D_static] = state.static_norms[exp_idx]
-                x0_i[D_static:D_static + D_sched] = state.schedule_norms[exp_idx][mid_idx]
-                if L_i > 1 and D_sched > 0:
-                    delta_start = D_static + D_sched
-                    cur_sched = state.schedule_norms[exp_idx]
+                x0_i[D_static:D_static + D_traj] = state.traj_norms[exp_idx][mid_idx]
+                if L_i > 1 and D_traj > 0:
+                    delta_start = D_static + D_traj
+                    cur_sched = state.traj_norms[exp_idx]
                     prev_val = cur_sched[mid_idx].copy()
                     for k in range(mid_idx, L_i - 1):
-                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        lo_k = np.maximum(0.0, prev_val - traj_d_np)
+                        hi_k = np.minimum(1.0, prev_val + traj_d_np)
                         span = hi_k - lo_k
                         d_k = np.where(span > 1e-12, (cur_sched[k + 1] - lo_k) / span, 0.5)
-                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        x0_i[delta_start + k * D_traj:delta_start + (k + 1) * D_traj] = d_k
                         prev_val = cur_sched[k + 1].copy()
                     prev_val = cur_sched[mid_idx].copy()
                     for k in range(mid_idx - 1, -1, -1):
-                        lo_k = np.maximum(0.0, prev_val - sched_d_np)
-                        hi_k = np.minimum(1.0, prev_val + sched_d_np)
+                        lo_k = np.maximum(0.0, prev_val - traj_d_np)
+                        hi_k = np.minimum(1.0, prev_val + traj_d_np)
                         span = hi_k - lo_k
                         d_k = np.where(span > 1e-12, (cur_sched[k] - lo_k) / span, 0.5)
-                        x0_i[delta_start + k * D_sched:delta_start + (k + 1) * D_sched] = d_k
+                        x0_i[delta_start + k * D_traj:delta_start + (k + 1) * D_traj] = d_k
                         prev_val = cur_sched[k].copy()
 
                 opt = self._engine.run_acquisition_gradient(
@@ -345,15 +345,15 @@ class TrajectoryOptimizer:
                 if opt.best_x is not None:
                     x_t = torch.from_numpy(opt.best_x).unsqueeze(0).double()
                     stat_t, traj_t = self._decode_trajectory_from_midpoint(
-                        x_t, D_static, D_sched, L_i, sched_delta_t,
+                        x_t, D_static, D_traj, L_i, traj_delta_t,
                     )
                     new_static = stat_t[0].cpu().numpy()
                     new_sched = traj_t[0].cpu().numpy()
                     if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
-                       not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
+                       not np.allclose(new_sched, state.traj_norms[exp_idx], atol=1e-6):
                         improved_this_round = True
                     state.static_norms[exp_idx] = new_static.copy()
-                    state.schedule_norms[exp_idx] = new_sched.copy()
+                    state.traj_norms[exp_idx] = new_sched.copy()
 
                 if self.step_callback is not None:
                     self.step_callback(round_idx, exp_idx, state)
@@ -372,7 +372,7 @@ class TrajectoryOptimizer:
     # ------------------------------------------------------------------
 
     def _decode_specs(self, state: TrajectoryState) -> list[ExperimentSpec]:
-        self.last_trajectory_points = np.concatenate(state.schedule_norms, axis=0)
+        self.last_trajectory_points = np.concatenate(state.traj_norms, axis=0)
         exp_ids: list[int] = []
         for i in range(state.n):
             exp_ids.extend([i] * state.per_exp_L[i])
@@ -382,11 +382,11 @@ class TrajectoryOptimizer:
         for i in range(state.n):
             L_i = state.per_exp_L[i]
             base_params = dict(state.flat_specs[i].initial_params.to_dict())
-            traj = state.schedule_norms[i]
+            traj = state.traj_norms[i]
 
             for si, (code, lo, hi) in enumerate(state.static_params):
                 base_params[code] = float(state.static_norms[i, si] * (hi - lo) + lo)
-            for si, (code, lo, hi) in enumerate(state.sched_params):
+            for si, (code, lo, hi) in enumerate(state.traj_params):
                 base_params[code] = float(traj[0, si] * (hi - lo) + lo)
 
             base_params = self._sanitize(base_params)
@@ -395,7 +395,7 @@ class TrajectoryOptimizer:
             entries: list[tuple[int, ParameterProposal]] = []
             for k in range(1, L_i):
                 sp: dict[str, Any] = {}
-                for si, (code, lo, hi) in enumerate(state.sched_params):
+                for si, (code, lo, hi) in enumerate(state.traj_params):
                     sp[code] = float(traj[k, si] * (hi - lo) + lo)
                 sp = self._sanitize(sp)
                 entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
@@ -408,8 +408,8 @@ class TrajectoryOptimizer:
 
             specs_out.append(ExperimentSpec(initial_params=initial, trajectories=trajectories))
 
-        self.last_trajectory_schedule_norms = [s.copy() for s in state.schedule_norms]
-        self.last_trajectory_sched_params = list(state.sched_params)
+        self.last_traj_norms = [s.copy() for s in state.traj_norms]
+        self.last_traj_params = list(state.traj_params)
         self.last_trajectory_per_exp_L = list(state.per_exp_L)
 
         return specs_out
@@ -421,7 +421,7 @@ class TrajectoryOptimizer:
 
 def init_trajectory_state(
     flat_specs: list[ExperimentSpec],
-    sched_params: list[tuple[str, float, float]],
+    traj_params: list[tuple[str, float, float]],
     static_params: list[tuple[str, float, float]],
     per_exp_L: list[int],
     primary_dim_code: str,
@@ -433,9 +433,9 @@ def init_trajectory_state(
     if datamodule is None:
         return None
 
-    sched_delta_norms = [
+    traj_delta_norms = [
         (trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
-        for code, lo, hi in sched_params
+        for code, lo, hi in traj_params
     ]
     static_delta_norms = [
         (trust_regions.get(code, (hi - lo) / 10.0) / (hi - lo) if hi - lo > 0 else 0.0)
@@ -443,18 +443,18 @@ def init_trajectory_state(
     ]
 
     # Global solution → midpoint of each trajectory
-    midpoint_warmstart = _warmstart_from_specs(flat_specs, sched_params, n)
+    midpoint_warmstart = _warmstart_from_specs(flat_specs, traj_params, n)
     static_warmstart = _warmstart_from_specs(flat_specs, static_params, n)
 
     static_norms = static_warmstart.copy()
-    schedule_norms = [
+    traj_norms = [
         np.tile(midpoint_warmstart[i], (per_exp_L[i], 1)) for i in range(n)
     ]
 
     n_dm_cols = len(datamodule.input_columns)
-    sched_col_map = [
+    traj_col_map = [
         (si, datamodule.input_columns.index(code))
-        for si, (code, _, _) in enumerate(sched_params)
+        for si, (code, _, _) in enumerate(traj_params)
         if code in datamodule.input_columns
     ]
     static_col_map = [
@@ -463,14 +463,14 @@ def init_trajectory_state(
         if code in datamodule.input_columns
     ]
 
-    sched_code_set = {code for code, _, _ in sched_params}
+    traj_code_set = {code for code, _, _ in traj_params}
     static_code_set = {code for code, _, _ in static_params}
     exp_base_rows: list[np.ndarray] = []
     for i_exp in range(n):
         row = np.full(n_dm_cols, 0.5)
         static_dict = flat_specs[i_exp].initial_params.to_dict()
         for c_idx, col in enumerate(datamodule.input_columns):
-            if col in static_dict and col not in sched_code_set and col not in static_code_set:
+            if col in static_dict and col not in traj_code_set and col not in static_code_set:
                 val = static_dict[col]
                 try:
                     lo_s, hi_s = bounds_fn(col)
@@ -482,12 +482,12 @@ def init_trajectory_state(
 
     return TrajectoryState(
         n=n, flat_specs=flat_specs,
-        sched_params=sched_params, static_params=static_params,
+        traj_params=traj_params, static_params=static_params,
         per_exp_L=per_exp_L, primary_dim_code=primary_dim_code,
-        sched_delta_norms=sched_delta_norms, static_delta_norms=static_delta_norms,
-        static_norms=static_norms, schedule_norms=schedule_norms,
+        traj_delta_norms=traj_delta_norms, static_delta_norms=static_delta_norms,
+        static_norms=static_norms, traj_norms=traj_norms,
         n_dm_cols=n_dm_cols, exp_base_rows=exp_base_rows,
-        sched_col_map=sched_col_map, static_col_map=static_col_map,
+        traj_col_map=traj_col_map, static_col_map=static_col_map,
     )
 
 
