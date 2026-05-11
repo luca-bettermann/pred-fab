@@ -182,35 +182,6 @@ class TrajectoryOptimizer:
 
         return stat, traj
 
-    def _decode_trajectory_from_midpoint_np(
-        self, best_x: np.ndarray, D_static: int, D_sched: int, L_i: int,
-        sched_deltas_np: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Numpy version of midpoint decode for storing results."""
-        new_static = best_x[:D_static]
-        mid_idx = L_i // 2
-        mid_val = best_x[D_static:D_static + D_sched]
-
-        new_sched = np.zeros((L_i, D_sched))
-        new_sched[mid_idx] = mid_val
-
-        if L_i > 1:
-            d_vars = best_x[D_static + D_sched:].reshape(L_i - 1, D_sched)
-            prev = mid_val.copy()
-            for k in range(mid_idx, L_i - 1):
-                lo_k = np.maximum(0.0, prev - sched_deltas_np)
-                hi_k = np.minimum(1.0, prev + sched_deltas_np)
-                new_sched[k + 1] = lo_k + d_vars[k] * (hi_k - lo_k)
-                prev = new_sched[k + 1].copy()
-            prev = mid_val.copy()
-            for k in range(mid_idx - 1, -1, -1):
-                lo_k = np.maximum(0.0, prev - sched_deltas_np)
-                hi_k = np.minimum(1.0, prev + sched_deltas_np)
-                new_sched[k] = lo_k + d_vars[k] * (hi_k - lo_k)
-                prev = new_sched[k].copy()
-
-        return new_static, new_sched
-
     # ------------------------------------------------------------------
     # Coordinate descent
     # ------------------------------------------------------------------
@@ -237,7 +208,6 @@ class TrajectoryOptimizer:
         static_delta_norms_list = state.static_delta_norms
         sched_delta_norms_list = state.sched_delta_norms
         sched_delta_t = torch.tensor(sched_delta_norms_list, dtype=torch.float64) if sched_delta_norms_list else torch.zeros(D_sched, dtype=torch.float64)
-        sched_deltas_np = np.array(sched_delta_norms_list)
         kappa = 1.0
 
         def _make_per_exp_objective(exp_idx: int):
@@ -356,9 +326,12 @@ class TrajectoryOptimizer:
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
-                    new_static, new_sched = self._decode_trajectory_from_midpoint_np(
-                        opt.best_x, D_static, D_sched, L_i, sched_deltas_np,
+                    x_t = torch.from_numpy(opt.best_x).unsqueeze(0).double()
+                    stat_t, traj_t = self._decode_trajectory_from_midpoint(
+                        x_t, D_static, D_sched, L_i, sched_delta_t,
                     )
+                    new_static = stat_t[0].cpu().numpy()
+                    new_sched = traj_t[0].cpu().numpy()
                     if not np.allclose(new_static, state.static_norms[exp_idx], atol=1e-6) or \
                        not np.allclose(new_sched, state.schedule_norms[exp_idx], atol=1e-6):
                         improved_this_round = True
