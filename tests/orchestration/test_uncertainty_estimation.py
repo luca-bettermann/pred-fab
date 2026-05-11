@@ -301,6 +301,7 @@ def test_acquisition_objective_combines_perf_and_delta_evidence(tmp_path):
         split_codes={SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []},
     )
     calibration._active_datamodule = datamodule
+    calibration.acquisition_scale = 1.0
 
     valid_params = {"param_1": 2.0, "param_2": 2, "n_layers": 2, "n_segments": 2, "speed": 50.0}
     X = datamodule.params_to_array(valid_params)

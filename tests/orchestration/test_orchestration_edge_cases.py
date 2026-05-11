@@ -70,6 +70,7 @@ def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
         split_codes={SplitType.TRAIN: ["exp_001"], SplitType.VAL: [], SplitType.TEST: []},
     )
     calibration._active_datamodule = datamodule
+    calibration.acquisition_scale = 1.0
 
     X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
     w = 0.5
