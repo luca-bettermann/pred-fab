@@ -26,68 +26,69 @@ def _score_color(v: float) -> str:
 
 
 class ProgressBar:
-    """Inline ANSI progress bar for optimizer iterations.
+    """Inline ANSI progress bar for optimizer runs.
 
-    Shows iteration count and objective while running, then a clean
-    summary line on finish. No fake max — the bar fills based on
-    improvement plateaus, not a predetermined budget.
-
-    Usage::
-
-        bar = ProgressBar("Optimizing")
-        for i in range(n):
-            bar.step(obj=current_obj)
-        bar.finish()
+    Tracks starts, iterations, and best objective internally.
+    Callers provide label + dimension info; display format is defined once here.
     """
 
-    def __init__(self, label: str = "Optimizing", bar_len: int = 12, max_iter: int | None = None):
+    def __init__(self, label: str, *, D: int | None = None, V: int | None = None,
+                 max_starts: int | None = None, bar_len: int = 12):
         self._label = label
         self._len = bar_len
-        self._i = 0
+        self._max_starts = max_starts
+        self._starts = 1
+        self._iters = 0
         self._best_obj: float | None = None
-        self._prev_obj: float | None = None
-        self._no_improve = 0
-        self._max_iter = max_iter
 
-    def step(self, i: int | None = None, obj: float | None = None) -> None:
-        """Advance by one (or jump to ``i``) and redraw."""
+        dims = ""
+        if D is not None:
+            dims += f"D={D}"
+        if V is not None:
+            dims += f", V={V}" if dims else f"V={V}"
+        self._dims = f" ({dims})" if dims else ""
+
+    def step(self, obj: float | None = None) -> None:
+        """Record one iteration and redraw."""
         import sys
-        self._i = (self._i + 1) if i is None else i
+        self._iters += 1
 
         if obj is not None:
             first = self._best_obj is None
             improved = first or obj < self._best_obj - 1e-15  # type: ignore[operator]
             if improved:
                 self._best_obj = obj
-                self._no_improve = 0
-            else:
-                self._no_improve += 1
             color = _G if improved else _D
             obj_str = f"  {color}obj={obj:.3f}{_R}"
-            self._prev_obj = obj
         else:
             obj_str = ""
 
-        if self._max_iter is not None:
-            filled = int(self._len * min(self._i / self._max_iter, 1.0))
+        if self._max_starts is not None:
+            filled = int(self._len * min(self._starts / self._max_starts, 1.0))
         else:
-            filled = min(self._i, self._len)
+            filled = min(self._iters, self._len)
         bar = "█" * filled + "░" * (self._len - filled)
-        sys.stdout.write(f"\r  {self._label:<14s} [{bar}] {_D}{self._i} iters{_R}{obj_str}            ")
+        sys.stdout.write(
+            f"\r  {self._label}{self._dims} [{bar}] "
+            f"{_D}{self._starts} starts  {self._iters} iters{_R}{obj_str}            "
+        )
         sys.stdout.flush()
 
-    def finish(self, nfev: int | None = None, suffix: str = "") -> None:
+    def new_start(self) -> None:
+        """Begin a new multi-start run."""
+        self._starts += 1
+
+    def finish(self) -> None:
         """Print final summary line."""
-        bar = "█" * self._len
-        info = suffix.strip() if suffix else ""
-        if not info:
-            parts = []
-            parts.append(f"{self._i} iters")
-            if self._best_obj is not None:
-                parts.append(f"obj={self._best_obj:.3f}")
-            info = "  ".join(parts)
         import sys
-        sys.stdout.write(f"\r{_G}✓{_R} {self._label:<14s} [{bar}] {_D}{info}{_R}            \n")
+        bar = "█" * self._len
+        parts = [f"{self._starts} starts", f"{self._iters} iters"]
+        if self._best_obj is not None:
+            parts.append(f"obj={self._best_obj:.3f}")
+        info = "  ".join(parts)
+        sys.stdout.write(
+            f"\r{_G}✓{_R} {self._label}{self._dims} [{bar}] {_D}{info}{_R}            \n"
+        )
         sys.stdout.flush()
 
 

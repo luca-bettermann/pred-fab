@@ -210,6 +210,10 @@ class TrajectoryOptimizer:
                 self._push_virtual_fn(all_virtual, all_weights, datamodule)  # type: ignore[reportOptionalCall]
 
         for round_idx in range(max_rounds):
+            if console:
+                import sys
+                sys.stdout.write(f"  \033[2mTrajectory round {round_idx+1}\033[0m\n")
+                sys.stdout.flush()
             improved_this_round = False
             for exp_idx in range(n):
                 L_i = per_exp_L[exp_idx]
@@ -238,9 +242,10 @@ class TrajectoryOptimizer:
                 rng = self._engine.rng
                 n_traj_starts = 3
                 best_opt = None
-                total_nfev = 0
-                traj_label = f"Traj {exp_idx+1}/{n} (r{round_idx+1})"
-                bar = ProgressBar(traj_label, max_iter=n_traj_starts) if console else None
+                bar = ProgressBar(
+                    f"Exp {exp_idx+1}/{n}", D=D_exp, V=D_exp,
+                    max_starts=n_traj_starts,
+                ) if console else None
                 for _si in range(n_traj_starts):
                     x0_i = np.zeros(D_exp)
                     x0_i[:D_static] = state.static_norms[exp_idx]
@@ -251,18 +256,19 @@ class TrajectoryOptimizer:
                             x0_i[delta_start + di] = 0.5 + rng.uniform(-0.15, 0.15)
                     trial = self._engine.run_acquisition_gradient(
                         objective, bounds_i, x0=x0_i,
-                        label=traj_label,
+                        label=f"Exp {exp_idx+1}/{n}",
                         show_progress=False,
                         n_starts=1, raw_samples=0,
                     )
-                    total_nfev += trial.nfev
                     if best_opt is None or trial.score > best_opt.score:
                         best_opt = trial
                     if bar:
                         bar.step(obj=-best_opt.score)
+                    if _si < n_traj_starts - 1 and bar:
+                        bar.new_start()
                 opt = best_opt  # type: ignore[assignment]
                 if bar:
-                    bar.finish(suffix=f"{n_traj_starts} starts  {total_nfev} iters  obj={-opt.score:.3f}")
+                    bar.finish()
                 total_iters += len(opt.convergence_history)
 
                 if opt.best_x is not None:
