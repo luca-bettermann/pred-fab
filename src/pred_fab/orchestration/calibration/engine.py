@@ -95,8 +95,20 @@ class OptimizationEngine:
                 else int(self.rng.randint(0, 2**31 - 1))
             sobol = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=sobol_seed)
             cand = sobol.draw(raw_samples).double() * span_t + lo_t
+            # Evaluate in batches to avoid memory issues with large objectives
+            batch_size = max(32, n_more)
+            n_batches = (raw_samples + batch_size - 1) // batch_size
+            init_bar = ProgressBar("Sobol init", max_starts=n_batches) if show_progress and n_batches > 1 else None
             with torch.no_grad():
-                vals = objective_tensor(cand)
+                val_chunks = []
+                for b_start in range(0, raw_samples, batch_size):
+                    chunk = cand[b_start:b_start + batch_size]
+                    val_chunks.append(objective_tensor(chunk))
+                    if init_bar:
+                        init_bar.step()
+                vals = torch.cat(val_chunks, dim=0)
+            if init_bar:
+                init_bar.finish()
             v = vals.detach().cpu().double()
             v_min, v_max = float(v.min().item()), float(v.max().item())
             if v_max - v_min > 1e-12:

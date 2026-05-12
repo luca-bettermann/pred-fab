@@ -1262,7 +1262,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             _objective, bounds_list, x0=x0,
             label=f"Global (D={D_per_exp}, V={n * D_per_exp})",
             show_progress=console,
-            raw_samples=0,
         )
         self.logger.info(f"LBFGS done: score={opt.score:.3f}, nfev={opt.nfev}")
         self.convergence_history["Global"] = opt.convergence_history
