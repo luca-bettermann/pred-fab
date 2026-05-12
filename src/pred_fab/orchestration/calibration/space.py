@@ -283,10 +283,9 @@ class SolutionSpace:
 
     def decode_to_specs(self, best_x: np.ndarray) -> list[ExperimentSpec]:
         """Convert optimized vector to ExperimentSpec instances."""
-        x_t = torch.tensor(best_x, dtype=torch.float64).unsqueeze(0)
-        L_per_exp = self._derive_L_per_exp(
-            x_t.reshape(1, self._n_experiments, self._D_per_exp)[0:1, :, : self._D_static],
-        )
+        x_t = torch.tensor(best_x, dtype=torch.float64)
+        x_per_exp = x_t.reshape(self._n_experiments, self._D_per_exp)
+        L_per_exp = self._derive_L_per_exp(x_per_exp[:, : self._D_static])
 
         specs: list[ExperimentSpec] = []
         for i in range(self._n_experiments):
@@ -350,9 +349,10 @@ class SolutionSpace:
         self, best_x: np.ndarray,
     ) -> tuple[list[np.ndarray], list[tuple[str, float, float]], list[int]]:
         """Extract trajectory norms, param info, and L per experiment for plotting."""
-        x_t = torch.tensor(best_x, dtype=torch.float64).unsqueeze(0)
-        raw = x_t.reshape(1, self._n_experiments, self._D_per_exp)
-        L_per_exp = self._derive_L_per_exp(raw[0:1, :, : self._D_static])
+        x_per_exp = torch.tensor(best_x, dtype=torch.float64).reshape(
+            self._n_experiments, self._D_per_exp,
+        )
+        L_per_exp = self._derive_L_per_exp(x_per_exp[:, : self._D_static])
 
         traj_norms: list[np.ndarray] = []
         for i in range(self._n_experiments):
