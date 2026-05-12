@@ -770,6 +770,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Detect trajectory config early — determines whether we use slope path
         has_slope_traj = bool(traj_set)
+        self.logger.info(f"Trajectory detection: traj_set={traj_set}, has_slope_traj={has_slope_traj}")
 
         if numeric_params and not has_slope_traj:
             flat_specs, flat_params, optimized = self._run_acquisition_phase(
