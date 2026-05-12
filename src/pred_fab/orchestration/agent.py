@@ -710,28 +710,19 @@ class PfabAgent:
         self,
         *,
         n_starts: int | None = None,
-        n_iters: int | None = None,
+        n_sobol: int | None = None,
         lr: float | None = None,
-        gradient_method: str | None = None,
-        raw_samples: int | None = None,
-        init_eta: float | None = None,
         acquisition_scale: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters."""
         self._assert_initialized()
         cal = self.calibration_system
         if n_starts is not None:
-            cal.engine.gradient_n_starts = n_starts
-        if n_iters is not None:
-            cal.engine.gradient_n_iters = n_iters
+            cal.engine.n_starts = n_starts
+        if n_sobol is not None:
+            cal.engine.n_sobol = n_sobol
         if lr is not None:
-            cal.engine.gradient_lr = lr
-        if gradient_method is not None:
-            cal.engine.gradient_method = gradient_method
-        if raw_samples is not None:
-            cal.engine.gradient_raw_samples = raw_samples
-        if init_eta is not None:
-            cal.engine.gradient_init_eta = init_eta
+            cal.engine.lr = lr
         if acquisition_scale is not None:
             cal.acquisition_scale = acquisition_scale
 

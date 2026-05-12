@@ -24,7 +24,7 @@ class TestOptimizerConfig:
     def test_configure_n_starts(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
         agent.configure_optimizer(n_starts=8)
-        assert agent.calibration_system.engine.gradient_n_starts == 8
+        assert agent.calibration_system.engine.n_starts == 8
 
 
 # ===========================================================================

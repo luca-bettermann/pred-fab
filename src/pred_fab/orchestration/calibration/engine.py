@@ -5,7 +5,6 @@ import warnings
 import numpy as np
 import torch
 
-from ...core import DataModule
 from ...utils import PfabLogger, ProgressBar, profiler
 
 
@@ -23,46 +22,41 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class OptimizationEngine:
-    """Numerical optimization backend — LBFGS with sigmoid bound reparameterisation."""
+    """Sobol → top-N → independent LBFGS → pick best.
+
+    Sigmoid bound reparameterisation: ``x = sigmoid(z) · (hi - lo) + lo``.
+    """
 
     def __init__(self, logger: PfabLogger, random_seed: int | None = None):
         self.logger = logger
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
 
-        self.gradient_n_starts: int = 4
-        self.gradient_n_iters: int = 100
-        self.gradient_lr: float = 0.05
-        self.gradient_method: str = "lbfgs"
-        self.gradient_raw_samples: int = 256
-        self.gradient_init_eta: float = 1.0
+        self.n_starts: int = 16
+        self.n_sobol: int = 512
+        self.lr: float = 0.05
+        self.sobol_batch_size: int = 64
 
-    def run_acquisition_gradient(
+    def optimize(
         self,
-        objective_tensor: Callable[[torch.Tensor], torch.Tensor],
+        objective: Callable[[torch.Tensor], torch.Tensor],
         bounds: list[tuple[float, float]],
         *,
         n_starts: int | None = None,
-        n_iters: int | None = None,
+        n_sobol: int | None = None,
         lr: float | None = None,
-        method: str | None = None,
-        x0: np.ndarray | None = None,
-        raw_samples: int | None = None,
         compile_objective: bool = False,
         label: str = "Optimizing",
         show_progress: bool = False,
     ) -> _OptResult:
-        """Multi-start gradient optimisation with sigmoid bound reparameterisation.
+        """Sobol → top-N → independent LBFGS → pick best.
 
-        ``objective_tensor`` takes ``(S, D)`` and returns ``(S,)`` — one scalar
-        per starting point. Bounds enforced via ``x = sigmoid(z) · (hi - lo) + lo``.
+        ``objective`` takes ``(S, D)`` and returns ``(S,)`` — one scalar per
+        candidate (lower is better).
         """
-        n_starts = n_starts if n_starts is not None else self.gradient_n_starts
-        n_iters = n_iters if n_iters is not None else self.gradient_n_iters
-        lr = lr if lr is not None else self.gradient_lr
-        method = (method or self.gradient_method).lower()
-        if method not in ("adam", "lbfgs", "sgd"):
-            raise ValueError(f"unknown gradient method: {method!r}")
+        n_starts = n_starts if n_starts is not None else self.n_starts
+        n_sobol_base = n_sobol if n_sobol is not None else self.n_sobol
+        lr = lr if lr is not None else self.lr
 
         D = len(bounds)
         if D == 0:
@@ -70,159 +64,95 @@ class OptimizationEngine:
 
         if compile_objective:
             try:
-                objective_tensor = torch.compile(objective_tensor, dynamic=True)  # type: ignore[assignment]
+                objective = torch.compile(objective, dynamic=True)  # type: ignore[assignment]
             except Exception as e:
-                self.logger.warning(
-                    f"torch.compile failed for objective_tensor; running eager: {e!r}"
-                )
+                self.logger.warning(f"torch.compile failed; running eager: {e!r}")
 
         bounds_arr = np.asarray(bounds, dtype=np.float64)
         lo_t = torch.tensor(bounds_arr[:, 0], dtype=torch.float64)
         hi_t = torch.tensor(bounds_arr[:, 1], dtype=torch.float64)
         span_t = hi_t - lo_t
 
-        x_inits: list[np.ndarray] = []
-        if x0 is not None:
-            x_inits.append(np.clip(x0, bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
-
-        _raw_base = raw_samples if raw_samples is not None else self.gradient_raw_samples
-        raw_samples = max(int(_raw_base * (D ** 0.5)), 0)
-        eta = float(self.gradient_init_eta)
-        n_more = max(n_starts - len(x_inits), 0)
-
-        if raw_samples > n_more and n_more > 0:
-            sobol_seed = int(torch.randint(0, 2**31 - 1, (1,)).item()) if self._random_seed is None \
-                else int(self.rng.randint(0, 2**31 - 1))
-            sobol = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=sobol_seed)
-            cand = sobol.draw(raw_samples).double() * span_t + lo_t
-            # Evaluate in batches to avoid memory issues with large objectives
-            batch_size = max(32, n_more)
-            n_batches = (raw_samples + batch_size - 1) // batch_size
-            init_bar = ProgressBar("Sobol init", max_starts=n_batches) if show_progress and n_batches > 1 else None
-            with torch.no_grad():
-                val_chunks = []
-                for b_start in range(0, raw_samples, batch_size):
-                    chunk = cand[b_start:b_start + batch_size]
-                    chunk_vals = objective_tensor(chunk)
-                    val_chunks.append(chunk_vals)
-                    if init_bar:
-                        best_so_far = float(torch.cat(val_chunks, dim=0).min().item())
-                        init_bar.step(obj=best_so_far)
-                vals = torch.cat(val_chunks, dim=0)
-            if init_bar:
-                init_bar.finish()
-            v = vals.detach().cpu().double()
-            v_min, v_max = float(v.min().item()), float(v.max().item())
-            if v_max - v_min > 1e-12:
-                v_norm = (v - v_min) / (v_max - v_min)
-            else:
-                v_norm = torch.zeros_like(v)
-            logits = -eta * v_norm
-            probs = torch.softmax(logits, dim=0).cpu().numpy()
-            probs = probs / probs.sum()
-            chosen_idx = self.rng.choice(raw_samples, size=n_more, replace=False, p=probs)
-            for idx in chosen_idx:
-                x_inits.append(cand[int(idx)].cpu().numpy())
-        else:
-            for _ in range(n_more):
-                x_inits.append(self.rng.uniform(bounds_arr[:, 0], bounds_arr[:, 1]).astype(np.float64))
-
-        x_inits_arr = np.stack(x_inits, axis=0)
-
-        u = (x_inits_arr - bounds_arr[:, 0]) / np.where(
-            bounds_arr[:, 1] - bounds_arr[:, 0] > 0,
-            bounds_arr[:, 1] - bounds_arr[:, 0],
-            1.0,
-        )
-        u = np.clip(u, 1e-4, 1.0 - 1e-4)
-        z_init = np.log(u / (1.0 - u))
-        z = torch.tensor(z_init, dtype=torch.float64, requires_grad=True)
-
-        history: list[float] = []
         nfev = [0]
-        bar = ProgressBar(label) if show_progress else None
-        if bar:
-            bar._starts = n_starts
 
-        def _decode_x(z_tensor: torch.Tensor) -> torch.Tensor:
-            return torch.sigmoid(z_tensor) * span_t + lo_t
+        def _decode(z: torch.Tensor) -> torch.Tensor:
+            return torch.sigmoid(z) * span_t + lo_t
 
-        def _eval_obj(z_tensor: torch.Tensor) -> torch.Tensor:
-            x = _decode_x(z_tensor)
-            vals = objective_tensor(x)
-            nfev[0] += int(z_tensor.shape[0])
+        def _encode(x: torch.Tensor) -> torch.Tensor:
+            u = (x - lo_t) / span_t
+            u = u.clamp(1e-4, 1.0 - 1e-4)
+            return torch.log(u / (1.0 - u))
+
+        def _eval(z: torch.Tensor) -> torch.Tensor:
+            x = _decode(z)
+            vals = objective(x)
+            nfev[0] += int(z.shape[0])
             return vals
 
-        with profiler.section("engine.run_acquisition_gradient"):
-            if method == "sgd":
-                optimizer = torch.optim.SGD([z], lr=lr)
-                for _it in range(n_iters):
-                    optimizer.zero_grad()
-                    vals = _eval_obj(z)
-                    loss = vals.sum()
-                    if loss.requires_grad:
-                        loss.backward()
-                    optimizer.step()
-                    best_now = float(vals.detach().min().item())
-                    history.append(best_now)
-                    if bar:
-                        bar.step(obj=best_now)
-            elif method == "adam":
-                optimizer = torch.optim.Adam([z], lr=lr)
-                for _it in range(n_iters):
-                    optimizer.zero_grad()
-                    vals = _eval_obj(z)
-                    loss = vals.sum()
-                    if loss.requires_grad:
-                        loss.backward()
-                    optimizer.step()
-                    best_now = float(vals.detach().min().item())
-                    history.append(best_now)
-                    if bar:
-                        bar.step(obj=best_now)
-            else:
-                last_vals: list[torch.Tensor] = []
-                _iter_count = [0]
-                _best_obj: list[float] = [float("inf")]
+        # --- Phase 1: Sobol global ---
+        n_sobol_scaled = max(n_sobol_base, 32 * D)
+        sobol_x, sobol_vals = self._sobol_phase(
+            objective, n_sobol_scaled, D, lo_t, hi_t, span_t, nfev,
+            show_progress=show_progress,
+        )
 
-                def _closure() -> torch.Tensor:
+        # --- Phase 2: Top-N selection ---
+        top_idx = torch.argsort(sobol_vals)[:n_starts]
+        x_starts = sobol_x[top_idx]
+        z_starts = _encode(x_starts)
+
+        # --- Phase 3: Independent LBFGS per start ---
+        history: list[float] = []
+        bar = ProgressBar(label, D=D, max_starts=n_starts) if show_progress else None
+
+        best_z: torch.Tensor | None = None
+        best_val = float("inf")
+
+        with profiler.section("engine.lbfgs"):
+            for s in range(n_starts):
+                z_s = z_starts[s].clone().detach().unsqueeze(0).requires_grad_(True)
+                start_best = [float("inf")]
+
+                def _closure(z_ref: torch.Tensor = z_s) -> torch.Tensor:
                     optimizer.zero_grad()  # type: ignore[has-type]
-                    vals = _eval_obj(z)
-                    last_vals.clear()
-                    last_vals.append(vals.detach())
+                    vals = _eval(z_ref)
                     loss = vals.sum()
                     if loss.requires_grad:
                         loss.backward()
-                    cur = float(vals.detach().min().item())
-                    if cur < _best_obj[0] - 1e-15 or _iter_count[0] == 0:
-                        _iter_count[0] += 1
-                        _best_obj[0] = cur
-                        history.append(cur)
-                        if bar:
-                            bar.step(obj=cur)
+                    cur = float(vals.detach().item())
+                    if cur < start_best[0] - 1e-15:
+                        start_best[0] = cur
+                    history.append(cur)
+                    if bar:
+                        bar.step(obj=min(best_val, start_best[0]))
                     return loss
 
                 optimizer = torch.optim.LBFGS(
-                    [z], lr=lr, max_iter=n_iters,
+                    [z_s], lr=lr, max_iter=100,
                     line_search_fn="strong_wolfe",
-                    tolerance_grad=0, tolerance_change=0,
                 )
                 optimizer.step(_closure)
-                if not history and last_vals:
-                    history.append(float(last_vals[0].min().item()))
 
-        with torch.no_grad():
-            x_final = _decode_x(z).cpu().numpy()
-            vals_final = objective_tensor(_decode_x(z)).cpu().numpy()
-            nfev[0] += int(z.shape[0])
+                with torch.no_grad():
+                    final_val = float(objective(_decode(z_s)).item())
+                    nfev[0] += 1
 
-        best_idx = int(np.argmin(vals_final))
-        best_val = float(vals_final[best_idx])
-        best_x = x_final[best_idx]
+                if final_val < best_val:
+                    best_val = final_val
+                    best_z = z_s.detach().clone()
+
+                if bar and s < n_starts - 1:
+                    bar.new_start()
 
         if bar:
             bar.finish()
 
+        # --- Decode best ---
+        if best_z is not None:
+            with torch.no_grad():
+                best_x = _decode(best_z).squeeze(0).cpu().numpy()
+        else:
+            best_x = None
 
         return _OptResult(
             best_x=best_x,
@@ -232,11 +162,53 @@ class OptimizationEngine:
             convergence_history=history,
         )
 
+    def _sobol_phase(
+        self,
+        objective: Callable[[torch.Tensor], torch.Tensor],
+        n_sobol: int,
+        D: int,
+        lo_t: torch.Tensor,
+        hi_t: torch.Tensor,
+        span_t: torch.Tensor,
+        nfev: list[int],
+        *,
+        show_progress: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Draw Sobol candidates and evaluate in batches."""
+        sobol_seed = (
+            int(torch.randint(0, 2**31 - 1, (1,)).item())
+            if self._random_seed is None
+            else int(self.rng.randint(0, 2**31 - 1))
+        )
+        sobol = torch.quasirandom.SobolEngine(dimension=D, scramble=True, seed=sobol_seed)
+        cand = sobol.draw(n_sobol).double() * span_t + lo_t
+
+        batch_size = self.sobol_batch_size
+        n_batches = (n_sobol + batch_size - 1) // batch_size
+        bar = ProgressBar("Sobol", D=D, max_starts=n_batches) if show_progress else None
+
+        with torch.no_grad():
+            val_chunks: list[torch.Tensor] = []
+            for b_start in range(0, n_sobol, batch_size):
+                chunk = cand[b_start : b_start + batch_size]
+                chunk_vals = objective(chunk)
+                val_chunks.append(chunk_vals)
+                nfev[0] += int(chunk.shape[0])
+                if bar:
+                    best_so_far = float(torch.cat(val_chunks, dim=0).min().item())
+                    bar.step(obj=best_so_far)
+            vals = torch.cat(val_chunks, dim=0)
+
+        if bar:
+            bar.finish()
+
+        return cand, vals
+
     def _wrap_mpc_objective(
         self,
         base_objective: Callable,
-        datamodule: DataModule,
-        bounds_fn: Callable[[DataModule, dict[str, Any]], np.ndarray],
+        datamodule: Any,
+        bounds_fn: Callable,
         depth: int,
         discount: float,
     ) -> Callable:
@@ -269,9 +241,9 @@ class OptimizationEngine:
                                     dtype=x_S.dtype,
                                 )
 
-                        res = engine.run_acquisition_gradient(
+                        res = engine.optimize(
                             _obj_tensor, bounds_ahead,
-                            x0=X_cur, n_starts=1, n_iters=5,
+                            n_starts=1,
                             label="mpc",
                         )
                         self._eval_counter[0] += res.nfev

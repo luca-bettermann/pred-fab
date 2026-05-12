@@ -337,9 +337,8 @@ def test_run_calibration_with_similarity_fn_completes(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.engine.gradient_n_iters = 2
-    cs.engine.gradient_n_starts = 1
-    cs.engine.gradient_raw_samples = 0
+    cs.engine.n_starts = 1
+    cs.engine.n_sobol = 1
     cs.configure_trajectory_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
@@ -365,9 +364,8 @@ def test_run_calibration_without_similarity_fn_still_works(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.engine.gradient_n_iters = 2
-    cs.engine.gradient_n_starts = 1
-    cs.engine.gradient_raw_samples = 0
+    cs.engine.n_starts = 1
+    cs.engine.n_sobol = 1
     cs.similarity_fn = None  # explicit no diversity
     cs.configure_trajectory_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
@@ -434,9 +432,8 @@ def test_run_calibration_schedule_respects_delta_constraints_with_fitted_kde(tmp
         pytest.skip("KDE not fitted — not enough distinct training configs")
 
     cs = agent.calibration_system
-    cs.engine.gradient_n_iters = 2
-    cs.engine.gradient_n_starts = 1
-    cs.engine.gradient_raw_samples = 0
+    cs.engine.n_starts = 1
+    cs.engine.n_sobol = 1
     cs.configure_trajectory_parameter("speed", "n_layers")
     cs.configure_adaptation_delta({"speed": delta})
 
@@ -482,9 +479,8 @@ def test_exploration_step_with_schedule_returns_experiment_spec(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.engine.gradient_n_iters = 2
-    cs.engine.gradient_n_starts = 1
-    cs.engine.gradient_raw_samples = 0
+    cs.engine.n_starts = 1
+    cs.engine.n_sobol = 1
     agent.configure_trajectory("speed", "n_layers", delta=50.0)
 
     first_exp = dataset.get_experiment(codes[0])

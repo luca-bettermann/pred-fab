@@ -21,7 +21,7 @@ def test_baseline_with_gradient_optimizer(tmp_path):
     """Baseline step produces valid ExperimentSpecs (gradient is the default refine path)."""
     agent, _, _, _ = build_real_agent_stack(tmp_path)
     # Keep iters low for test speed.
-    agent.configure_optimizer(n_starts=2, n_iters=20)
+    agent.configure_optimizer(n_starts=2, n_sobol=32)
 
     sampled = agent.baseline_step(n=3)
 
@@ -38,7 +38,7 @@ def test_baseline_with_integer_params_runs(tmp_path):
     path. Verified by the run completing without exception.
     """
     agent, _, _, _ = build_real_agent_stack(tmp_path)
-    agent.configure_optimizer(n_iters=5, n_starts=1)
+    agent.configure_optimizer(n_starts=1, n_sobol=16)
 
     sampled = agent.baseline_step(n=2)
     assert len(sampled) == 2

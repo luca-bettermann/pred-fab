@@ -1,4 +1,4 @@
-"""Tests for OptimizationEngine.run_acquisition_gradient.
+"""Tests for OptimizationEngine.optimize.
 
 Three guarantees this commit promises:
   1. Sigmoid bound reparameterisation keeps the returned ``best_x`` strictly
@@ -40,8 +40,8 @@ def test_gradient_respects_bounds(engine):
         # Maximise sum of x → minimise −sum(x)
         return -(x.sum(dim=-1))
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=4, n_iters=200, method="adam",
+    result = engine.optimize(
+        obj, bounds, n_starts=4,
     )
     assert result.best_x is not None
     assert (result.best_x >= lo).all()
@@ -60,8 +60,8 @@ def test_gradient_finds_quadratic_minimum(engine):
     def obj(x: torch.Tensor) -> torch.Tensor:
         return (x.squeeze(-1) - target) ** 2
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=4, n_iters=200, method="adam",
+    result = engine.optimize(
+        obj, bounds, n_starts=4,
     )
     assert result.best_x is not None
     assert abs(float(result.best_x[0]) - target) < 1e-2
@@ -76,8 +76,8 @@ def test_gradient_2d_quadratic_recovers_target(engine):
         target_t = torch.tensor(target, dtype=x.dtype)
         return ((x - target_t) ** 2).sum(dim=-1)
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=6, n_iters=200, method="adam",
+    result = engine.optimize(
+        obj, bounds, n_starts=6,
     )
     assert result.best_x is not None
     np.testing.assert_allclose(result.best_x, target, atol=1e-2)
@@ -92,8 +92,8 @@ def test_gradient_with_lbfgs_backend(engine):
         target_t = torch.tensor(target, dtype=x.dtype)
         return ((x - target_t) ** 2).sum(dim=-1)
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=4, n_iters=30, method="lbfgs",
+    result = engine.optimize(
+        obj, bounds, n_starts=4,
     )
     assert result.best_x is not None
     np.testing.assert_allclose(result.best_x, target, atol=1e-3)
@@ -113,7 +113,7 @@ def test_objective_receives_tensor_with_grad(engine):
             saw_grad[0] = True
         return (x.squeeze(-1) - 0.5) ** 2
 
-    engine.run_acquisition_gradient(obj, bounds, n_starts=2, n_iters=5)
+    engine.optimize(obj, bounds, n_starts=2)
     assert saw_grad[0], "objective_tensor never received a tensor with grad"
 
 
@@ -122,7 +122,7 @@ def test_objective_receives_tensor_with_grad(engine):
 
 def test_gradient_empty_bounds_returns_empty(engine):
     """0-D problem → no work to do; result has best_x=None."""
-    result = engine.run_acquisition_gradient(
+    result = engine.optimize(
         lambda x: torch.zeros(x.shape[0]),
         bounds=[], n_starts=2,
     )
@@ -137,24 +137,22 @@ def test_gradient_single_start(engine):
     def obj(x: torch.Tensor) -> torch.Tensor:
         return (x.squeeze(-1) - 0.4) ** 2
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=1, n_iters=100,
+    result = engine.optimize(
+        obj, bounds, n_starts=1,
     )
     assert result.best_x is not None
     assert abs(float(result.best_x[0]) - 0.4) < 1e-2
 
 
-def test_gradient_x0_is_used(engine):
-    """When x0 supplied, it seeds the first start (visible in convergence)."""
+def test_gradient_sobol_finds_minimum(engine):
+    """Sobol init + LBFGS finds the minimum of a simple quadratic."""
     bounds = [(0.0, 1.0)]
-    x0 = np.array([0.45])  # near the minimum
 
     def obj(x: torch.Tensor) -> torch.Tensor:
         return (x.squeeze(-1) - 0.5) ** 2
 
-    # With x0 near optimum we converge in fewer iters
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=1, n_iters=50, x0=x0,
+    result = engine.optimize(
+        obj, bounds, n_starts=1,
     )
     assert result.best_x is not None
     assert abs(float(result.best_x[0]) - 0.5) < 1e-2
@@ -168,8 +166,8 @@ def test_gradient_score_negates_objective(engine):
         # Objective minimum at x=0.5; minimum value is -1.0
         return -torch.exp(-(x.squeeze(-1) - 0.5) ** 2 * 100)
 
-    result = engine.run_acquisition_gradient(
-        obj, bounds, n_starts=4, n_iters=200,
+    result = engine.optimize(
+        obj, bounds, n_starts=4,
     )
     # objective minimum ≈ -1, so score = 1
     assert result.score > 0.95

@@ -57,9 +57,8 @@ def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
     """Sampled continuous values should respect configured parameter bounds."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
-    calibration.engine.gradient_n_iters = 2
-    calibration.engine.gradient_n_starts = 1
-    calibration.engine.gradient_raw_samples = 0
+    calibration.engine.n_starts = 1
+    calibration.engine.n_sobol = 1
     calibration.configure_param_bounds({"param_1": (2.0, 7.0)})
 
     results = calibration.run_baseline(n=3)
@@ -418,9 +417,8 @@ def test_run_calibration_with_schedule_returns_experiment_spec(tmp_path):
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     cs = agent.calibration_system
-    cs.engine.gradient_n_iters = 2
-    cs.engine.gradient_n_starts = 1
-    cs.engine.gradient_raw_samples = 0
+    cs.engine.n_starts = 1
+    cs.engine.n_sobol = 1
     cs.configure_trajectory_parameter("speed", "dim_1")
     cs.configure_adaptation_delta({"speed": 50.0})
 
