@@ -768,7 +768,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         }
 
         # Detect trajectory config early — determines whether we use slope path
-        has_slope_traj = bool(traj_set and per_exp_L is not None and max(per_exp_L) > 1)
+        has_slope_traj = bool(traj_set)
 
         if numeric_params and not has_slope_traj:
             flat_specs, flat_params, optimized = self._run_acquisition_phase(
@@ -778,8 +778,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 label=f"Global (D={len(numeric_params)}, V={n * len(numeric_params)})", init_evidence=True,
             )
         elif numeric_params and has_slope_traj:
-            # Single-pass: Global + slopes together
-            pass  # handled below in the trajectory block
+            # Single-pass: slopes handle everything — build warm start specs from bisection
+            flat_specs = []
+            for i in range(n):
+                bp: dict[str, Any] = dict(self.fixed_params)
+                if structural_values is not None:
+                    for sv_code, sv_val in structural_values[i].items():
+                        bp[sv_code] = sv_val
+                for d, (code, lo, hi) in enumerate(numeric_params):
+                    bp[code] = float(init_norm[i, d] * (hi - lo) + lo)
+                for d_cat, code in enumerate(cat_codes):
+                    bp[code] = cat_assignments[i][d_cat]
+                for _, (code_i, lo_i, hi_i) in enumerate(integer_params):
+                    if code_i in bp:
+                        bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
+                bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
+                flat_specs.append(ExperimentSpec(
+                    initial_params=ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE),
+                    trajectories={},
+                ))
+            flat_params = init_norm.copy()
+            optimized = init_norm.copy()
 
         else:
             # No numeric params anywhere — fall back to centre-of-bounds + cats.
@@ -852,26 +871,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self._active_datamodule = baseline_dm
                 if self._fit_empty_kde_fn is not None:
                     self._fit_empty_kde_fn(baseline_dm, n)
-
-                # Build initial specs from bisection for warm start (no optimization yet)
-                flat_specs = []
-                for i in range(n):
-                    params: dict[str, Any] = dict(self.fixed_params)
-                    if structural_values is not None:
-                        for sv_code, sv_val in structural_values[i].items():
-                            params[sv_code] = sv_val
-                    for d, (code, lo, hi) in enumerate(numeric_params):
-                        params[code] = float(init_norm[i, d] * (hi - lo) + lo)
-                    for d_cat, code in enumerate(cat_codes):
-                        params[code] = cat_assignments[i][d_cat]
-                    for _, (code_i, lo_i, hi_i) in enumerate(integer_params):
-                        if code_i in params:
-                            params[code_i] = int(np.clip(np.round(params[code_i]), lo_i, hi_i))
-                    params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
-                    flat_specs.append(ExperimentSpec(
-                        initial_params=ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE),
-                        trajectories={},
-                    ))
 
                 specs = self._run_slope_trajectory(
                     n, flat_specs, traj_params_list, per_exp_L,
