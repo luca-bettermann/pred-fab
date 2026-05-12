@@ -1102,6 +1102,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Identify trajectory param columns in the datamodule
         traj_codes = [code for code, _, _ in traj_params]
+        self.logger.info(f"traj_codes={traj_codes}, dm_input_columns={baseline_dm.input_columns}")
         traj_dm_cols = [
             baseline_dm.input_columns.index(code)
             for code in traj_codes if code in baseline_dm.input_columns
@@ -1246,11 +1247,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None, w)
 
+        self.logger.info(f"Calling LBFGS: {len(bounds_list)} bounds, x0 shape={x0.shape}, console={console}")
         opt = self.engine.run_acquisition_gradient(
             _objective, bounds_list, x0=x0,
             label=f"Global (D={D_per_exp}, V={n * D_per_exp})",
             show_progress=console,
         )
+        self.logger.info(f"LBFGS done: score={opt.score:.3f}, nfev={opt.nfev}")
         self.convergence_history["Global"] = opt.convergence_history
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
