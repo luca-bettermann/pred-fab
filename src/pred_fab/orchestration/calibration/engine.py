@@ -42,7 +42,6 @@ class OptimizationEngine:
         self.n_sobol: int = 512
         self.lr: float = 0.05
         self.sobol_batch_size: int = 64
-        self.sigmoid_scale: float = 1.0
 
     def optimize(
         self,
@@ -94,15 +93,13 @@ class OptimizationEngine:
                 nfev[0] += int(z.shape[0])
                 return vals
         else:
-            sig_s = self.sigmoid_scale
-
             def _decode(z: torch.Tensor) -> torch.Tensor:
-                return torch.sigmoid(z / sig_s) * span_t + lo_t
+                return torch.sigmoid(z) * span_t + lo_t
 
             def _encode(x: torch.Tensor) -> torch.Tensor:
                 u = (x - lo_t) / span_t
                 u = u.clamp(1e-4, 1.0 - 1e-4)
-                return torch.log(u / (1.0 - u)) * sig_s
+                return torch.log(u / (1.0 - u))
 
             def _eval(z: torch.Tensor) -> torch.Tensor:
                 x = _decode(z)
@@ -144,9 +141,6 @@ class OptimizationEngine:
                 start_best = [float("inf")]
 
                 def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history, _s: int = s) -> torch.Tensor:
-                    if raw_z:
-                        with torch.no_grad():
-                            z_ref.data.clamp_(lo_t, hi_t)
                     optimizer.zero_grad()  # type: ignore[has-type]
                     vals = _eval(z_ref)
                     loss = vals.sum()

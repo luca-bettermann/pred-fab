@@ -1,11 +1,16 @@
 """Decision-vector layout, variable types, and decode for N-experiment optimisation.
 
-Variable types own their decode transform (sigmoid for all, applied once):
-  - StaticVariable: sigmoid(z) → normalised value
-  - TrajectoryVariable: sigmoid(z_mid + offset · z_slope) → per-layer values
+All bound enforcement uses ``sigmoid(K · z)`` with a single sharpness
+constant K.  Steeper sigmoid → the full bounded range is reachable with
+modest z-values, and the optimizer has strong gradients throughout.
 
-SolutionSpace maps Variables to a flat decision vector, provides z-bounds
-for Sobol sampling, and builds ExperimentSpecs from optimised z-vectors.
+Variable types own their decode:
+  - StaticVariable: sigmoid(Kz) → normalised value
+  - TrajectoryVariable: sigmoid(K · (z_mid + offset · slope)) → per-layer values
+    where slope = sigmoid(Kz) · 2·sm - sm  (bounded by its own sigmoid)
+
+SolutionSpace maps Variables to a flat z-space decision vector, provides
+z-bounds for Sobol sampling, and builds ExperimentSpecs from optimised z-vectors.
 """
 from __future__ import annotations
 
@@ -20,7 +25,12 @@ from ...core.data_objects import DataObject
 from .bounds import BoundsManager
 
 
+SIGMOID_K = 3.0
 Z_RANGE = 4.0
+
+
+def _sigmoid_k(z: torch.Tensor) -> torch.Tensor:
+    return torch.sigmoid(SIGMOID_K * z)
 
 # ---------------------------------------------------------------------------
 # Variable types
@@ -50,7 +60,7 @@ class Variable:
         return [(-Z_RANGE, Z_RANGE)]
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return torch.sigmoid(z)
+        return _sigmoid_k(z)
 
     def to_real(self, norm: float) -> float:
         return float(norm * self.span + self.lo)
@@ -74,7 +84,7 @@ class StaticVariable(Variable):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         if self.is_integer:
             return z + (z.round() - z).detach()
-        return torch.sigmoid(z)
+        return _sigmoid_k(z)
 
     def to_real(self, norm: float) -> float | int:
         if self.is_integer:
@@ -84,9 +94,13 @@ class StaticVariable(Variable):
 
 @dataclass(frozen=True)
 class TrajectoryVariable(Variable):
-    """Midpoint + slope per experiment, decoded to L layers via sigmoid."""
+    """Midpoint + slope per experiment, decoded to L layers via sigmoid.
+
+    The slope decision variable is unbounded; sigmoid maps it to
+    [-slope_max, slope_max] differentiably (no clamping needed).
+    """
     dimension_code: str = ""
-    slope_max_z: float = 0.8
+    slope_max: float = 0.8
 
     @property
     def n_dims(self) -> int:
@@ -94,24 +108,26 @@ class TrajectoryVariable(Variable):
 
     @property
     def z_bounds(self) -> list[tuple[float, float]]:
-        return [(-Z_RANGE, Z_RANGE), (-self.slope_max_z, self.slope_max_z)]
+        return [(-Z_RANGE, Z_RANGE), (-Z_RANGE, Z_RANGE)]
 
     def decode_trajectory(
         self,
         z_mid: torch.Tensor,
-        z_slope: torch.Tensor,
+        z_slope_raw: torch.Tensor,
         L: int,
     ) -> torch.Tensor:
-        """Decode midpoint + slope into per-layer normalised values via sigmoid.
+        """Decode midpoint + slope into per-layer normalised values.
 
-        sigmoid'(0) = 0.25, so z_slope ≈ 4× the normalised step near center.
+        slope = sigmoid(K · z_slope_raw) · 2·slope_max - slope_max
+        value(k) = sigmoid(K · (z_mid + offset · slope))
         """
+        slope = _sigmoid_k(z_slope_raw) * 2.0 * self.slope_max - self.slope_max
         mid_idx = L // 2
         offsets = torch.arange(L, dtype=z_mid.dtype, device=z_mid.device) - mid_idx
         z_all = z_mid.unsqueeze(-2) + offsets.reshape(
             *([1] * (z_mid.ndim - 1)), L, 1,
-        ) * z_slope.unsqueeze(-2)
-        return torch.sigmoid(z_all)
+        ) * slope.unsqueeze(-2)
+        return _sigmoid_k(z_all)
 
     def to_real(self, norm: float) -> float:
         return float(norm * self.span + self.lo)

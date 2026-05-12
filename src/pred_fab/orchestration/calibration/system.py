@@ -582,11 +582,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if code in traj_set:
                 span = hi - lo
                 trust = self.bounds.trust_regions.get(code, span / 10.0)
-                slope_max_z = 4.0 * trust / span if span > 0 else 0.4
+                from .space import SIGMOID_K
+                slope_max = trust / (SIGMOID_K * 0.25 * span) if span > 0 else 0.4
                 variables.append(TrajectoryVariable(
                     data_object=obj, lo=lo, hi=hi,
                     dimension_code=self.trajectory_configs[code],
-                    slope_max_z=slope_max_z,
+                    slope_max=slope_max,
                 ))
             else:
                 variables.append(StaticVariable(

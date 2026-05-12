@@ -699,7 +699,6 @@ class PfabAgent:
         n_sobol: int | None = None,
         lr: float | None = None,
         acquisition_scale: float | None = None,
-        sigmoid_scale: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters."""
         self._assert_initialized()
@@ -712,8 +711,6 @@ class PfabAgent:
             cal.engine.lr = lr
         if acquisition_scale is not None:
             cal.acquisition_scale = acquisition_scale
-        if sigmoid_scale is not None:
-            cal.engine.sigmoid_scale = sigmoid_scale
 
     def configure_trajectory(
         self,
