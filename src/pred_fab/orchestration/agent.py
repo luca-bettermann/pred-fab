@@ -414,8 +414,6 @@ class PfabAgent:
         self,
         datamodule: DataModule,
         kappa: float | None = None,
-        n_optimization_rounds: int = 5,
-        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """Unified proposal step: κ>0 = exploration, κ=0 = inference.
 
@@ -425,35 +423,27 @@ class PfabAgent:
         if kappa is None:
             kappa = self.calibration_system.kappa_default
 
-        mode = Mode.INFERENCE if kappa == 0.0 else Mode.EXPLORATION
-        result = self.calibration_system.run_calibration(
+        source_step = SourceStep.INFERENCE if kappa == 0.0 else SourceStep.EXPLORATION
+        result = self.calibration_system.run_acquisition(
             datamodule=datamodule,
-            mode=mode,
-            current_params=current_params,
             kappa=kappa,
-            n_optimization_rounds=n_optimization_rounds,
+            source_step=source_step,
         )
 
         self.logger.info(f"Completed acquisition step (kappa={kappa}).")
         return result
 
-    # Backward-compatible aliases
-    def exploration_step(self, datamodule: DataModule, kappa: float | None = None,
-                         n_optimization_rounds: int = 5,
-                         current_params: dict[str, Any] | None = None) -> ExperimentSpec:
+    def exploration_step(self, datamodule: DataModule,
+                         kappa: float | None = None) -> ExperimentSpec:
         """Alias for acquisition_step with kappa > 0; ``None`` uses the configured default."""
-        return self.acquisition_step(datamodule, kappa=kappa,
-                                     n_optimization_rounds=n_optimization_rounds,
-                                     current_params=current_params)
+        return self.acquisition_step(datamodule, kappa=kappa)
 
     def inference_step(
         self,
         exp_data: ExperimentData,
         datamodule: DataModule,
-        n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
-        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """Feature extraction + evaluation, then acquisition_step with kappa=0."""
         self._check_systems(StepType.FULL)
@@ -461,9 +451,7 @@ class PfabAgent:
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
-        return self.acquisition_step(datamodule, kappa=0.0,
-                                     n_optimization_rounds=n_optimization_rounds,
-                                     current_params=current_params)
+        return self.acquisition_step(datamodule, kappa=0.0)
 
     def adaptation_step(
         self,
@@ -500,14 +488,12 @@ class PfabAgent:
         # Calibrate around effective current parameters (online = single step).
         current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
         target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
-        result = self.calibration_system.run_calibration(
-            datamodule=temp_datamodule,
-            mode=mode,
-            current_params=current_params,
-            target_indices=target_indices,
-            kappa=kappa,
+        raise NotImplementedError(
+            "adaptation_step requires trust-region optimization (not yet migrated "
+            "to the unified _optimize path). Use exploration_step or inference_step "
+            "for offline acquisition."
         )
-        # Tag as adaptation (run_calibration uses mode-derived source_step).
+        # TODO: migrate adaptation to _optimize with trust-region bounds
         proposal = ParameterProposal.from_dict(
             result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
         )
