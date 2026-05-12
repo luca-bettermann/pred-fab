@@ -767,13 +767,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if code in self.data_objects and isinstance(self.data_objects[code], DataDomainAxis)
         }
 
-        if numeric_params:
+        # Detect trajectory config early — determines whether we use slope path
+        has_slope_traj = bool(traj_set and per_exp_L is not None and max(per_exp_L) > 1)
+
+        if numeric_params and not has_slope_traj:
             flat_specs, flat_params, optimized = self._run_acquisition_phase(
                 n, numeric_params, integer_params, int_set, int_ranges_map,
                 init_norm, cat_codes, cat_assignments,
                 structural_values=None,
                 label=f"Global (D={len(numeric_params)}, V={n * len(numeric_params)})", init_evidence=True,
             )
+        elif numeric_params and has_slope_traj:
+            # Single-pass: Global + slopes together
+            pass  # handled below in the trajectory block
+
         else:
             # No numeric params anywhere — fall back to centre-of-bounds + cats.
             optimized = np.zeros((n, 0))
@@ -822,7 +829,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 per_exp_L = [L] * n
 
         # --- Schedule phase (if scheduled params exist and L > 1) ---
-        if traj_set and per_exp_L is not None and max(per_exp_L) > 1:
+        if has_slope_traj:
             dim_codes_for_sched = sorted(set(self.trajectory_configs.values()) & domain_axis_sched_dims)
             if dim_codes_for_sched:
                 primary_dim_code = dim_codes_for_sched[0]
@@ -840,6 +847,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 traj_params_list.append((code, lo, hi))
 
             if traj_params_list:
+                # Initialize evidence model (normally done by _run_acquisition_phase)
+                baseline_dm = self._build_schema_datamodule()
+                self._active_datamodule = baseline_dm
+                if self._fit_empty_kde_fn is not None:
+                    self._fit_empty_kde_fn(baseline_dm, n)
+
+                # Build initial specs from bisection for warm start (no optimization yet)
+                flat_specs = []
+                for i in range(n):
+                    params: dict[str, Any] = dict(self.fixed_params)
+                    if structural_values is not None:
+                        for sv_code, sv_val in structural_values[i].items():
+                            params[sv_code] = sv_val
+                    for d, (code, lo, hi) in enumerate(numeric_params):
+                        params[code] = float(init_norm[i, d] * (hi - lo) + lo)
+                    for d_cat, code in enumerate(cat_codes):
+                        params[code] = cat_assignments[i][d_cat]
+                    for _, (code_i, lo_i, hi_i) in enumerate(integer_params):
+                        if code_i in params:
+                            params[code_i] = int(np.clip(np.round(params[code_i]), lo_i, hi_i))
+                    params = self.schema.parameters.sanitize_values(params, ignore_unknown=True)
+                    flat_specs.append(ExperimentSpec(
+                        initial_params=ParameterProposal.from_dict(params, source_step=SourceStep.BASELINE),
+                        trajectories={},
+                    ))
+
                 specs = self._run_slope_trajectory(
                     n, flat_specs, traj_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
