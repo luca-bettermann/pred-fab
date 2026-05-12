@@ -1247,7 +1247,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None, w)
 
+        # Test objective with warm start to catch errors early
         self.logger.info(f"Calling LBFGS: {len(bounds_list)} bounds, x0 shape={x0.shape}, console={console}")
+        try:
+            x0_t = torch.tensor(x0, dtype=torch.float64).unsqueeze(0)
+            with torch.no_grad():
+                test_val = _objective(x0_t)
+            self.logger.info(f"Objective test: val={float(test_val[0].item()):.3f}")
+        except Exception as e:
+            self.logger.warning(f"Objective test failed: {e}")
+            return flat_specs
+
         opt = self.engine.run_acquisition_gradient(
             _objective, bounds_list, x0=x0,
             label=f"Global (D={D_per_exp}, V={n * D_per_exp})",
