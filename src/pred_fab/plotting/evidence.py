@@ -197,7 +197,7 @@ def plot_evidence_panel(
     grid_max = float(grid.max()) if grid.size > 0 else 1.0
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
                      cmap_name="evidence", contour_overlay=False, show_colorbar=True,
-                     vmin=0.0, vmax=max(grid_max, 1e-6))
+                     vmin=0.0, vmax=1.0, cbar_lim=max(grid_max, 1e-6))
     if label:
         subplot_label(ax, label)
     _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
