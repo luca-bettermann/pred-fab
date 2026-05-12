@@ -86,6 +86,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.max_trajectory_rounds: int = 5
         self.trajectory_step_callback: Callable[[int, int, TrajectoryState], None] | None = None
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
+        self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None
 
         # Set ordered weights
         self.schema = schema
@@ -1063,7 +1064,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n: int,
         flat_specs: list[ExperimentSpec],
         traj_params: list[tuple[str, float, float]],
-        per_exp_L: list[int],
+        per_exp_L_init: list[int],
         primary_dim_code: str,
         integer_params: list[tuple[str, int, int]],
         cat_codes: list[str],
@@ -1080,7 +1081,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         from .slope import decode_slope_trajectory, default_slope_max
 
         D_traj = len(traj_params)
-        if D_traj == 0 or max(per_exp_L) <= 1:
+        if D_traj == 0 or max(per_exp_L_init) <= 1:
             return flat_specs
 
         baseline_dm = self._active_datamodule
@@ -1089,7 +1090,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         console = self.logger._console_output_enabled
         n_dm_cols = len(baseline_dm.input_columns)
-        total_L = sum(per_exp_L)
+        total_L = sum(per_exp_L_init)
 
         # Identify trajectory param columns in the datamodule
         traj_codes = [code for code, _, _ in traj_params]
@@ -1172,22 +1173,28 @@ class CalibrationSystem(BaseOrchestrationSystem):
                         prior_fill[i, c_idx] = 0.5
         prior_fill_t = torch.from_numpy(prior_fill).to(dtype=torch.float64)
 
-        # Weights: 1/L_i per layer per experiment
-        weights_list: list[float] = []
-        for i in range(n):
-            weights_list.extend([1.0 / per_exp_L[i]] * per_exp_L[i])
-
-        # Layer-to-experiment mapping for building the full tensor
-        exp_layer_offsets = []
-        off = 0
-        for i in range(n):
-            exp_layer_offsets.append(off)
-            off += per_exp_L[i]
+        # Build mapping from static param → (code, lo, hi) for L derivation
+        static_param_map = {code: (si, lo, hi) for si, (code, lo, hi) in enumerate(static_params)}
+        derive_L = self.derive_L_fn
 
         self.logger.info(
             f"Slope trajectory: N={n}, D_static={D_static}, D_traj={D_traj}, "
-            f"D_slope={D_traj}, total_vars={n * D_per_exp}, total_L={total_L}"
+            f"D_slope={D_traj}, total_vars={n * D_per_exp}"
         )
+
+        def _derive_L_per_exp(static_vals_s: torch.Tensor) -> list[int]:
+            """Derive N_layers per experiment from current static param values."""
+            if derive_L is None:
+                return list(per_exp_L_init)
+            Ls = []
+            for i in range(n):
+                # Denormalize static params to build param dict
+                p: dict[str, Any] = {}
+                for si, (code, lo, hi) in enumerate(static_params):
+                    val_norm = float(static_vals_s[i, si].detach())
+                    p[code] = val_norm * (hi - lo) + lo
+                Ls.append(max(1, derive_L(p)))
+            return Ls
 
         def _objective(x_flat_S: torch.Tensor) -> torch.Tensor:
             S = int(x_flat_S.shape[0])
@@ -1195,6 +1202,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             static_vals = x[:, :, :D_static]                    # (S, N, D_static)
             midpoints = x[:, :, D_static:D_static + D_traj]     # (S, N, D_traj)
             slopes = x[:, :, D_static + D_traj:]                # (S, N, D_traj)
+
+            # Derive L_i from current H_layer (use first start for L computation)
+            cur_L = _derive_L_per_exp(static_vals[0])
 
             # Build all layers for all experiments
             all_rows = prior_fill_t.unsqueeze(0).expand(S, n, n_dm_cols).clone().to(dtype=x_flat_S.dtype)
@@ -1207,23 +1217,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             # Expand to per-layer tensor using sigmoid decode
             layer_rows: list[torch.Tensor] = []
+            weights_dynamic: list[float] = []
             for i in range(n):
-                L_i = per_exp_L[i]
-                # Sigmoid decode: midpoint + slope → L_i layer values
+                L_i = cur_L[i]
                 traj_layers = decode_slope_trajectory(
                     midpoints[:, i, :], slopes[:, i, :], L_i,
                 )  # (S, L_i, D_traj)
 
-                # Replicate base row L_i times, set traj columns per layer
                 base_i = all_rows[:, i, :].unsqueeze(1).expand(S, L_i, n_dm_cols).clone()
                 if traj_dm_idxs is not None:
                     idx_t = traj_dm_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1)
                     base_i = base_i.scatter(-1, idx_t, traj_layers)
                 layer_rows.append(base_i)
+                weights_dynamic.extend([1.0 / L_i] * L_i)
 
             full = torch.cat(layer_rows, dim=1)  # (S, total_L, D)
             full_S_NL = full.unsqueeze(1)  # (S, 1, total_L, D)
-            w = torch.tensor(weights_list, dtype=x_flat_S.dtype).unsqueeze(0).expand(S, -1)
+            w = torch.tensor(weights_dynamic, dtype=x_flat_S.dtype).unsqueeze(0).expand(S, -1)
 
             return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None, w)
 
@@ -1237,11 +1247,24 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Decode result into ExperimentSpecs with trajectories
         best = opt.best_x if opt.best_x is not None else x0
+
+        # Derive final per_exp_L from the optimized H_layer values
+        final_L: list[int] = []
+        for i in range(n):
+            off = i * D_per_exp
+            if derive_L is not None:
+                p_final: dict[str, Any] = {}
+                for si, (code, lo, hi) in enumerate(static_params):
+                    p_final[code] = float(best[off + si] * (hi - lo) + lo)
+                final_L.append(max(1, derive_L(p_final)))
+            else:
+                final_L.append(per_exp_L_init[i])
+
         specs_out: list[ExperimentSpec] = []
 
         for i in range(n):
             off = i * D_per_exp
-            L_i = per_exp_L[i]
+            L_i = final_L[i]
 
             # Decode static params
             bp: dict[str, Any] = dict(self.fixed_params)
@@ -1290,16 +1313,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
             decode_slope_trajectory(
                 torch.tensor(best[i * D_per_exp + D_static:i * D_per_exp + D_static + D_traj], dtype=torch.float64).unsqueeze(0),
                 torch.tensor(best[i * D_per_exp + D_static + D_traj:i * D_per_exp + D_per_exp], dtype=torch.float64).unsqueeze(0),
-                per_exp_L[i],
+                final_L[i],
             )[0].cpu().numpy()
             for i in range(n)
         ]
         self.last_traj_params = list(traj_params)
-        self.last_trajectory_per_exp_L = list(per_exp_L)
+        self.last_trajectory_per_exp_L = list(final_L)
         self.last_trajectory_points = np.concatenate(self.last_traj_norms, axis=0)
         exp_ids: list[int] = []
         for i in range(n):
-            exp_ids.extend([i] * per_exp_L[i])
+            exp_ids.extend([i] * final_L[i])
         self.last_trajectory_exp_ids = exp_ids
 
         return specs_out
