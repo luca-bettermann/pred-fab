@@ -28,30 +28,32 @@ def _score_color(v: float) -> str:
 class ProgressBar:
     """Inline ANSI progress bar for optimizer runs.
 
-    Tracks starts, iterations, and best objective internally.
-    Callers provide label + dimension info; display format is defined once here.
+    Flexible: callers pass ``info`` (static labels like D=5, V=60) and
+    ``**counters`` (dynamic values like starts=3, iters=120) on each step.
+    ``fill`` (0–1) drives the bar; ``obj`` tracks best objective.
     """
 
-    def __init__(self, label: str, *, D: int | None = None, V: int | None = None,
-                 max_starts: int | None = None, bar_len: int = 12):
+    def __init__(self, label: str, *, info: dict[str, Any] | None = None,
+                 bar_len: int = 12):
         self._label = label
         self._len = bar_len
-        self._max_starts = max_starts
-        self._starts = 1
-        self._iters = 0
         self._best_obj: float | None = None
+        self._fill = 0.0
+        self._counters: dict[str, int] = {}
 
-        dims = ""
-        if D is not None:
-            dims += f"D={D}"
-        if V is not None:
-            dims += f", V={V}" if dims else f"V={V}"
-        self._dims = f" ({dims})" if dims else ""
+        if info:
+            parts = ", ".join(f"{k}={v}" for k, v in info.items())
+            self._info_str = f" ({parts})"
+        else:
+            self._info_str = ""
 
-    def step(self, obj: float | None = None) -> None:
-        """Record one iteration and redraw."""
+    def step(self, *, fill: float | None = None, obj: float | None = None,
+             **counters: int) -> None:
+        """Update bar and redraw. ``fill`` is [0, 1]; counters shown as key=value."""
         import sys
-        self._iters += 1
+        if fill is not None:
+            self._fill = fill
+        self._counters.update(counters)
 
         if obj is not None:
             first = self._best_obj is None
@@ -63,31 +65,23 @@ class ProgressBar:
         else:
             obj_str = ""
 
-        if self._max_starts is not None:
-            filled = int(self._len * min(self._starts / self._max_starts, 1.0))
-        else:
-            filled = min(self._iters, self._len)
+        filled = int(self._len * min(self._fill, 1.0))
         bar = "█" * filled + "░" * (self._len - filled)
+        ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
         sys.stdout.write(
-            f"\r  {self._label}{self._dims} [{bar}] "
-            f"{_D}{self._starts} starts  {self._iters} iters{_R}{obj_str}            "
+            f"\r  {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}{obj_str}            "
         )
         sys.stdout.flush()
-
-    def new_start(self) -> None:
-        """Begin a new multi-start run."""
-        self._starts += 1
 
     def finish(self) -> None:
         """Print final summary line."""
         import sys
         bar = "█" * self._len
-        parts = [f"{self._starts} starts", f"{self._iters} iters"]
+        ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
         if self._best_obj is not None:
-            parts.append(f"obj={self._best_obj:.3f}")
-        info = "  ".join(parts)
+            ctr += f"  obj={self._best_obj:.3f}"
         sys.stdout.write(
-            f"\r{_G}✓{_R} {self._label}{self._dims} [{bar}] {_D}{info}{_R}            \n"
+            f"\r{_G}✓{_R} {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}            \n"
         )
         sys.stdout.flush()
 

@@ -81,10 +81,10 @@ def test_print_training_summary_disabled(reporter, capsys):
 def test_print_phase_header(reporter, capsys):
     """Phase header should include phase number and title."""
     reporter._logger._console_output_enabled = True
-    reporter.print_phase_header(1, "Baseline", "10 experiments")
+    reporter.print_phase_header(1, "Discovery", "10 experiments")
     output = capsys.readouterr().out
     assert "PHASE 1" in output
-    assert "Baseline" in output
+    assert "Discovery" in output
     assert "10 experiments" in output
 
 

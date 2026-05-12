@@ -364,6 +364,7 @@ def subplot_topology(
     point_alpha: float = 1.0,
     show_colorbar: bool = True,
     cbar_label: str | None = None,
+    cbar_lim: float | None = None,
 ):
     """Render a topology panel: contourf + optional white contours + scatter + colorbar.
 
@@ -371,6 +372,10 @@ def subplot_topology(
     the colorbar. ``cmap_name`` accepts a semantic key from the registry
     (density, evidence, evidence_gain, performance, mixed) or any raw
     matplotlib colormap name.
+
+    ``cbar_lim`` truncates the colorbar to [0, cbar_lim] while keeping the
+    color mapping at [vmin, vmax] — so colors stay comparable across plots
+    but the colorbar shows the actual data peak.
     """
     cm = _resolve_cmap(cmap_name)
     im = ax.contourf(x_values, y_values, grid, levels=levels, cmap=cm,
@@ -394,6 +399,8 @@ def subplot_topology(
     if show_colorbar:
         cbar = plt.colorbar(im, ax=ax, shrink=0.8, label=cbar_label or "")
         style_colorbar(cbar)
+        if cbar_lim is not None:
+            cbar.ax.set_ylim(0, cbar_lim)
 
     return im
 

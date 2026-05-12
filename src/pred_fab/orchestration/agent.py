@@ -414,8 +414,6 @@ class PfabAgent:
         self,
         datamodule: DataModule,
         kappa: float | None = None,
-        n_optimization_rounds: int = 5,
-        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """Unified proposal step: κ>0 = exploration, κ=0 = inference.
 
@@ -425,35 +423,27 @@ class PfabAgent:
         if kappa is None:
             kappa = self.calibration_system.kappa_default
 
-        mode = Mode.INFERENCE if kappa == 0.0 else Mode.EXPLORATION
-        result = self.calibration_system.run_calibration(
+        source_step = SourceStep.INFERENCE if kappa == 0.0 else SourceStep.EXPLORATION
+        result = self.calibration_system.run_acquisition(
             datamodule=datamodule,
-            mode=mode,
-            current_params=current_params,
             kappa=kappa,
-            n_optimization_rounds=n_optimization_rounds,
+            source_step=source_step,
         )
 
         self.logger.info(f"Completed acquisition step (kappa={kappa}).")
         return result
 
-    # Backward-compatible aliases
-    def exploration_step(self, datamodule: DataModule, kappa: float | None = None,
-                         n_optimization_rounds: int = 5,
-                         current_params: dict[str, Any] | None = None) -> ExperimentSpec:
+    def exploration_step(self, datamodule: DataModule,
+                         kappa: float | None = None) -> ExperimentSpec:
         """Alias for acquisition_step with kappa > 0; ``None`` uses the configured default."""
-        return self.acquisition_step(datamodule, kappa=kappa,
-                                     n_optimization_rounds=n_optimization_rounds,
-                                     current_params=current_params)
+        return self.acquisition_step(datamodule, kappa=kappa)
 
     def inference_step(
         self,
         exp_data: ExperimentData,
         datamodule: DataModule,
-        n_optimization_rounds: int = 5,
         recompute: bool = False,
         visualize: bool = False,
-        current_params: dict[str, Any] | None = None,
     ) -> ExperimentSpec:
         """Feature extraction + evaluation, then acquisition_step with kappa=0."""
         self._check_systems(StepType.FULL)
@@ -461,9 +451,7 @@ class PfabAgent:
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
-        return self.acquisition_step(datamodule, kappa=0.0,
-                                     n_optimization_rounds=n_optimization_rounds,
-                                     current_params=current_params)
+        return self.acquisition_step(datamodule, kappa=0.0)
 
     def adaptation_step(
         self,
@@ -500,14 +488,12 @@ class PfabAgent:
         # Calibrate around effective current parameters (online = single step).
         current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
         target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
-        result = self.calibration_system.run_calibration(
-            datamodule=temp_datamodule,
-            mode=mode,
-            current_params=current_params,
-            target_indices=target_indices,
-            kappa=kappa,
+        raise NotImplementedError(
+            "adaptation_step requires trust-region optimization (not yet migrated "
+            "to the unified _optimize path). Use exploration_step or inference_step "
+            "for offline acquisition."
         )
-        # Tag as adaptation (run_calibration uses mode-derived source_step).
+        # TODO: migrate adaptation to _optimize with trust-region bounds
         proposal = ParameterProposal.from_dict(
             result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
         )
@@ -599,7 +585,7 @@ class PfabAgent:
         ``encode`` and the gradient acquisition path operate on the new
         device.
 
-        Returns self for chaining (``agent.to('cuda').baseline_step(3)``).
+        Returns self for chaining (``agent.to('cuda').discovery_step(3)``).
 
         Note: KDE storage (``_model_kdes`` latent_points / point_weights)
         remains numpy on CPU; the torch estimators convert + move to
@@ -710,34 +696,19 @@ class PfabAgent:
         self,
         *,
         n_starts: int | None = None,
-        n_iters: int | None = None,
+        n_sobol: int | None = None,
         lr: float | None = None,
-        gradient_method: str | None = None,
-        raw_samples: int | None = None,
-        init_eta: float | None = None,
-        smoothness_weight: float | None = None,
-        max_trajectory_rounds: int | None = None,
         acquisition_scale: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters."""
         self._assert_initialized()
         cal = self.calibration_system
         if n_starts is not None:
-            cal.engine.gradient_n_starts = n_starts
-        if n_iters is not None:
-            cal.engine.gradient_n_iters = n_iters
+            cal.engine.n_starts = n_starts
+        if n_sobol is not None:
+            cal.engine.n_sobol = n_sobol
         if lr is not None:
-            cal.engine.gradient_lr = lr
-        if gradient_method is not None:
-            cal.engine.gradient_method = gradient_method
-        if raw_samples is not None:
-            cal.engine.gradient_raw_samples = raw_samples
-        if init_eta is not None:
-            cal.engine.gradient_init_eta = init_eta
-        if smoothness_weight is not None:
-            cal.smoothness_weight = smoothness_weight
-        if max_trajectory_rounds is not None:
-            cal.max_trajectory_rounds = max_trajectory_rounds
+            cal.engine.lr = lr
         if acquisition_scale is not None:
             cal.acquisition_scale = acquisition_scale
 
@@ -780,9 +751,9 @@ class PfabAgent:
         return self.calibration_system.last_opt_n_starts
 
     @property
-    def last_baseline_nfev(self) -> int:
-        """Number of DE evaluations in the most recent baseline step."""
-        return getattr(self.calibration_system, 'last_baseline_nfev', 0)
+    def last_discovery_nfev(self) -> int:
+        """Number of DE evaluations in the most recent discovery step."""
+        return getattr(self.calibration_system, 'last_discovery_nfev', 0)
 
     # ── Acquisition introspection ───────────────────────────────────────────────
 
@@ -826,22 +797,22 @@ class PfabAgent:
         self._context_snapshot.update(values)
 
     @requires(SystemName.CALIBRATION)
-    def baseline_step(
+    def discovery_step(
         self,
         n: int,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals via batch-aware evidence maximization.
+        """Generate n space-filling discovery proposals via batch-aware evidence maximization.
 
         Uses the acquisition objective with κ=1 (pure exploration: maximize ΔI,
         the integrated evidence gain). Each new proposal is added to the
         evidence field so subsequent proposals naturally space-fill.
         """
-        # Bypass the encoder during baseline so the (random-init) prediction
+        # Bypass the encoder during discovery so the (random-init) prediction
         # model can't taint placement: evidence/KDE operates on raw normalised
         # input space here. Auto-managed; not user-facing.
         self.pred_system._bypass_encoder = True
         try:
-            result = self.calibration_system.run_baseline(n=n)
+            result = self.calibration_system.run_discovery(n=n)
         finally:
             self.pred_system._bypass_encoder = False
         return result

@@ -33,7 +33,7 @@ from ._style import (
     RED, YELLOW, ACCENT_RED, ACCENT_YELLOW,
 )
 
-from .baseline import plot_parameter_space, plot_parameter_space_per_cell, plot_mean_error_topology, plot_parameter_space_3d, plot_dimensional_trajectories
+from .discovery import plot_parameter_space, plot_parameter_space_per_cell, plot_mean_error_topology, plot_parameter_space_3d, plot_dimensional_trajectories
 from .prediction import plot_topology_comparison, plot_importance_weights
 from .exploration import plot_acquisition
 from .inference import plot_inference_result

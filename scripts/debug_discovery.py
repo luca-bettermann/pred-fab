@@ -1,9 +1,9 @@
-"""Debug script: runs baseline flow in a single script for stepping through in a debugger.
+"""Debug script: runs discovery flow in a single script for stepping through in a debugger.
 
 Usage:
-    python -m scripts.debug_baseline
+    python -m scripts.debug_discovery
     # or with debugger:
-    python -m debugpy --wait-for-client --listen 5678 -m scripts.debug_baseline
+    python -m debugpy --wait-for-client --listen 5678 -m scripts.debug_discovery
 """
 import sys
 sys.path.insert(0, "src")
@@ -33,9 +33,9 @@ cs.engine.gradient_n_starts = 2
 cs.engine.gradient_raw_samples = 0
 agent.configure_trajectory("speed", "n_layers", delta=50.0)
 
-# --- Baseline (equivalent to cli baseline) ---
-print("\n=== Running baseline ===")
-specs = agent.baseline_step(n=3)
+# --- Discovery (equivalent to cli discovery) ---
+print("\n=== Running discovery ===")
+specs = agent.discovery_step(n=3)
 
 print(f"\n=== Got {len(specs)} specs ===")
 for i, spec in enumerate(specs):
