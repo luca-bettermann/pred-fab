@@ -39,8 +39,15 @@ def decode_slope_trajectory(
 
 
 def default_slope_max(dim_code: str, data_objects: dict[str, Any]) -> float:
-    """Default slope bound = 1/max_dim_value from the domain axis definition."""
+    """Default slope bound in logit space, derived from trust region semantics.
+
+    The per-step real-space change at the sigmoid center is:
+        real_step = z_slope × sigmoid'(0) = z_slope × 0.25
+
+    For default trust region = range/dim_max:
+        z_slope_max = (range/dim_max) / (0.25 × range) = 4/dim_max
+    """
     obj = data_objects.get(dim_code)
     if obj is not None and hasattr(obj, "max_val"):
-        return 1.0 / max(int(obj.max_val), 1)
-    return 0.1
+        return 4.0 / max(int(obj.max_val), 1)
+    return 0.4
