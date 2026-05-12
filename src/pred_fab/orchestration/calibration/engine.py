@@ -36,6 +36,7 @@ class OptimizationEngine:
         self.n_sobol: int = 512
         self.lr: float = 0.05
         self.sobol_batch_size: int = 64
+        self.sigmoid_scale: float = 1.0
 
     def optimize(
         self,
@@ -77,13 +78,15 @@ class OptimizationEngine:
 
         nfev = [0]
 
+        s = self.sigmoid_scale
+
         def _decode(z: torch.Tensor) -> torch.Tensor:
-            return torch.sigmoid(z) * span_t + lo_t
+            return torch.sigmoid(z / s) * span_t + lo_t
 
         def _encode(x: torch.Tensor) -> torch.Tensor:
             u = (x - lo_t) / span_t
             u = u.clamp(1e-4, 1.0 - 1e-4)
-            return torch.log(u / (1.0 - u))
+            return torch.log(u / (1.0 - u)) * s
 
         def _eval(z: torch.Tensor) -> torch.Tensor:
             x = _decode(z)
