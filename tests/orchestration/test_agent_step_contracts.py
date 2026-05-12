@@ -77,11 +77,11 @@ def test_train_executes_real_training_method(tmp_path):
     assert agent.pred_system.datamodule is datamodule
 
 
-def test_baseline_step_returns_experiment_specs(tmp_path):
-    """baseline_step returns ExperimentSpec instances with LHS spacing."""
+def test_discovery_step_returns_experiment_specs(tmp_path):
+    """discovery_step returns ExperimentSpec instances with LHS spacing."""
     agent, _, _, _ = build_real_agent_stack(tmp_path)
-    sampled = agent.baseline_step(n=3)
+    sampled = agent.discovery_step(n=3)
 
     assert len(sampled) == 3
     assert all(isinstance(p, ExperimentSpec) for p in sampled)
-    assert all(p.initial_params.source_step == "baseline_step" for p in sampled)
+    assert all(p.initial_params.source_step == "discovery_step" for p in sampled)

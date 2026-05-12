@@ -1,6 +1,6 @@
 """
-Edge-case tests for CalibrationSystem baseline generation and run_calibration(ONLINE):
-run_baseline (n, infinite bounds, fixed params),
+Edge-case tests for CalibrationSystem discovery generation and run_calibration(ONLINE):
+run_discovery (n, infinite bounds, fixed params),
 run_calibration(domain=ONLINE) behavior, _compute_system_performance mismatched lengths,
 and _get_online_bounds trust-region semantics.
 """
@@ -22,38 +22,38 @@ from tests.utils.builders import (
 )
 
 
-# ===== run_baseline() basic behavior =====
+# ===== run_discovery() basic behavior =====
 
-def test_generate_baseline_returns_correct_count(tmp_path):
+def test_generate_discovery_returns_correct_count(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.run_baseline(n=5)
+    results = calibration.run_discovery(n=5)
     assert len(results) == 5
 
 
-def test_generate_baseline_returns_empty_for_zero_samples(tmp_path):
+def test_generate_discovery_returns_empty_for_zero_samples(tmp_path):
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.run_baseline(n=0)
+    results = calibration.run_discovery(n=0)
     assert results == []
 
 
-def test_generate_baseline_fixed_params_appear_in_all_samples(tmp_path):
+def test_generate_discovery_fixed_params_appear_in_all_samples(tmp_path):
     """Fixed parameters should appear with their fixed value in every sample."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
     calibration.configure_fixed_params({"param_3": "A"})
 
-    results = calibration.run_baseline(n=6)
+    results = calibration.run_discovery(n=6)
     for sample in results:
         assert sample["param_3"] == "A"
 
 
-def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
+def test_generate_discovery_values_stay_within_param_bounds(tmp_path):
     """Sampled continuous values should respect configured parameter bounds."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -61,23 +61,23 @@ def test_generate_baseline_values_stay_within_param_bounds(tmp_path):
     calibration.engine.n_sobol = 1
     calibration.configure_param_bounds({"param_1": (2.0, 7.0)})
 
-    results = calibration.run_baseline(n=3)
+    results = calibration.run_discovery(n=3)
     for sample in results:
         assert 2.0 <= sample["param_1"] <= 7.0, f"param_1 out of bounds: {sample['param_1']}"
 
 
-def test_generate_baseline_integer_params_are_int_typed(tmp_path):
+def test_generate_discovery_integer_params_are_int_typed(tmp_path):
     """Integer parameters (param_2, n_layers, n_segments) should be coerced to int type."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.run_baseline(n=5)
+    results = calibration.run_discovery(n=5)
     for sample in results:
         assert isinstance(sample["param_2"], int), f"param_2 should be int, got {type(sample['param_2'])}"
 
 
-def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
+def test_generate_discovery_skips_params_with_infinite_schema_bounds(tmp_path):
     """Parameters without explicit bounds and with infinite schema bounds are skipped."""
     from pred_fab.core.data_objects import DataReal, Feature, PerformanceAttribute
     from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
@@ -103,7 +103,7 @@ def test_generate_baseline_skips_params_with_infinite_schema_bounds(tmp_path):
     dataset = Dataset(schema=schema, debug_flag=True)
     calibration = build_calibration_system(tmp_path, dataset)
 
-    results = calibration.run_baseline(n=3)
+    results = calibration.run_discovery(n=3)
     # "unbounded" should be absent from each sample because it has infinite bounds
     for sample in results:
         assert "unbounded" not in sample, f"Infinite-bounds param should be skipped, got: {sample}"
@@ -240,21 +240,21 @@ def test_configure_calibration_sets_all_system_fields(tmp_path):
     assert cs.trust_regions["speed"] == pytest.approx(10.0)
 
 
-# ===== Baseline determinism =====
+# ===== Discovery determinism =====
 
-def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
+def test_generate_discovery_is_deterministic_with_same_seed(tmp_path):
     """Same random seed must produce identical Sobol samples."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
 
     cal1 = build_calibration_system(tmp_path / "a", dataset)
     cal1.random_seed = 7
     cal1.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
-    r1 = cal1.run_baseline(n=5)
+    r1 = cal1.run_discovery(n=5)
 
     cal2 = build_calibration_system(tmp_path / "b", dataset)
     cal2.random_seed = 7
     cal2.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
-    r2 = cal2.run_baseline(n=5)
+    r2 = cal2.run_discovery(n=5)
 
     for s1, s2 in zip(r1, r2):
         assert s1["param_1"] == pytest.approx(s2["param_1"], abs=1e-6)
@@ -263,36 +263,36 @@ def test_generate_baseline_is_deterministic_with_same_seed(tmp_path):
 
 # ===== ExperimentSpec return type =====
 
-def test_generate_baseline_returns_experiment_spec_instances(tmp_path):
-    """run_baseline() should return ExperimentSpec objects."""
+def test_generate_discovery_returns_experiment_spec_instances(tmp_path):
+    """run_discovery() should return ExperimentSpec objects."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.run_baseline(n=3)
+    results = calibration.run_discovery(n=3)
     for spec in results:
         assert isinstance(spec, ExperimentSpec)
         assert isinstance(spec.initial_params, ParameterProposal)
 
 
-def test_generate_baseline_has_empty_schedules(tmp_path):
-    """run_baseline() always returns ExperimentSpecs with empty schedules."""
+def test_generate_discovery_has_empty_schedules(tmp_path):
+    """run_discovery() always returns ExperimentSpecs with empty schedules."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.run_baseline(n=4)
+    results = calibration.run_discovery(n=4)
     for spec in results:
         assert spec.trajectories == {}
 
 
-def test_generate_baseline_experiment_spec_supports_dict_like_access(tmp_path):
+def test_generate_discovery_experiment_spec_supports_dict_like_access(tmp_path):
     """ExperimentSpec forwarding interface: __getitem__, __contains__, keys() work."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
 
-    results = calibration.run_baseline(n=2)
+    results = calibration.run_discovery(n=2)
     spec = results[0]
 
     # __getitem__
@@ -437,16 +437,16 @@ def test_run_calibration_with_schedule_returns_experiment_spec(tmp_path):
     assert len(result.trajectories) > 0
 
 
-# ===== BASELINE: categorical inclusion via DataModule one-hot encoding =====
+# ===== DISCOVERY: categorical inclusion via DataModule one-hot encoding =====
 
-def test_baseline_unfixed_categorical_produces_valid_category_values(tmp_path):
+def test_discovery_unfixed_categorical_produces_valid_category_values(tmp_path):
     """Unfixed categorical params must appear in every proposal with a valid category value."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
     # param_3 is intentionally NOT fixed
 
-    results = calibration.run_baseline(n=6)
+    results = calibration.run_discovery(n=6)
 
     for spec in results:
         assert "param_3" in spec, "param_3 should appear in every proposal"
@@ -455,14 +455,14 @@ def test_baseline_unfixed_categorical_produces_valid_category_values(tmp_path):
         )
 
 
-def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
+def test_discovery_unfixed_categorical_covers_multiple_categories(tmp_path):
     """With n=9 proposals and a 3-category param, Sobol guarantees all 3 categories appear."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
     calibration.random_seed = 0
 
-    results = calibration.run_baseline(n=9)
+    results = calibration.run_discovery(n=9)
 
     categories_seen = {spec["param_3"] for spec in results}
     assert categories_seen == {"A", "B", "C"}, (
@@ -470,9 +470,9 @@ def test_baseline_unfixed_categorical_covers_multiple_categories(tmp_path):
     )
 
 
-# ===== BASELINE: Sobol space-filling =====
+# ===== DISCOVERY: Sobol space-filling =====
 
-def test_baseline_sobol_covers_parameter_range(tmp_path):
+def test_discovery_sobol_covers_parameter_range(tmp_path):
     """Sobol sequence covers the parameter range with low discrepancy.
 
     Fix all params except param_1 so sampling is 1D over [0, 6].
@@ -488,7 +488,7 @@ def test_baseline_sobol_covers_parameter_range(tmp_path):
     calibration.random_seed = 42
 
     n = 8  # power of 2 for optimal Sobol properties
-    results = calibration.run_baseline(n=n)
+    results = calibration.run_discovery(n=n)
     values = sorted(spec["param_1"] for spec in results)
 
     # Must cover both halves of the range

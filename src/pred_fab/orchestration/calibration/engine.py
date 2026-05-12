@@ -109,7 +109,6 @@ class OptimizationEngine:
 
         # --- Phase 3: Independent LBFGS per start ---
         per_start_history: list[list[float]] = []
-        total_iters = [0]
         info: dict[str, Any] = {"D": D_display}
         if d_param is not None:
             info["V"] = D
@@ -135,13 +134,12 @@ class OptimizationEngine:
                     if cur < start_best[0] - 1e-15:
                         start_best[0] = cur
                     _sh.append(cur)
-                    total_iters[0] += 1
                     if bar:
                         bar.step(
                             fill=(_s + 1) / n_starts,
                             obj=min(best_val, start_best[0]),
                             starts=_s + 1,
-                            iters=total_iters[0],
+                            iters=len(_sh),
                         )
                     return loss
 

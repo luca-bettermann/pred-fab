@@ -63,7 +63,6 @@ def plot_convergence(
         ax.plot([], [], color=cmap(0.7), linewidth=1.5, label=label)
 
     if all_vals:
-        ax.set_yscale("symlog", linthresh=1.0)
         v_min = min(all_vals)
         v_max = max(all_vals)
         margin = abs(v_max - v_min) * 0.05
