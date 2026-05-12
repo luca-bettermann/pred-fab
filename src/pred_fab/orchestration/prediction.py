@@ -82,8 +82,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         self._radius: float = RADIUS_DEFAULT
 
         # When True, evidence/KDE bypasses model.encode() and operates in raw
-        # normalised input space. Auto-toggled by agent.baseline_step() so the
-        # initial random encoder doesn't taint baseline placement. Not user-facing.
+        # normalised input space. Auto-toggled by agent.discovery_step() so the
+        # initial random encoder doesn't taint discovery placement. Not user-facing.
         self._bypass_encoder: bool = False
         self._estimator_config: EstimatorConfig = EstimatorConfig()
         self._estimator: EvidenceEstimator = make_estimator(self._estimator_config)
@@ -687,7 +687,7 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> np.ndarray:
         """Encode a 1-D normalized parameter array via a specific model's encode().
 
-        When ``self._bypass_encoder`` is set (baseline mode), returns the raw
+        When ``self._bypass_encoder`` is set (discovery mode), returns the raw
         sliced input directly so the evidence/KDE works in raw input space.
         """
         if self.datamodule is None:

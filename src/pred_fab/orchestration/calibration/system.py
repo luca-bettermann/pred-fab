@@ -32,7 +32,7 @@ class EvidenceBackend:
 # ======================================================================
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: acquisition-driven exploration, inference, batch baseline, and joint schedule optimization."""
+    """Active-learning calibration engine: acquisition-driven exploration, inference, batch discovery, and joint schedule optimization."""
 
     def __init__(
         self,
@@ -222,7 +222,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     #     score(batch) = (1 − κ) · mean_k combined_score(perf(z_k), w)
     #                   + κ · Δ∫_[0,1]^D E(z | data_old ∪ batch) − E(z | data_old) dz
     #
-    # κ=1 baseline drops the perf term; κ=0 inference drops the Δ∫E term.
+    # κ=1 discovery drops the perf term; κ=0 inference drops the Δ∫E term.
     # Single-candidate phases pass batch with shape (1, D).
 
     def _compute_perf_dict_for_params(self, params: dict[str, Any]) -> dict[str, float | None]:
@@ -506,9 +506,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _build_objective(self, mode: Mode, kappa: float) -> Callable:
         """Return the objective function for the given calibration mode."""
-        if mode == Mode.BASELINE:
+        if mode == Mode.DISCOVERY:
             raise ValueError(
-                "Mode.BASELINE uses run_baseline() — call calibration_system.run_baseline(n) directly."
+                "Mode.DISCOVERY uses run_discovery() — call calibration_system.run_discovery(n) directly."
             )
         # Inference is acquisition with kappa=0 (pure performance, no uncertainty)
         effective_kappa = 0.0 if mode == Mode.INFERENCE else kappa
@@ -584,7 +584,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return ExperimentSpec(initial_params=initial, trajectories=trajectories)
 
     def _build_schema_datamodule(self) -> DataModule:
-        """Build a schema-only DataModule (no training data) for baseline generation.
+        """Build a schema-only DataModule (no training data) for discovery generation.
 
         Uses NormMethod.NONE; excludes params with infinite bounds (logged as warnings).
         """
@@ -602,7 +602,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             if lo == -np.inf or hi == np.inf:
                 self.logger.warning(
                     f"Parameter '{code}' has infinite bounds; "
-                    "skipping in baseline generation."
+                    "skipping in discovery generation."
                 )
                 continue
             active_codes.append(code)
@@ -618,12 +618,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return datamodule
 
     # ==================================================================
-    # § Baseline — batch proposal generation (run_baseline)
+    # § Discovery — batch proposal generation
     # ==================================================================
 
 
-    def run_baseline(self, n: int) -> list["ExperimentSpec"]:
-        """Generate n baseline proposals via Sobol -> LBFGS acquisition (kappa=1)."""
+    def run_discovery(self, n: int) -> list["ExperimentSpec"]:
+        """Generate n discovery proposals via Sobol -> LBFGS acquisition (kappa=1)."""
         if n == 0:
             return []
 
@@ -662,7 +662,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         ]
 
         if not variables and not categorical_params:
-            self.logger.warning("No valid parameters for baseline generation.")
+            self.logger.warning("No valid parameters for discovery generation.")
             return []
 
         # Stratify categoricals
@@ -685,14 +685,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         specs = self._optimize(
             n, variables, cat_codes, cat_assignments,
-            kappa=1.0, source_step=SourceStep.BASELINE,
-            label="Baseline",
+            kappa=1.0, source_step=SourceStep.DISCOVERY,
+            label="Local",
         )
 
         n_static = sum(1 for v in variables if isinstance(v, StaticVariable))
         n_traj = sum(1 for v in variables if isinstance(v, TrajectoryVariable))
         self.logger.info(
-            f"Baseline: {n} experiments "
+            f"Discovery: {n} experiments "
             f"({n_static} static, {n_traj} trajectory, "
             f"{len(categorical_params)} categorical"
             f"{f', {n_strata} strata' if n_strata > 1 else ''})."
@@ -714,17 +714,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Constructs the decision vector layout from Variable objects, defines
         the objective closure, runs Sobol -> LBFGS, and decodes the result.
         """
-        baseline_dm = self._build_schema_datamodule()
-        self._active_datamodule = baseline_dm
+        discovery_dm = self._build_schema_datamodule()
+        self._active_datamodule = discovery_dm
 
         if self._fit_empty_kde_fn is not None:
-            self._fit_empty_kde_fn(baseline_dm, n)
+            self._fit_empty_kde_fn(discovery_dm, n)
 
         space = SolutionSpace(
             variables=variables,
             n_experiments=n,
             bounds_manager=self.bounds,
-            datamodule=baseline_dm,
+            datamodule=discovery_dm,
             fixed_params=dict(self.fixed_params),
             cat_codes=cat_codes,
             cat_assignments=cat_assignments,
@@ -755,7 +755,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             show_progress=console,
         )
         self.convergence_history[label] = opt.convergence_history
-        self.last_baseline_nfev = getattr(self, 'last_baseline_nfev', 0) + opt.nfev
+        self.last_discovery_nfev = getattr(self, 'last_discovery_nfev', 0) + opt.nfev
 
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
@@ -905,9 +905,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Single mechanism handles all four cases through the same vectorised DE path:
           - ``(N=1, L=1)`` — single-point exploration / inference Process phase.
-          - ``(N>1, L=1)`` — joint-batch baseline Domain / Process phase.
+          - ``(N>1, L=1)`` — joint-batch discovery Domain / Process phase.
           - ``(N=1, L>1)`` — exploration / inference schedule phase.
-          - ``(N>1, L>1)`` — joint-batch baseline schedule.
+          - ``(N>1, L>1)`` — joint-batch discovery schedule.
 
         ``phase_param_codes`` selects the dimensions the optimiser sees; the rest
         of each ``(proposal, step)`` row is filled from ``fixed_values_per_n[n]``
@@ -1033,7 +1033,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         elif mode == Mode.INFERENCE:
             source_step = SourceStep.INFERENCE
         else:
-            source_step = SourceStep.BASELINE
+            source_step = SourceStep.DISCOVERY
 
         is_online = current_params is not None and target_indices is not None
 

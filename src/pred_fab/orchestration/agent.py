@@ -599,7 +599,7 @@ class PfabAgent:
         ``encode`` and the gradient acquisition path operate on the new
         device.
 
-        Returns self for chaining (``agent.to('cuda').baseline_step(3)``).
+        Returns self for chaining (``agent.to('cuda').discovery_step(3)``).
 
         Note: KDE storage (``_model_kdes`` latent_points / point_weights)
         remains numpy on CPU; the torch estimators convert + move to
@@ -768,9 +768,9 @@ class PfabAgent:
         return self.calibration_system.last_opt_n_starts
 
     @property
-    def last_baseline_nfev(self) -> int:
-        """Number of DE evaluations in the most recent baseline step."""
-        return getattr(self.calibration_system, 'last_baseline_nfev', 0)
+    def last_discovery_nfev(self) -> int:
+        """Number of DE evaluations in the most recent discovery step."""
+        return getattr(self.calibration_system, 'last_discovery_nfev', 0)
 
     # ── Acquisition introspection ───────────────────────────────────────────────
 
@@ -814,22 +814,22 @@ class PfabAgent:
         self._context_snapshot.update(values)
 
     @requires(SystemName.CALIBRATION)
-    def baseline_step(
+    def discovery_step(
         self,
         n: int,
     ) -> list[ExperimentSpec]:
-        """Generate n space-filling baseline proposals via batch-aware evidence maximization.
+        """Generate n space-filling discovery proposals via batch-aware evidence maximization.
 
         Uses the acquisition objective with κ=1 (pure exploration: maximize ΔI,
         the integrated evidence gain). Each new proposal is added to the
         evidence field so subsequent proposals naturally space-fill.
         """
-        # Bypass the encoder during baseline so the (random-init) prediction
+        # Bypass the encoder during discovery so the (random-init) prediction
         # model can't taint placement: evidence/KDE operates on raw normalised
         # input space here. Auto-managed; not user-facing.
         self.pred_system._bypass_encoder = True
         try:
-            result = self.calibration_system.run_baseline(n=n)
+            result = self.calibration_system.run_discovery(n=n)
         finally:
             self.pred_system._bypass_encoder = False
         return result
