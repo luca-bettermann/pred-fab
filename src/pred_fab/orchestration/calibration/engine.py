@@ -144,6 +144,9 @@ class OptimizationEngine:
                 start_best = [float("inf")]
 
                 def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history, _s: int = s) -> torch.Tensor:
+                    if raw_z:
+                        with torch.no_grad():
+                            z_ref.data.clamp_(lo_t, hi_t)
                     optimizer.zero_grad()  # type: ignore[has-type]
                     vals = _eval(z_ref)
                     loss = vals.sum()
