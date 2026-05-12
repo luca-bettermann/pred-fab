@@ -779,12 +779,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
             )
         elif numeric_params and has_slope_traj:
             # Single-pass: slopes handle everything — build warm start specs from bisection
+            structural_values = None
             flat_specs = []
             for i in range(n):
                 bp: dict[str, Any] = dict(self.fixed_params)
-                if structural_values is not None:
-                    for sv_code, sv_val in structural_values[i].items():
-                        bp[sv_code] = sv_val
                 for d, (code, lo, hi) in enumerate(numeric_params):
                     bp[code] = float(init_norm[i, d] * (hi - lo) + lo)
                 for d_cat, code in enumerate(cat_codes):
