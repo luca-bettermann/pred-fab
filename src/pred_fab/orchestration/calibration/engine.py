@@ -103,9 +103,11 @@ class OptimizationEngine:
                 val_chunks = []
                 for b_start in range(0, raw_samples, batch_size):
                     chunk = cand[b_start:b_start + batch_size]
-                    val_chunks.append(objective_tensor(chunk))
+                    chunk_vals = objective_tensor(chunk)
+                    val_chunks.append(chunk_vals)
                     if init_bar:
-                        init_bar.step()
+                        best_so_far = float(torch.cat(val_chunks, dim=0).min().item())
+                        init_bar.step(obj=best_so_far)
                 vals = torch.cat(val_chunks, dim=0)
             if init_bar:
                 init_bar.finish()
