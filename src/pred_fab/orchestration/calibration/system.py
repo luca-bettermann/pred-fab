@@ -654,12 +654,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 continue
             optimizable.append((code, data_obj))
 
-        variables: list[Variable] = [
-            TrajectoryVariable(data_object=obj, dimension_code=self.trajectory_configs[code])
-            if code in traj_set
-            else StaticVariable(data_object=obj, is_integer=isinstance(obj, (DataInt, DataDomainAxis)))
-            for code, obj in optimizable
-        ]
+        variables: list[Variable] = []
+        for code, obj in optimizable:
+            lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+            if code in traj_set:
+                span = hi - lo
+                trust = self.bounds.trust_regions.get(code, span / 10.0)
+                slope_max_z = 4.0 * trust / span if span > 0 else 0.4
+                variables.append(TrajectoryVariable(
+                    data_object=obj, lo=lo, hi=hi,
+                    dimension_code=self.trajectory_configs[code],
+                    slope_max_z=slope_max_z,
+                ))
+            else:
+                variables.append(StaticVariable(
+                    data_object=obj, lo=lo, hi=hi,
+                    is_integer=isinstance(obj, (DataInt, DataDomainAxis)),
+                ))
 
         if not variables and not categorical_params:
             self.logger.warning("No valid parameters for discovery generation.")
@@ -750,6 +761,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         opt = self.engine.optimize(
             objective, space.bounds,
+            raw_z=True,
             d_param=space._D_param,
             label=label,
             show_progress=console,

@@ -1,12 +1,11 @@
 """Decision-vector layout, variable types, and decode for N-experiment optimisation.
 
-Variable types define the contract between step methods and the optimizer.
-SolutionSpace maps Variables to a flat decision vector, owns the single decode
-pipeline (Sobol eval, LBFGS eval, spec construction), and builds ExperimentSpecs.
+Variable types own their decode transform (sigmoid for all, applied once):
+  - StaticVariable: sigmoid(z) → normalised value
+  - TrajectoryVariable: sigmoid(z_mid + offset · z_slope) → per-layer values
 
-Tanh-slope trajectory decode:
-    z(k) = z_mid + (k - L//2) * z_slope
-    value(k) = 0.5 + 0.5 * tanh(z(k))
+SolutionSpace maps Variables to a flat decision vector, provides z-bounds
+for Sobol sampling, and builds ExperimentSpecs from optimised z-vectors.
 """
 from __future__ import annotations
 
@@ -21,18 +20,40 @@ from ...core.data_objects import DataObject
 from .bounds import BoundsManager
 
 
+Z_RANGE = 4.0
+
 # ---------------------------------------------------------------------------
 # Variable types
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Variable:
-    """A parameter to be optimized. Wraps the schema DataObject — no info duplicated."""
+    """A parameter to be optimized. Wraps the schema DataObject."""
     data_object: DataObject
+    lo: float = 0.0
+    hi: float = 1.0
 
     @property
     def code(self) -> str:
         return self.data_object.code
+
+    @property
+    def span(self) -> float:
+        return self.hi - self.lo
+
+    @property
+    def n_dims(self) -> int:
+        return 1
+
+    @property
+    def z_bounds(self) -> list[tuple[float, float]]:
+        return [(-Z_RANGE, Z_RANGE)]
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(z)
+
+    def to_real(self, norm: float) -> float:
+        return float(norm * self.span + self.lo)
 
 
 @dataclass(frozen=True)
@@ -40,32 +61,60 @@ class StaticVariable(Variable):
     """Single value per experiment (continuous or integer)."""
     is_integer: bool = False
 
+    @property
+    def int_range(self) -> int | None:
+        return int(self.hi - self.lo) if self.is_integer else None
+
+    @property
+    def z_bounds(self) -> list[tuple[float, float]]:
+        if self.is_integer:
+            return [(0.0, float(self.hi - self.lo))]
+        return [(-Z_RANGE, Z_RANGE)]
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        if self.is_integer:
+            return z + (z.round() - z).detach()
+        return torch.sigmoid(z)
+
+    def to_real(self, norm: float) -> float | int:
+        if self.is_integer:
+            return int(np.clip(np.round(norm) + self.lo, self.lo, self.hi))
+        return float(norm * self.span + self.lo)
+
 
 @dataclass(frozen=True)
 class TrajectoryVariable(Variable):
-    """Midpoint + slope per experiment, decoded to L layers via tanh."""
-    dimension_code: str
+    """Midpoint + slope per experiment, decoded to L layers via sigmoid."""
+    dimension_code: str = ""
+    slope_max_z: float = 0.8
 
+    @property
+    def n_dims(self) -> int:
+        return 2
 
-# ---------------------------------------------------------------------------
-# Tanh-slope trajectory decode
-# ---------------------------------------------------------------------------
+    @property
+    def z_bounds(self) -> list[tuple[float, float]]:
+        return [(-Z_RANGE, Z_RANGE), (-self.slope_max_z, self.slope_max_z)]
 
-def _decode_slope_trajectory(
-    midpoint_norm: torch.Tensor,
-    z_slope: torch.Tensor,
-    L: int,
-) -> torch.Tensor:
-    """Decode midpoint + slope into per-layer normalised values in (0, 1).
+    def decode_trajectory(
+        self,
+        z_mid: torch.Tensor,
+        z_slope: torch.Tensor,
+        L: int,
+    ) -> torch.Tensor:
+        """Decode midpoint + slope into per-layer normalised values via sigmoid.
 
-    tanh'(0) = 1, so z_slope ~ real-space normalised step near center.
-    """
-    mid_idx = L // 2
-    x_centered = (2.0 * midpoint_norm - 1.0).clamp(-1 + 1e-4, 1 - 1e-4)
-    z_mid = torch.atanh(x_centered)
-    offsets = torch.arange(L, dtype=z_mid.dtype, device=z_mid.device) - mid_idx
-    z_all = z_mid.unsqueeze(-2) + offsets.reshape(*([1] * (z_mid.ndim - 1)), L, 1) * z_slope.unsqueeze(-2)
-    return 0.5 + 0.5 * torch.tanh(z_all)
+        sigmoid'(0) = 0.25, so z_slope ≈ 4× the normalised step near center.
+        """
+        mid_idx = L // 2
+        offsets = torch.arange(L, dtype=z_mid.dtype, device=z_mid.device) - mid_idx
+        z_all = z_mid.unsqueeze(-2) + offsets.reshape(
+            *([1] * (z_mid.ndim - 1)), L, 1,
+        ) * z_slope.unsqueeze(-2)
+        return torch.sigmoid(z_all)
+
+    def to_real(self, norm: float) -> float:
+        return float(norm * self.span + self.lo)
 
 
 # ---------------------------------------------------------------------------
@@ -73,11 +122,11 @@ def _decode_slope_trajectory(
 # ---------------------------------------------------------------------------
 
 class SolutionSpace:
-    """Maps Variable objects to a flat decision vector for the optimizer.
+    """Maps Variable objects to a flat z-space decision vector for the optimizer.
 
-    Owns the complete decode pipeline: flat vector -> evaluable tensor + weights -> ExperimentSpec.
-    The decode method is defined once and used by Sobol evaluation, LBFGS optimization, and
-    final spec construction.
+    The engine operates in z-space (no sigmoid). SolutionSpace provides z-bounds
+    for Sobol sampling and applies per-variable decode (sigmoid) in its decode()
+    method — called by the objective function during optimisation.
     """
 
     def __init__(
@@ -119,37 +168,13 @@ class SolutionSpace:
         self._D_per_exp = self._D_static + 2 * self._D_traj
         self._D_param = self._D_static + self._D_traj
 
-        # Real-space bounds from BoundsManager (for decode)
-        self._static_bounds: list[tuple[float, float]] = []
-        self._static_int_ranges: list[int | None] = []
-        for sv in self._statics:
-            lo, hi = bounds_manager._get_hierarchical_bounds_for_code(sv.code)
-            self._static_bounds.append((lo, hi))
-            self._static_int_ranges.append(int(hi - lo) if sv.is_integer else None)
-
-        self._traj_bounds: list[tuple[float, float]] = []
-        self._slope_maxes: list[float] = []
-        for tv in self._trajectories:
-            lo, hi = bounds_manager._get_hierarchical_bounds_for_code(tv.code)
-            self._traj_bounds.append((lo, hi))
-            span = hi - lo
-            trust = bounds_manager.trust_regions.get(tv.code, span / 10.0)
-            self._slope_maxes.append(trust / span if span > 0 else 0.1)
-
-        # Optimizer bounds (normalised)
+        # z-bounds for the optimizer (Sobol sampling range)
         self._bounds_list: list[tuple[float, float]] = []
         for _ in range(n_experiments):
-            for i, sv in enumerate(self._statics):
-                r = self._static_int_ranges[i]
-                if r is not None:
-                    self._bounds_list.append((0.0, float(r)))
-                else:
-                    self._bounds_list.append((0.0, 1.0))
-            for _ in self._trajectories:
-                self._bounds_list.append((0.0, 1.0))
-            for ti in range(self._D_traj):
-                sm = self._slope_maxes[ti]
-                self._bounds_list.append((-sm, sm))
+            for sv in self._statics:
+                self._bounds_list.extend(sv.z_bounds)
+            for tv in self._trajectories:
+                self._bounds_list.extend(tv.z_bounds)
 
         # Column mapping: variable code -> datamodule column index
         dm_cols = datamodule.input_columns
@@ -201,64 +226,51 @@ class SolutionSpace:
     def total_vars(self) -> int:
         return self._n_experiments * self._D_per_exp
 
-    def _derive_L_per_exp(self, static_vals: torch.Tensor) -> list[int]:
-        """Compute layers per experiment from current static variable values."""
+    def _derive_L_per_exp(self, static_z: torch.Tensor) -> list[int]:
+        """Compute layers per experiment from current static z-values."""
         if self._derive_L_fn is None or self._D_traj == 0:
             return [1] * self._n_experiments
         Ls = []
         for i in range(self._n_experiments):
             p: dict[str, Any] = {}
             for si, sv in enumerate(self._statics):
-                lo, hi = self._static_bounds[si]
-                r = self._static_int_ranges[si]
-                if r is not None:
-                    p[sv.code] = int(static_vals[i, si].detach().round().item()) + int(lo)
-                else:
-                    p[sv.code] = float(static_vals[i, si].detach().item()) * (hi - lo) + lo
+                z_val = static_z[i, si].detach()
+                norm = float(sv.decode(z_val).item())
+                p[sv.code] = sv.to_real(norm)
             Ls.append(max(1, self._derive_L_fn(p)))
         return Ls
 
-    def decode(self, x_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Decision vector -> (S, total_points, D_dm) tensor + (S, total_points) weights.
+    def decode(self, z_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """z-space decision vector -> (S, total_points, D_dm) tensor + (S, total_points) weights.
 
-        Single definition — called by Sobol eval, LBFGS eval, and spec decode.
+        Applies per-variable sigmoid decode. Single definition — called by
+        Sobol eval, LBFGS eval, and spec decode.
         """
-        S = int(x_flat.shape[0])
-        x = x_flat.reshape(S, self._n_experiments, self._D_per_exp)
+        S = int(z_flat.shape[0])
+        z = z_flat.reshape(S, self._n_experiments, self._D_per_exp)
 
-        static_vals = x[:, :, : self._D_static]
-        midpoints = x[:, :, self._D_static : self._D_static + self._D_traj]
-        slopes = x[:, :, self._D_static + self._D_traj :]
+        static_z = z[:, :, : self._D_static]
+        mid_z = z[:, :, self._D_static : self._D_static + self._D_traj]
+        slope_z = z[:, :, self._D_static + self._D_traj :]
 
-        # STE rounding for integers
-        for si, r in enumerate(self._static_int_ranges):
-            if r is not None:
-                raw = static_vals[:, :, si]
-                static_vals = static_vals.clone()
-                static_vals[:, :, si] = raw + (raw.round() - raw).detach()
+        # Decode static variables via their own decode method
+        static_norm = torch.empty_like(static_z)
+        for si, sv in enumerate(self._statics):
+            static_norm[:, :, si] = sv.decode(static_z[:, :, si])
 
         # Derive L per experiment (uses first candidate in batch for consistency)
-        L_per_exp = self._derive_L_per_exp(static_vals[0])
+        L_per_exp = self._derive_L_per_exp(static_z[0])
 
         # Build base rows from prior fill
-        base = self._prior_fill.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=x_flat.dtype)
+        base = self._prior_fill.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=z_flat.dtype)
 
-        # Scatter static values
+        # Scatter static values (already decoded to normalised)
         for si, dm_idx in enumerate(self._static_dm_idx):
             if dm_idx is None:
                 continue
-            r = self._static_int_ranges[si]
-            if r is not None:
-                lo = self._static_bounds[si][0]
-                hi = self._static_bounds[si][1]
-                span = hi - lo
-                base[:, :, dm_idx] = (static_vals[:, :, si] + lo - lo) / span if span > 0 else 0.5
-            else:
-                base[:, :, dm_idx] = static_vals[:, :, si]
+            base[:, :, dm_idx] = static_norm[:, :, si]
 
         # Expand to per-layer rows with trajectory decode
-        # Unified path: _decode_slope_trajectory works for L=1 too (returns single layer).
-        # When D_traj=0, midpoints/slopes are empty and the scatter loop is a no-op.
         layer_rows: list[torch.Tensor] = []
         weights: list[float] = []
 
@@ -267,9 +279,11 @@ class SolutionSpace:
             expanded = base[:, i, :].unsqueeze(1).expand(S, L_i, self._n_dm_cols).clone()
 
             if self._D_traj > 0:
-                traj_layers = _decode_slope_trajectory(
-                    midpoints[:, i, :], slopes[:, i, :], L_i,
-                )  # (S, L_i, D_traj)
+                traj_layers = torch.empty(S, L_i, self._D_traj, dtype=z_flat.dtype)
+                for ti, tv in enumerate(self._trajectories):
+                    traj_layers[:, :, ti] = tv.decode_trajectory(
+                        mid_z[:, i, ti : ti + 1], slope_z[:, i, ti : ti + 1], L_i,
+                    ).squeeze(-1)
                 for ti, dm_idx in enumerate(self._traj_dm_idx):
                     if dm_idx is not None:
                         expanded[:, :, dm_idx] = traj_layers[:, :, ti]
@@ -278,15 +292,18 @@ class SolutionSpace:
             weights.extend([1.0 / L_i] * L_i)
 
         points = torch.cat(layer_rows, dim=1)  # (S, total_points, D_dm)
-        w = torch.tensor(weights, dtype=x_flat.dtype)
+        w = torch.tensor(weights, dtype=z_flat.dtype)
         w = w.unsqueeze(0).expand(S, -1)  # (S, total_points)
         return points, w
 
-    def decode_to_specs(self, best_x: np.ndarray) -> list[ExperimentSpec]:
-        """Convert optimized vector to ExperimentSpec instances."""
-        x_t = torch.tensor(best_x, dtype=torch.float64)
-        x_per_exp = x_t.reshape(self._n_experiments, self._D_per_exp)
-        L_per_exp = self._derive_L_per_exp(x_per_exp[:, : self._D_static])
+    def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:
+        """Convert optimised z-vector to ExperimentSpec instances."""
+        z_t = torch.tensor(best_z, dtype=torch.float64)
+        z_per_exp = z_t.reshape(self._n_experiments, self._D_per_exp)
+
+        # Decode static z-values for L derivation
+        static_z = z_per_exp[:, : self._D_static]
+        L_per_exp = self._derive_L_per_exp(static_z)
 
         specs: list[ExperimentSpec] = []
         for i in range(self._n_experiments):
@@ -297,42 +314,42 @@ class SolutionSpace:
             for d_cat, code in enumerate(self._cat_codes):
                 bp[code] = self._cat_assignments[i][d_cat]
 
-            # Static params
+            # Static params: decode z → normalised → real
             for si, sv in enumerate(self._statics):
-                lo, hi = self._static_bounds[si]
-                raw = best_x[off + si]
-                if sv.is_integer:
-                    bp[sv.code] = int(np.clip(np.round(raw) + lo, lo, hi))
-                else:
-                    bp[sv.code] = float(raw * (hi - lo) + lo)
+                z_val = best_z[off + si]
+                norm = float(sv.decode(torch.tensor(z_val, dtype=torch.float64)).item())
+                bp[sv.code] = sv.to_real(norm)
 
-            # Trajectory params — always decode via tanh slope (works for L=1 too)
+            # Trajectory params: decode via sigmoid(z_mid + offset * z_slope)
             traj_vals: np.ndarray | None = None
             if self._D_traj > 0:
                 mid_t = torch.tensor(
-                    best_x[off + self._D_static : off + self._D_static + self._D_traj],
+                    best_z[off + self._D_static : off + self._D_static + self._D_traj],
                     dtype=torch.float64,
                 ).unsqueeze(0)
                 slp_t = torch.tensor(
-                    best_x[off + self._D_static + self._D_traj : off + self._D_per_exp],
+                    best_z[off + self._D_static + self._D_traj : off + self._D_per_exp],
                     dtype=torch.float64,
                 ).unsqueeze(0)
-                traj_vals = _decode_slope_trajectory(mid_t, slp_t, L_i)[0].cpu().numpy()
+                traj_norm = torch.empty(1, L_i, self._D_traj, dtype=torch.float64)
                 for ti, tv in enumerate(self._trajectories):
-                    lo, hi = self._traj_bounds[ti]
-                    bp[tv.code] = float(traj_vals[0, ti] * (hi - lo) + lo)
+                    traj_norm[0, :, ti] = tv.decode_trajectory(
+                        mid_t[:, ti : ti + 1], slp_t[:, ti : ti + 1], L_i,
+                    ).squeeze(-1)
+                traj_vals = traj_norm[0].cpu().numpy()
+                for ti, tv in enumerate(self._trajectories):
+                    bp[tv.code] = tv.to_real(float(traj_vals[0, ti]))
 
             bp = self._schema_sanitize(bp)
             initial = ParameterProposal.from_dict(bp, source_step=self._source_step)
 
-            # Trajectory entries (layers 1..L-1 — empty when L=1)
+            # Trajectory entries (layers 1..L-1)
             entries: list[tuple[int, ParameterProposal]] = []
             if traj_vals is not None:
                 for k in range(1, L_i):
                     sp: dict[str, Any] = {}
                     for ti, tv in enumerate(self._trajectories):
-                        lo, hi = self._traj_bounds[ti]
-                        sp[tv.code] = float(traj_vals[k, ti] * (hi - lo) + lo)
+                        sp[tv.code] = tv.to_real(float(traj_vals[k, ti]))
                     sp = self._schema_sanitize(sp)
                     entries.append((k, ParameterProposal.from_dict(sp, source_step=self._source_step)))
 
@@ -347,29 +364,32 @@ class SolutionSpace:
         return specs
 
     def get_trajectory_plot_data(
-        self, best_x: np.ndarray,
+        self, best_z: np.ndarray,
     ) -> tuple[list[np.ndarray], list[tuple[str, float, float]], list[int]]:
         """Extract trajectory norms, param info, and L per experiment for plotting."""
-        x_per_exp = torch.tensor(best_x, dtype=torch.float64).reshape(
+        z_per_exp = torch.tensor(best_z, dtype=torch.float64).reshape(
             self._n_experiments, self._D_per_exp,
         )
-        L_per_exp = self._derive_L_per_exp(x_per_exp[:, : self._D_static])
+        L_per_exp = self._derive_L_per_exp(z_per_exp[:, : self._D_static])
 
         traj_norms: list[np.ndarray] = []
         for i in range(self._n_experiments):
             off = i * self._D_per_exp
             L_i = L_per_exp[i]
             mid_t = torch.tensor(
-                best_x[off + self._D_static : off + self._D_static + self._D_traj],
+                best_z[off + self._D_static : off + self._D_static + self._D_traj],
                 dtype=torch.float64,
             ).unsqueeze(0)
             slp_t = torch.tensor(
-                best_x[off + self._D_static + self._D_traj : off + self._D_per_exp],
+                best_z[off + self._D_static + self._D_traj : off + self._D_per_exp],
                 dtype=torch.float64,
             ).unsqueeze(0)
-            traj_norms.append(
-                _decode_slope_trajectory(mid_t, slp_t, L_i)[0].cpu().numpy()
-            )
+            exp_norms = torch.empty(L_i, self._D_traj, dtype=torch.float64)
+            for ti, tv in enumerate(self._trajectories):
+                exp_norms[:, ti] = tv.decode_trajectory(
+                    mid_t[:, ti : ti + 1], slp_t[:, ti : ti + 1], L_i,
+                ).squeeze(0).squeeze(-1)
+            traj_norms.append(exp_norms.cpu().numpy())
 
-        traj_params = [(tv.code, *self._traj_bounds[ti]) for ti, tv in enumerate(self._trajectories)]
+        traj_params = [(tv.code, tv.lo, tv.hi) for tv in self._trajectories]
         return traj_norms, traj_params, L_per_exp
