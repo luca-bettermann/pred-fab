@@ -1100,11 +1100,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         ]
         traj_dm_idxs = torch.tensor(traj_dm_cols, dtype=torch.long) if traj_dm_cols else None
 
-        # All non-trajectory continuous params (static)
-        traj_code_set = set(traj_codes) | self.trajectory_locked_static
+        # All non-trajectory continuous params (static).
+        # With slope parameterization, H_layer IS optimizable (N_layers derived
+        # dynamically via derive_L_fn). No trajectory_locked_static exclusion.
         static_params = [
             (code, lo, hi) for code, lo, hi in continuous_params
-            if code not in traj_code_set
+            if code not in set(traj_codes)
         ]
         D_static = len(static_params)
 
