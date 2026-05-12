@@ -750,6 +750,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         opt = self.engine.optimize(
             objective, space.bounds,
+            d_param=space._D_per_exp,
             label=label,
             show_progress=console,
         )
@@ -976,6 +977,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         opt = self.engine.optimize(
             _tensor_obj,
             phase_bounds,
+            d_param=D_phase,
             label=label,
             show_progress=show_progress,
         )
@@ -1262,6 +1264,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
                 opt = self.engine.optimize(
                     _schedule_objective_tensor, abs_bounds,
+                    d_param=D_traj,
                     label="Trajectory", show_progress=console,
                 )
                 self.last_opt_nfev += opt.nfev

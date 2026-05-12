@@ -42,6 +42,7 @@ class OptimizationEngine:
         objective: Callable[[torch.Tensor], torch.Tensor],
         bounds: list[tuple[float, float]],
         *,
+        d_param: int | None = None,
         n_starts: int | None = None,
         n_sobol: int | None = None,
         lr: float | None = None,
@@ -59,6 +60,7 @@ class OptimizationEngine:
         lr = lr if lr is not None else self.lr
 
         D = len(bounds)
+        D_display = d_param if d_param is not None else D
         if D == 0:
             return _OptResult(best_x=None, nfev=0, n_starts=0, score=0.0)
 
@@ -90,9 +92,10 @@ class OptimizationEngine:
             return vals
 
         # --- Phase 1: Sobol global ---
-        n_sobol_scaled = max(n_sobol_base, 32 * D)
+        n_sobol_scaled = max(n_sobol_base, 32 * D_display)
         sobol_x, sobol_vals = self._sobol_phase(
             objective, n_sobol_scaled, D, lo_t, hi_t, span_t, nfev,
+            D_display=D_display,
             show_progress=show_progress,
         )
 
@@ -103,7 +106,7 @@ class OptimizationEngine:
 
         # --- Phase 3: Independent LBFGS per start ---
         history: list[float] = []
-        bar = ProgressBar(label, D=D, max_starts=n_starts) if show_progress else None
+        bar = ProgressBar(label, D=D_display, V=D if d_param is not None else None, max_starts=n_starts) if show_progress else None
 
         best_z: torch.Tensor | None = None
         best_val = float("inf")
@@ -172,6 +175,7 @@ class OptimizationEngine:
         span_t: torch.Tensor,
         nfev: list[int],
         *,
+        D_display: int | None = None,
         show_progress: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Draw Sobol candidates and evaluate in batches."""
@@ -185,7 +189,7 @@ class OptimizationEngine:
 
         batch_size = self.sobol_batch_size
         n_batches = (n_sobol + batch_size - 1) // batch_size
-        bar = ProgressBar("Sobol", D=D, max_starts=n_batches) if show_progress else None
+        bar = ProgressBar("Sobol", D=D_display or D, V=D if D_display is not None else None, max_starts=n_batches) if show_progress else None
 
         with torch.no_grad():
             val_chunks: list[torch.Tensor] = []
