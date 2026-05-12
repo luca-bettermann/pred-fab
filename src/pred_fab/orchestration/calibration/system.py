@@ -847,6 +847,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 L = max(int(self.fixed_params[d]) for d in fixed_sched)
                 per_exp_L = [L] * n
 
+        self.logger.info(f"per_exp_L={per_exp_L}, traj_set={traj_set}, domain_axis_sched_dims={domain_axis_sched_dims}")
         # --- Schedule phase (if scheduled params exist and L > 1) ---
         if has_slope_traj:
             dim_codes_for_sched = sorted(set(self.trajectory_configs.values()) & domain_axis_sched_dims)
@@ -1082,11 +1083,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         from .slope import decode_slope_trajectory, default_slope_max
 
         D_traj = len(traj_params)
-        if D_traj == 0 or max(per_exp_L_init) <= 1:
+        self.logger.info(f"_run_slope_trajectory: D_traj={D_traj}, per_exp_L_init={per_exp_L_init}")
+        if D_traj == 0 or (per_exp_L_init is not None and max(per_exp_L_init) <= 1):
+            self.logger.info("_run_slope_trajectory: early exit (no traj or L<=1)")
+            return flat_specs
+        if per_exp_L_init is None:
+            self.logger.info("_run_slope_trajectory: early exit (per_exp_L_init is None)")
             return flat_specs
 
         baseline_dm = self._active_datamodule
         if baseline_dm is None:
+            self.logger.info("_run_slope_trajectory: early exit (no active datamodule)")
             return flat_specs
 
         console = self.logger._console_output_enabled
