@@ -1178,7 +1178,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         derive_L = self.derive_L_fn
 
         self.logger.info(
-            f"Slope trajectory: N={n}, D_static={D_static}, D_traj={D_traj}, "
+            f"Global: N={n}, D_static={D_static}, D_traj={D_traj}, "
             f"D_slope={D_traj}, total_vars={n * D_per_exp}"
         )
 
@@ -1239,11 +1239,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         opt = self.engine.run_acquisition_gradient(
             _objective, bounds_list, x0=x0,
-            label=f"Slope (D={D_per_exp}, V={n * D_per_exp})",
+            label=f"Global (D={D_per_exp}, V={n * D_per_exp})",
             show_progress=console,
         )
-        self.convergence_history["Slope"] = opt.convergence_history
-        self.last_baseline_nfev += opt.nfev
+        self.convergence_history["Global"] = opt.convergence_history
+        if not hasattr(self, 'last_baseline_nfev'):
+            self.last_baseline_nfev: int = opt.nfev
+        else:
+            self.last_baseline_nfev += opt.nfev
 
         # Decode result into ExperimentSpecs with trajectories
         best = opt.best_x if opt.best_x is not None else x0
