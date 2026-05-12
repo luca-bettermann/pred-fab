@@ -446,21 +446,33 @@ class TransformerModel(IPredictionModel):
             sample = y_full_f[feats[0]]  # (B, L, *extra_d)
             actual_extra_per_depth[depth] = tuple(int(s) for s in sample.shape[2:])
 
-        for _ in range(self.EPOCHS):
+        epoch_logger = kwargs.get("epoch_logger")
+
+        for epoch in range(self.EPOCHS):
             optimizer.zero_grad()
             per_depth_outputs: dict[int, torch.Tensor] = self._model(
                 X_full_f, axis_indices, actual_extra_per_depth,
             )
             total_loss = X_full_f.new_zeros(())
+            per_depth_loss: dict[str, float] = {}
             for depth, feats in self._depth_to_features.items():
-                out_d = per_depth_outputs[depth]  # (B, L, *extra_d, n_features_d)
+                out_d = per_depth_outputs[depth]
                 weight = float(self.LOSS_WEIGHTS.get(depth, 1.0))
+                depth_loss = 0.0
                 for f_idx, feat in enumerate(feats):
                     y_pred_f = out_d[..., f_idx]
                     loss_f = nn.functional.mse_loss(y_pred_f, y_full_f[feat])
                     total_loss = total_loss + weight * loss_f
+                    depth_loss += float(loss_f.detach())
+                per_depth_loss[f"loss/depth_{depth}"] = depth_loss
             total_loss.backward()
             optimizer.step()
+
+            if epoch_logger is not None:
+                epoch_logger.log_epoch(epoch, {
+                    "loss/total": float(total_loss.detach()),
+                    **per_depth_loss,
+                })
 
         self._model.eval()
         self._is_trained = True
