@@ -13,8 +13,6 @@ from ..base_system import BaseOrchestrationSystem
 from .engine import OptimizationEngine, _OptResult
 from .bounds import BoundsManager
 from .space import SolutionSpace
-from .trajectory import TrajectoryOptimizer, TrajectoryState, init_trajectory_state
-
 
 @dataclass
 class EvidenceBackend:
@@ -80,11 +78,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points: list[dict[str, Any]] | None = None
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
-        self.trajectory_locked_static: set[str] = set()
-        self.smoothness_weight: float = 0.01
         self.acquisition_scale: float = 1000.0
-        self.max_trajectory_rounds: int = 5
-        self.trajectory_step_callback: Callable[[int, int, TrajectoryState], None] | None = None
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
         self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None
 
@@ -770,7 +764,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Detect trajectory config early — determines whether we use slope path
         has_slope_traj = bool(traj_set)
-        self.logger.info(f"Trajectory detection: traj_set={traj_set}, has_slope_traj={has_slope_traj}")
 
         if numeric_params and not has_slope_traj:
             flat_specs, flat_params, optimized = self._run_acquisition_phase(
@@ -847,7 +840,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 L = max(int(self.fixed_params[d]) for d in fixed_sched)
                 per_exp_L = [L] * n
 
-        self.logger.info(f"per_exp_L={per_exp_L}, traj_set={traj_set}, domain_axis_sched_dims={domain_axis_sched_dims}")
         # --- Schedule phase (if scheduled params exist and L > 1) ---
         if has_slope_traj:
             dim_codes_for_sched = sorted(set(self.trajectory_configs.values()) & domain_axis_sched_dims)
@@ -1102,7 +1094,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Identify trajectory param columns in the datamodule
         traj_codes = [code for code, _, _ in traj_params]
-        self.logger.info(f"traj_codes={traj_codes}, dm_input_columns={baseline_dm.input_columns}")
         traj_dm_cols = [
             baseline_dm.input_columns.index(code)
             for code in traj_codes if code in baseline_dm.input_columns
@@ -1110,8 +1101,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         traj_dm_idxs = torch.tensor(traj_dm_cols, dtype=torch.long) if traj_dm_cols else None
 
         # All non-trajectory continuous params (static).
-        # With slope parameterization, H_layer IS optimizable (N_layers derived
-        # dynamically via derive_L_fn). No trajectory_locked_static exclusion.
         static_params = [
             (code, lo, hi) for code, lo, hi in continuous_params
             if code not in set(traj_codes)
@@ -1247,23 +1236,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None, w)
 
-        # Test objective with warm start to catch errors early
-        self.logger.info(f"Calling LBFGS: {len(bounds_list)} bounds, x0 shape={x0.shape}, console={console}")
-        try:
-            x0_t = torch.tensor(x0, dtype=torch.float64).unsqueeze(0)
-            with torch.no_grad():
-                test_val = _objective(x0_t)
-            self.logger.info(f"Objective test: val={float(test_val[0].item()):.3f}")
-        except Exception as e:
-            self.logger.warning(f"Objective test failed: {e}")
-            return flat_specs
-
         opt = self.engine.run_acquisition_gradient(
             _objective, bounds_list, x0=x0,
             label=f"Global (D={D_per_exp}, V={n * D_per_exp})",
             show_progress=console,
         )
-        self.logger.info(f"LBFGS done: score={opt.score:.3f}, nfev={opt.nfev}")
         self.convergence_history["Global"] = opt.convergence_history
         if not hasattr(self, 'last_baseline_nfev'):
             self.last_baseline_nfev: int = opt.nfev
@@ -1351,61 +1328,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_exp_ids = exp_ids
 
         return specs_out
-
-    def _phase3_trajectory(
-        self,
-        n: int,
-        flat_specs: list[ExperimentSpec],
-        traj_params: list[tuple[str, float, float]],
-        per_exp_L: list[int],
-        primary_dim_code: str,
-        integer_params: list[tuple[str, int, int]],
-        cat_codes: list[str],
-        cat_assignments: list[tuple[Any, ...]],
-        structural_values: list[dict[str, int]] | None,
-        static_params: list[tuple[str, float, float]] | None = None,
-    ) -> list[ExperimentSpec]:
-        """Delegate trajectory optimization to TrajectoryOptimizer."""
-        if len(traj_params) == 0 or max(per_exp_L) <= 1:
-            return flat_specs
-
-        baseline_dm = self._active_datamodule
-        if baseline_dm is None:
-            return flat_specs
-
-        state = init_trajectory_state(
-            flat_specs, traj_params, static_params or [],
-            per_exp_L, primary_dim_code,
-            dict(self.trust_regions), baseline_dm,
-            self.bounds._get_hierarchical_bounds_for_code,
-        )
-        if state is None:
-            return flat_specs
-
-        optimizer = TrajectoryOptimizer(
-            engine=self.engine,
-            acquisition_fn=self._acquisition_joint_batched_tensor,
-            push_virtual_fn=self._push_virtual_fn,
-            pop_virtual_fn=self._pop_virtual_fn,
-            sanitize_fn=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
-            smoothness_weight=self.smoothness_weight,
-            acquisition_scale=self.acquisition_scale,
-            max_rounds=self.max_trajectory_rounds,
-            step_callback=self.trajectory_step_callback,
-        )
-
-        specs = optimizer.optimize(state, baseline_dm, self.logger._console_output_enabled)
-
-        # Copy output state back for plotting/display
-        self.last_trajectory_points = optimizer.last_trajectory_points
-        self.last_trajectory_exp_ids = optimizer.last_trajectory_exp_ids
-        self.last_traj_norms = optimizer.last_traj_norms
-        self.last_traj_params = optimizer.last_traj_params
-        self.last_trajectory_per_exp_L = optimizer.last_trajectory_per_exp_L
-        self.last_baseline_nfev += optimizer.total_iters
-        self.convergence_history["Trajectory"] = optimizer.convergence_history
-
-        return specs
 
     @staticmethod
     def _recursive_split(
