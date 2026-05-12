@@ -26,7 +26,7 @@ from .bounds import BoundsManager
 
 
 SIGMOID_K = 3.0
-Z_RANGE = 4.0
+Z_RANGE = 4.6 / SIGMOID_K
 
 
 def _sigmoid_k(z: torch.Tensor) -> torch.Tensor:
