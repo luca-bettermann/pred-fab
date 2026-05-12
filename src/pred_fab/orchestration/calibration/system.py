@@ -823,9 +823,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # --- Schedule phase (if scheduled params exist and L > 1) ---
         if traj_set and per_exp_L is not None and max(per_exp_L) > 1:
-            # Determine primary dimension code: prefer an unfixed domain-axis
-            # sched dim; fall back to a fixed-dim sched when --design-intent
-            # pins the dimension (e.g. n_layers=4).
             dim_codes_for_sched = sorted(set(self.trajectory_configs.values()) & domain_axis_sched_dims)
             if dim_codes_for_sched:
                 primary_dim_code = dim_codes_for_sched[0]
@@ -843,16 +840,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 traj_params_list.append((code, lo, hi))
 
             if traj_params_list:
-                locked = traj_set | self.trajectory_locked_static
-                static_params_list = [
-                    (code, lo, hi) for code, lo, hi in continuous_params
-                    if code not in locked
-                ]
-                specs = self._phase3_trajectory(
+                specs = self._run_slope_trajectory(
                     n, flat_specs, traj_params_list, per_exp_L,
                     primary_dim_code, integer_params, cat_codes, cat_assignments,
-                    None,
-                    static_params=static_params_list,
+                    structural_values, continuous_params,
                 )
             else:
                 specs = flat_specs
@@ -1036,6 +1027,252 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         optimized = space.decode_optimized_positions(best_x)
         return specs, best_x, optimized
+
+    def _run_slope_trajectory(
+        self,
+        n: int,
+        flat_specs: list[ExperimentSpec],
+        traj_params: list[tuple[str, float, float]],
+        per_exp_L: list[int],
+        primary_dim_code: str,
+        integer_params: list[tuple[str, int, int]],
+        cat_codes: list[str],
+        cat_assignments: list[tuple[Any, ...]],
+        structural_values: list[dict[str, int]] | None,
+        continuous_params: list[tuple[str, float, float]],
+    ) -> list[ExperimentSpec]:
+        """Joint Global+Trajectory optimization with sigmoid slopes.
+
+        Adds one z_slope variable per trajectory dimension per experiment
+        to the existing Global solution. Single LBFGS pass — no coordinate
+        descent. Layer values decoded via sigmoid: z(k) = z_mid + offset * z_slope.
+        """
+        from .slope import decode_slope_trajectory, default_slope_max
+
+        D_traj = len(traj_params)
+        if D_traj == 0 or max(per_exp_L) <= 1:
+            return flat_specs
+
+        baseline_dm = self._active_datamodule
+        if baseline_dm is None:
+            return flat_specs
+
+        console = self.logger._console_output_enabled
+        n_dm_cols = len(baseline_dm.input_columns)
+        total_L = sum(per_exp_L)
+
+        # Identify trajectory param columns in the datamodule
+        traj_codes = [code for code, _, _ in traj_params]
+        traj_dm_cols = [
+            baseline_dm.input_columns.index(code)
+            for code in traj_codes if code in baseline_dm.input_columns
+        ]
+        traj_dm_idxs = torch.tensor(traj_dm_cols, dtype=torch.long) if traj_dm_cols else None
+
+        # All non-trajectory continuous params (static)
+        traj_code_set = set(traj_codes) | self.trajectory_locked_static
+        static_params = [
+            (code, lo, hi) for code, lo, hi in continuous_params
+            if code not in traj_code_set
+        ]
+        D_static = len(static_params)
+
+        # Column mapping for static params
+        static_dm_cols = []
+        static_si = []
+        for si, (code, _, _) in enumerate(static_params):
+            if code in baseline_dm.input_columns:
+                static_dm_cols.append(baseline_dm.input_columns.index(code))
+                static_si.append(si)
+        static_dm_idxs = torch.tensor(static_dm_cols, dtype=torch.long) if static_dm_cols else None
+        static_si_t = torch.tensor(static_si, dtype=torch.long) if static_si else None
+
+        # Column mapping for trajectory midpoint params
+        traj_si = []
+        for ti, (code, _, _) in enumerate(traj_params):
+            for si, (scode, _, _) in enumerate(static_params):
+                if scode == code:
+                    traj_si.append(si)
+                    break
+        # Actually traj params are NOT in static_params (they're excluded).
+        # Midpoints are separate variables. Decision vector layout:
+        # [static_0..D_static-1 | midpoint_0..D_traj-1 | slope_0..D_traj-1] per experiment
+        D_per_exp = D_static + D_traj + D_traj  # static + midpoints + slopes
+
+        # Bounds
+        bounds_list: list[tuple[float, float]] = []
+        for _exp in range(n):
+            for _si, (_code, _lo, _hi) in enumerate(static_params):
+                bounds_list.append((0.0, 1.0))
+            for _ti, (_code, lo, hi) in enumerate(traj_params):
+                bounds_list.append((0.0, 1.0))  # midpoint in [0, 1]
+            for _ti, (code, lo, hi) in enumerate(traj_params):
+                dim_code = self.trajectory_configs.get(code, "")
+                sm = default_slope_max(dim_code, self.data_objects)
+                bounds_list.append((-sm, sm))  # slope
+
+        # Warm start from Global flat_specs: static params + midpoints from Global, slope = 0
+        x0 = np.zeros(n * D_per_exp)
+        for i, spec in enumerate(flat_specs):
+            off = i * D_per_exp
+            p = spec.initial_params.to_dict()
+            for si, (code, lo, hi) in enumerate(static_params):
+                raw = float(p.get(code, (lo + hi) / 2.0))
+                span = hi - lo
+                x0[off + si] = (raw - lo) / span if span > 0 else 0.5
+            for ti, (code, lo, hi) in enumerate(traj_params):
+                raw = float(p.get(code, (lo + hi) / 2.0))
+                span = hi - lo
+                x0[off + D_static + ti] = (raw - lo) / span if span > 0 else 0.5
+            # slopes start at 0 (flat trajectory)
+
+        # Pre-fill base rows with frozen params (integers, fixed, structural)
+        prior_fill = np.full((n, n_dm_cols), 0.5)
+        all_set = set(code for code, _, _ in static_params) | set(traj_codes)
+        for i, spec in enumerate(flat_specs):
+            p = spec.initial_params.to_dict()
+            for c_idx, col in enumerate(baseline_dm.input_columns):
+                if col in p and col not in all_set:
+                    val = p[col]
+                    try:
+                        lo_s, hi_s = self.bounds._get_hierarchical_bounds_for_code(col)
+                        span_s = hi_s - lo_s
+                        prior_fill[i, c_idx] = (float(val) - lo_s) / span_s if span_s > 0 else 0.5
+                    except (ValueError, KeyError):
+                        prior_fill[i, c_idx] = 0.5
+        prior_fill_t = torch.from_numpy(prior_fill).to(dtype=torch.float64)
+
+        # Weights: 1/L_i per layer per experiment
+        weights_list: list[float] = []
+        for i in range(n):
+            weights_list.extend([1.0 / per_exp_L[i]] * per_exp_L[i])
+
+        # Layer-to-experiment mapping for building the full tensor
+        exp_layer_offsets = []
+        off = 0
+        for i in range(n):
+            exp_layer_offsets.append(off)
+            off += per_exp_L[i]
+
+        self.logger.info(
+            f"Slope trajectory: N={n}, D_static={D_static}, D_traj={D_traj}, "
+            f"D_slope={D_traj}, total_vars={n * D_per_exp}, total_L={total_L}"
+        )
+
+        def _objective(x_flat_S: torch.Tensor) -> torch.Tensor:
+            S = int(x_flat_S.shape[0])
+            x = x_flat_S.reshape(S, n, D_per_exp)
+            static_vals = x[:, :, :D_static]                    # (S, N, D_static)
+            midpoints = x[:, :, D_static:D_static + D_traj]     # (S, N, D_traj)
+            slopes = x[:, :, D_static + D_traj:]                # (S, N, D_traj)
+
+            # Build all layers for all experiments
+            all_rows = prior_fill_t.unsqueeze(0).expand(S, n, n_dm_cols).clone().to(dtype=x_flat_S.dtype)
+
+            # Set static params
+            if static_dm_idxs is not None and static_si_t is not None:
+                src_static = static_vals.index_select(-1, static_si_t)
+                idx_s = static_dm_idxs.unsqueeze(0).unsqueeze(0).expand(S, n, -1)
+                all_rows = all_rows.scatter(-1, idx_s, src_static)
+
+            # Expand to per-layer tensor using sigmoid decode
+            layer_rows: list[torch.Tensor] = []
+            for i in range(n):
+                L_i = per_exp_L[i]
+                # Sigmoid decode: midpoint + slope → L_i layer values
+                traj_layers = decode_slope_trajectory(
+                    midpoints[:, i, :], slopes[:, i, :], L_i,
+                )  # (S, L_i, D_traj)
+
+                # Replicate base row L_i times, set traj columns per layer
+                base_i = all_rows[:, i, :].unsqueeze(1).expand(S, L_i, n_dm_cols).clone()
+                if traj_dm_idxs is not None:
+                    idx_t = traj_dm_idxs.unsqueeze(0).unsqueeze(0).expand(S, L_i, -1)
+                    base_i = base_i.scatter(-1, idx_t, traj_layers)
+                layer_rows.append(base_i)
+
+            full = torch.cat(layer_rows, dim=1)  # (S, total_L, D)
+            full_S_NL = full.unsqueeze(1)  # (S, 1, total_L, D)
+            w = torch.tensor(weights_list, dtype=x_flat_S.dtype).unsqueeze(0).expand(S, -1)
+
+            return self._acquisition_joint_batched_tensor(full_S_NL, 1.0, None, w)
+
+        opt = self.engine.run_acquisition_gradient(
+            _objective, bounds_list, x0=x0,
+            label=f"Slope (D={D_per_exp}, V={n * D_per_exp})",
+            show_progress=console,
+        )
+        self.convergence_history["Slope"] = opt.convergence_history
+        self.last_baseline_nfev += opt.nfev
+
+        # Decode result into ExperimentSpecs with trajectories
+        best = opt.best_x if opt.best_x is not None else x0
+        specs_out: list[ExperimentSpec] = []
+
+        for i in range(n):
+            off = i * D_per_exp
+            L_i = per_exp_L[i]
+
+            # Decode static params
+            bp: dict[str, Any] = dict(self.fixed_params)
+            if structural_values is not None:
+                for sv_code, sv_val in structural_values[i].items():
+                    bp[sv_code] = sv_val
+            for si, (code, lo, hi) in enumerate(static_params):
+                val = best[off + si]
+                bp[code] = float(val * (hi - lo) + lo)
+            for _, (code_i, lo_i, hi_i) in enumerate(integer_params):
+                if code_i in bp and isinstance(bp[code_i], (int, float)):
+                    bp[code_i] = int(np.clip(np.round(bp[code_i]), lo_i, hi_i))
+            for d_cat, code in enumerate(cat_codes):
+                bp[code] = cat_assignments[i][d_cat]
+
+            # Decode trajectory via sigmoid (single path: torch → numpy)
+            midpoint_t = torch.tensor(best[off + D_static:off + D_static + D_traj], dtype=torch.float64).unsqueeze(0)
+            slope_t = torch.tensor(best[off + D_static + D_traj:off + D_per_exp], dtype=torch.float64).unsqueeze(0)
+            traj_vals = decode_slope_trajectory(midpoint_t, slope_t, L_i)[0].cpu().numpy()  # (L_i, D_traj)
+
+            # Set initial params to layer 0 values
+            for ti, (code, lo, hi) in enumerate(traj_params):
+                bp[code] = float(traj_vals[0, ti] * (hi - lo) + lo)
+            bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
+            initial = ParameterProposal.from_dict(bp, source_step=SourceStep.BASELINE)
+
+            # Build trajectory entries for layers 1..L-1
+            entries: list[tuple[int, ParameterProposal]] = []
+            for k in range(1, L_i):
+                sp: dict[str, Any] = {}
+                for ti, (code, lo, hi) in enumerate(traj_params):
+                    sp[code] = float(traj_vals[k, ti] * (hi - lo) + lo)
+                sp = self.schema.parameters.sanitize_values(sp, ignore_unknown=True)
+                entries.append((k, ParameterProposal.from_dict(sp, source_step=SourceStep.BASELINE)))
+
+            trajectories: dict[str, ParameterTrajectory] = {}
+            if entries:
+                trajectories[primary_dim_code] = ParameterTrajectory(
+                    dimension=primary_dim_code, entries=entries,
+                )
+
+            specs_out.append(ExperimentSpec(initial_params=initial, trajectories=trajectories))
+
+        # Store for plotting
+        self.last_traj_norms = [
+            decode_slope_trajectory(
+                torch.tensor(best[i * D_per_exp + D_static:i * D_per_exp + D_static + D_traj], dtype=torch.float64).unsqueeze(0),
+                torch.tensor(best[i * D_per_exp + D_static + D_traj:i * D_per_exp + D_per_exp], dtype=torch.float64).unsqueeze(0),
+                per_exp_L[i],
+            )[0].cpu().numpy()
+            for i in range(n)
+        ]
+        self.last_traj_params = list(traj_params)
+        self.last_trajectory_per_exp_L = list(per_exp_L)
+        self.last_trajectory_points = np.concatenate(self.last_traj_norms, axis=0)
+        exp_ids: list[int] = []
+        for i in range(n):
+            exp_ids.extend([i] * per_exp_L[i])
+        self.last_trajectory_exp_ids = exp_ids
+
+        return specs_out
 
     def _phase3_trajectory(
         self,
