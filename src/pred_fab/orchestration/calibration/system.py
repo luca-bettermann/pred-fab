@@ -72,7 +72,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_perf: float = 0.0
         self.last_opt_unc: float = 0.0
         self.last_trajectory: list[dict[str, Any]] | None = None
-        self.convergence_history: dict[str, list[float]] = {}  # label → per-iteration convergence
+        self.convergence_history: dict[str, list[list[float]]] = {}  # label → per-start convergence
         # Phase data for validation plots
         self.last_domain_values: list[dict[str, int]] | None = None
         self.last_process_points: list[dict[str, Any]] | None = None
@@ -1429,7 +1429,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 (domain_opt.nfev if domain_opt is not None else 0)
                 + (process_opt.nfev if process_opt is not None else 0)
             )
-            history: list[float] = []
+            history: list[list[float]] = []
             if domain_opt is not None:
                 history.extend(domain_opt.convergence_history)
             if process_opt is not None:

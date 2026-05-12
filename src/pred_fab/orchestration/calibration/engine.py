@@ -15,7 +15,7 @@ class _OptResult:
     nfev: int
     n_starts: int
     score: float  # negated objective (higher = better)
-    convergence_history: list[float] = field(default_factory=list)
+    convergence_history: list[list[float]] = field(default_factory=list)
 
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -108,7 +108,7 @@ class OptimizationEngine:
         z_starts = _encode(x_starts)
 
         # --- Phase 3: Independent LBFGS per start ---
-        history: list[float] = []
+        per_start_history: list[list[float]] = []
         bar = ProgressBar(label, D=D_display, V=D if d_param is not None else None, max_starts=n_starts) if show_progress else None
 
         best_z: torch.Tensor | None = None
@@ -116,10 +116,12 @@ class OptimizationEngine:
 
         with profiler.section("engine.lbfgs"):
             for s in range(n_starts):
+                start_history: list[float] = []
+                per_start_history.append(start_history)
                 z_s = z_starts[s].clone().detach().unsqueeze(0).requires_grad_(True)
                 start_best = [float("inf")]
 
-                def _closure(z_ref: torch.Tensor = z_s) -> torch.Tensor:
+                def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history) -> torch.Tensor:
                     optimizer.zero_grad()  # type: ignore[has-type]
                     vals = _eval(z_ref)
                     loss = vals.sum()
@@ -128,7 +130,7 @@ class OptimizationEngine:
                     cur = float(vals.detach().item())
                     if cur < start_best[0] - 1e-15:
                         start_best[0] = cur
-                    history.append(cur)
+                    _sh.append(cur)
                     if bar:
                         bar.step(obj=min(best_val, start_best[0]))
                     return loss
@@ -165,7 +167,7 @@ class OptimizationEngine:
             nfev=nfev[0],
             n_starts=n_starts,
             score=float(-best_val),
-            convergence_history=history,
+            convergence_history=per_start_history,
         )
 
     def _sobol_phase(
