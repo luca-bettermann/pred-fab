@@ -9,8 +9,7 @@ from matplotlib.cm import ScalarMappable
 
 from ._style import (
     save_fig, apply_style, clean_spines,
-    STEEL_500, EMERALD_500, ZINC_300, ZINC_500, ZINC_700,
-    style_colorbar,
+    ZINC_300, ZINC_700, style_colorbar,
 )
 
 
@@ -20,9 +19,12 @@ def plot_convergence(
 ) -> None:
     """Per-start convergence plot coloured by Sobol rank.
 
-    Each phase (Baseline, Schedule, …) gets its own x-axis reset.
-    Within a phase, every LBFGS start is a separate line coloured from
-    dark (best Sobol rank) to light (worst).
+    Each LBFGS start is a separate line. Colour runs from dark (best
+    Sobol candidate) to light (worst) using a continuous colormap with
+    a colorbar showing the rank mapping.
+
+    Y-axis shows raw (negative) objective on a symlog scale so that
+    the converged region — where starts differ — gets more visual space.
     """
     if not histories or all(len(h) == 0 for h in histories.values()):
         return
@@ -32,19 +34,23 @@ def plot_convergence(
 
     fig, ax = plt.subplots(figsize=(10, 4))
     all_vals: list[float] = []
+    last_cmap_name: str | None = None
+    last_n_starts: int = 0
 
     for pi, (label, starts) in enumerate(histories.items()):
         if not starts:
             continue
 
         n_starts = len(starts)
-        cmap = plt.get_cmap(phase_cmaps[pi % len(phase_cmaps)])
+        cmap_name = phase_cmaps[pi % len(phase_cmaps)]
+        cmap = plt.get_cmap(cmap_name)
+        last_cmap_name = cmap_name
+        last_n_starts = n_starts
 
         for si, start_h in enumerate(starts):
             if not start_h:
                 continue
-            h = np.abs(np.array(start_h))
-            h = np.maximum(h, 1e-10)
+            h = np.array(start_h)
             x = np.arange(len(h))
             all_vals.extend(h.tolist())
 
@@ -54,19 +60,29 @@ def plot_convergence(
             alpha = 0.95 if si == 0 else 0.6
             ax.plot(x, h, color=color, linewidth=lw, alpha=alpha)
 
-        # Legend entry for this phase (single representative line)
         ax.plot([], [], color=cmap(0.7), linewidth=1.5, label=label)
 
     if all_vals:
-        ax.set_yscale("log")
-        v_min = min(all_vals) * 0.8
-        v_max = max(all_vals) * 1.2
-        ax.set_ylim(v_min, v_max)
+        ax.set_yscale("symlog", linthresh=1.0)
+        v_min = min(all_vals)
+        v_max = max(all_vals)
+        margin = abs(v_max - v_min) * 0.05
+        ax.set_ylim(v_min - margin, v_max + margin)
 
     ax.set_xlabel("Iteration (per start)", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("|Objective|", fontsize=9, color=ZINC_700)
+    ax.set_ylabel("Objective", fontsize=9, color=ZINC_700)
     ax.legend(fontsize=8, frameon=False, loc="upper right")
     ax.grid(True, alpha=0.2, color=ZINC_300, which="both")
     clean_spines(ax)
+
+    if last_cmap_name and last_n_starts > 1:
+        sm = ScalarMappable(
+            cmap=plt.get_cmap(last_cmap_name),
+            norm=Normalize(vmin=0, vmax=last_n_starts - 1),
+        )
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
+        cbar.set_label("Sobol rank", fontsize=8, color=ZINC_700)
+        style_colorbar(cbar)
 
     save_fig(save_path)
