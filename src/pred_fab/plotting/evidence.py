@@ -117,6 +117,75 @@ def _evidence_fn(D: float) -> float:
     return D / (1.0 + D)
 
 
+def _normal_cdf(x: float) -> float:
+    from math import erf, sqrt
+    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
+
+
+def _marginal_factors(
+    points: list[dict[str, Any]],
+    hidden_axes: list[AxisSpec],
+    sigma: float,
+) -> np.ndarray:
+    """Per-point marginal weight: how much of each kernel falls inside bounds
+    along the hidden dimensions.
+
+    Analytical Gaussian integral over [lo, hi] per hidden axis, multiplied
+    across all hidden axes. Returns shape ``(N_points,)``.
+    """
+    n = len(points)
+    factors = np.ones(n)
+    for ax in hidden_axes:
+        lo, hi = ax.bounds  # type: ignore[misc]
+        rng = hi - lo
+        for j in range(n):
+            u = (float(points[j].get(ax.key, (lo + hi) / 2)) - lo) / rng
+            f = _normal_cdf((1.0 - u) / sigma) - _normal_cdf(-u / sigma)
+            factors[j] *= f
+    return factors
+
+
+def _compute_grid_marginalized(
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    all_axes: list[AxisSpec],
+    points: list[dict[str, Any]],
+    weights: list[float],
+    sigma: float,
+    cell_fn: Callable[[float], float],
+    resolution: int = 40,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """2D grid with analytical marginalization over hidden dimensions.
+
+    Each point's kernel contribution is scaled by the fraction of its
+    Gaussian that falls inside the bounds of the non-plotted dimensions.
+    Boundary points automatically show lower density/evidence.
+    """
+    hidden = [a for a in all_axes if a.key not in (x_axis.key, y_axis.key)]
+    m_factors = _marginal_factors(points, hidden, sigma)
+
+    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
+    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
+    xs = np.linspace(x_lo, x_hi, resolution)
+    ys = np.linspace(y_lo, y_hi, resolution)
+    x_range = x_hi - x_lo
+    y_range = y_hi - y_lo
+
+    px = np.array([p.get(x_axis.key, 0) for p in points])
+    py = np.array([p.get(y_axis.key, 0) for p in points])
+    w = np.array(weights) * m_factors
+    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+
+    grid = np.zeros((resolution, resolution))
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
+            density = np.sum(w * np.exp(-d2 * inv_2s2))
+            grid[j, i] = cell_fn(density)
+
+    return xs, ys, grid
+
+
 # ======================================================================
 # Scatter + trajectory overlay
 # ======================================================================
@@ -187,13 +256,24 @@ def plot_evidence_panel(
     experiments: list[Any],
     sigma: float,
     *,
+    all_axes: list[AxisSpec] | None = None,
     label: str | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     resolution: int = 40,
 ) -> None:
-    """Evidence integrand 1/(1+D) panel."""
+    """Evidence integrand D/(1+D) panel with faithful marginalization.
+
+    When ``all_axes`` is provided, hidden dimensions are marginalized
+    analytically — boundary points show reduced evidence because their
+    kernels extend outside the parameter space.
+    """
     pts, exp_ids, weights = expand_experiments(experiments, param_transform)
-    xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _evidence_fn, resolution)
+    if all_axes is not None:
+        xs, ys, grid = _compute_grid_marginalized(
+            x_axis, y_axis, all_axes, pts, weights, sigma, _evidence_fn, resolution,
+        )
+    else:
+        xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _evidence_fn, resolution)
     grid_max = float(grid.max()) if grid.size > 0 else 1.0
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
                      cmap_name="evidence", contour_overlay=False, show_colorbar=True,
@@ -248,8 +328,14 @@ def plot_multi_angle(
     resolution: int = 40,
     title: str | None = None,
 ) -> None:
-    """Plot ``focus_axis`` against each axis in ``other_axes`` in a single row."""
+    """Plot ``focus_axis`` against each axis in ``other_axes`` in a single row.
+
+    When using the default ``plot_evidence_panel``, hidden dimensions are
+    marginalized analytically so the 2D projection faithfully represents
+    the full-D evidence landscape.
+    """
     fn = panel_fn or plot_evidence_panel
+    all_axes = [focus_axis] + list(other_axes)
     n = len(other_axes)
     if n == 0:
         return
@@ -261,8 +347,12 @@ def plot_multi_angle(
 
     for i, other in enumerate(other_axes):
         label = f"{focus_axis.label} × {other.label}"
-        fn(axes[i], focus_axis, other, experiments, sigma,
-           label=label, param_transform=param_transform, resolution=resolution)
+        kwargs: dict[str, Any] = dict(
+            label=label, param_transform=param_transform, resolution=resolution,
+        )
+        if fn is plot_evidence_panel:
+            kwargs["all_axes"] = all_axes
+        fn(axes[i], focus_axis, other, experiments, sigma, **kwargs)
 
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
