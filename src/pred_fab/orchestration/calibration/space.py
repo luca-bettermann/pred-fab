@@ -117,6 +117,7 @@ class SolutionSpace:
 
         # Per-experiment layout: [static_0..D_s-1 | mid_0..D_t-1 | slope_0..D_t-1]
         self._D_per_exp = self._D_static + 2 * self._D_traj
+        self._D_param = self._D_static + self._D_traj
 
         # Real-space bounds from BoundsManager (for decode)
         self._static_bounds: list[tuple[float, float]] = []
