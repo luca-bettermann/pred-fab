@@ -109,7 +109,11 @@ class OptimizationEngine:
 
         # --- Phase 3: Independent LBFGS per start ---
         per_start_history: list[list[float]] = []
-        bar = ProgressBar(label, D=D_display, V=D if d_param is not None else None, max_starts=n_starts) if show_progress else None
+        total_iters = [0]
+        info: dict[str, Any] = {"D": D_display}
+        if d_param is not None:
+            info["V"] = D
+        bar = ProgressBar(label, info=info) if show_progress else None
 
         best_z: torch.Tensor | None = None
         best_val = float("inf")
@@ -121,7 +125,7 @@ class OptimizationEngine:
                 z_s = z_starts[s].clone().detach().unsqueeze(0).requires_grad_(True)
                 start_best = [float("inf")]
 
-                def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history) -> torch.Tensor:
+                def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history, _s: int = s) -> torch.Tensor:
                     optimizer.zero_grad()  # type: ignore[has-type]
                     vals = _eval(z_ref)
                     loss = vals.sum()
@@ -131,8 +135,14 @@ class OptimizationEngine:
                     if cur < start_best[0] - 1e-15:
                         start_best[0] = cur
                     _sh.append(cur)
+                    total_iters[0] += 1
                     if bar:
-                        bar.step(obj=min(best_val, start_best[0]))
+                        bar.step(
+                            fill=(_s + 1) / n_starts,
+                            obj=min(best_val, start_best[0]),
+                            starts=_s + 1,
+                            iters=total_iters[0],
+                        )
                     return loss
 
                 optimizer = torch.optim.LBFGS(
@@ -148,9 +158,6 @@ class OptimizationEngine:
                 if final_val < best_val:
                     best_val = final_val
                     best_z = z_s.detach().clone()
-
-                if bar and s < n_starts - 1:
-                    bar.new_start()
 
         if bar:
             bar.finish()
@@ -194,18 +201,23 @@ class OptimizationEngine:
 
         batch_size = self.sobol_batch_size
         n_batches = (n_sobol + batch_size - 1) // batch_size
-        bar = ProgressBar("Sobol", D=D_display or D, V=D if D_display is not None else None, max_starts=n_batches) if show_progress else None
+        sobol_info: dict[str, Any] = {"D": D_display or D}
+        if D_display is not None:
+            sobol_info["V"] = D
+        bar = ProgressBar("Sobol", info=sobol_info) if show_progress else None
 
         with torch.no_grad():
             val_chunks: list[torch.Tensor] = []
+            batch_num = 0
             for b_start in range(0, n_sobol, batch_size):
                 chunk = cand[b_start : b_start + batch_size]
                 chunk_vals = objective(chunk)
                 val_chunks.append(chunk_vals)
                 nfev[0] += int(chunk.shape[0])
+                batch_num += 1
                 if bar:
                     best_so_far = float(torch.cat(val_chunks, dim=0).min().item())
-                    bar.step(obj=best_so_far)
+                    bar.step(fill=batch_num / n_batches, obj=best_so_far, batches=batch_num)
             vals = torch.cat(val_chunks, dim=0)
 
         if bar:
