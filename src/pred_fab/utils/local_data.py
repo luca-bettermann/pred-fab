@@ -49,11 +49,18 @@ class LocalData:
         return f"{self.schema_id}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
-        """Get full path to local experiment folder."""
+        """Get full path to local experiment folder.
+
+        Strips the schema_id prefix from exp_code if present, to avoid
+        doubling (e.g. schema_folder=local/ADVEI_2026, exp_code=ADVEI_2026/discovery/000
+        → local/ADVEI_2026/discovery/000, not local/ADVEI_2026/ADVEI_2026/discovery/000).
+        """
         if not isinstance(exp_code, str) or not exp_code:
             raise ValueError("Experiment code must be a non-empty string")
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before getting experiment folder")
+        if self.schema_id and exp_code.startswith(self.schema_id + "/"):
+            exp_code = exp_code[len(self.schema_id) + 1:]
         return os.path.join(self.schema_folder, exp_code)
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
@@ -70,6 +77,10 @@ class LocalData:
         Walks nested directories to find leaf folders (those containing
         files or no subdirectories), supporting codes like
         ``discovery/000`` alongside flat codes like ``exp_001``.
+
+        Returned codes include the schema_id prefix to match the
+        convention used by NocoDB and the rest of the system
+        (e.g. ``ADVEI_2026/discovery/000``).
         """
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before listing experiments")
@@ -79,8 +90,9 @@ class LocalData:
         experiments = []
         for root, dirs, files in os.walk(self.schema_folder):
             if not dirs or files:
-                code = os.path.relpath(root, self.schema_folder)
-                if code != ".":
+                rel = os.path.relpath(root, self.schema_folder)
+                if rel != ".":
+                    code = f"{self.schema_id}/{rel}" if self.schema_id else rel
                     experiments.append(code)
         return sorted(experiments)
 
