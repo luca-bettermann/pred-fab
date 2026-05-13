@@ -49,25 +49,20 @@ class LocalData:
         return f"{self.schema_id}_{str(exp_nr).zfill(3)}"
 
     def get_experiment_folder(self, exp_code: str) -> str:
-        """Get full path to local experiment folder.
-
-        Strips the schema_id prefix from exp_code if present, to avoid
-        doubling (e.g. schema_folder=local/ADVEI_2026, exp_code=ADVEI_2026/discovery/000
-        → local/ADVEI_2026/discovery/000, not local/ADVEI_2026/ADVEI_2026/discovery/000).
-        """
+        """Get full path to local experiment folder."""
         if not isinstance(exp_code, str) or not exp_code:
             raise ValueError("Experiment code must be a non-empty string")
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before getting experiment folder")
-        if self.schema_id and exp_code.startswith(self.schema_id + "/"):
-            exp_code = exp_code[len(self.schema_id) + 1:]
         return os.path.join(self.schema_folder, exp_code)
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
         """Get full path to a file within an experiment folder."""
         assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         assert isinstance(filename, str) and filename, "Filename must be a non-empty string"
-        return os.path.join(self.get_experiment_folder(exp_code), filename)
+        if self.schema_folder is None:
+            raise ValueError("Schema ID must be set before getting experiment file path")
+        return os.path.join(self.schema_folder, exp_code, filename)
 
     def list_experiments(self) -> list[str]:
         """List all experiment codes within the schema folder.
@@ -90,11 +85,7 @@ class LocalData:
             if not dirs or files:
                 rel = os.path.relpath(root, self.schema_folder)
                 if rel != ".":
-                    if self.schema_id and not rel.startswith(self.schema_id + "/"):
-                        code = f"{self.schema_id}/{rel}"
-                    else:
-                        code = rel
-                    experiments.append(code)
+                    experiments.append(rel)
         return sorted(experiments)
 
     def copy_to_folder(self, src_path: str, target_folder: str) -> str:
