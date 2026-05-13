@@ -67,9 +67,7 @@ class LocalData:
         """Get full path to a file within an experiment folder."""
         assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
         assert isinstance(filename, str) and filename, "Filename must be a non-empty string"
-        if self.schema_folder is None:
-            raise ValueError("Schema ID must be set before getting experiment file path")
-        return os.path.join(self.schema_folder, exp_code, filename)
+        return os.path.join(self.get_experiment_folder(exp_code), filename)
 
     def list_experiments(self) -> list[str]:
         """List all experiment codes within the schema folder.
@@ -92,7 +90,10 @@ class LocalData:
             if not dirs or files:
                 rel = os.path.relpath(root, self.schema_folder)
                 if rel != ".":
-                    code = f"{self.schema_id}/{rel}" if self.schema_id else rel
+                    if self.schema_id and not rel.startswith(self.schema_id + "/"):
+                        code = f"{self.schema_id}/{rel}"
+                    else:
+                        code = rel
                     experiments.append(code)
         return sorted(experiments)
 
