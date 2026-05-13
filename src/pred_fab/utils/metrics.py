@@ -66,20 +66,20 @@ class Metrics:
         return {'mae': mae, 'rmse': rmse, 'r2': r2, 'n_samples': len(y_true)}
 
     @staticmethod
-    def calculate_adjusted_r2(
+    def calculate_targeted_r2(
         y_true: np.ndarray,
         y_pred: np.ndarray,
         importance: np.ndarray,
     ) -> dict[str, float]:
         """Performance-weighted R² that emphasizes high-importance samples.
 
-        Returns dict with 'r2', 'r2_adj', and 'n_samples'.
+        Returns dict with 'r2', 'r2_targeted', and 'n_samples'.
 
         The *importance* array contains pre-computed per-sample weights
         (typically in [floor, 1.0], see _build_importance_weights).
-        Samples with higher weight contribute more to R²_adj.
+        Samples with higher weight contribute more to R²_targeted.
 
-        Interpretation of the gap (r2_adj - r2):
+        Interpretation of the gap (r2_targeted - r2):
           gap > 0 -> high-importance samples predicted better
           gap < 0 -> high-importance samples predicted worse
           gap ~ 0 -> prediction quality is uniform across the space
@@ -96,9 +96,9 @@ class Metrics:
 
         n = len(y_true)
         if n == 0:
-            return {'r2': 0.0, 'r2_adj': 0.0, 'n_samples': 0}
+            return {'r2': 0.0, 'r2_targeted': 0.0, 'n_samples': 0}
 
         r2 = Metrics._r2(y_true, y_pred)
-        r2_adj = Metrics._r2(y_true, y_pred, weights=importance)
+        r2_targeted = Metrics._r2(y_true, y_pred, weights=importance)
 
-        return {'r2': r2, 'r2_adj': r2_adj, 'n_samples': n}
+        return {'r2': r2, 'r2_targeted': r2_targeted, 'n_samples': n}

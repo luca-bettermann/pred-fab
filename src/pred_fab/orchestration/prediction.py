@@ -1162,7 +1162,7 @@ class PredictionSystem(BaseOrchestrationSystem):
           - Below mean: weight drops toward floor (low-performing = less important)
 
         The sigmoid ensures smooth transitions with no hard cutoffs. The gap
-        (R²_adj - R²) is interpretable relative to the mean:
+        (R²_targeted - R²) is interpretable relative to the mean:
           gap > 0 → model predicts above-average experiments better
           gap < 0 → model predicts above-average experiments worse
           gap ≈ 0 → uniform prediction quality across performance range
@@ -1209,8 +1209,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> dict[str, dict[str, float]]:
         """Validate prediction models on validation or test set.
 
-        Returns per-feature metrics: {feature_name: {'r2': float, 'r2_adj': float, ...}}.
-        When performance_weights are provided, R²_adj is computed using combined
+        Returns per-feature metrics: {feature_name: {'r2': float, 'r2_targeted': float, ...}}.
+        When performance_weights are provided, R²_targeted is computed using combined
         performance as the importance signal.
         """
         dm = self._assert_trained()
@@ -1241,8 +1241,8 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(f"Evaluating {len(self.models)} models on {X_split.shape[0]} samples...")
 
-        # Build per-row importance for R²_adj: experiments near the performance
-        # optimum are weighted higher, so R²_adj measures prediction accuracy
+        # Build per-row importance for R²_targeted: experiments near the performance
+        # optimum are weighted higher, so R²_targeted measures prediction accuracy
         # where it matters most for calibration.
         importance_arr = self._build_importance_weights(dm, split, performance_weights)
 
@@ -1270,25 +1270,25 @@ class PredictionSystem(BaseOrchestrationSystem):
                 feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
 
                 if importance_arr is not None and len(importance_arr) == len(y_true_feat):
-                    adj = Metrics.calculate_adjusted_r2(
+                    adj = Metrics.calculate_targeted_r2(
                         y_true_feat, y_pred_feat, importance_arr
                     )
-                    feat_metrics['r2_adj'] = adj['r2_adj']
+                    feat_metrics['r2_targeted'] = adj['r2_targeted']
 
                 results[feature_name] = feat_metrics
 
         # Print compact validation table with line breaks for readability
-        has_adj = any('r2_adj' in m for m in results.values())
+        has_adj = any('r2_targeted' in m for m in results.values())
         header = f"  {'Feature':<25s}  {'R²':>8s}"
         if has_adj:
-            header += f"  {'R²_adj':>8s}"
+            header += f"  {'R²_targeted':>8s}"
         self.logger.console_new_line()
         self.logger.console_info(header)
         self.logger.console_info(f"  {'─' * (36 if not has_adj else 46)}")
         for feat, m in results.items():
             line = f"  {feat:<25s}  {m['r2']:8.4f}"
-            if has_adj and 'r2_adj' in m:
-                line += f"  {m['r2_adj']:8.4f}"
+            if has_adj and 'r2_targeted' in m:
+                line += f"  {m['r2_targeted']:8.4f}"
             self.logger.console_info(line)
         self.logger.console_new_line()
         self.logger.console_success(

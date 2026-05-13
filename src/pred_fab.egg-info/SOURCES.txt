@@ -37,14 +37,12 @@ src/pred_fab/orchestration/prediction.py
 src/pred_fab/orchestration/calibration/__init__.py
 src/pred_fab/orchestration/calibration/bounds.py
 src/pred_fab/orchestration/calibration/engine.py
-src/pred_fab/orchestration/calibration/slope.py
 src/pred_fab/orchestration/calibration/space.py
 src/pred_fab/orchestration/calibration/system.py
-src/pred_fab/orchestration/calibration/trajectory.py
 src/pred_fab/plotting/__init__.py
 src/pred_fab/plotting/_style.py
-src/pred_fab/plotting/baseline.py
 src/pred_fab/plotting/convergence.py
+src/pred_fab/plotting/discovery.py
 src/pred_fab/plotting/evidence.py
 src/pred_fab/plotting/exploration.py
 src/pred_fab/plotting/inference.py
