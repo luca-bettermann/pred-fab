@@ -36,6 +36,10 @@ class IExternalData(ABC):
         """Push parameters to external source; returns True on success. Default: no-op (False)."""
         return False
 
+    def push_parameter_updates(self, exp_codes: list[str], updates: dict[str, dict[str, Any]], recompute: bool = False, **kwargs: Any) -> bool:
+        """Push parameter update events to external source; returns True on success. Default: no-op (False)."""
+        return False
+
     def push_performance(self, exp_codes: list[str], performance: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push performance metrics to external source; returns True on success. Default: no-op (False)."""
         return False

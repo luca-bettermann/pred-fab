@@ -844,7 +844,7 @@ class Dataset:
             BlockType.PARAM_UPDATES, codes_to_save,
             getter=functools.partial(self._get_exp_data, block_type=BlockType.PARAM_UPDATES),
             saver=self.local_data.save_parameter_updates,
-            external_saver=None,
+            external_saver=self.external_data.push_parameter_updates if self.external_data else None,
             recompute=recompute,
             verbose=verbose
         )
