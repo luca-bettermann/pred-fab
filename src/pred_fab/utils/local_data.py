@@ -71,9 +71,8 @@ class LocalData:
         files or no subdirectories), supporting codes like
         ``discovery/000`` alongside flat codes like ``exp_001``.
 
-        Returned codes include the schema_id prefix to match the
-        convention used by NocoDB and the rest of the system
-        (e.g. ``ADVEI_2026/discovery/000``).
+        Returned codes are relative to the schema folder
+        (e.g. ``discovery/000``).
         """
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before listing experiments")
