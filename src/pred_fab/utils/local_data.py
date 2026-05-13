@@ -65,17 +65,24 @@ class LocalData:
         return os.path.join(self.schema_folder, exp_code, filename)
 
     def list_experiments(self) -> list[str]:
-        """List all experiment folder names within the schema folder."""
+        """List all experiment codes within the schema folder.
+
+        Walks nested directories to find leaf folders (those containing
+        files or no subdirectories), supporting codes like
+        ``discovery/000`` alongside flat codes like ``exp_001``.
+        """
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before listing experiments")
         if not os.path.exists(self.schema_folder):
             return []
-        
-        return [
-            d
-            for d in os.listdir(self.schema_folder)
-            if os.path.isdir(os.path.join(self.schema_folder, d))
-        ]
+
+        experiments = []
+        for root, dirs, files in os.walk(self.schema_folder):
+            if not dirs or files:
+                code = os.path.relpath(root, self.schema_folder)
+                if code != ".":
+                    experiments.append(code)
+        return sorted(experiments)
 
     def copy_to_folder(self, src_path: str, target_folder: str) -> str:
         """Copy file or folder to target directory."""
