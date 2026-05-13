@@ -57,17 +57,17 @@ def test_format_perf_skips_nan(reporter):
     assert "0.500" in result
 
 
-def test_print_training_summary_with_r2_and_r2_targeted(reporter, capsys):
+def test_print_training_summary_with_r2_and_r2_adj(reporter, capsys):
     """Training summary should show both R2 and R2_adj when available."""
     reporter._logger._console_output_enabled = True
     metrics = {
-        "feature_1": {"r2": 0.85, "r2_targeted": 0.82},
+        "feature_1": {"r2": 0.85, "r2_adj": 0.82},
         "feature_2": {"r2": 0.92},
     }
     reporter.print_training_summary(metrics)
     output = capsys.readouterr().out
     assert "0.850" in output
-    assert "0.820" in output  # r2_targeted
+    assert "0.820" in output  # r2_adj
     assert "0.920" in output
 
 
