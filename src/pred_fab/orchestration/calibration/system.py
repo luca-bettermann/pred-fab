@@ -330,7 +330,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if dm is None:
             return torch.zeros(S, dtype=X_SD.dtype)
         if self.perf_fn_tensor is None:
-            # No perf closure registered → 0 perf for all candidates.
+            return torch.zeros(S, dtype=X_SD.dtype)
+        if not getattr(dm, "_is_fitted", True):
+            self.logger.warning("DataModule not fitted; perf_tensor returns zeros.")
             return torch.zeros(S, dtype=X_SD.dtype)
 
         # Build per-candidate params dicts. Continuous values stay as 0-D
@@ -717,6 +719,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         console = self.logger._console_output_enabled
         perf_range = self._perf_range if kappa < 1.0 else None
+        if kappa < 1.0 and perf_range is None:
+            self.logger.warning(
+                "kappa < 1 but perf_range not set — performance arm is unnormalised. "
+                "Call update_perf_range() after training."
+            )
 
         def objective(x_flat: torch.Tensor) -> torch.Tensor:
             points, weights = space.decode(x_flat)

@@ -360,6 +360,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         model's ``train()`` runs to completion before the next; cross-model
         outputs are surfaced at prediction time via ``predictions_so_far`` in
         ``model.predict``.
+
+        Pass ``epoch_logger=WandbLogger(...)`` to log per-epoch loss and
+        post-training validation metrics to Weights & Biases.
         """
         self.datamodule = datamodule
 

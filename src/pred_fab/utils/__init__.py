@@ -3,6 +3,7 @@ from .logger import PfabLogger
 from .metrics import Metrics, combined_score
 from .console import ConsoleReporter, ProgressBar
 from .profiler import profiler
+from .wandb_logger import WandbLogger
 from .enum import (
     SystemName,
     Roles,
