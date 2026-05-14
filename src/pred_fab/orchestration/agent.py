@@ -509,6 +509,24 @@ class PfabAgent:
 
     # === ADDITIONAL API CALLS ===
 
+    def extract(
+        self,
+        exp_data: ExperimentData,
+        recompute: bool = False,
+        visualize: bool = False,
+        feature: str | None = None,
+    ) -> dict[str, "np.ndarray"]:
+        """Run feature extraction only. Returns {feature_code: array}.
+
+        When ``feature`` is provided (e.g. ``"extrusion"``, ``"vision"``),
+        only feature models whose class name contains that string are run.
+        """
+        self._check_systems(StepType.EVAL)
+        return self.feature_system.run_feature_extraction(
+            exp_data, 0, None, recompute=recompute, visualize=visualize,
+            feature=feature,
+        )
+
     def evaluate(
         self,
         exp_data: ExperimentData,
@@ -516,18 +534,9 @@ class PfabAgent:
         visualize: bool = False,
         feature: str | None = None,
     ) -> None:
-        """Evaluate an experiment and mutate features/performance in place.
-
-        When ``feature`` is provided (e.g. ``"extrusion"``, ``"vision"``),
-        only feature models whose class name contains that string are run.
-        ``None`` runs all models.
-        """
+        """Run feature extraction + evaluation (features → performance scores)."""
+        self.extract(exp_data, recompute=recompute_flag, visualize=visualize, feature=feature)
         self._check_systems(StepType.EVAL)
-
-        self.feature_system.run_feature_extraction(
-            exp_data, 0, None, recompute=recompute_flag, visualize=visualize,
-            feature=feature,
-        )
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
