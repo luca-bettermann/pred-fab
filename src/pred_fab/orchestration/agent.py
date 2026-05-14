@@ -513,13 +513,21 @@ class PfabAgent:
         self,
         exp_data: ExperimentData,
         recompute_flag: bool = False,
-        visualize: bool = False
+        visualize: bool = False,
+        feature: str | None = None,
     ) -> None:
-        """Evaluate an experiment and mutate features/performance in place."""
+        """Evaluate an experiment and mutate features/performance in place.
+
+        When ``feature`` is provided (e.g. ``"extrusion"``, ``"vision"``),
+        only feature models whose class name contains that string are run.
+        ``None`` runs all models.
+        """
         self._check_systems(StepType.EVAL)
 
-        # Extract Features and Evaluate Performance
-        self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute_flag, visualize=visualize)
+        self.feature_system.run_feature_extraction(
+            exp_data, 0, None, recompute=recompute_flag, visualize=visualize,
+            feature=feature,
+        )
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 

@@ -91,9 +91,14 @@ class FeatureSystem(BaseOrchestrationSystem):
         evaluate_from: int = 0,
         evaluate_to: int | None = None,
         visualize: bool = False,
-        recompute: bool = False
+        recompute: bool = False,
+        feature: str | None = None,
     ) -> dict[str, np.ndarray]:
-        """Execute all feature extractions for an experiment and mutate exp_data with results."""
+        """Execute feature extractions for an experiment and mutate exp_data with results.
+
+        When ``feature`` is provided, only models whose class name contains
+        that string (case-insensitive) are run. ``None`` runs all models.
+        """
         # Handle recompute logic
         if recompute:
             self.logger.info(f"Recompute flag set - clearing cache")
@@ -119,6 +124,7 @@ class FeatureSystem(BaseOrchestrationSystem):
             visualize=visualize,
             skip_feature_code=skip_for_code,
             get_params_for_row=get_params_for_row,
+            feature_filter=feature,
         )
 
         # Update exp_data with results
@@ -135,14 +141,19 @@ class FeatureSystem(BaseOrchestrationSystem):
         visualize: bool = False,
         skip_feature_code: dict[str, bool] = {},
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
+        feature_filter: str | None = None,
     ) -> dict[str, np.ndarray]:
-        """Run all feature models and return {code: tensor} dict."""
+        """Run feature models and return {code: tensor} dict."""
 
         # Prepare result dictionaries
         feature_dict: dict[str, np.ndarray] = {}
 
         # Run feature extraction for each feature code
         for feature_model in self.models:
+            if feature_filter is not None:
+                name = type(feature_model).__name__.lower()
+                if feature_filter.lower() not in name:
+                    continue
             # Skip if already loaded
             if all(skip_feature_code.get(code, False) for code in feature_model.outputs):
                 self.logger.info(f"Skipping feature extraction for '{feature_model.outputs}' as features already complete")
