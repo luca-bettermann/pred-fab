@@ -20,13 +20,13 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def run_evaluation(
         self,
         exp_data: ExperimentData,
-        recompute: bool = False
+        recompute: bool = False,
+        feature: str | None = None,
     ) -> dict[str, float | None]:
-        """Score all features for a completed experiment and store results in exp_data.
+        """Score features for a completed experiment and store results in exp_data.
 
-        This is post-experiment documentation only — the resulting performance values are
-        not consumed by any calibration or prediction logic. Calibration uses
-        _evaluate_feature_dict directly via a closure for its internal scoring.
+        When ``feature`` is provided, only evaluation models whose
+        ``input_feature`` contains that string (case-insensitive) are run.
         """
         # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
         # so that evaluation models can iterate rows uniformly regardless of feature depth.
@@ -47,7 +47,8 @@ class EvaluationSystem(BaseOrchestrationSystem):
             features_dict=features_dict,
             parameters=exp_data.parameters,
             incomplete_features=incomplete_features,
-            skip_for_code=skip_for_code
+            skip_for_code=skip_for_code,
+            feature_filter=feature,
         )
         exp_data.performance.set_values_from_dict(performance_dict, self.logger)
         return performance_dict
@@ -57,15 +58,19 @@ class EvaluationSystem(BaseOrchestrationSystem):
         features_dict: dict[str, np.ndarray],
         parameters: Parameters,
         incomplete_features: dict[str, bool] = {},
-        skip_for_code: dict[str, bool] = {}
+        skip_for_code: dict[str, bool] = {},
+        feature_filter: str | None = None,
     ) -> dict[str, float | None]:
-        """Run all evaluation models and return {perf_code: value} dict."""
+        """Run evaluation models and return {perf_code: value} dict."""
 
         # Prepare result dictionaries
         performance_dict: dict[str, float | None] = {}
 
         # Run evaluation for each performance code
         for eval_model in self.models:
+            if feature_filter is not None:
+                if feature_filter.lower() not in eval_model.input_feature.lower():
+                    continue
             # Skip if already loaded
             if skip_for_code.get(eval_model.output_performance, False):
                 self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' as performance already complete.")

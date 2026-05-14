@@ -534,10 +534,14 @@ class PfabAgent:
         visualize: bool = False,
         feature: str | None = None,
     ) -> None:
-        """Run feature extraction + evaluation (features → performance scores)."""
+        """Run feature extraction + evaluation (features → performance scores).
+
+        When ``feature`` is provided, only matching feature extraction and
+        evaluation models are run.
+        """
         self.extract(exp_data, recompute=recompute_flag, visualize=visualize, feature=feature)
         self._check_systems(StepType.EVAL)
-        self.eval_system.run_evaluation(exp_data, recompute=recompute_flag)
+        self.eval_system.run_evaluation(exp_data, recompute=recompute_flag, feature=feature)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
     @requires(SystemName.PREDICTION)
