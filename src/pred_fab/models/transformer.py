@@ -446,12 +446,21 @@ class TransformerModel(IPredictionModel):
             sample = y_full_f[feats[0]]  # (B, L, *extra_d)
             actual_extra_per_depth[depth] = tuple(int(s) for s in sample.shape[2:])
 
+        # Padding mask: True where position is padded (all y features NaN).
+        # Shape (B, L) — passed to encoder as src_key_padding_mask.
+        all_nan = torch.ones((X_full_f.shape[0], L), dtype=torch.bool)
+        for feat_t in y_full_f.values():
+            flat = feat_t.view(feat_t.shape[0], L, -1)
+            all_nan = all_nan & torch.isnan(flat).all(dim=-1)
+        padding_mask = all_nan  # True = padded, ignore in attention
+
         epoch_logger = kwargs.get("epoch_logger")
 
         for epoch in range(self.EPOCHS):
             optimizer.zero_grad()
             per_depth_outputs: dict[int, torch.Tensor] = self._model(
                 X_full_f, axis_indices, actual_extra_per_depth,
+                padding_mask=padding_mask,
             )
             total_loss = X_full_f.new_zeros(())
             per_depth_loss: dict[str, float] = {}
@@ -628,8 +637,12 @@ class _TransformerEncoder(nn.Module):
         self,
         x: torch.Tensor,
         axis_indices: torch.Tensor | None = None,
+        padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """``(B, L, n_input)`` → ``(B, L, d_model)`` with causal attention."""
+        """``(B, L, n_input)`` → ``(B, L, d_model)`` with causal + padding attention mask.
+
+        ``padding_mask``: ``(B, L)`` bool tensor, True = padded (ignored in attention).
+        """
         B, L, _ = x.shape
         if axis_indices is None:
             if self._n_axes != 1:
@@ -656,7 +669,10 @@ class _TransformerEncoder(nn.Module):
         causal_mask = torch.triu(
             torch.full((L, L), float("-inf"), device=x.device), diagonal=1,
         )
-        return self.encoder(h, mask=causal_mask, is_causal=True)
+        return self.encoder(
+            h, mask=causal_mask, is_causal=True,
+            src_key_padding_mask=padding_mask,
+        )
 
 
 class _EncDecNet(nn.Module):
@@ -687,14 +703,16 @@ class _EncDecNet(nn.Module):
         x: torch.Tensor,
         axis_indices: torch.Tensor | None = None,
         actual_extra_per_depth: dict[int, tuple[int, ...]] | None = None,
+        padding_mask: torch.Tensor | None = None,
     ) -> dict[int, torch.Tensor]:
         """Encoder + every decoder. Returns ``dict[depth, decoder_output]``.
 
         ``actual_extra_per_depth`` overrides the decoder's schema-max extra-axis
         sizes per depth (e.g. ``{2: (3,)}`` for a depth-2 head with runtime
         n_segments=3 < schema max). Defaults to schema-max for missing depths.
+        ``padding_mask``: ``(B, L)`` bool, True = padded position.
         """
-        hidden = self.encoder(x, axis_indices)
+        hidden = self.encoder(x, axis_indices, padding_mask=padding_mask)
         actual_extra_per_depth = actual_extra_per_depth or {}
         out: dict[int, torch.Tensor] = {}
         for d_str, module in self.decoders.items():
