@@ -695,8 +695,9 @@ class _TransformerEncoder(nn.Module):
             dist = positions.unsqueeze(1) - positions.unsqueeze(0)  # (L, L)
             # Per-head bias: (n_heads, L, L)
             alibi = -slopes[:, None, None] * dist.unsqueeze(0).float()
-            # Combine: broadcast causal (L,L) + alibi (n_heads, L, L)
+            # Combine: causal (L,L) + alibi (n_heads, L, L) → expand to (B*n_heads, L, L)
             mask = causal_mask.unsqueeze(0) + alibi  # (n_heads, L, L)
+            mask = mask.repeat(B, 1, 1)              # (B*n_heads, L, L)
         else:
             mask = causal_mask
 
