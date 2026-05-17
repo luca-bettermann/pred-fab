@@ -266,7 +266,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             cols = feat_obj.columns if (feat_obj is not None and hasattr(feat_obj, "columns")) else []  # type: ignore[union-attr]
             feat_depths[feat] = (len(cols) - 1) if cols else 0
 
-        out: list[tuple[torch.Tensor, dict[str, torch.Tensor]]] = []
+        # Collect per-experiment batches with their natural sequence length.
+        raw_batches: list[tuple[torch.Tensor, dict[str, torch.Tensor], int]] = []
+        max_L = 0
+
         for code in codes:
             exp = dm.dataset.get_experiment(code)
             params = exp.get_effective_parameters_for_row(0)
@@ -282,13 +285,13 @@ class PredictionSystem(BaseOrchestrationSystem):
             seq_axis_sizes_t = tuple(int(s) for s in seq_axis_sizes)
             if first_seq_axis_sizes is None:
                 first_seq_axis_sizes = seq_axis_sizes_t
-            elif seq_axis_sizes_t != first_seq_axis_sizes:
-                raise ValueError(
-                    f"_build_transformer_train_batches: experiments in the "
-                    f"same split must share seq_axis_sizes; got "
-                    f"{seq_axis_sizes_t} vs {first_seq_axis_sizes}.",
+            else:
+                # Track max per axis for padding
+                first_seq_axis_sizes = tuple(
+                    max(a, b) for a, b in zip(first_seq_axis_sizes, seq_axis_sizes_t)
                 )
             L = int(np.prod(seq_axis_sizes)) if seq_axis_sizes else 1
+            max_L = max(max_L, L)
             other_axis_indices = [i for i in range(len(shape)) if i not in seq_axis_idx_set]
             other_sizes = [shape[i] for i in other_axis_indices]
             n_other = int(np.prod(other_sizes)) if other_sizes else 1
@@ -315,11 +318,8 @@ class PredictionSystem(BaseOrchestrationSystem):
                 if stats is not None:
                     col_t = dm._apply_normalization_tensor(col_t, stats)
                 feat_depth = feat_depths[feat]
-                # extra_axis_sizes_d: axes [axis_depth..feat_depth) of the model's shape.
                 extra_axis_sizes_d = tuple(shape[axis_idx] for axis_idx in range(n_axes, feat_depth))
-                # Build (1, L, *extra_axis_sizes_d). Cells deeper than feat_depth
-                # are broadcast-equivalent — last write wins (all values equal).
-                y_feat = torch.zeros((1, L) + extra_axis_sizes_d, dtype=torch.float32)
+                y_feat = torch.full((1, L) + extra_axis_sizes_d, float("nan"), dtype=torch.float32)
                 for cell_flat in range(n_rows):
                     coord = np.unravel_index(cell_flat, shape)
                     seq_coord = tuple(int(coord[i]) for i in seq_axis_indices)
@@ -331,7 +331,23 @@ class PredictionSystem(BaseOrchestrationSystem):
                         y_feat[0, seq_pos] = col_t[cell_flat]
                 y_dict[feat] = y_feat
 
+            raw_batches.append((X_seq, y_dict, L))
+
+        # Pad all batches to max_L. Padded X positions are zero; padded y
+        # positions are NaN (ignored in loss via nanmean).
+        out: list[tuple[torch.Tensor, dict[str, torch.Tensor]]] = []
+        for X_seq, y_dict, L in raw_batches:
+            if L < max_L:
+                pad_L = max_L - L
+                X_pad = torch.zeros((1, pad_L, X_seq.shape[2]), dtype=X_seq.dtype)
+                X_seq = torch.cat([X_seq, X_pad], dim=1)
+                for feat in y_dict:
+                    y_t = y_dict[feat]
+                    pad_shape = (1, pad_L) + y_t.shape[2:]
+                    y_pad = torch.full(pad_shape, float("nan"), dtype=y_t.dtype)
+                    y_dict[feat] = torch.cat([y_t, y_pad], dim=1)
             out.append((X_seq, y_dict))
+
         return out, (first_seq_axis_sizes or ()), domain_axis_sizes
 
     def _compute_model_cat_cardinalities(self, model: IPredictionModel) -> dict[int, int]:

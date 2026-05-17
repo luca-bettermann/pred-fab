@@ -461,9 +461,12 @@ class TransformerModel(IPredictionModel):
                 depth_loss = 0.0
                 for f_idx, feat in enumerate(feats):
                     y_pred_f = out_d[..., f_idx]
-                    loss_f = nn.functional.mse_loss(y_pred_f, y_full_f[feat])
-                    total_loss = total_loss + weight * loss_f
-                    depth_loss += float(loss_f.detach())
+                    y_true_f = y_full_f[feat]
+                    mask = ~torch.isnan(y_true_f)
+                    if mask.any():
+                        loss_f = nn.functional.mse_loss(y_pred_f[mask], y_true_f[mask])
+                        total_loss = total_loss + weight * loss_f
+                        depth_loss += float(loss_f.detach())
                 per_depth_loss[f"loss/depth_{depth}"] = depth_loss
             total_loss.backward()
             optimizer.step()
