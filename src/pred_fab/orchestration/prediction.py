@@ -1202,6 +1202,101 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return np.array(importance_rows, dtype=np.float64)
 
+    def _validate_flat(
+        self,
+        model: IPredictionModel,
+        dm: DataModule,
+        X_split: torch.Tensor,
+        y_split: torch.Tensor,
+        importance_arr: np.ndarray | None,
+    ) -> dict[str, dict[str, float]]:
+        """Per-row validation for non-sequence models (MLP, deterministic)."""
+        input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
+        input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
+        indices = [dm.output_columns.index(f) for f in model.outputs]
+        indices_t = torch.as_tensor(indices, dtype=torch.long)
+
+        y_true_norm = y_split.index_select(1, indices_t)
+        y_true = dm.denormalize_values(y_true_norm, model.outputs).detach().cpu().numpy()
+
+        y_pred_dict = model.forward_pass(X_split.index_select(1, input_indices_t))
+        y_pred_norm = torch.stack([y_pred_dict[f] for f in model.outputs], dim=-1)
+        y_pred = dm.denormalize_values(y_pred_norm, model.outputs).detach().cpu().numpy()
+
+        results: dict[str, dict[str, float]] = {}
+        for i, feat in enumerate(model.outputs):
+            feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
+            if importance_arr is not None and len(importance_arr) == len(y_true[:, i]):
+                adj = Metrics.calculate_adjusted_r2(y_true[:, i], y_pred[:, i], importance_arr)
+                feat_metrics['r2_adj'] = adj['r2_adj']
+            results[feat] = feat_metrics
+        return results
+
+    def _validate_transformer(
+        self,
+        model: IPredictionModel,
+        dm: DataModule,
+        split: SplitType,
+        importance_arr: np.ndarray | None,
+    ) -> dict[str, dict[str, float]]:
+        """Sequence-aware validation for TransformerModel.
+
+        Uses predict() with full causal context instead of per-row forward_pass().
+        """
+        codes = dm.get_split_codes(split)
+        if not codes:
+            return {}
+
+        per_feat_true: dict[str, list[float]] = {f: [] for f in model.outputs}
+        per_feat_pred: dict[str, list[float]] = {f: [] for f in model.outputs}
+
+        for code in codes:
+            exp = dm.dataset.get_experiment(code)
+            params = exp.get_effective_parameters_for_row(0)
+            dim_info = self._get_model_dim_info(model, params)
+            shape = dim_info['shape']
+
+            pred_list = model.predict([params], dm, [dim_info], {})
+            if not pred_list:
+                continue
+            preds = pred_list[0]
+
+            exported = dm.dataset.export_to_tensor_dict(
+                [code],
+                x_columns=dm.input_columns,
+                y_columns=dm.output_columns,
+                categorical_mappings=dm.categorical_mappings,
+            )
+            if exported.is_empty():
+                continue
+
+            for feat in model.outputs:
+                y_pred_native = preds[feat].detach().cpu().numpy().ravel()
+                y_true_norm = exported.y[feat].to(dtype=torch.float32)
+                stats = dm._feature_stats.get(feat)
+                if stats is not None:
+                    y_true_denorm = dm._reverse_normalization_tensor(y_true_norm, stats)
+                else:
+                    y_true_denorm = y_true_norm
+                y_true_flat = y_true_denorm.detach().cpu().numpy().ravel()
+
+                n = min(len(y_true_flat), len(y_pred_native))
+                per_feat_true[feat].extend(y_true_flat[:n].tolist())
+                per_feat_pred[feat].extend(y_pred_native[:n].tolist())
+
+        results: dict[str, dict[str, float]] = {}
+        for feat in model.outputs:
+            y_t = np.array(per_feat_true[feat])
+            y_p = np.array(per_feat_pred[feat])
+            if len(y_t) == 0:
+                continue
+            feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
+            if importance_arr is not None and len(importance_arr) == len(y_t):
+                adj = Metrics.calculate_adjusted_r2(y_t, y_p, importance_arr)
+                feat_metrics['r2_adj'] = adj['r2_adj']
+            results[feat] = feat_metrics
+        return results
+
     def validate(
         self,
         use_test: bool = False,
@@ -1249,33 +1344,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
         for model in self.models:
-            input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
-            input_indices_t = torch.as_tensor(input_indices, dtype=torch.long)
-            indices = [dm.output_columns.index(f) for f in model.outputs]
-            indices_t = torch.as_tensor(indices, dtype=torch.long)
-
-            # Ground truth (denormalised) — tensor in, tensor out → numpy for metrics.
-            y_true_norm = y_split.index_select(1, indices_t)
-            y_true = dm.denormalize_values(y_true_norm, model.outputs).detach().cpu().numpy()
-
-            # Prediction.
-            y_pred_dict = model.forward_pass(X_split.index_select(1, input_indices_t))
-            y_pred_norm = torch.stack([y_pred_dict[f] for f in model.outputs], dim=-1)
-            y_pred = dm.denormalize_values(y_pred_norm, model.outputs).detach().cpu().numpy()
-
-            for i, feature_name in enumerate(model.outputs):
-                y_true_feat = y_true[:, i]
-                y_pred_feat = y_pred[:, i]
-
-                feat_metrics = Metrics.calculate_regression_metrics(y_true_feat, y_pred_feat)
-
-                if importance_arr is not None and len(importance_arr) == len(y_true_feat):
-                    adj = Metrics.calculate_adjusted_r2(
-                        y_true_feat, y_pred_feat, importance_arr
-                    )
-                    feat_metrics['r2_adj'] = adj['r2_adj']
-
-                results[feature_name] = feat_metrics
+            from ..models.transformer import TransformerModel
+            if isinstance(model, TransformerModel):
+                results.update(self._validate_transformer(model, dm, split, importance_arr))
+            else:
+                results.update(self._validate_flat(model, dm, X_split, y_split, importance_arr))
 
         # Print compact validation table with line breaks for readability
         has_adj = any('r2_adj' in m for m in results.values())

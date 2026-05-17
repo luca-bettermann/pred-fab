@@ -478,6 +478,24 @@ class TransformerModel(IPredictionModel):
         self._is_trained = True
 
     # ------------------------------------------------------------------
+    # Artifact serialization
+    # ------------------------------------------------------------------
+
+    def _get_model_artifacts(self) -> dict[str, Any]:
+        return {
+            "state_dict": self._model.state_dict() if self._model else None,
+            "depth_to_features": self._depth_to_features,
+            "is_trained": self._is_trained,
+        }
+
+    def _set_model_artifacts(self, artifacts: dict[str, Any]) -> None:
+        self._depth_to_features = artifacts["depth_to_features"]
+        self._is_trained = artifacts["is_trained"]
+        if artifacts["state_dict"] is not None and self._model is not None:
+            self._model.load_state_dict(artifacts["state_dict"])
+            self._model.eval()
+
+    # ------------------------------------------------------------------
     # Schema check
     # ------------------------------------------------------------------
 
