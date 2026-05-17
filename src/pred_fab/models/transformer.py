@@ -76,6 +76,7 @@ class TransformerModel(IPredictionModel):
     # depth losses (e.g. ``LOSS_WEIGHTS = {1: 1.0, 2: 0.5}`` halves depth-2's
     # contribution).
     LOSS_WEIGHTS: dict[int, float] = {}
+    USE_ALIBI: bool = True
 
     @property
     def sequence_axis_code(self) -> tuple[str, ...]:
@@ -136,6 +137,7 @@ class TransformerModel(IPredictionModel):
         torch.manual_seed(self.SEED)
         n_axes = len(self.sequence_axis_code)
 
+        use_alibi = getattr(self, 'USE_ALIBI', True)
         encoder = _TransformerEncoder(
             n_input=n_input,
             d_model=self.D_MODEL,
@@ -145,6 +147,7 @@ class TransformerModel(IPredictionModel):
             dropout=self.DROPOUT,
             max_seq_len=self.MAX_SEQ_LEN,
             n_axes=n_axes,
+            use_alibi=use_alibi,
         )
 
         self._depth_to_features = self._group_outputs_by_depth()
@@ -615,12 +618,20 @@ class _TransformerEncoder(nn.Module):
         dropout: float,
         max_seq_len: int,
         n_axes: int = 1,
+        use_alibi: bool = True,
     ):
         super().__init__()
         self.input_proj = nn.Linear(n_input, d_model)
-        self.pos_embeds = nn.ModuleList([
-            nn.Embedding(max_seq_len, d_model) for _ in range(n_axes)
-        ])
+        self._use_alibi = use_alibi
+        self._n_heads = n_heads
+        if use_alibi:
+            # ALiBi: no learned position embeddings. Locality bias is
+            # baked into the attention mask via fixed per-head slopes.
+            self.pos_embeds = nn.ModuleList()
+        else:
+            self.pos_embeds = nn.ModuleList([
+                nn.Embedding(max_seq_len, d_model) for _ in range(n_axes)
+            ])
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -666,11 +677,31 @@ class _TransformerEncoder(nn.Module):
         h = self.input_proj(x)
         for i, embed in enumerate(self.pos_embeds):
             h = h + embed(axis_indices[:, i])[None, :, :]
+
+        # Causal mask: upper triangle = -inf
         causal_mask = torch.triu(
             torch.full((L, L), float("-inf"), device=x.device), diagonal=1,
         )
+
+        if self._use_alibi:
+            # ALiBi: per-head linear distance bias on attention weights.
+            # slopes = 2^(-8/n * k) for k=1..n (Press et al., 2022)
+            slopes = torch.tensor([
+                2.0 ** (-8.0 / self._n_heads * (k + 1))
+                for k in range(self._n_heads)
+            ], device=x.device)
+            # Distance matrix: dist[i,j] = i - j (non-negative for causal)
+            positions = torch.arange(L, device=x.device)
+            dist = positions.unsqueeze(1) - positions.unsqueeze(0)  # (L, L)
+            # Per-head bias: (n_heads, L, L)
+            alibi = -slopes[:, None, None] * dist.unsqueeze(0).float()
+            # Combine: broadcast causal (L,L) + alibi (n_heads, L, L)
+            mask = causal_mask.unsqueeze(0) + alibi  # (n_heads, L, L)
+        else:
+            mask = causal_mask
+
         return self.encoder(
-            h, mask=causal_mask, is_causal=True,
+            h, mask=mask, is_causal=False,
             src_key_padding_mask=padding_mask,
         )
 
