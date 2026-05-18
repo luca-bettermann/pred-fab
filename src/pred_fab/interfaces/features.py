@@ -135,6 +135,10 @@ class IFeatureModel(BaseInterface):
         # Snapshot of initial parameters used when no per-row override is provided.
         params_snapshot = parameters.get_values_dict()
 
+        # Expose row-resolver so subclasses can look up params at other positions
+        # (e.g. previous layer). Temporary — will be replaced by SequenceContext.
+        self._get_params_for_row = get_params_for_row
+
         # Process each combination
         i_end = evaluate_to if evaluate_to is not None else len(dim_combinations)
         for i, current_dim in enumerate(dim_combinations):
