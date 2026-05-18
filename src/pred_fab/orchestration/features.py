@@ -198,7 +198,11 @@ class FeatureSystem(BaseOrchestrationSystem):
         """Run feature models in dependency order and return {code: tensor} dict."""
 
         feature_dict: dict[str, np.ndarray] = {}
+
         features_so_far: dict[str, np.ndarray] = {}
+        for code, tensor in features.get_values_dict().items():
+            if tensor is not None:
+                features_so_far[code] = features.tensor_to_table(code, tensor, parameters)
 
         ordered_models = self._topo_sort_models()
 
