@@ -36,6 +36,7 @@ class ExportedTensorDict:
     def is_empty(self) -> bool:
         return self.n_rows == 0
 from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDomainAxis
+from .data_objects import DataArray
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
