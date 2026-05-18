@@ -63,7 +63,13 @@ class Metrics:
         rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
         r2 = Metrics._r2(y_true, y_pred)
 
-        return {'mae': mae, 'rmse': rmse, 'r2': r2, 'n_samples': len(y_true)}
+        nonzero = np.abs(y_true) > 1e-10
+        if nonzero.any():
+            mape = float(np.mean(np.abs((y_true[nonzero] - y_pred[nonzero]) / y_true[nonzero])))
+        else:
+            mape = float("nan")
+
+        return {'mae': mae, 'rmse': rmse, 'r2': r2, 'mape': mape, 'n_samples': len(y_true)}
 
     @staticmethod
     def calculate_adjusted_r2(
