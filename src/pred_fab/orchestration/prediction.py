@@ -1288,13 +1288,10 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             for feat in model.outputs:
                 y_pred_native = preds[feat].detach().cpu().numpy().ravel()
-                y_true_norm = exported.y[feat].to(dtype=torch.float32)
-                stats = dm._feature_stats.get(feat)
-                if stats is not None:
-                    y_true_denorm = dm._reverse_normalization_tensor(y_true_norm, stats)
-                else:
-                    y_true_denorm = y_true_norm
-                y_true_flat = y_true_denorm.detach().cpu().numpy().ravel()
+                # export_to_tensor_dict returns raw values; predict() also
+                # returns denormalized values — both are in physical units.
+                y_true_raw = exported.y[feat].to(dtype=torch.float32)
+                y_true_flat = y_true_raw.detach().cpu().numpy().ravel()
 
                 n = min(len(y_true_flat), len(y_pred_native))
                 per_feat_true[feat].extend(y_true_flat[:n].tolist())
