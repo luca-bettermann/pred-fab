@@ -129,5 +129,3 @@ class EvaluationSystem(BaseOrchestrationSystem):
     def get_models(self) -> list[IEvaluationModel]:
         return self.models
 
-    def get_model_specs(self) -> dict[str, list[str]]:
-        return {m.output_performance: m.input_features for m in self.models}
