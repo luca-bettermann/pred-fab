@@ -22,17 +22,19 @@ class FeatureSystem(BaseOrchestrationSystem):
     def _set_feature_column_names(self, schema: DatasetSchema) -> None:
         """Derive and validate domain+depth from schema outputs, then set column names on DataArrays.
 
-        For each feature model, all outputs must share the same ``domain_code`` and ``feature_depth``
-        in the schema; raises ValueError if they diverge.  The resolved Domain object and depth are
-        stored in ``_model_domain_map`` keyed by ``id(model)`` for use during feature extraction.
+        Also validates:
+          - each model implements at least one of ``_load_data`` / ``_load_from_features``
+          - ``input_features`` reference outputs of another registered model
+          - the dependency graph is acyclic
         """
         self._schema = schema
+
+        # --- Per-model domain/depth derivation (unchanged) ---
         for model in self.models:
             domain_codes: list[str | None] = []
             feature_depths: list[int | None] = []
 
             for output_code in model.outputs:
-                # get data array
                 if output_code not in schema.features.data_objects:
                     raise ValueError(f"Output '{output_code}' from model '{model.__class__}' is not in schema.")
                 data_array = schema.features.data_objects[output_code]
@@ -41,14 +43,12 @@ class FeatureSystem(BaseOrchestrationSystem):
                 domain_codes.append(data_array.domain_code)
                 feature_depths.append(data_array.feature_depth)
 
-            # Validate all outputs share the same domain_code
             if len(set(domain_codes)) > 1:
                 raise ValueError(
                     f"Feature model '{model.__class__.__name__}' has outputs with mixed domain_codes: "
                     f"{dict(zip(model.outputs, domain_codes))}. All outputs must share the same domain_code."
                 )
 
-            # Validate all outputs share the same feature_depth
             if len(set(feature_depths)) > 1:
                 raise ValueError(
                     f"Feature model '{model.__class__.__name__}' has outputs with mixed feature_depths: "
@@ -58,7 +58,6 @@ class FeatureSystem(BaseOrchestrationSystem):
             derived_domain_code = domain_codes[0] if domain_codes else None
             derived_depth = feature_depths[0] if feature_depths else None
 
-            # Resolve the Domain object from the schema
             domain: Domain | None = None
             if derived_domain_code is not None:
                 domain = schema.domains.get(derived_domain_code)
@@ -68,10 +67,8 @@ class FeatureSystem(BaseOrchestrationSystem):
                         f"'{derived_domain_code}', but this domain is not registered in the schema."
                     )
 
-            # Store derived (domain, depth) for use during feature extraction
             self._model_domain_map[id(model)] = (domain, derived_depth)
 
-            # Set column names only if not already explicitly set.
             for output_code in model.outputs:
                 data_array = schema.features.data_objects[output_code]  # type: ignore[assignment]
                 if not data_array.columns:  # type: ignore[union-attr]
@@ -82,6 +79,69 @@ class FeatureSystem(BaseOrchestrationSystem):
                         col_names = [ax.iterator_code for ax in axes] + [output_code]
                         data_array.set_columns(col_names)  # type: ignore[union-attr]
 
+        # --- Validate load method implementation ---
+        for model in self.models:
+            if not model.uses_raw_data and not model.uses_feature_input:
+                raise TypeError(
+                    f"{type(model).__name__} must implement _load_data or "
+                    f"_load_from_features"
+                )
+
+        # --- Validate input_features references and acyclicity ---
+        self._validate_feature_dependencies()
+
+    def _validate_feature_dependencies(self) -> None:
+        """Check that input_features reference valid outputs and the graph is acyclic."""
+        all_outputs: set[str] = set()
+        for m in self.models:
+            all_outputs.update(m.outputs)
+
+        for m in self.models:
+            for feat in m.input_features:
+                if feat not in all_outputs:
+                    raise ValueError(
+                        f"{type(m).__name__} declares input_feature '{feat}' but "
+                        f"no registered feature model produces it."
+                    )
+
+        # Cycle detection via topo sort
+        self._topo_sort_models()
+
+    def _build_dependency_graph(self) -> dict[int, set[int]]:
+        """Build {model_id: set of upstream model_ids} from input_features."""
+        output_to_model: dict[str, IFeatureModel] = {}
+        for m in self.models:
+            for out in m.outputs:
+                output_to_model[out] = m
+
+        deps: dict[int, set[int]] = {id(m): set() for m in self.models}
+        for m in self.models:
+            for feat_code in m.input_features:
+                producer = output_to_model.get(feat_code)
+                if producer is not None and producer is not m:
+                    deps[id(m)].add(id(producer))
+        return deps
+
+    def _topo_sort_models(self) -> list[IFeatureModel]:
+        """Order models so dependencies run first. Raises on cycles."""
+        deps = self._build_dependency_graph()
+        in_degree = {id(m): len(deps[id(m)]) for m in self.models}
+        sorted_list: list[IFeatureModel] = []
+        queue = [m for m in self.models if in_degree[id(m)] == 0]
+        while queue:
+            m = queue.pop(0)
+            sorted_list.append(m)
+            for other in self.models:
+                if id(m) in deps[id(other)]:
+                    in_degree[id(other)] -= 1
+                    if in_degree[id(other)] == 0:
+                        queue.append(other)
+        if len(sorted_list) != len(self.models):
+            raise ValueError(
+                "Feature model dependency cycle detected — "
+                "input_features form a circular dependency."
+            )
+        return sorted_list
 
     # === FEATURE EXTRACTION ===
 
@@ -99,23 +159,16 @@ class FeatureSystem(BaseOrchestrationSystem):
         When ``feature`` is provided, only models whose class name contains
         that string (case-insensitive) are run. ``None`` runs all models.
         """
-        # Handle recompute logic
         if recompute:
             self.logger.info(f"Recompute flag set - clearing cache")
 
-        # Check if the features are already computed
         skip_for_code = {code: exp_data.is_complete(code, evaluate_from, evaluate_to)
                          for code in exp_data.features.keys() if not recompute}
 
-        # Provide per-row effective parameter resolution so that runtime parameter updates
-        # recorded on the experiment (e.g. adapted print_speed during online adaptation) are
-        # reflected in feature extraction.  ExperimentData.get_effective_parameters_for_row
-        # applies all recorded ParameterUpdateEvents that start at or before the given row.
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None
         if exp_data.parameter_updates:
             get_params_for_row = exp_data.get_effective_parameters_for_row
 
-        # Get feature extraction results from core logic
         feature_dict = self._compute_features_from_params(
             parameters=exp_data.parameters,
             features=exp_data.features,
@@ -127,7 +180,6 @@ class FeatureSystem(BaseOrchestrationSystem):
             feature_filter=feature,
         )
 
-        # Update exp_data with results
         exp_data.features.set_values_from_dict(feature_dict, self.logger)
 
         return feature_dict
@@ -143,23 +195,22 @@ class FeatureSystem(BaseOrchestrationSystem):
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
         feature_filter: str | None = None,
     ) -> dict[str, np.ndarray]:
-        """Run feature models and return {code: tensor} dict."""
+        """Run feature models in dependency order and return {code: tensor} dict."""
 
-        # Prepare result dictionaries
         feature_dict: dict[str, np.ndarray] = {}
+        features_so_far: dict[str, np.ndarray] = {}
 
-        # Run feature extraction for each feature code
-        for feature_model in self.models:
+        ordered_models = self._topo_sort_models()
+
+        for feature_model in ordered_models:
             if feature_filter is not None:
                 name = type(feature_model).__name__.lower()
                 if feature_filter.lower() not in name:
                     continue
-            # Skip if already loaded
             if all(skip_feature_code.get(code, False) for code in feature_model.outputs):
                 self.logger.info(f"Skipping feature extraction for '{feature_model.outputs}' as features already complete")
                 continue
 
-            # Look up domain and depth derived during _set_feature_column_names.
             if id(feature_model) not in self._model_domain_map:
                 raise RuntimeError(
                     f"FeatureSystem has no domain mapping for '{feature_model.__class__.__name__}'. "
@@ -167,7 +218,6 @@ class FeatureSystem(BaseOrchestrationSystem):
                 )
             domain, depth = self._model_domain_map[id(feature_model)]
 
-            # Run feature extraction and return 2d feature array
             feature_array = feature_model.compute_features(
                 parameters=parameters,
                 domain=domain,
@@ -176,19 +226,18 @@ class FeatureSystem(BaseOrchestrationSystem):
                 visualize=visualize,
                 depth=depth,
                 get_params_for_row=get_params_for_row,
+                features_so_far=features_so_far if feature_model.input_features else None,
             )
 
-            # Determine number of dimension columns from domain
             num_dims = 0
             if domain is not None:
                 max_depth = len(domain.axes) if depth is None else min(depth, len(domain.axes))
                 num_dims = max_depth
 
             for i, code in enumerate(feature_model.outputs):
-                # Slice [iterators..., selected-feature] from model output table.
                 table = feature_array[:, list(range(num_dims)) + [num_dims + i]]
-                # Convert to canonical tensor via shared Features transformation.
-                feature_dict[code] = features.table_to_tensor(code, table, parameters)
+                tensor = features.table_to_tensor(code, table, parameters)
+                feature_dict[code] = tensor
+                features_so_far[code] = table
 
         return feature_dict
-

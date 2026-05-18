@@ -18,22 +18,43 @@ class IFeatureModel(BaseInterface):
     outputs of a single feature model must share the same ``domain_code`` and ``feature_depth``
     in the schema; this is a structural requirement because a single ``compute_features`` call
     iterates one domain at one depth.
+
+    Subclasses must implement exactly one of:
+      - ``_load_data`` — for models that consume raw data (files, sensors, databases)
+      - ``_load_from_features`` — for models that consume other features' outputs
+
+    Both default to ``NotImplementedError``. FeatureSystem validates at init
+    that at least one is overridden.
     """
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
 
-    # === ABSTRACT METHODS ===
+    # === DATA LOADING (implement one) ===
 
-    # abstract methods from BaseInterface:
-    # - input_parameters
-    # - input_features
-    # - outputs
-
-    @abstractmethod
     def _load_data(self, params: dict, **dimensions) -> Any:
         """Load domain-specific raw data for the given parameter context (files, DB, etc.)."""
-        ...
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _load_data or _load_from_features"
+        )
+
+    def _load_from_features(
+        self,
+        features: dict[str, np.ndarray],
+        params: dict,
+        **dimensions,
+    ) -> Any:
+        """Load data from upstream feature arrays.
+
+        ``features`` maps feature code → full 2D table ``(n_rows, n_dims + 1)``
+        for each declared ``input_features``. Use ``slice_feature_at`` to
+        extract values at the current dimension context.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _load_data or _load_from_features"
+        )
+
+    # === FEATURE LOGIC (always implement) ===
 
     @abstractmethod
     def _compute_feature_logic(
@@ -46,10 +67,25 @@ class IFeatureModel(BaseInterface):
         """Extract feature values from loaded data; returns dict mapping feature codes to numeric values."""
         ...
 
-    # Pre-define input features as empty. Features can not have other features as inputs.
     @property
     def input_features(self) -> list[str]:
+        """Feature codes from other models that this model consumes.
+
+        Override to declare dependencies — the FeatureSystem will run
+        upstream models first and pass their computed arrays via
+        ``_load_from_features``.  Default: no dependencies.
+        """
         return []
+
+    @property
+    def uses_raw_data(self) -> bool:
+        """True if this model implements ``_load_data`` (loads from raw sources)."""
+        return type(self)._load_data is not IFeatureModel._load_data
+
+    @property
+    def uses_feature_input(self) -> bool:
+        """True if this model implements ``_load_from_features`` (consumes upstream features)."""
+        return type(self)._load_from_features is not IFeatureModel._load_from_features
 
     # === PUBLIC API ===
 
@@ -63,16 +99,12 @@ class IFeatureModel(BaseInterface):
         visualize: bool = False,
         depth: int | None = None,
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
+        features_so_far: dict[str, np.ndarray] | None = None,
         ) -> NDArray:
-        """Iterate over every domain axis combination in [evaluate_from, evaluate_to) and call _load_data + _compute_feature_logic.
+        """Iterate over every domain axis combination in [evaluate_from, evaluate_to) and call the appropriate load + compute methods.
 
         Returns a 2-D array of shape (n_combinations, n_dims + n_outputs) where the first
         n_dims columns are the domain axis iterator values and the remaining columns are feature values.
-
-        If ``get_params_for_row`` is provided, it is called with the global flat row index for
-        each iteration step and its result is used as the parameter dict.  This enables feature
-        extraction to reflect per-row effective parameters (e.g. adapted runtime parameters
-        recorded on an ExperimentData) rather than the single initial parameter snapshot.
         """
         self.logger.info(f"Starting evaluation for '{self.outputs}'")
 
@@ -108,28 +140,22 @@ class IFeatureModel(BaseInterface):
         for i, current_dim in enumerate(dim_combinations):
             i_global = evaluate_from + i
 
-            # Resolve effective parameters: use the per-row callable when available so that
-            # runtime parameter updates recorded on the experiment (e.g. adapted print_speed
-            # during online adaptation) are reflected in the feature extraction.
             params = get_params_for_row(i_global) if get_params_for_row is not None else params_snapshot
 
-            # merge dims and params into single dict
             current_dim_dict = dict(zip(dim_iterator_codes, current_dim)) if axes else {}
             self.logger.debug(f"Processing {i_global}/{i_end}: {current_dim_dict}")
 
-            # Compute feature values
             feature_values = self._compute_feature_values(
                 params,
                 current_dim_dict,
                 visualize=visualize,
+                features_so_far=features_so_far,
                 )
 
-            # Store in array
             if axes:
                 feature_array[i, :num_dims] = current_dim
             feature_array[i, num_dims:] = feature_values
 
-        # return 2d array
         return feature_array
 
     @final
@@ -138,21 +164,52 @@ class IFeatureModel(BaseInterface):
         params,
         dimensions,
         visualize: bool = False,
+        features_so_far: dict[str, np.ndarray] | None = None,
         ) -> list[float]:
-        """Extract feature with memoization via Dataset."""
+        """Load data via the appropriate method, then compute features."""
 
-        # Load and compute
         self.logger.debug(f"Computing features '{self.outputs}' for {params}")
-        data = self._load_data(params, **dimensions)
+
+        if self.uses_feature_input and features_so_far is not None:
+            relevant = {k: v for k, v in features_so_far.items() if k in self.input_features}
+            data = self._load_from_features(relevant, params, **dimensions)
+        else:
+            data = self._load_data(params, **dimensions)
+
         feature_dict = self._compute_feature_logic(data, params, visualize=visualize, **dimensions)
 
-        # Validate output from user implementation
         for feature_code, feature_value in feature_dict.items():
             if not isinstance(feature_value, (int, float, np.integer, np.floating)):
                 raise TypeError(
                     f"_compute_features() must return numeric values, got {type(feature_value).__name__} for feature '{feature_code}'"
                 )
 
-        # Get the correct order of feature values
         feature_values = [feature_dict[code] for code in self.outputs]  # type: ignore
         return feature_values
+
+
+def slice_feature_at(
+    feature_table: np.ndarray,
+    axis_code: str,
+    axis_value: int,
+    dim_codes: list[str],
+) -> np.ndarray:
+    """Filter a feature table by axis code and return the value column.
+
+    ``feature_table`` has shape ``(n_rows, n_dims + 1)`` where the first
+    ``n_dims`` columns are dimension indices and the last column is the
+    feature value.
+
+    ``dim_codes`` is the ordered list of dimension code names matching
+    the columns (from the schema domain axes).
+
+    Returns the 1-D array of values where ``axis_code == axis_value``.
+    """
+    if axis_code not in dim_codes:
+        raise ValueError(
+            f"axis_code {axis_code!r} not found in dim_codes {dim_codes}. "
+            f"Check that the upstream feature's domain matches."
+        )
+    col_idx = dim_codes.index(axis_code)
+    mask = feature_table[:, col_idx] == axis_value
+    return feature_table[mask, -1]
