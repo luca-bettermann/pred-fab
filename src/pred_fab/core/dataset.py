@@ -1050,6 +1050,9 @@ class Dataset:
             external_missing, external_data = external_loader(local_missing, **kwargs)
             # directly store retrieved data in ExpData object
             for code, data in external_data.items():
+                if isinstance(data, np.ndarray) and "feature_name" in kwargs:
+                    col_names = self._get_array_column_names(kwargs["feature_name"])
+                    data = pd.DataFrame(data, columns=col_names)
                 setter(code, data)
             self._check_for_retrieved_codes(local_missing, external_missing, dtype, Loaders.EXTERNAL, verbose)
         elif self.debug_flag:
