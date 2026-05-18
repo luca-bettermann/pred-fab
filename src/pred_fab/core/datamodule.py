@@ -197,33 +197,33 @@ class DataModule:
         return len(new_codes)
 
     def _create_splits(self, val_size: float, test_size: float) -> None:
-        """Creates split codes based on dataset."""
-        exp_codes = self.dataset.get_populated_experiment_codes()
-        
-        if not exp_codes:
-            self._split_codes = {SplitType.TRAIN: [], SplitType.VAL: [], SplitType.TEST: []}
+        """Creates split codes based on dataset, preserving pre-set splits.
+
+        Experiments already assigned to a split are kept. Only unassigned
+        experiments are auto-split according to val_size / test_size.
+        """
+        all_codes = set(self.dataset.get_populated_experiment_codes())
+        if not all_codes:
             return
-            
-        # Sort for deterministic split
-        exp_codes.sort()
-        n_samples = len(exp_codes)
-        indices = np.arange(n_samples)
-        
+
+        pre_assigned: set[str] = set()
+        for codes in self._split_codes.values():
+            pre_assigned.update(codes)
+
+        unassigned = sorted(all_codes - pre_assigned)
+
+        if not unassigned:
+            return
+
         if test_size == 0.0 and val_size == 0.0:
-            self._split_codes = {
-                SplitType.TRAIN: exp_codes,
-                SplitType.VAL: [],
-                SplitType.TEST: []
-            }
+            self._split_codes[SplitType.TRAIN].extend(unassigned)
             return
-        
-        # torch-native random split (was sklearn.train_test_split).
-        # Same shuffle-then-slice semantics; deterministic via the explicit
-        # random_seed.
+
+        n = len(unassigned)
+        indices = np.arange(n)
         rng = np.random.default_rng(self.random_seed)
         shuffled = rng.permutation(indices)
 
-        # Split off test set
         if test_size > 0.0:
             n_test = int(round(len(shuffled) * test_size))
             test_idx = shuffled[:n_test]
@@ -232,10 +232,7 @@ class DataModule:
             train_val_idx = shuffled
             test_idx = np.array([], dtype=int)
 
-        # Split remaining into train/val
         if val_size > 0.0 and len(train_val_idx) > 0:
-            # val_size is given as a fraction of the original indices set; adjust
-            # relative to the post-test remainder so the absolute counts match.
             adjusted = val_size / (1.0 - test_size) if test_size < 1.0 else 0.0
             n_val = int(round(len(train_val_idx) * adjusted))
             val_idx = train_val_idx[:n_val]
@@ -243,12 +240,10 @@ class DataModule:
         else:
             train_idx = train_val_idx
             val_idx = np.array([], dtype=int)
-        
-        self._split_codes = {
-            SplitType.TRAIN: [exp_codes[i] for i in train_idx],
-            SplitType.VAL: [exp_codes[i] for i in val_idx],
-            SplitType.TEST: [exp_codes[i] for i in test_idx]
-        }
+
+        self._split_codes[SplitType.TRAIN].extend([unassigned[i] for i in train_idx])
+        self._split_codes[SplitType.VAL].extend([unassigned[i] for i in val_idx])
+        self._split_codes[SplitType.TEST].extend([unassigned[i] for i in test_idx])
     
     def _inject_lagged_params(
         self,
