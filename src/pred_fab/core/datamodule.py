@@ -216,7 +216,8 @@ class DataModule:
             return
 
         if test_size == 0.0 and val_size == 0.0:
-            self._split_codes[SplitType.TRAIN].extend(unassigned)
+            if not pre_assigned:
+                self._split_codes[SplitType.TRAIN].extend(unassigned)
             return
 
         n = len(unassigned)
