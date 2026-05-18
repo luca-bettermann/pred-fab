@@ -3,7 +3,6 @@ import numpy as np
 import torch
 
 from ..core import ExperimentData, Parameters
-from ..core.data_objects import Features
 from ..interfaces.evaluation import IEvaluationModel
 from ..utils import PfabLogger, profiler
 from .base_system import BaseOrchestrationSystem
