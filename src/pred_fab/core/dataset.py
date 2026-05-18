@@ -640,6 +640,87 @@ class Dataset:
         self.logger.console_info("\n".join(summary))
         self.logger.console_new_line()
     
+    # === Feature completeness validation ===
+
+    def validate_completeness(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Check whether all experiments have all expected feature values.
+
+        Returns a nested dict: ``{exp_code: {feat_code: {expected, actual, nan, ok}}}``.
+        ``expected`` is derived from the experiment's axis sizes and the feature's depth.
+        """
+        report: dict[str, dict[str, dict[str, Any]]] = {}
+
+        for exp_code in self.get_experiment_codes():
+            exp = self.get_experiment(exp_code)
+            exp_report: dict[str, dict[str, Any]] = {}
+
+            for feat_code in self.schema.features.keys():
+                feat_obj = self.schema.features.get(feat_code)
+                if not isinstance(feat_obj, DataArray):
+                    continue
+
+                expected = self._expected_feature_count(exp, feat_obj)
+
+                if not exp.features.has(feat_code):
+                    exp_report[feat_code] = {"expected": expected, "actual": 0, "nan": 0, "ok": False}
+                    continue
+
+                tensor = exp.features.get_value(feat_code)
+                flat = np.asarray(tensor).reshape(-1)
+                n_nan = int(np.isnan(flat).sum())
+                n_actual = len(flat) - n_nan
+
+                exp_report[feat_code] = {
+                    "expected": expected,
+                    "actual": n_actual,
+                    "nan": n_nan,
+                    "ok": n_actual == expected and n_nan == 0,
+                }
+
+            report[exp_code] = exp_report
+
+        return report
+
+    def is_all_complete(self) -> bool:
+        """True if every experiment has all expected feature values with no NaN."""
+        report = self.validate_completeness()
+        return all(
+            entry["ok"]
+            for exp in report.values()
+            for entry in exp.values()
+        )
+
+    def get_incomplete(self) -> list[tuple[str, str]]:
+        """Return ``(exp_code, feat_code)`` pairs that are incomplete or have NaN."""
+        report = self.validate_completeness()
+        return [
+            (exp_code, feat_code)
+            for exp_code, feats in report.items()
+            for feat_code, entry in feats.items()
+            if not entry["ok"]
+        ]
+
+    def _expected_feature_count(self, exp: ExperimentData, feat_obj: DataArray) -> int:
+        """Compute expected number of values for a feature on an experiment.
+
+        Uses the experiment's actual axis sizes (from parameters), not schema max.
+        """
+        domain_code = feat_obj.domain_code
+        depth = feat_obj.feature_depth
+        if domain_code is None or depth is None or depth == 0:
+            return 1
+
+        domain = self.schema.domains.get(domain_code)
+        if domain is None:
+            return 1
+
+        params = exp.parameters.get_values_dict()
+        count = 1
+        for axis in domain.axes[:depth]:
+            axis_size = int(params.get(axis.code, 1))
+            count *= axis_size
+        return count
+
     # === Helper Methods for Hierarchical Loading/Saving ===
 
     def _set_exp_data(self, code: str, data: Any, block_type: BlockType) -> None:
