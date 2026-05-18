@@ -66,6 +66,9 @@ class DataModule:
         # Lagged parameter config: {original_col: lag}. Populated by add_lagged_params().
         self._lagged_params: dict[str, int] = {}
 
+        # Row exclusion: {axis_code: set of values to drop}. Applied in get_batches().
+        self._excluded_rows: dict[str, set[int]] = {}
+
         # Create splits (stores experiment codes)
         self._split_codes: dict[str, list[str]] = {
             SplitType.TRAIN: [],
@@ -148,6 +151,17 @@ class DataModule:
                 self._lagged_params[col] = lag
                 self.input_columns.append(lagged_col)
                 self._col_norm_methods[lagged_col] = self._col_norm_methods.get(col, NormMethod.NONE)
+
+    def exclude_rows(self, axis: str, values: list[int]) -> None:
+        """Exclude rows where ``axis`` matches any of ``values``. Call before ``prepare()``.
+
+        Rows are dropped from batches before normalization fitting, so
+        excluded positions don't affect normalization stats. Uses
+        ``cell_meta`` axis columns for filtering — no cross-experiment leakage.
+        """
+        if self._is_fitted:
+            raise RuntimeError("exclude_rows must be called before prepare().")
+        self._excluded_rows.setdefault(axis, set()).update(values)
 
     @property
     def cat_cardinalities(self) -> dict[int, int]:
@@ -246,6 +260,39 @@ class DataModule:
         self._split_codes[SplitType.VAL].extend([unassigned[i] for i in val_idx])
         self._split_codes[SplitType.TEST].extend([unassigned[i] for i in test_idx])
     
+    def _apply_row_exclusions(
+        self,
+        exported: "ExportedTensorDict",
+    ) -> "ExportedTensorDict":
+        """Drop rows where any excluded axis matches a configured value.
+
+        Modifies X, y, and cell_meta in place. Called before normalization
+        fitting and batch building so excluded rows never affect training.
+        """
+        if not self._excluded_rows:
+            return exported
+
+        from .dataset import ExportedTensorDict
+
+        mask = torch.ones(exported.n_rows, dtype=torch.bool)
+        for axis_code, excluded_values in self._excluded_rows.items():
+            if axis_code in exported.X:
+                col = exported.X[axis_code]
+                for val in excluded_values:
+                    mask &= col != val
+            elif axis_code in exported.y:
+                col = exported.y[axis_code]
+                for val in excluded_values:
+                    mask &= col != val
+
+        if mask.all():
+            return exported
+
+        X_filtered = {k: v[mask] for k, v in exported.X.items()}
+        y_filtered = {k: v[mask] for k, v in exported.y.items()}
+        meta_filtered = exported.cell_meta[mask]
+        return ExportedTensorDict(X_filtered, y_filtered, meta_filtered)
+
     def _inject_lagged_params(
         self,
         X_dict: dict[str, torch.Tensor],
@@ -324,6 +371,9 @@ class DataModule:
         )
         if exported.is_empty():
             return
+        exported = self._apply_row_exclusions(exported)
+        if exported.is_empty():
+            return
 
         X_dict = self._inject_context_features_tensor(exported.X, exported.y)
 
@@ -393,6 +443,9 @@ class DataModule:
             y_columns=self.output_columns,
             categorical_mappings=self.categorical_mappings,
         )
+        if exported.is_empty():
+            return []
+        exported = self._apply_row_exclusions(exported)
         if exported.is_empty():
             return []
 
