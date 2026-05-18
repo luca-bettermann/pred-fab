@@ -2,20 +2,19 @@ from typing import Any
 import numpy as np
 import torch
 
+from ..core import ExperimentData, Parameters
+from ..core.data_objects import Features
+from ..interfaces.evaluation import IEvaluationModel
 from ..utils import PfabLogger, profiler
-from ..core import Dataset, ExperimentData, DataReal, Parameters
-from ..interfaces import IEvaluationModel
 from .base_system import BaseOrchestrationSystem
 
 
 class EvaluationSystem(BaseOrchestrationSystem):
-    """Orchestrates performance evaluation across all registered evaluation models."""
+    """Aggregates dimensional features into scalar experiment-level performance."""
 
     def __init__(self, logger: PfabLogger):
         super().__init__(logger)
         self.models: list[IEvaluationModel] = []
-
-    # === EVALUATION ===
 
     def run_evaluation(
         self,
@@ -23,26 +22,17 @@ class EvaluationSystem(BaseOrchestrationSystem):
         recompute: bool = False,
         feature: str | None = None,
     ) -> dict[str, float | None]:
-        """Score features for a completed experiment and store results in exp_data.
-
-        When ``feature`` is provided, only evaluation models whose
-        ``input_feature`` contains that string (case-insensitive) are run.
-        """
-        # Prepare feature dict: convert N-D tensors to 2-D tables [iter..., value]
-        # so that evaluation models can iterate rows uniformly regardless of feature depth.
+        """Score features for a completed experiment and store results in exp_data."""
         features_dict: dict[str, np.ndarray] = {}
         for code, tensor in exp_data.features.get_values_dict().items():
             features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
-        # Mark features that were never computed so their eval models can be skipped.
         incomplete_features = {code: not exp_data.is_complete(code, 0, None)
                                for code in exp_data.features.keys()}
 
-        # Determine which performance codes to skip based on existing values
         skip_for_code = {code: exp_data.performance.has_value(code)
                          for code in exp_data.performance.keys() if not recompute}
 
-        # Compute and store performance
         performance_dict = self._evaluate_feature_dict(
             features_dict=features_dict,
             parameters=exp_data.parameters,
@@ -62,31 +52,27 @@ class EvaluationSystem(BaseOrchestrationSystem):
         feature_filter: str | None = None,
     ) -> dict[str, float | None]:
         """Run evaluation models and return {perf_code: value} dict."""
-
-        # Prepare result dictionaries
         performance_dict: dict[str, float | None] = {}
 
-        # Run evaluation for each performance code
         for eval_model in self.models:
             if feature_filter is not None:
-                if feature_filter.lower() not in eval_model.input_feature.lower():
+                if not any(feature_filter.lower() in f.lower() for f in eval_model.input_features):
                     continue
-            # Skip if already loaded
+
             if skip_for_code.get(eval_model.output_performance, False):
-                self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' as performance already complete.")
-                continue
-            # Skip if the feature array is incomplete -> we only evaluate on complete feature arrays
-            elif incomplete_features.get(eval_model.input_feature, False):
-                self.logger.info(f"Skipping evaluation for '{eval_model.input_feature}' as feature array incomplete.'")
+                self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' — already complete.")
                 continue
 
-            # Run evaluation (we only keep the average performance)
-            avg_performance, _, _ = eval_model.compute_performance(
-                feature_array=features_dict[eval_model.input_feature],
-                parameters=parameters,
-            )
+            if any(incomplete_features.get(f, False) for f in eval_model.input_features):
+                self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' — input feature incomplete.")
+                continue
 
-            # Collect results
+            if not all(f in features_dict for f in eval_model.input_features):
+                self.logger.warning(f"Skipping '{eval_model.output_performance}' — missing input features.")
+                continue
+
+            model_features = {f: features_dict[f] for f in eval_model.input_features}
+            avg_performance, _ = eval_model.compute_performance(model_features, parameters)
             performance_dict[eval_model.output_performance] = avg_performance
             self.logger.info(f"Computed performance '{eval_model.output_performance}': {avg_performance}")
 
@@ -97,13 +83,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         features_dicts_S: list[dict[str, torch.Tensor]],
         parameters_list: list[Parameters],
     ) -> dict[str, torch.Tensor]:
-        """Batched tensor eval over S candidates → ``{perf_code: (S,) tensor}``.
-
-        Per-candidate per-cell prediction tensors are flattened to ``(S, n_rows)``
-        for ``compute_performance_tensor``; gradient flows from the perf scores
-        back through the prediction tensors. Candidates missing a required
-        feature get NaN at their slot in the output.
-        """
+        """Batched tensor eval over S candidates → ``{perf_code: (S,) tensor}``."""
         S = len(features_dicts_S)
         result: dict[str, torch.Tensor] = {}
         if S == 0:
@@ -111,38 +91,35 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
         with profiler.section("eval._evaluate_feature_dict_tensor"):
             for eval_model in self.models:
-                feat_code = eval_model.input_feature
-                feature_values_list: list[torch.Tensor] = []
+                feat_codes = eval_model.input_features
+
                 valid_indices: list[int] = []
                 for s, feat_dict in enumerate(features_dicts_S):
-                    if feat_code in feat_dict:
-                        # Flatten any (*feat_shape,) tensor to (n_rows,) for the eval.
-                        feature_values_list.append(feat_dict[feat_code].reshape(-1))
+                    if all(f in feat_dict for f in feat_codes):
                         valid_indices.append(s)
-                if not feature_values_list:
+                if not valid_indices:
                     continue
 
-                # Stack into (S_valid, n_rows). Within an acquisition call all
-                # candidates share feat_shape (shape group invariant from
-                # _predict_from_params_tensor); n_rows is consistent.
+                model_tensors: dict[str, torch.Tensor] = {}
                 try:
-                    feature_values_S = torch.stack(feature_values_list, dim=0)
+                    for f in feat_codes:
+                        stacked = torch.stack(
+                            [features_dicts_S[s][f].reshape(-1) for s in valid_indices], dim=0,
+                        )
+                        model_tensors[f] = stacked
                 except RuntimeError:
-                    # Heterogeneous shapes: fall back to per-candidate loop.
                     avgs_list = []
-                    for fv, idx_s in zip(feature_values_list, valid_indices):
+                    for s in valid_indices:
+                        single = {f: features_dicts_S[s][f].reshape(-1).unsqueeze(0) for f in feat_codes}
                         avgs_list.append(eval_model.compute_performance_tensor(
-                            fv.unsqueeze(0), [parameters_list[idx_s]],
+                            single, [parameters_list[s]],
                         )[0])
                     avgs = torch.stack(avgs_list)
                 else:
                     valid_params = [parameters_list[s] for s in valid_indices]
                     with profiler.section(f"eval.compute_performance_tensor [{eval_model.output_performance}]"):
-                        avgs = eval_model.compute_performance_tensor(
-                            feature_values_S, valid_params,
-                        )
+                        avgs = eval_model.compute_performance_tensor(model_tensors, valid_params)
 
-                # Place into result tensor of shape (S,); pad invalid candidates with NaN.
                 full = torch.full((S,), float('nan'), dtype=avgs.dtype)
                 for k, s in enumerate(valid_indices):
                     full[s] = avgs[k]
@@ -151,5 +128,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
         return result
 
     def get_models(self) -> list[IEvaluationModel]:
-        """Return registered evaluation models."""
         return self.models
+
+    def get_model_specs(self) -> dict[str, list[str]]:
+        return {m.output_performance: m.input_features for m in self.models}

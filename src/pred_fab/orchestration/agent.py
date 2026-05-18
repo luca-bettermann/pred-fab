@@ -650,9 +650,9 @@ class PfabAgent:
         feature_weights: dict[str, float] = {}
         for eval_model in self.eval_system.models:
             perf_name = eval_model.output_performance
-            feat_name = eval_model.input_feature
             if perf_name in weights:
-                feature_weights[feat_name] = weights[perf_name]
+                for feat_name in eval_model.input_features:
+                    feature_weights[feat_name] = weights[perf_name]
         if feature_weights:
             self.pred_system.set_uncertainty_weights(feature_weights)
 

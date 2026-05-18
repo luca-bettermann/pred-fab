@@ -148,15 +148,24 @@ class ScalarEvaluationModel(IEvaluationModel):
         return []
 
     @property
-    def input_feature(self):
-        return "feature_scalar"
+    def input_features(self):
+        return ["feature_scalar"]
 
     @property
     def output_performance(self):
         return "performance_1"
 
-    def _compute_target_value(self, params, **dimensions):
-        return 7.0
+    def _score_row(self, feature_values, params, **dimensions):
+        value = feature_values["feature_scalar"]
+        target = 7.0
+        return float(np.clip(1.0 - abs(value - target) / max(target, 1e-10), 0.0, 1.0))
+
+    def _score_tensor(self, feature_tensors, parameters_list):
+        import torch
+        feat = feature_tensors["feature_scalar"]
+        target = 7.0
+        perfs = 1.0 - (feat - target).abs() / target
+        return torch.clamp(perfs, 0.0, 1.0).mean(dim=-1)
 
 
 class MixedPredictionModelGrid(IPredictionModel):
@@ -357,15 +366,28 @@ class WorkflowEvaluationModelA(IEvaluationModel):
         return ["param_1"]
 
     @property
-    def input_feature(self) -> str:
-        return "feature_1"
+    def input_features(self) -> List[str]:
+        return ["feature_1"]
 
     @property
     def output_performance(self) -> str:
         return "performance_1"
 
-    def _compute_target_value(self, params: Dict, **dimensions) -> float:
-        return float(params.get("param_1", 5.0)) * 1.5
+    def _score_row(self, feature_values, params, **dimensions):
+        value = feature_values["feature_1"]
+        target = float(params.get("param_1", 5.0)) * 1.5
+        denom = max(target, 1e-10)
+        return float(np.clip(1.0 - abs(value - target) / denom, 0.0, 1.0))
+
+    def _score_tensor(self, feature_tensors, parameters_list):
+        import torch
+        feat = feature_tensors["feature_1"]
+        S = feat.shape[0]
+        targets = torch.tensor([float(p.get_values_dict().get("param_1", 5.0)) * 1.5 for p in parameters_list])
+        diffs = (feat - targets[:, None]).abs()
+        denoms = targets.clamp(min=1e-10)
+        perfs = 1.0 - diffs / denoms[:, None]
+        return torch.clamp(perfs, 0.0, 1.0).mean(dim=-1)
 
 
 class WorkflowEvaluationModelB(IEvaluationModel):
@@ -376,15 +398,23 @@ class WorkflowEvaluationModelB(IEvaluationModel):
         return []
 
     @property
-    def input_feature(self) -> str:
-        return "feature_2"
+    def input_features(self) -> List[str]:
+        return ["feature_2"]
 
     @property
     def output_performance(self) -> str:
         return "performance_2"
 
-    def _compute_target_value(self, params: Dict, **dimensions) -> float:
-        return 1.0
+    def _score_row(self, feature_values, params, **dimensions):
+        value = feature_values["feature_2"]
+        target = 1.0
+        return float(np.clip(1.0 - abs(value - target) / max(target, 1e-10), 0.0, 1.0))
+
+    def _score_tensor(self, feature_tensors, parameters_list):
+        import torch
+        feat = feature_tensors["feature_2"]
+        perfs = 1.0 - (feat - 1.0).abs()
+        return torch.clamp(perfs, 0.0, 1.0).mean(dim=-1)
 
 
 class WorkflowPredictionModel(IPredictionModel):
@@ -507,15 +537,22 @@ class ContractEvaluationModelOk(IEvaluationModel):
         return []
 
     @property
-    def input_feature(self) -> str:
-        return "feature_scalar"
+    def input_features(self):
+        return ["feature_scalar"]
 
     @property
     def output_performance(self) -> str:
         return "performance_1"
 
-    def _compute_target_value(self, params, **dimensions):
-        return 1.0
+    def _score_row(self, feature_values, params, **dimensions):
+        value = feature_values["feature_scalar"]
+        return float(np.clip(1.0 - abs(value - 1.0), 0.0, 1.0))
+
+    def _score_tensor(self, feature_tensors, parameters_list):
+        import torch
+        feat = feature_tensors["feature_scalar"]
+        perfs = 1.0 - (feat - 1.0).abs()
+        return torch.clamp(perfs, 0.0, 1.0).mean(dim=-1)
 
 
 class ContractPredictionModelDefaults(IPredictionModel):
