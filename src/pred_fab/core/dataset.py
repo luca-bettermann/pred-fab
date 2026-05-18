@@ -1115,7 +1115,7 @@ class Dataset:
             self.logger.warning(f"Skipped pushing {dtype} to external source due missing ExternalData source.")
 
     def _build_export_rows(
-        self, experiment_codes: list[str],
+        self, experiment_codes: list[str], max_depth: int | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[tuple[int, int]]]:
         """Shared row builder used by ``export_to_dataframe`` and ``export_to_tensor_dict``.
 
@@ -1134,6 +1134,8 @@ class Dataset:
                 continue
 
             dim_names = exp_data.parameters.get_dim_names()
+            if max_depth is not None and len(dim_names) > max_depth:
+                dim_names = dim_names[:max_depth]
 
             if not dim_names:
                 # Case 1: scalar experiment (no dimensions).
@@ -1195,7 +1197,7 @@ class Dataset:
         """
         if not experiment_codes:
             return pd.DataFrame(), pd.DataFrame()
-        X_rows, y_rows, _ = self._build_export_rows(experiment_codes)
+        X_rows, y_rows, _ = self._build_export_rows(experiment_codes, max_depth=max_depth)
         if not X_rows:
             return pd.DataFrame(), pd.DataFrame()
         return pd.DataFrame(X_rows), pd.DataFrame(y_rows)
@@ -1206,6 +1208,7 @@ class Dataset:
         x_columns: list[str] | None = None,
         y_columns: list[str] | None = None,
         categorical_mappings: dict[str, list[str]] | None = None,
+        max_depth: int | None = None,
     ) -> "ExportedTensorDict":
         """Tensor-native export.
 
@@ -1225,7 +1228,7 @@ class Dataset:
         if not experiment_codes:
             return ExportedTensorDict({}, {}, torch.zeros((0, 2), dtype=torch.long))
 
-        X_rows, y_rows, cell_meta_list = self._build_export_rows(experiment_codes)
+        X_rows, y_rows, cell_meta_list = self._build_export_rows(experiment_codes, max_depth=max_depth)
         if not X_rows:
             return ExportedTensorDict({}, {}, torch.zeros((0, 2), dtype=torch.long))
 

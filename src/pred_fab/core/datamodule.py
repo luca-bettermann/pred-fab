@@ -69,6 +69,9 @@ class DataModule:
         # Row exclusion: {axis_code: set of values to drop}. Applied in get_batches().
         self._excluded_rows: dict[str, set[int]] = {}
 
+        # Domain depth limit: only iterate this many axes when building rows.
+        self._max_depth: int | None = None
+
         # Create splits (stores experiment codes)
         self._split_codes: dict[str, list[str]] = {
             SplitType.TRAIN: [],
@@ -151,6 +154,18 @@ class DataModule:
                 self._lagged_params[col] = lag
                 self.input_columns.append(lagged_col)
                 self._col_norm_methods[lagged_col] = self._col_norm_methods.get(col, NormMethod.NONE)
+
+    def set_max_depth(self, depth: int) -> None:
+        """Limit domain iteration to ``depth`` axes. Call before ``prepare()``.
+
+        With ``depth=1`` on a (layers, nodes) domain, rows are built per
+        layer only (12 per experiment, not 84). Depth-2 features are averaged
+        over the extra axis. Fixes row duplication for depth-1 models and
+        ensures ``add_lagged_params(lag=1)`` shifts by one layer, not one node.
+        """
+        if self._is_fitted:
+            raise RuntimeError("set_max_depth must be called before prepare().")
+        self._max_depth = depth
 
     def exclude_rows(self, axis: str, values: list[int]) -> None:
         """Exclude rows where ``axis`` matches any of ``values``. Call before ``prepare()``.
@@ -368,6 +383,7 @@ class DataModule:
             x_columns=self.input_columns,
             y_columns=self.output_columns,
             categorical_mappings=self.categorical_mappings,
+            max_depth=self._max_depth,
         )
         if exported.is_empty():
             return
@@ -442,6 +458,7 @@ class DataModule:
             x_columns=self.input_columns,
             y_columns=self.output_columns,
             categorical_mappings=self.categorical_mappings,
+            max_depth=self._max_depth,
         )
         if exported.is_empty():
             return []
