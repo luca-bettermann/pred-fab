@@ -63,6 +63,9 @@ class DataModule:
         # Column normalization methods map (for X)
         self._col_norm_methods: dict[str, NormMethod] = {}
 
+        # Lagged parameter config: {original_col: lag}. Populated by add_lagged_params().
+        self._lagged_params: dict[str, int] = {}
+
         # Create splits (stores experiment codes)
         self._split_codes: dict[str, list[str]] = {
             SplitType.TRAIN: [],
@@ -126,6 +129,25 @@ class DataModule:
                 feat_obj = self.dataset.schema.features.get(col)
                 if isinstance(feat_obj, DataArray) and feat_obj.context:
                     self._context_feature_codes.append(col)
+
+    def add_lagged_params(self, lag: int = 1) -> None:
+        """Register lagged parameter columns. Call before ``prepare()``.
+
+        For each non-categorical parameter in ``input_columns``, a
+        ``prev_{code}`` column is added. Within each experiment, values
+        are shifted by ``lag`` rows; the first ``lag`` rows copy their
+        own values (no change signal).
+        """
+        if self._is_fitted:
+            raise RuntimeError("add_lagged_params must be called before prepare().")
+        for col in list(self.input_columns):
+            if col in self.categorical_mappings:
+                continue
+            lagged_col = f"prev_{col}"
+            if lagged_col not in self.input_columns:
+                self._lagged_params[col] = lag
+                self.input_columns.append(lagged_col)
+                self._col_norm_methods[lagged_col] = self._col_norm_methods.get(col, NormMethod.NONE)
 
     @property
     def cat_cardinalities(self) -> dict[int, int]:
@@ -228,6 +250,39 @@ class DataModule:
             SplitType.TEST: [exp_codes[i] for i in test_idx]
         }
     
+    def _inject_lagged_params(
+        self,
+        X_dict: dict[str, torch.Tensor],
+        cell_meta: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Add prev_{col} columns by shifting per experiment (no cross-experiment leakage).
+
+        ``cell_meta`` has shape ``(n_rows, 2)`` with ``[exp_idx, cell_idx]``.
+        Within each experiment, values are shifted by ``lag`` rows along
+        cell_idx order. The first ``lag`` rows copy their own values.
+        """
+        out = dict(X_dict)
+        exp_ids = cell_meta[:, 0]
+
+        for col, lag in self._lagged_params.items():
+            if col not in X_dict:
+                continue
+            vals = X_dict[col]
+            shifted = vals.clone()
+
+            for exp_id in exp_ids.unique():
+                mask = exp_ids == exp_id
+                exp_vals = vals[mask]
+                n = exp_vals.shape[0]
+                if n <= lag:
+                    pass  # all rows copy themselves (no shift possible)
+                else:
+                    shifted[mask] = torch.cat([exp_vals[:lag], exp_vals[:-lag]])
+
+            out[f"prev_{col}"] = shifted
+
+        return out
+
     def _inject_context_features(self, X_df: pd.DataFrame, y_df: pd.DataFrame) -> pd.DataFrame:
         """Copy context feature columns from y_df into X_df so they appear in input during training."""
         if not self._context_feature_codes:
@@ -301,6 +356,11 @@ class DataModule:
                 continue
             self._feature_stats[col] = make_normaliser(method, valid)
 
+        for orig_col in self._lagged_params:
+            lagged_col = f"prev_{orig_col}"
+            if orig_col in self._parameter_stats:
+                self._parameter_stats[lagged_col] = self._parameter_stats[orig_col]
+
         self._is_fitted = True
 
     def fit_normalization(self, split: SplitType = SplitType.TRAIN) -> None:
@@ -341,6 +401,8 @@ class DataModule:
             return []
 
         X_dict = self._inject_context_features_tensor(exported.X, exported.y)
+        if self._lagged_params:
+            X_dict = self._inject_lagged_params(X_dict, exported.cell_meta)
         X_t = self.prepare_input_from_tensor_dict(X_dict)
 
         # Build y as (n_rows, len(output_columns)) tensor; apply normalisation per col.
