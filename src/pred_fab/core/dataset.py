@@ -362,7 +362,16 @@ class ExperimentData:
                     f"Expected list/dict for parameter updates in experiment '{self.code}', "
                     f"got {type(values).__name__}"
                 )
-            self.parameter_updates = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
+            events = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
+            self.parameter_updates = [
+                ParameterUpdateEvent(
+                    updates=self.parameters.sanitize_values(e.updates, ignore_unknown=True),
+                    iterator_code=e.iterator_code,
+                    step_index=e.step_index,
+                    source_step=e.source_step,
+                )
+                for e in events
+            ]
         elif block_type == BlockType.FEATURES:
             self.features.set_values_from_df(values, logger, parameters=self.parameters)
         elif block_type == BlockType.PERF_ATTRS:
