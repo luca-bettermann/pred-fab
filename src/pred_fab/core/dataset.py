@@ -268,23 +268,45 @@ class ExperimentData:
             return True
         return False
 
-    def _event_start_index(self, event: ParameterUpdateEvent) -> int:
-        """Return the step index at which this event takes effect.
-
-        Events are defined per-step on a single iterator axis. The
-        step_index IS the row index when iterating at that axis's depth.
-        """
-        if event.iterator_code is None and event.step_index is None:
-            return 0
-        if event.iterator_code is None or event.step_index is None:
-            raise ValueError("ParameterUpdateEvent must set both iterator_code and step_index, or neither.")
-        return event.step_index
-
     def get_effective_parameters_for_row(self, row_index: int) -> dict[str, Any]:
-        """Get effective parameter values at a flattened row index, including applied updates."""
+        """Get effective parameter values at a flattened row index, including applied updates.
+
+        Uses the full domain strides to determine which events have taken
+        effect by the given row.
+        """
+        effective = self.parameters.get_values_dict().copy()
+        if not self.parameter_updates:
+            return effective
+
+        strides = self.parameters._get_dimension_strides()
+        for event in self.parameter_updates:
+            if event.iterator_code is None or event.step_index is None:
+                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
+                effective.update(coerced)
+                continue
+            stride = strides.get(event.iterator_code, 1)
+            event_start = event.step_index * stride
+            if row_index >= event_start:
+                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
+                effective.update(coerced)
+        return effective
+
+    def get_effective_parameters_for_context(
+        self, iterator_ctx: dict[str, int],
+    ) -> dict[str, Any]:
+        """Get effective parameter values for a given iterator context.
+
+        Matches events by iterator_code and step_index against the context.
+        Works at any depth — no flat index computation needed.
+        """
         effective = self.parameters.get_values_dict().copy()
         for event in self.parameter_updates:
-            if row_index >= self._event_start_index(event):
+            if event.iterator_code is None or event.step_index is None:
+                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
+                effective.update(coerced)
+                continue
+            ctx_value = iterator_ctx.get(event.iterator_code)
+            if ctx_value is not None and ctx_value >= event.step_index:
                 coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
                 effective.update(coerced)
         return effective
@@ -1174,10 +1196,10 @@ class Dataset:
                 iterator_features.append((f"{ic}_pos", ic, size))
 
             for row_idx, idx_tuple in enumerate(dim_combinations):
-                row_dict = exp_data.get_effective_parameters_for_row(row_idx)
-                iterator_ctx: dict[str, Any] = {
+                iterator_ctx: dict[str, int] = {
                     dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
                 }
+                row_dict = exp_data.get_effective_parameters_for_context(iterator_ctx)
 
                 for feat_code, axis_code, size in iterator_features:
                     raw_idx = iterator_ctx.get(axis_code)
