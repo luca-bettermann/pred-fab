@@ -1190,12 +1190,15 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         # Collect per-experiment combined scores
         codes = dm.get_split_codes(split)
+        max_depth = getattr(dm, '_max_depth', None)
         exp_scores: list[tuple[float, int]] = []  # (score, n_rows)
         for code in codes:
             exp = dm.dataset.get_experiment(code)
             perf = exp.performance.get_values_dict()
             score = combined_score(perf, performance_weights)
             dim_names = exp.parameters.get_dim_names()
+            if max_depth is not None and len(dim_names) > max_depth:
+                dim_names = dim_names[:max_depth]
             n_rows = len(exp.parameters.get_dim_combinations(dim_names)) if dim_names else 1
             exp_scores.append((score, n_rows))
 
