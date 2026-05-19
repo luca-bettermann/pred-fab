@@ -476,16 +476,14 @@ class PredictionSystem(BaseOrchestrationSystem):
                 params = exp.parameters.get_values_dict().copy()
                 exp_configs.append(params)
             else:
-                events = sorted(exp.parameter_updates, key=lambda e: exp._event_start_index(e))
-                seg_start = 0
+                events = sorted(exp.parameter_updates, key=lambda e: (e.iterator_code or "", e.step_index or 0))
+                seen_steps: set[int] = set()
                 for event in events:
-                    seg_end = exp._event_start_index(event)
-                    if seg_end > seg_start:
-                        exp_configs.append(exp.get_effective_parameters_for_row(seg_start))
-                    seg_start = seg_end
-                n_rows = exp.get_num_rows()
-                if n_rows > seg_start:
-                    exp_configs.append(exp.get_effective_parameters_for_row(seg_start))
+                    step = event.step_index or 0
+                    if step not in seen_steps:
+                        seen_steps.add(step)
+                        ctx = {event.iterator_code: step} if event.iterator_code else {}
+                        exp_configs.append(exp.get_effective_parameters_for_context(ctx))
 
         self._n_exp = n_exp
         if not exp_configs:
