@@ -1169,6 +1169,12 @@ class Dataset:
                 iterator_ctx: dict[str, Any] = {
                     dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
                 }
+
+                for feat_code, axis_code, size in iterator_features:
+                    raw_idx = iterator_ctx.get(axis_code)
+                    if raw_idx is not None:
+                        row_dict[feat_code] = float(raw_idx) / max(size - 1, 1)
+
                 X_rows.append(row_dict)
 
                 y_dict = {}
@@ -1176,13 +1182,6 @@ class Dataset:
                     val = exp_data.features.value_at(feature_name, exp_data.parameters, iterator_ctx)
                     if val is not None and not np.isnan(val):
                         y_dict[feature_name] = val
-
-                for feat_code, axis_code, size in iterator_features:
-                    raw_idx = iterator_ctx.get(axis_code)
-                    if raw_idx is None:
-                        continue
-                    norm = float(raw_idx) / max(size - 1, 1)
-                    y_dict[feat_code] = norm
 
                 y_rows.append(y_dict)
                 cell_meta.append((exp_idx, row_idx))
