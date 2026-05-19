@@ -1113,7 +1113,7 @@ class Dataset:
             # Check for non-empty data (handling dicts and arrays)
             if isinstance(val, (dict, list)) and len(val) > 0:
                 data_to_save[code] = val
-            elif isinstance(val, np.ndarray) and val.size > 0 and not np.all(np.isnan(val)):
+            elif isinstance(val, np.ndarray) and val.size > 0 and not np.all(np.isnan(val[:, -1])):
                 data_to_save[code] = val
             elif not isinstance(val, (dict, list, np.ndarray)):
                 raise ValueError(f"Unsupported data type for saving: {type(val)}")
