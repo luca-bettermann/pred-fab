@@ -219,18 +219,36 @@ class MLPModel(IPredictionModel):
                 TensorDataset(X, y), batch_size=batch_size, shuffle=True,
             )
 
-        for _ in range(self.EPOCHS):
+        epoch_logger = kwargs.get("epoch_logger")
+
+        for epoch in range(self.EPOCHS):
             if use_minibatch:
+                epoch_loss = 0.0
                 for X_b, y_b in loader:
                     optimizer.zero_grad()
                     loss = loss_fn(net(self._embed_cats(X_b)), y_b)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += float(loss.detach())
             else:
                 optimizer.zero_grad()
                 loss = loss_fn(net(self._embed_cats(X)), y)
                 loss.backward()
                 optimizer.step()
+                epoch_loss = float(loss.detach())
+
+            if epoch_logger is not None:
+                metrics = {"loss/total": epoch_loss}
+                if val_batches:
+                    with torch.no_grad():
+                        X_val = torch.cat([b[0] for b in val_batches], dim=0)
+                        y_val = torch.cat([b[1] for b in val_batches], dim=0)
+                        if y_val.ndim == 1:
+                            y_val = y_val.reshape(-1, 1)
+                        val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
+                        metrics["loss/val"] = val_loss
+                epoch_logger.log_epoch(epoch, metrics)
+
         net.eval()
         self._cat_embeddings.eval()
 
