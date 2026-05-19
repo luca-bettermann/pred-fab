@@ -1102,8 +1102,8 @@ class Dataset:
         else:
             self.logger.info(f"{dtype.capitalize()} already exist as local files.")
 
-        # 3. Save to external source (skip if in debug mode)
-        if not self.debug_flag and external_saver:
+        # 3. Save to external source (skip if local didn't write anything new)
+        if not self.debug_flag and external_saver and saved:
             pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
             if pushed:
                 self._logging(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.", self.logger.console_pushed, verbose)
