@@ -269,13 +269,16 @@ class ExperimentData:
         return False
 
     def _event_start_index(self, event: ParameterUpdateEvent) -> int:
-        """Translate an event's step context into the flattened row start index."""
+        """Return the step index at which this event takes effect.
+
+        Events are defined per-step on a single iterator axis. The
+        step_index IS the row index when iterating at that axis's depth.
+        """
         if event.iterator_code is None and event.step_index is None:
             return 0
         if event.iterator_code is None or event.step_index is None:
-            raise ValueError("ParameterUpdateEvent must set both dimension and step_index, or neither.")
-        start, _ = self.parameters.get_start_and_end_indices(event.iterator_code, event.step_index)
-        return start
+            raise ValueError("ParameterUpdateEvent must set both iterator_code and step_index, or neither.")
+        return event.step_index
 
     def get_effective_parameters_for_row(self, row_index: int) -> dict[str, Any]:
         """Get effective parameter values at a flattened row index, including applied updates."""
