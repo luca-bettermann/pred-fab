@@ -282,7 +282,8 @@ class ExperimentData:
         effective = self.parameters.get_values_dict().copy()
         for event in self.parameter_updates:
             if row_index >= self._event_start_index(event):
-                effective.update(event.updates)
+                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
+                effective.update(coerced)
         return effective
 
     def get_num_rows(self) -> int:
