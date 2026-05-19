@@ -486,7 +486,7 @@ class PfabAgent:
         self._log_step_completion(exp_data.code, start, end, action="used for tuning")
 
         # Calibrate around effective current parameters (online = single step).
-        current_params = exp_data.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
+        current_params = exp_data.get_effective_parameters_at_step(iterator_code=dimension, step_index=step_index)
         target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
         raise NotImplementedError(
             "adaptation_step requires trust-region optimization (not yet migrated "
@@ -501,7 +501,7 @@ class PfabAgent:
 
         # Record only if user confirms that proposed changes were applied physically.
         if record:
-            exp_data.record_parameter_update(proposal, dimension=dimension, step_index=step_index)
+            exp_data.record_parameter_update(proposal, iterator_code=dimension, step_index=step_index)
             self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
 
         self.logger.info("Successfully completed adaptation step.")

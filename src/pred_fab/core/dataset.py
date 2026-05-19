@@ -88,7 +88,7 @@ class ParameterUpdateEvent:
     """Immutable record of an applied parameter update at a specific fabrication step."""
 
     updates: dict[str, Any]
-    dimension: str | None = None
+    iterator_code: str | None = None
     step_index: int | None = None
     source_step: str | None = None
 
@@ -96,7 +96,7 @@ class ParameterUpdateEvent:
         """Serialize event to plain dictionary."""
         return {
             "updates": dict(self.updates),
-            "dimension": self.dimension,
+            "iterator_code": self.iterator_code,
             "step_index": self.step_index,
             "source_step": self.source_step,
         }
@@ -106,7 +106,7 @@ class ParameterUpdateEvent:
         """Deserialize event from plain dictionary."""
         return cls(
             updates=dict(data.get("updates", {})),
-            dimension=data.get("dimension"),
+            iterator_code=data.get("iterator_code") or data.get("dimension"),
             step_index=data.get("step_index"),
             source_step=data.get("source_step"),
         )
@@ -131,7 +131,7 @@ class ParameterTrajectory:
             )
             experiment.record_parameter_update(
                 proposal,
-                dimension=event.dimension,
+                iterator_code=event.iterator_code,
                 step_index=event.step_index,
             )
 
@@ -146,7 +146,7 @@ def trajectory_to_events(trajectory: 'ParameterTrajectory') -> list[ParameterUpd
     return [
         ParameterUpdateEvent(
             updates=dict(proposal.values),
-            dimension=trajectory.dimension,
+            iterator_code=trajectory.dimension,
             step_index=step_index,
             source_step=proposal.source_step,
         )
@@ -165,7 +165,7 @@ def events_to_trajectory(
     Events without a ``step_index`` (i.e. initial-state events not bound to a
     schedule step) are skipped. Inverse of :func:`trajectory_to_events`.
     """
-    matched = [e for e in events if e.dimension == dimension and e.step_index is not None]
+    matched = [e for e in events if e.iterator_code == dimension and e.step_index is not None]
     matched.sort(key=lambda e: e.step_index)  # type: ignore[arg-type, return-value]
     entries: list[tuple[int, ParameterProposal]] = [
         (
@@ -270,11 +270,11 @@ class ExperimentData:
 
     def _event_start_index(self, event: ParameterUpdateEvent) -> int:
         """Translate an event's step context into the flattened row start index."""
-        if event.dimension is None and event.step_index is None:
+        if event.iterator_code is None and event.step_index is None:
             return 0
-        if event.dimension is None or event.step_index is None:
+        if event.iterator_code is None or event.step_index is None:
             raise ValueError("ParameterUpdateEvent must set both dimension and step_index, or neither.")
-        start, _ = self.parameters.get_start_and_end_indices(event.dimension, event.step_index)
+        start, _ = self.parameters.get_start_and_end_indices(event.iterator_code, event.step_index)
         return start
 
     def get_effective_parameters_for_row(self, row_index: int) -> dict[str, Any]:
@@ -295,35 +295,33 @@ class ExperimentData:
 
     def get_effective_parameters_at_step(
         self,
-        dimension: str | None = None,
+        iterator_code: str | None = None,
         step_index: int | None = None,
     ) -> dict[str, Any]:
         """Get effective parameters at the start of the specified step context."""
-        if dimension is None and step_index is None:
+        if iterator_code is None and step_index is None:
             return self.get_effective_parameters_for_row(0)
-        if dimension is None or step_index is None:
-            raise ValueError("Both dimension and step_index must be provided together.")
-        start, _ = self.parameters.get_start_and_end_indices(dimension, step_index)
+        if iterator_code is None or step_index is None:
+            raise ValueError("Both iterator_code and step_index must be provided together.")
+        start, _ = self.parameters.get_start_and_end_indices(iterator_code, step_index)
         return self.get_effective_parameters_for_row(start)
 
     def record_parameter_update(
         self,
         proposal: ParameterProposal,
-        dimension: str | None = None,
+        iterator_code: str | None = None,
         step_index: int | None = None,
     ) -> ParameterUpdateEvent | None:
         """Record an applied parameter proposal for later reconstruction of effective training rows."""
-        if dimension is None and step_index is not None:
-            raise ValueError("step_index can only be provided with dimension.")
-        if dimension is not None and step_index is None:
-            raise ValueError("dimension can only be provided with step_index.")
+        if iterator_code is None and step_index is not None:
+            raise ValueError("step_index can only be provided with iterator_code.")
+        if iterator_code is not None and step_index is None:
+            raise ValueError("iterator_code can only be provided with step_index.")
         if not proposal.values:
             return None
 
-        # Determine current effective context at this step before applying the update.
-        before = self.get_effective_parameters_at_step(dimension=dimension, step_index=step_index)
+        before = self.get_effective_parameters_at_step(iterator_code=iterator_code, step_index=step_index)
 
-        # Keep only changed values and sanitize to schema dtypes/constraints.
         delta = {
             code: value
             for code, value in proposal.values.items()
@@ -340,7 +338,7 @@ class ExperimentData:
         sanitized_delta = self.parameters.sanitize_values(delta, ignore_unknown=False)
         event = ParameterUpdateEvent(
             updates=sanitized_delta,
-            dimension=dimension,
+            iterator_code=iterator_code,
             step_index=step_index,
             source_step=proposal.source_step,
         )
