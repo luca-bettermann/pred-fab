@@ -385,8 +385,6 @@ class ExperimentData:
         if block_type == BlockType.PARAMETERS:
             return self.parameters.get_values_dict()
         elif block_type == BlockType.PARAM_UPDATES:
-            if not self.parameter_updates:
-                return {}
             return {"events": [e.to_dict() for e in self.parameter_updates]}
         elif block_type == BlockType.PERF_ATTRS:
             return self.performance.get_values_dict()
