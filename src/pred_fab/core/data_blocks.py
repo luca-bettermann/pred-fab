@@ -210,14 +210,14 @@ class Parameters(DataBlock):
         return self._get_domain_axis_values(codes)
 
     def _get_dimension_strides(self) -> dict[str, int]:
-        """Compute stride per domain axis; stride[axis] = product of sizes of all inner axes."""
+        """Compute stride per domain axis; keyed by both axis code and iterator code."""
         sorted_dims = self._get_sorted_domain_axes()
         strides = {}
         current_stride = 1
 
-        # Iterate backwards (from innermost axis outward)
         for dim in reversed(sorted_dims):
             strides[dim.code] = current_stride
+            strides[dim.iterator_code] = current_stride
             size = self.get_value(dim.code)
             current_stride *= size
         return strides
