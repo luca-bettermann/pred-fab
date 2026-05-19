@@ -5,6 +5,7 @@ import torch
 from ..core import ExperimentData, Parameters
 from ..interfaces.evaluation import IEvaluationModel
 from ..utils import PfabLogger, profiler
+from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 
 
@@ -40,6 +41,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
             feature_filter=feature,
         )
         exp_data.performance.set_values_from_dict(performance_dict, self.logger)
+        exp_data.mark_dirty(BlockType.PERF_ATTRS.value)
         return performance_dict
 
     def _evaluate_feature_dict(

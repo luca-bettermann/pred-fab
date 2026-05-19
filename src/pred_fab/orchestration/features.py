@@ -181,6 +181,8 @@ class FeatureSystem(BaseOrchestrationSystem):
         )
 
         exp_data.features.set_values_from_dict(feature_dict, self.logger)
+        for code in feature_dict:
+            exp_data.mark_dirty(code)
 
         return feature_dict
 

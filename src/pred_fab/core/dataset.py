@@ -232,6 +232,7 @@ class ExperimentData:
         # to a named dataset (baseline / reference / test / exploration / etc.).
         self.dataset_code: str | None = dataset_code
         self.parameter_updates: list[ParameterUpdateEvent] = []
+        self._dirty: set[str] = set()
         # self.predicted_features = predicted_features
 
     # === Helper Methods for Validation ===
@@ -349,8 +350,25 @@ class ExperimentData:
 
     # === Helper Methods for Data Access ===
 
+    def mark_dirty(self, block_type: str) -> None:
+        """Mark a block type as modified locally (needs push on save)."""
+        self._dirty.add(block_type)
+
+    def is_dirty(self, block_type: str) -> bool:
+        """True if block was modified since last load/save."""
+        return block_type in self._dirty
+
+    def clear_dirty(self, block_type: str) -> None:
+        """Clear dirty flag after successful save."""
+        self._dirty.discard(block_type)
+
     def set_data(self, values: Any, block_type: BlockType, logger: PfabLogger) -> None:
-        """Set values for a specific data type."""
+        """Set values for a specific data type. Marks the block as dirty."""
+        dtype_key = block_type if isinstance(block_type, str) else block_type.value
+        self._dirty.add(dtype_key)
+        if block_type == BlockType.FEATURES and hasattr(values, 'columns'):
+            feat_code = list(values.columns)[-1]
+            self._dirty.add(str(feat_code))
         if block_type == BlockType.PARAMETERS:
             self.parameters.set_values_from_dict(values, logger)
         elif block_type == BlockType.PARAM_UPDATES:
@@ -1034,9 +1052,10 @@ class Dataset:
         # 2. Load from local files
         if not recompute_flag:
             local_missing, local_data = loader(memory_missing, **kwargs)
-            # directly store retrieved data in ExpData object
             for code, data in local_data.items():
                 setter(code, data)
+                if code in self._experiments:
+                    self._experiments[code].clear_dirty(dtype if isinstance(dtype, str) else str(dtype))
             self._check_for_retrieved_codes(memory_missing, local_missing, dtype, Loaders.LOCAL, verbose)
         else:
             local_missing = memory_missing
@@ -1048,12 +1067,13 @@ class Dataset:
         # 3. Load from external sources
         if not self.debug_flag and external_loader:
             external_missing, external_data = external_loader(local_missing, **kwargs)
-            # directly store retrieved data in ExpData object
             for code, data in external_data.items():
                 if isinstance(data, np.ndarray) and "feature_name" in kwargs:
                     col_names = self._get_array_column_names(kwargs["feature_name"])
                     data = pd.DataFrame(data, columns=col_names)
                 setter(code, data)
+                if code in self._experiments:
+                    self._experiments[code].clear_dirty(dtype if isinstance(dtype, str) else str(dtype))
             self._check_for_retrieved_codes(local_missing, external_missing, dtype, Loaders.EXTERNAL, verbose)
         elif self.debug_flag:
             external_missing = local_missing 
@@ -1102,13 +1122,21 @@ class Dataset:
         else:
             self.logger.info(f"{dtype.capitalize()} already exist as local files.")
 
-        # 3. Save to external source (skip if in debug mode)
+        # 3. Save to external source (skip if not dirty or debug mode)
         if not self.debug_flag and external_saver:
-            pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
-            if pushed:
-                self._logging(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.", self.logger.console_pushed, verbose)
+            dirty_codes = [c for c in codes_to_save
+                           if c in self._experiments and self._experiments[c].is_dirty(dtype)]
+            if dirty_codes:
+                dirty_data = {c: data_to_save[c] for c in dirty_codes}
+                pushed = external_saver(dirty_codes, dirty_data, recompute, **kwargs)
+                if pushed:
+                    self._logging(f"Pushed to external source: {dtype} for {len(dirty_codes)} experiments.", self.logger.console_pushed, verbose)
+                    for c in dirty_codes:
+                        self._experiments[c].clear_dirty(dtype)
+                else:
+                    self.logger.info(f"Skipped pushing {dtype} to external source due to missing implementation in ExternalData.")
             else:
-                self.logger.info(f"Skipped pushing {dtype} to external source due to missing implementation in ExternalData.")
+                self.logger.info(f"No dirty data for {dtype} — skipping external push.")
         elif self.debug_flag:
             self.logger.info(f"Skipped pushing {dtype} to external source due to debug mode.")
         else:
