@@ -34,26 +34,21 @@ from ._style import (
 def expand_experiments(
     experiments: list[Any],
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    trajectories: dict[str, list[dict[str, Any]]] | None = None,
-    codes: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[int], list[float]]:
     """Expand experiments into flat point lists with per-layer 1/L weights.
 
     Accepts:
       - ``ExperimentSpec`` — expands via ``.trajectories``
       - ``ExperimentData`` — expands via ``.parameter_updates``
-      - ``dict`` — expands via optional ``trajectories`` map keyed by ``codes``
+      - ``dict`` — single point, no expansion
     """
     transform = param_transform or (lambda d: d)
-    traj_map = trajectories or {}
-    code_list = codes or []
     all_pts: list[dict[str, Any]] = []
     exp_ids: list[int] = []
     weights: list[float] = []
 
     for i, exp in enumerate(experiments):
         if hasattr(exp, "initial_params"):
-            # ExperimentSpec
             base = dict(exp.initial_params.to_dict())
             layers: list[dict[str, Any]] = [transform(base)]
             for _dim, traj in exp.trajectories.items():
@@ -62,7 +57,6 @@ def expand_experiments(
                     layer_p.update(transform(proposal.to_dict()))
                     layers.append(layer_p)
         elif hasattr(exp, "parameter_updates") and hasattr(exp, "parameters"):
-            # ExperimentData
             base_params = exp.parameters.get_values_dict()
             if exp.parameter_updates:
                 dim_names = exp.parameters.get_dim_names()
@@ -74,18 +68,7 @@ def expand_experiments(
             else:
                 layers = [transform(base_params)]
         else:
-            # Plain dict
-            base = transform(dict(exp))
-            code = code_list[i] if i < len(code_list) else None
-            traj_steps = traj_map.get(code, []) if code else []
-            if traj_steps:
-                layers = []
-                for step in traj_steps:
-                    layer_p = dict(base)
-                    layer_p.update(transform(step))
-                    layers.append(layer_p)
-            else:
-                layers = [base]
+            layers = [transform(dict(exp))]
 
         w = 1.0 / len(layers)
         for lp in layers:
@@ -287,8 +270,6 @@ def plot_evidence_panel(
     all_axes: list[AxisSpec] | None = None,
     label: str | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    trajectories: dict[str, list[dict[str, Any]]] | None = None,
-    codes: list[str] | None = None,
     resolution: int = 40,
 ) -> None:
     """Evidence integrand D/(1+D) panel with faithful marginalization.
@@ -296,13 +277,8 @@ def plot_evidence_panel(
     When ``all_axes`` is provided, hidden dimensions are marginalized
     analytically — boundary points show reduced evidence because their
     kernels extend outside the parameter space.
-
-    When ``trajectories`` and ``codes`` are provided, plain-dict experiments
-    are expanded into per-step points connected by trajectory lines.
     """
-    pts, exp_ids, weights = expand_experiments(
-        experiments, param_transform, trajectories=trajectories, codes=codes,
-    )
+    pts, exp_ids, weights = expand_experiments(experiments, param_transform)
     if all_axes is not None:
         xs, ys, grid = _compute_grid_marginalized(
             x_axis, y_axis, all_axes, pts, weights, sigma, _evidence_fn, resolution,
@@ -360,8 +336,6 @@ def plot_multi_angle(
     *,
     panel_fn: Callable | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    trajectories: dict[str, list[dict[str, Any]]] | None = None,
-    codes: list[str] | None = None,
     resolution: int = 40,
     title: str | None = None,
 ) -> None:
@@ -370,9 +344,6 @@ def plot_multi_angle(
     When using the default ``plot_evidence_panel``, hidden dimensions are
     marginalized analytically so the 2D projection faithfully represents
     the full-D evidence landscape.
-
-    ``trajectories`` and ``codes`` enable per-layer expansion for plain-dict
-    experiments that have parameter trajectories.
     """
     fn = panel_fn or plot_evidence_panel
     all_axes = [focus_axis] + list(other_axes)
@@ -392,10 +363,6 @@ def plot_multi_angle(
         )
         if fn is plot_evidence_panel:
             kwargs["all_axes"] = all_axes
-            if trajectories is not None:
-                kwargs["trajectories"] = trajectories
-            if codes is not None:
-                kwargs["codes"] = codes
         fn(axes[i], focus_axis, other, experiments, sigma, **kwargs)
 
     fig.tight_layout()
