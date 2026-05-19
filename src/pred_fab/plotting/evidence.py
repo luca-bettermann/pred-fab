@@ -39,12 +39,10 @@ def expand_experiments(
 ) -> tuple[list[dict[str, Any]], list[int], list[float]]:
     """Expand experiments into flat point lists with per-layer 1/L weights.
 
-    Accepts ``list[ExperimentSpec]`` (with ``.initial_params``,
-    ``.trajectories``) or ``list[dict]`` (plain param dicts).
-
-    For plain dicts, per-layer expansion uses the optional ``trajectories``
-    dict keyed by experiment code (from ``codes``). Each entry is a list
-    of per-step param dicts that override the base.
+    Accepts:
+      - ``ExperimentSpec`` — expands via ``.trajectories``
+      - ``ExperimentData`` — expands via ``.parameter_updates``
+      - ``dict`` — expands via optional ``trajectories`` map keyed by ``codes``
     """
     transform = param_transform or (lambda d: d)
     traj_map = trajectories or {}
@@ -55,6 +53,7 @@ def expand_experiments(
 
     for i, exp in enumerate(experiments):
         if hasattr(exp, "initial_params"):
+            # ExperimentSpec
             base = dict(exp.initial_params.to_dict())
             layers: list[dict[str, Any]] = [transform(base)]
             for _dim, traj in exp.trajectories.items():
@@ -62,7 +61,20 @@ def expand_experiments(
                     layer_p = dict(base)
                     layer_p.update(transform(proposal.to_dict()))
                     layers.append(layer_p)
+        elif hasattr(exp, "parameter_updates") and hasattr(exp, "parameters"):
+            # ExperimentData
+            base_params = exp.parameters.get_values_dict()
+            if exp.parameter_updates:
+                dim_names = exp.parameters.get_dim_names()
+                n_steps = int(exp.parameters.get_value(dim_names[0])) if dim_names else 1
+                layers = []
+                for step in range(n_steps):
+                    ctx = {exp.parameters.get_dim_iterator_codes(dim_names[:1])[0]: step} if dim_names else {}
+                    layers.append(transform(exp.get_effective_parameters_for_context(ctx)))
+            else:
+                layers = [transform(base_params)]
         else:
+            # Plain dict
             base = transform(dict(exp))
             code = code_list[i] if i < len(code_list) else None
             traj_steps = traj_map.get(code, []) if code else []
