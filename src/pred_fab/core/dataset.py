@@ -813,7 +813,7 @@ class Dataset:
             loader=self.local_data.load_parameter_updates,
             setter=functools.partial(self._set_exp_data, block_type=BlockType.PARAM_UPDATES),
             in_memory=functools.partial(self._has_exp_data, block_type=BlockType.PARAM_UPDATES),
-            external_loader=None,
+            external_loader=self.external_data.pull_parameter_updates if self.external_data else None,
             recompute_flag=recompute_flag,
             verbose=verbose
         )

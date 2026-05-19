@@ -32,6 +32,10 @@ class IExternalData(ABC):
         # Default implementation returns all as missing
         return missing_exp_codes, features_dict
 
+    def pull_parameter_updates(self, exp_codes: list[str]) -> tuple[list[str], dict[str, Any]]:
+        """Fetch parameter update events for given codes; returns (missing_codes, code→events dict). Default: all missing."""
+        return list(exp_codes), {}
+
     def push_parameters(self, exp_codes: list[str], parameters: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push parameters to external source; returns True on success. Default: no-op (False)."""
         return False
