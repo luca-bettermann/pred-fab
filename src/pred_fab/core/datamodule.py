@@ -484,6 +484,13 @@ class DataModule:
 
         cell_meta = exported.cell_meta
 
+        # Drop rows where any output is NaN — missing measurements must not train
+        valid = ~torch.isnan(y_t).any(dim=-1)
+        if not valid.all():
+            X_t = X_t[valid]
+            y_t = y_t[valid]
+            cell_meta = cell_meta[valid]
+
         # Batch
         if self.batch_size is None:
             return [(X_t, y_t, cell_meta)]
