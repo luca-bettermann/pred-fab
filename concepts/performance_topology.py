@@ -151,9 +151,11 @@ def main(
     ax_mx = fig1.add_subplot(gs[0, 1])
     ax_my = fig1.add_subplot(gs[1, 1])
 
-    # Joint feature topology
-    cm_f = cmap("evidence")
-    im = ax_joint.contourf(xs, ys, feat_grid, levels=18, cmap=cm_f)
+    # Joint feature topology — Greys (raw data, no semantic judgment)
+    cm_f = cmap("density")
+    norm_f = Normalize(vmin=0.0, vmax=float(feat_grid.max()))
+    levels_f = np.linspace(0.02, float(feat_grid.max()), 18)
+    im = ax_joint.contourf(xs, ys, feat_grid, levels=levels_f, cmap=cm_f, norm=norm_f)
     ax_joint.contour(xs, ys, feat_grid, levels=8, colors=[ZINC_300], linewidths=0.4)
 
     # Target contour
@@ -161,11 +163,10 @@ def main(
                           colors=[ZINC_300], linewidths=1.2, linestyles="--")
     ax_joint.clabel(tc, fmt=f"t={target_value:.2f}", fontsize=7, colors=ZINC_400)
 
-    # Experiments
-    m = MARKERS["sample"]
+    # Experiments — white dots, Zinc-700 edge (baseline style)
     for ex, ey in zip(exp_x, exp_y):
-        ax_joint.scatter([ex], [ey], c=m.color, s=m.size, edgecolors=m.edgecolor,
-                         linewidth=m.linewidth, zorder=10)
+        ax_joint.scatter([ex], [ey], c="white", s=30, edgecolors=ZINC_700,
+                         linewidth=0.5, zorder=10)
 
     ax_joint.set_xlim(x_lo, x_hi)
     ax_joint.set_ylim(y_lo, y_hi)
@@ -173,7 +174,7 @@ def main(
     ax_joint.set_ylabel(y_label, fontsize=FONT["axis_label"], color=ZINC_600)
     subplot_label(ax_joint, f"$\\hat{{f}}(x, y)$")
     clean_spines(ax_joint)
-    sm = ScalarMappable(norm=Normalize(vmin=feat_grid.min(), vmax=feat_grid.max()), cmap=cm_f)
+    sm = ScalarMappable(norm=norm_f, cmap=cm_f)
     cb = fig1.colorbar(sm, ax=ax_joint, shrink=0.85, pad=0.06)
     style_colorbar(cb)
 
@@ -202,8 +203,8 @@ def main(
     ax2.contour(xs, ys, perf_grid, levels=8, colors="white", linewidths=0.3, alpha=0.5)
 
     for ex, ey in zip(exp_x, exp_y):
-        ax2.scatter([ex], [ey], c=m.color, s=m.size, edgecolors=m.edgecolor,
-                    linewidth=m.linewidth, zorder=10)
+        ax2.scatter([ex], [ey], c="white", s=30, edgecolors=ZINC_700,
+                    linewidth=0.5, zorder=10)
 
     # Optimum
     ax2.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=55,
