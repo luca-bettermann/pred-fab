@@ -487,6 +487,11 @@ class DataModule:
         # Drop rows where any output is NaN — missing measurements must not train
         valid = ~torch.isnan(y_t).any(dim=-1)
         if not valid.all():
+            n_dropped = int((~valid).sum())
+            import warnings
+            warnings.warn(
+                f"Dropped {n_dropped}/{len(valid)} rows with NaN outputs from {split} batches."
+            )
             X_t = X_t[valid]
             y_t = y_t[valid]
             cell_meta = cell_meta[valid]
