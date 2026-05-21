@@ -49,6 +49,7 @@ from .evidence import (
     plot_multi_angle,
     expand_experiments,
 )
+from .parallel import plot_parallel_coordinates
 
 __all__ = [
     "AxisSpec",
@@ -83,4 +84,5 @@ __all__ = [
     "plot_evidence_gain_panel",
     "plot_multi_angle",
     "expand_experiments",
+    "plot_parallel_coordinates",
 ]
