@@ -792,11 +792,15 @@ class Dataset:
         source: Loaders = Loaders.LOCAL,
         verbose_flag: bool = False,
         dataset: str | None = None,
+        exclude: list[str] | None = None,
     ) -> int:
         """Load experiments from storage hierarchically.
 
         When ``dataset`` is provided (e.g. ``"discovery"``), only experiments
         whose code contains that substring are loaded. ``None`` loads all.
+
+        ``exclude`` filters out experiments whose code contains any of the
+        given substrings (e.g. ``["failed"]`` skips failed experiments).
         """
         if source != Loaders.LOCAL:
             raise NotImplementedError(f"Only {source.value} source is currently supported")
@@ -804,6 +808,8 @@ class Dataset:
         exp_codes = self.local_data.list_experiments()
         if dataset is not None:
             exp_codes = [c for c in exp_codes if f"/{dataset}/" in c or c.startswith(f"{dataset}/")]
+        if exclude:
+            exp_codes = [c for c in exp_codes if not any(x in c for x in exclude)]
 
         missing = self.load_experiments(exp_codes, verbose=verbose_flag)
         loaded_count = len(exp_codes) - len(missing)
