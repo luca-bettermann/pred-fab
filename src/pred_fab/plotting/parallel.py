@@ -90,8 +90,8 @@ def plot_parallel_coordinates(
     for line in proposed_lines:
         ax.plot(x_positions, line, color=ACCENT_YELLOW, alpha=0.9, linewidth=2.0, zorder=5)
         for j, v in enumerate(line):
-            ax.scatter([j], [v], marker="x", c=ACCENT_YELLOW, s=30, zorder=6,
-                       linewidths=1.0)
+            ax.scatter([j], [v], c=ACCENT_YELLOW, s=25, zorder=6,
+                       edgecolors="white", linewidth=0.5)
 
     ax.set_xlim(-0.3, n_axes - 0.7)
     ax.set_ylim(-0.05, 1.05)
