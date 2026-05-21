@@ -787,18 +787,27 @@ class Dataset:
 
     # === Hierarchical Load/Save Methods ===
     
-    def populate(self, source: Loaders = Loaders.LOCAL, verbose_flag: bool = False) -> int:
-        """Load all experiments from storage hierarchically by scanning dataset folder."""
+    def populate(
+        self,
+        source: Loaders = Loaders.LOCAL,
+        verbose_flag: bool = False,
+        dataset: str | None = None,
+    ) -> int:
+        """Load experiments from storage hierarchically.
+
+        When ``dataset`` is provided (e.g. ``"discovery"``), only experiments
+        whose code contains that substring are loaded. ``None`` loads all.
+        """
         if source != Loaders.LOCAL:
             raise NotImplementedError(f"Only {source.value} source is currently supported")
-        
-        # Scan local folders for experiment codes
+
         exp_codes = self.local_data.list_experiments()
-        
-        # Use batch loading
+        if dataset is not None:
+            exp_codes = [c for c in exp_codes if f"/{dataset}/" in c or c.startswith(f"{dataset}/")]
+
         missing = self.load_experiments(exp_codes, verbose=verbose_flag)
         loaded_count = len(exp_codes) - len(missing)
-        
+
         return loaded_count
 
     def load_experiment(self, exp_code: str, verbose: bool = False) -> ExperimentData:
