@@ -792,7 +792,7 @@ class Dataset:
         source: Loaders = Loaders.LOCAL,
         verbose_flag: bool = False,
         dataset: str | None = None,
-        exclude: list[str] | None = None,
+        exclude: list[str] | None = ["failed"],
     ) -> int:
         """Load experiments from storage hierarchically.
 
