@@ -787,43 +787,41 @@ def compute_evidence_gain_grid_from_experiments(
     """High-level wrapper: experiments + axis specs → ΔE grid.
 
     Handles ``expand_experiments`` → center extraction → normalization
-    to [0,1]^D → ``compute_evidence_gain_grid``.
+    to [0,1]² → ``compute_evidence_gain_grid``.
+
+    Projects experiment points to the two visible axes (x_key, y_key)
+    and runs the KernelField in 2D.
 
     Parameters
     ----------
     experiments : list of ExperimentSpec / ExperimentData / dict
-    all_axes : list of AxisSpec — ALL parameter axes (visible + hidden)
+    all_axes : list of AxisSpec — ALL parameter axes (used for bounds)
     x_key, y_key : visible axis keys
     sigma : KDE bandwidth (in [0,1] normalized space)
     """
     from ..plotting.evidence import expand_experiments
 
-    pts, _, pt_weights = expand_experiments(experiments, param_transform)
-    if not pts:
-        xs = np.linspace(*next(a.bounds for a in all_axes if a.key == x_key), resolution)
-        ys = np.linspace(*next(a.bounds for a in all_axes if a.key == y_key), resolution)
-        return xs, ys, np.zeros((resolution, resolution))
-
-    axis_keys = [a.key for a in all_axes]
-    axis_lo = np.array([a.bounds[0] for a in all_axes])
-    axis_hi = np.array([a.bounds[1] for a in all_axes])
-    axis_range = axis_hi - axis_lo
-
-    centers = np.array([
-        [(float(p.get(k, (lo + hi) / 2)) - lo) / rng
-         for k, lo, hi, rng in zip(axis_keys, axis_lo, axis_hi, axis_range)]
-        for p in pts
-    ])
-    centers = np.clip(centers, 0.0, 1.0)
-
-    x_idx = axis_keys.index(x_key)
-    y_idx = axis_keys.index(y_key)
-
     x_axis = next(a for a in all_axes if a.key == x_key)
     y_axis = next(a for a in all_axes if a.key == y_key)
 
+    pts, _, pt_weights = expand_experiments(experiments, param_transform)
+    if not pts:
+        xs = np.linspace(*x_axis.bounds, resolution)
+        ys = np.linspace(*y_axis.bounds, resolution)
+        return xs, ys, np.zeros((resolution, resolution))
+
+    x_lo, x_hi = x_axis.bounds
+    y_lo, y_hi = y_axis.bounds
+    centers_2d = np.array([
+        [
+            np.clip((float(p.get(x_key, (x_lo + x_hi) / 2)) - x_lo) / (x_hi - x_lo), 0, 1),
+            np.clip((float(p.get(y_key, (y_lo + y_hi) / 2)) - y_lo) / (y_hi - y_lo), 0, 1),
+        ]
+        for p in pts
+    ])
+
     return compute_evidence_gain_grid(
-        centers, np.array(pt_weights), sigma,
+        centers_2d, np.array(pt_weights), sigma,
         x_bounds=x_axis.bounds,
         y_bounds=y_axis.bounds,
         resolution=resolution,
