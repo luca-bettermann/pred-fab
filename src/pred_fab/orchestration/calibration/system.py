@@ -347,11 +347,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             scores = scores + (1.0 - kappa) * perfs
         if evidences is not None and kappa > 0.0:
             scores = scores + kappa * evidences
-        if not hasattr(self, "_blend_logged"):
-            self._blend_logged = True
-            p_str = f"P=[{perfs.min():.4f}, {perfs.max():.4f}]" if perfs is not None else "P=None"
-            e_str = f"ΔE=[{evidences.min():.4f}, {evidences.max():.4f}]" if evidences is not None else "ΔE=None"
-            self.logger.console_warning(f"κ-blend scales: {p_str}  {e_str}  κ={kappa}")
         return -scores * self.acquisition_scale
 
     def _per_candidate_perf_tensor(
@@ -781,42 +776,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
-
-        # Diagnostic: evaluate the winning point through the real pipeline
-        if specs and kappa < 1.0:
-            best_params = dict(specs[0].initial_params.to_dict())
-            for code, obj in self.schema.parameters.items():
-                if isinstance(obj, DataDomainAxis) and code not in best_params:
-                    if code in self.dimension_derivations:
-                        best_params[code] = self.dimension_derivations[code](best_params)
-            perf_dict = self._compute_perf_dict_for_params(best_params)
-            p_sys = combined_score(perf_dict, self.performance_weights)
-            de = self._compute_evidence_gain_for_params(best_params)
-            acq = (1.0 - kappa) * p_sys + kappa * de
-
-            # Also evaluate through the optimizer's actual objective (joint path)
-            with torch.no_grad():
-                best_x_t = torch.from_numpy(np.atleast_1d(best_x)).double().unsqueeze(0)
-                points, weights = space.decode(best_x_t)
-                full_S_NL = points.unsqueeze(1)
-                obj_val = float(self._acquisition_joint_batched_tensor(
-                    full_S_NL, kappa, perf_range, weights,
-                )[0].item())
-
-            # Compare the normalized vectors from both paths
-            x_from_params = datamodule.params_to_array(best_params)
-            x_from_decode = points[0, 0, :].detach().cpu().numpy()
-            self.logger.console_info(
-                f"  Proposal diagnostics:\n"
-                f"    params     = {{{', '.join(f'{k}: {v:.4f}' for k, v in best_params.items() if isinstance(v, (int, float)))}}}\n"
-                f"    P_sys      = {p_sys:.4f}  (per-feature: {{{', '.join(f'{k}: {v:.3f}' for k, v in perf_dict.items() if v is not None)}}})\n"
-                f"    ΔE (point) = {de:.4f}\n"
-                f"    A (recomp) = {acq:.4f}\n"
-                f"    obj (real) = {obj_val:.4f}  (negated acquisition × scale)\n"
-                f"    x_params   = [{', '.join(f'{v:.4f}' for v in x_from_params)}]\n"
-                f"    x_decode   = [{', '.join(f'{v:.4f}' for v in x_from_decode)}]\n"
-                f"    dm.cols    = {datamodule.input_columns}"
-            )
 
         # Store trajectory plot data
         if space._D_traj > 0:
