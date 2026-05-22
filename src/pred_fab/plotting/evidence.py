@@ -134,42 +134,40 @@ def evidence_gain_cell_fn(D: float) -> float:
 
 
 def make_marginalized_evidence_fn(
-    experiments: list[Any],
+    evidence_fn: Callable[[dict[str, Any]], float],
     all_axes: list[AxisSpec],
     x_key: str,
     y_key: str,
-    sigma: float,
-    cell_fn: Callable[[float], float] = evidence_gain_cell_fn,
-    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    n_samples: int = 32,
+    seed: int = 0,
 ) -> Callable[[dict[str, Any]], float]:
-    """Build a ``params → float`` evidence function with hidden-dim marginalization.
+    """Build a ``params → float`` wrapper that marginalizes over hidden dims.
 
-    Pre-computes marginal factors once; each call evaluates a 2D KDE
-    at the (x_key, y_key) slice with analytically integrated hidden dims.
-    Defaults to ``evidence_gain_cell_fn`` (high where data is missing).
+    Evaluates ``evidence_fn`` at ``n_samples`` Sobol points across the hidden
+    dimensions and returns the mean. Uses the actual evidence pipeline
+    (KernelField + ANOVA integration) — no simplified proxy.
     """
-    pts, _, weights = expand_experiments(experiments, param_transform)
-    x_axis = next(a for a in all_axes if a.key == x_key)
-    y_axis = next(a for a in all_axes if a.key == y_key)
     hidden = [a for a in all_axes if a.key not in (x_key, y_key)]
-    m_factors = _marginal_factors(pts, hidden, sigma)
+    if not hidden:
+        return evidence_fn
 
-    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
-    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
-    x_range = x_hi - x_lo
-    y_range = y_hi - y_lo
+    from scipy.stats.qmc import Sobol
+    sampler = Sobol(d=len(hidden), scramble=True, seed=seed)
+    sobol_01 = sampler.random(n_samples)
 
-    px = np.array([p.get(x_key, 0) for p in pts])
-    py = np.array([p.get(y_key, 0) for p in pts])
-    w = np.array(weights) * m_factors
-    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+    hidden_keys = [a.key for a in hidden]
+    hidden_lo = np.array([a.bounds[0] for a in hidden])  # type: ignore[index]
+    hidden_hi = np.array([a.bounds[1] for a in hidden])  # type: ignore[index]
+    hidden_samples = hidden_lo + sobol_01 * (hidden_hi - hidden_lo)
 
     def _fn(params: dict[str, Any]) -> float:
-        x = float(params[x_key])
-        y = float(params[y_key])
-        d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
-        density = float(np.sum(w * np.exp(-d2 * inv_2s2)))
-        return cell_fn(density)
+        total = 0.0
+        for row in hidden_samples:
+            p = dict(params)
+            for k, v in zip(hidden_keys, row):
+                p[k] = float(v)
+            total += evidence_fn(p)
+        return total / n_samples
 
     return _fn
 
