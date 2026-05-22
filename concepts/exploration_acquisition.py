@@ -76,8 +76,7 @@ def main(
             params[y_key] = float(ys[j])
             perf_grid[j, i] = score_fn(params)
 
-    ev_norm = evidence_grid / evidence_grid.max() if evidence_grid.max() > 0 else evidence_grid
-    acq_grid = (1 - kappa) * perf_grid + kappa * ev_norm
+    acq_grid = (1 - kappa) * perf_grid + kappa * evidence_grid
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []

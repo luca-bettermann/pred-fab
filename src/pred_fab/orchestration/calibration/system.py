@@ -225,8 +225,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self._compute_perf_dict_for_params(params)
 
     def system_performance(self, params: dict[str, Any]) -> float:
-        """Weighted system performance P_sys for a single candidate."""
-        return self._compute_normalised_perf_for_params(params, self._perf_range)
+        """Weighted system performance P_sys for a single candidate (raw, unnormalized)."""
+        return self._compute_normalised_perf_for_params(params)
 
     def evidence_gain(self, params: dict[str, Any]) -> float:
         """Evidence gain ΔE for a single candidate."""
@@ -753,12 +753,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return space.decode_to_specs(np.zeros(0))
 
         console = self.logger._console_output_enabled
-        perf_range = self._perf_range if kappa < 1.0 else None
-        if kappa < 1.0 and perf_range is None:
-            self.logger.warning(
-                "kappa < 1 but perf_range not set — performance arm is unnormalised. "
-                "Call update_perf_range() after training."
-            )
+        perf_range = None
 
         def objective(x_flat: torch.Tensor) -> torch.Tensor:
             points, weights = space.decode(x_flat)
