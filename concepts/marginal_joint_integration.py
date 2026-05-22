@@ -186,33 +186,15 @@ def main():
     evidence_y = rho_y / (1.0 + rho_y)
 
     # Compute Z_new via real ANOVA evidence gain
-    import torch
-    from pred_fab.orchestration.evidence import KernelIndex, KernelFieldEstimator
+    from pred_fab.orchestration.evidence import compute_evidence_gain_grid
 
-    kf = KernelFieldEstimator()
-    index_old = KernelIndex(CENTERS, np.ones(len(CENTERS)), sigma)
-    empty_index = KernelIndex(np.empty((0, 2)), np.empty(0), sigma)
-    old_centers_t = index_old.centers.unsqueeze(0).double()
-    old_weights_t = index_old.weights.unsqueeze(0).double()
-    E_old = float(kf.integrated_evidence_perturbed_batched_joint_torch(
-        empty_index, old_centers_t, old_weights_t,
-    )[0].item())
-
-    gain_res = 80
-    xs_gain = np.linspace(0, 1, gain_res)
-    gain_grid = np.zeros((gain_res, gain_res))
-    for j in range(gain_res):
-        row_pts = np.stack([xs_gain, np.full(gain_res, xs_gain[j])], axis=-1)
-        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
-        weights_t = torch.ones(gain_res, 1, dtype=torch.float64)
-        e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
-            index_old, row_pts_t, weights_t,
-        )
-        gain_grid[j, :] = (e_new.detach().cpu().numpy() - E_old)
+    xs_gain, ys_gain, gain_grid = compute_evidence_gain_grid(
+        CENTERS, np.ones(len(CENTERS)), sigma, resolution=80,
+    )
 
     idx_flat = np.argmax(gain_grid)
     iy, ix = np.unravel_index(idx_flat, gain_grid.shape)
-    z_new = np.array([xs_gain[ix], xs_gain[iy]])
+    z_new = np.array([xs_gain[ix], ys_gain[iy]])
 
     # ================================================================
     # Figure 1: Joint density — what we know

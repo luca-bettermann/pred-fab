@@ -1,25 +1,29 @@
 """Exploration concept: evidence gain + performance + acquisition topology.
 
 Three side-by-side topologies showing the κ-blend:
-  1. Evidence gain ΔE(x, y)  — where information is missing (marginalized)
+  1. Evidence gain ΔE(x, y)  — KernelField ANOVA integrated evidence
   2. Performance P_sys(x, y) — where quality is high
   3. Acquisition A(x, y)     — (1-κ)·P_sys + κ·ΔE
 
 Usage with real model::
 
-    from pred_fab.plotting import make_marginalized_evidence_fn, AxisSpec
+    from pred_fab.orchestration.evidence import compute_evidence_gain_grid
 
-    evidence_fn = make_marginalized_evidence_fn(
-        experiments, all_axes, x_key, y_key, sigma,
+    # Build evidence gain grid from KDE data
+    xs_ev, ys_ev, ev_grid = compute_evidence_gain_grid(
+        centers, weights, sigma, resolution=60,
     )
+
     main(
-        evidence_fn=evidence_fn,
+        evidence_grid=ev_grid,
         score_fn=cal.system_performance,
         kappa=0.5,
         ...
     )
 
-Acquisition grid is derived: A = (1-κ)·P_sys + κ·ΔE.
+Evidence grid uses compute_evidence_gain_grid (same KernelField ANOVA
+pipeline as the evidence gain concept figure). Performance is swept
+via score_fn. Acquisition is derived: A = (1-κ)·P_sys + κ·ΔE.
 """
 from __future__ import annotations
 
@@ -43,7 +47,7 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
-    evidence_fn: Callable[[dict[str, Any]], float],
+    evidence_grid: np.ndarray,
     score_fn: Callable[[dict[str, Any]], float],
     kappa: float,
     save_path: str | None = None,
@@ -66,18 +70,16 @@ def main(
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
 
-    evidence_grid = np.zeros((resolution, resolution))
     perf_grid = np.zeros((resolution, resolution))
-
     for i in range(resolution):
         for j in range(resolution):
             params = dict(fixed)
             params[x_key] = float(xs[i])
             params[y_key] = float(ys[j])
-            evidence_grid[j, i] = evidence_fn(params)
             perf_grid[j, i] = score_fn(params)
 
-    acq_grid = (1 - kappa) * perf_grid + kappa * evidence_grid
+    ev_norm = evidence_grid / evidence_grid.max() if evidence_grid.max() > 0 else evidence_grid
+    acq_grid = (1 - kappa) * perf_grid + kappa * ev_norm
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
@@ -116,4 +118,4 @@ def main(
 
 
 if __name__ == "__main__":
-    raise RuntimeError("Requires evidence_fn and score_fn — call main() directly.")
+    raise RuntimeError("Requires evidence_grid and score_fn — call main() directly.")

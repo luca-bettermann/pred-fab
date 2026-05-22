@@ -726,3 +726,41 @@ def make_estimator(config: EstimatorConfig) -> EvidenceEstimator:
             box=config.box, n_samples=config.n_samples, seed=config.seed,
         )
     raise ValueError(f"unknown estimator type: {config.type!r}")
+
+
+def compute_evidence_gain_grid(
+    centers: np.ndarray,
+    weights: np.ndarray,
+    sigma: float,
+    resolution: int = 80,
+    estimator: EvidenceEstimator | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute a 2D ΔE grid over [0,1]² using the KernelField ANOVA pipeline.
+
+    Returns ``(xs, ys, gain_grid)`` where ``gain_grid[j, i] = E(old ∪ {(xs[i], ys[j])}) - E(old)``.
+    Same computation as the evidence gain concept figure.
+    """
+    kf = estimator or KernelFieldEstimator()
+    D = centers.shape[1]
+    index_old = KernelIndex(centers, weights, sigma)
+
+    empty_index = KernelIndex(np.empty((0, D)), np.empty(0), sigma)
+    old_centers_t = index_old.centers.unsqueeze(0).double()
+    old_weights_t = index_old.weights.unsqueeze(0).double()
+    E_old = float(kf.integrated_evidence_perturbed_batched_joint_torch(
+        empty_index, old_centers_t, old_weights_t,
+    )[0].item())
+
+    xs = np.linspace(0, 1, resolution)
+    ys = np.linspace(0, 1, resolution)
+    gain_grid = np.zeros((resolution, resolution))
+    for j in range(resolution):
+        row_pts = np.stack([xs, np.full(resolution, ys[j])], axis=-1)
+        row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
+        weights_t = torch.ones(resolution, 1, dtype=torch.float64)
+        e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
+            index_old, row_pts_t, weights_t,
+        )
+        gain_grid[j, :] = e_new.detach().cpu().numpy() - E_old
+
+    return xs, ys, gain_grid
