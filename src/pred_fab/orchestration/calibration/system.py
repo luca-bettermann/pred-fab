@@ -248,6 +248,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_dict = self._compute_perf_dict_for_params(params)
         return self._normalize_perf_dict(perf_dict, perf_range)
 
+    def _compute_evidence_gain_for_params(self, params: dict[str, Any]) -> float:
+        """Single-candidate evidence gain ΔE for a params dict."""
+        dm = self._active_datamodule
+        if dm is None or self.evidence.batched_tensor is None:
+            return 0.0
+        x_norm = dm.params_to_array(params)
+        X_SD = torch.from_numpy(np.atleast_2d(x_norm)).double()
+        with torch.no_grad():
+            ev = self.evidence.batched_tensor(X_SD)
+        return float(ev[0].item())
+
     @property
     def _perf_range(self) -> tuple[float, float] | None:
         """Tuple form of ``(_perf_range_min, _perf_range_max)`` if both are set, else None."""
