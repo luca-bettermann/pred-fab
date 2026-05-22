@@ -796,7 +796,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             # Also evaluate through the optimizer's actual objective (joint path)
             with torch.no_grad():
-                best_x_t = torch.from_numpy(np.atleast_1d(best_x)).double()
+                best_x_t = torch.from_numpy(np.atleast_1d(best_x)).double().unsqueeze(0)
                 points, weights = space.decode(best_x_t)
                 full_S_NL = points.unsqueeze(1)
                 obj_val = float(self._acquisition_joint_batched_tensor(
