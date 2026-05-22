@@ -571,7 +571,7 @@ class PfabAgent:
 
         # Update running performance range for acquisition normalization
         if self.calibration_system is not None:
-            self.calibration_system.update_perf_range(datamodule)
+            self.calibration_system.set_active_datamodule(datamodule)
 
         # Run validation on trained models if requested
         if validate or test:

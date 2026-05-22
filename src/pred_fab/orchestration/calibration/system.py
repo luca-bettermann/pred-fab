@@ -92,8 +92,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.kappa_default: float = 0.5
 
         # Running min/max of predicted system performance across training data.
-        self._perf_range_min: float | None = None
-        self._perf_range_max: float | None = None
 
         self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
@@ -284,13 +282,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         with torch.no_grad():
             ev = self.evidence.batched_tensor(X_SD)
         return float(ev[0].item())
-
-    @property
-    def _perf_range(self) -> tuple[float, float] | None:
-        """Tuple form of ``(_perf_range_min, _perf_range_max)`` if both are set, else None."""
-        if self._perf_range_min is None or self._perf_range_max is None:
-            return None
-        return (self._perf_range_min, self._perf_range_max)
 
     def _per_candidate_perf_batched(
         self,
@@ -498,48 +489,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
     # § Helpers — spec construction, datamodule, perf range
     # ==================================================================
 
-    def update_perf_range(self, datamodule: DataModule) -> None:
-        """Update performance normalization range from training data.
-
-        Called after each train(). Computes predicted performance at each
-        training experiment. Uses raw min/max directly — no buffer.
-        """
+    def set_active_datamodule(self, datamodule: DataModule) -> None:
+        """Set the active DataModule for acquisition evaluation."""
         self._active_datamodule = datamodule
-        train_codes = datamodule.get_split_codes(SplitType.TRAIN)
-        if not train_codes:
-            return
-
-        raw_min: float | None = None
-        raw_max: float | None = None
-
-        for code in train_codes:
-            exp = datamodule.dataset.get_experiment(code)
-            params_dict = exp.parameters.get_values_dict()
-            try:
-                sys_perf = self._compute_normalised_perf_for_params(params_dict)
-            except Exception as exc:
-                self.logger.warning(f"update_perf_range: failed for {code}: {exc}")
-                continue
-
-            if raw_min is None or sys_perf < raw_min:
-                raw_min = sys_perf
-            if raw_max is None or sys_perf > raw_max:
-                raw_max = sys_perf
-
-        if raw_min is not None and raw_max is not None:
-            self._perf_range_min = raw_min
-            self._perf_range_max = raw_max
-            self.logger.debug(
-                f"Performance range: [{raw_min:.3f}, {raw_max:.3f}]"
-            )
-
-    def _get_acquisition_ranges(self) -> tuple[tuple[float, float] | None, None]:
-        """Return (perf_range, unc_range) for acquisition normalization."""
-        if self._perf_range_min is not None and self._perf_range_max is not None:
-            perf_range = (self._perf_range_min, self._perf_range_max)
-        else:
-            perf_range = None
-        return perf_range, None
 
     def _build_schema_datamodule(self) -> DataModule:
         """Build a schema-only DataModule (no training data) for discovery generation.

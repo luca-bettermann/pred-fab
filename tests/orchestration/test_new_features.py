@@ -64,26 +64,13 @@ class TestConfigureEvidence:
 # Performance range tracking
 # ===========================================================================
 
-class TestPerfRange:
-    """Running perf range is updated after train()."""
+class TestActiveDatamodule:
+    """Active datamodule is set after train()."""
 
-    def test_perf_range_set_after_train(self, tmp_path):
+    def test_active_datamodule_set_after_train(self, tmp_path):
         agent, _, _ = _setup_trained_agent(tmp_path)
         cal = agent.calibration_system
-        assert cal._perf_range_min is not None
-        assert cal._perf_range_max is not None
-
-    def test_perf_range_min_leq_max(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        cal = agent.calibration_system
-        assert cal._perf_range_min <= cal._perf_range_max
-
-    def test_get_acquisition_ranges_uses_perf_range(self, tmp_path):
-        agent, _, _ = _setup_trained_agent(tmp_path)
-        cal = agent.calibration_system
-        perf_range, unc_range = cal._get_acquisition_ranges()
-        assert perf_range == (cal._perf_range_min, cal._perf_range_max)
-        assert unc_range is None  # uncertainty not renormalized
+        assert cal._active_datamodule is not None
 
 
 # ===========================================================================
