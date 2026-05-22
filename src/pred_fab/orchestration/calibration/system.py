@@ -395,7 +395,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             perf_dict_S = self.perf_fn_tensor(
                 [params_list[i] for i in valid_idx]  # type: ignore[index]
             )
-        except Exception:
+        except Exception as exc:
+            self.logger.warning(f"perf_fn_tensor failed: {exc}")
             return torch.zeros(S, dtype=X_SD.dtype)
 
         # System-perf aggregation: weighted sum across perf codes, normalised by perf_range.
