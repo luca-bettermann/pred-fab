@@ -10,7 +10,7 @@ Usage with real model::
     from pred_fab.plotting import make_marginalized_evidence_fn, AxisSpec
 
     evidence_fn = make_marginalized_evidence_fn(
-        cal.evidence_gain, all_axes, x_key, y_key,
+        experiments, all_axes, x_key, y_key, sigma,
     )
     main(
         evidence_fn=evidence_fn,

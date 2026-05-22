@@ -134,52 +134,41 @@ def evidence_gain_cell_fn(D: float) -> float:
 
 
 def make_marginalized_evidence_fn(
-    evidence_fn: Callable[[dict[str, Any]], float],
+    experiments: list[Any],
     all_axes: list[AxisSpec],
     x_key: str,
     y_key: str,
-    n_quadrature: int = 5,
+    sigma: float,
+    cell_fn: Callable[[float], float] = evidence_gain_cell_fn,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Callable[[dict[str, Any]], float]:
-    """Build a ``params → float`` wrapper that marginalizes over hidden dims.
+    """Point-evaluation form of ``compute_grid_marginalized``.
 
-    Uses Gauss-Legendre quadrature (same integration method as the
-    KernelField shell probes) over hidden dimensions. Evaluates the full
-    evidence pipeline at each quadrature point — no simplified proxy.
-
-    For ``H`` hidden dims, each call evaluates ``evidence_fn`` at
-    ``n_quadrature ** H`` points.
+    Same computation: ``expand_experiments`` → ``_marginal_factors`` →
+    weighted KDE density → ``cell_fn``. Returns a closure instead of a grid.
     """
+    pts, _, weights = expand_experiments(experiments, param_transform)
+    x_axis = next(a for a in all_axes if a.key == x_key)
+    y_axis = next(a for a in all_axes if a.key == y_key)
     hidden = [a for a in all_axes if a.key not in (x_key, y_key)]
-    if not hidden:
-        return evidence_fn
+    m_factors = _marginal_factors(pts, hidden, sigma)
 
-    from numpy.polynomial.legendre import leggauss
-    nodes, weights = leggauss(n_quadrature)
-    nodes_01 = (nodes + 1.0) / 2.0
-    weights_01 = weights / 2.0
+    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
+    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
+    x_range = x_hi - x_lo
+    y_range = y_hi - y_lo
 
-    hidden_keys = [a.key for a in hidden]
-    hidden_lo = np.array([a.bounds[0] for a in hidden])  # type: ignore[index]
-    hidden_hi = np.array([a.bounds[1] for a in hidden])  # type: ignore[index]
-    hidden_range = hidden_hi - hidden_lo
-
-    grids = np.meshgrid(*[nodes_01] * len(hidden), indexing="ij")
-    quad_points = np.stack([g.ravel() for g in grids], axis=-1)
-    w_grids = np.meshgrid(*[weights_01] * len(hidden), indexing="ij")
-    quad_weights = np.ones(len(quad_points))
-    for wg in w_grids:
-        quad_weights *= wg.ravel()
-
-    quad_params = hidden_lo + quad_points * hidden_range
+    px = np.array([p.get(x_key, 0) for p in pts])
+    py = np.array([p.get(y_key, 0) for p in pts])
+    w = np.array(weights) * m_factors
+    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
 
     def _fn(params: dict[str, Any]) -> float:
-        total = 0.0
-        for row, w in zip(quad_params, quad_weights):
-            p = dict(params)
-            for k, v in zip(hidden_keys, row):
-                p[k] = float(v)
-            total += w * evidence_fn(p)
-        return total
+        x = float(params[x_key])
+        y = float(params[y_key])
+        d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
+        density = float(np.sum(w * np.exp(-d2 * inv_2s2)))
+        return cell_fn(density)
 
     return _fn
 
