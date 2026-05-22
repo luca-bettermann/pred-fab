@@ -9,9 +9,8 @@ Usage with real model::
 
     from pred_fab.orchestration.evidence import compute_evidence_gain_grid
 
-    # Build evidence gain grid from KDE data
-    xs_ev, ys_ev, ev_grid = compute_evidence_gain_grid(
-        centers, weights, sigma, resolution=60,
+    xs, ys, ev_grid = compute_evidence_gain_grid(
+        experiments, all_axes, x_key, y_key, sigma, resolution=60,
     )
 
     main(
@@ -21,9 +20,8 @@ Usage with real model::
         ...
     )
 
-Evidence grid uses compute_evidence_gain_grid (same KernelField ANOVA
-pipeline as the evidence gain concept figure). Performance is swept
-via score_fn. Acquisition is derived: A = (1-κ)·P_sys + κ·ΔE.
+Evidence grid uses compute_evidence_gain_grid (KernelField ANOVA).
+Performance is swept via score_fn. Acquisition: A = (1-κ)·P_sys + κ·ΔE.
 """
 from __future__ import annotations
 

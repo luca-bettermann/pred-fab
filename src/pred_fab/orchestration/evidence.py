@@ -728,7 +728,7 @@ def make_estimator(config: EstimatorConfig) -> EvidenceEstimator:
     raise ValueError(f"unknown estimator type: {config.type!r}")
 
 
-def compute_evidence_gain_grid(
+def _evidence_gain_grid_from_centers(
     centers: np.ndarray,
     weights: np.ndarray,
     sigma: float,
@@ -737,14 +737,7 @@ def compute_evidence_gain_grid(
     resolution: int = 80,
     estimator: EvidenceEstimator | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute a 2D ΔE grid using the KernelField ANOVA pipeline.
-
-    Centers and sigma are in [0,1]^D (normalized space). ``x_bounds`` and
-    ``y_bounds`` define the parameter-space axes for the returned grid —
-    mapped to [0,1] internally for the KernelField computation.
-
-    Returns ``(xs, ys, gain_grid)`` in parameter space.
-    """
+    """Low-level: 2D ΔE grid from pre-normalized centers in [0,1]^D."""
     kf = estimator or KernelFieldEstimator()
     D = centers.shape[1]
     index_old = KernelIndex(centers, weights, sigma)
@@ -774,7 +767,7 @@ def compute_evidence_gain_grid(
     return xs_param, ys_param, gain_grid
 
 
-def compute_evidence_gain_grid_from_experiments(
+def compute_evidence_gain_grid(
     experiments: list,
     all_axes: list,
     x_key: str,
@@ -784,18 +777,15 @@ def compute_evidence_gain_grid_from_experiments(
     param_transform=None,
     estimator: EvidenceEstimator | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """High-level wrapper: experiments + axis specs → ΔE grid.
+    """Compute a 2D ΔE grid using the KernelField ANOVA pipeline.
 
     Handles ``expand_experiments`` → center extraction → normalization
-    to [0,1]² → ``compute_evidence_gain_grid``.
-
-    Projects experiment points to the two visible axes (x_key, y_key)
-    and runs the KernelField in 2D.
+    to [0,1]² → KernelField integration. Returns grid in parameter space.
 
     Parameters
     ----------
     experiments : list of ExperimentSpec / ExperimentData / dict
-    all_axes : list of AxisSpec — ALL parameter axes (used for bounds)
+    all_axes : list of AxisSpec — all parameter axes (used for bounds)
     x_key, y_key : visible axis keys
     sigma : KDE bandwidth (in [0,1] normalized space)
     """
@@ -820,7 +810,7 @@ def compute_evidence_gain_grid_from_experiments(
         for p in pts
     ])
 
-    return compute_evidence_gain_grid(
+    return _evidence_gain_grid_from_centers(
         centers_2d, np.array(pt_weights), sigma,
         x_bounds=x_axis.bounds,
         y_bounds=y_axis.bounds,

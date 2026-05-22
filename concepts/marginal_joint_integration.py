@@ -186,9 +186,9 @@ def main():
     evidence_y = rho_y / (1.0 + rho_y)
 
     # Compute Z_new via real ANOVA evidence gain
-    from pred_fab.orchestration.evidence import compute_evidence_gain_grid
+    from pred_fab.orchestration.evidence import _evidence_gain_grid_from_centers
 
-    xs_gain, ys_gain, gain_grid = compute_evidence_gain_grid(
+    xs_gain, ys_gain, gain_grid = _evidence_gain_grid_from_centers(
         CENTERS, np.ones(len(CENTERS)), sigma, resolution=80,
     )
 
