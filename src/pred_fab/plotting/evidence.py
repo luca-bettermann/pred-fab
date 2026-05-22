@@ -128,18 +128,25 @@ def evidence_cell_fn(D: float) -> float:
     return D / (1.0 + D)
 
 
+def evidence_gain_cell_fn(D: float) -> float:
+    """Evidence gain 1/(1+D) — high where points are missing, bounded [0, 1]."""
+    return 1.0 / (1.0 + D)
+
+
 def make_marginalized_evidence_fn(
     experiments: list[Any],
     all_axes: list[AxisSpec],
     x_key: str,
     y_key: str,
     sigma: float,
+    cell_fn: Callable[[float], float] = evidence_gain_cell_fn,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Callable[[dict[str, Any]], float]:
     """Build a ``params → float`` evidence function with hidden-dim marginalization.
 
     Pre-computes marginal factors once; each call evaluates a 2D KDE
     at the (x_key, y_key) slice with analytically integrated hidden dims.
+    Defaults to ``evidence_gain_cell_fn`` (high where data is missing).
     """
     pts, _, weights = expand_experiments(experiments, param_transform)
     x_axis = next(a for a in all_axes if a.key == x_key)
@@ -162,7 +169,7 @@ def make_marginalized_evidence_fn(
         y = float(params[y_key])
         d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
         density = float(np.sum(w * np.exp(-d2 * inv_2s2)))
-        return evidence_cell_fn(density)
+        return cell_fn(density)
 
     return _fn
 
