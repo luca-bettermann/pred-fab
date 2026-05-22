@@ -71,7 +71,7 @@ def performance_topology(
 ) -> None:
     """Performance surface — RdYlGn (quality judgment)."""
     cm_p = cmap("performance")
-    norm_p = Normalize(vmin=0, vmax=1)
+    norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     ax.contourf(xs, ys, grid, levels=18, cmap=cm_p, norm=norm_p)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
     if show_optimum:
@@ -145,19 +145,21 @@ def marginal_performance(
     """Marginal performance curve with gradient fill — RdYlGn."""
     cm_p = cmap("performance")
     line_color = cm_p(0.7)
-    y_max = 1.0
+    y_min, y_max = float(curve.min()), float(curve.max())
+    pad = (y_max - y_min) * 0.05 or 0.05
+    y_lo, y_hi = y_min - pad, y_max + pad
     res_y = 100
-    extent = [float(vals[0]), float(vals[-1]), 0, y_max]
+    extent = [float(vals[0]), float(vals[-1]), y_lo, y_hi]
     gradient = np.linspace(0, 1, res_y).reshape(-1, 1) * np.ones((1, len(vals)))
-    curve_norm = curve / y_max
+    curve_norm = (curve - y_lo) / (y_hi - y_lo)
     gradient = gradient * curve_norm[None, :]
     norm_fill = Normalize(vmin=0, vmax=1)
     ax.imshow(gradient, aspect="auto", origin="lower", extent=extent,
               cmap=cm_p, norm=norm_fill, alpha=0.7, zorder=0)
-    ax.fill_between(vals, curve, y_max, color="white", zorder=1)
+    ax.fill_between(vals, curve, y_hi, color="white", zorder=1)
     ax.plot(vals, curve, color=line_color, linewidth=1.5)
     ax.set_xlim(float(vals[0]), float(vals[-1]))
-    ax.set_ylim(0, y_max)
+    ax.set_ylim(y_lo, y_hi)
     ax.set_xlabel(axis_label, fontsize=FONT["axis_label"], color=ZINC_600)
     subplot_label(ax, panel_label)
     clean_spines(ax)
