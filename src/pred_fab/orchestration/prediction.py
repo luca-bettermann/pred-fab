@@ -79,7 +79,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         # Per-model evidence state. Gaussian density kernel; integrated-objective acquisition.
         self._model_kdes: dict[int, _ModelKDE] = {}
-        self._n_exp: int = 0
+        self._n_exp: int = 0  # exposed via n_experiments property
         self._radius: float = RADIUS_DEFAULT
 
         # When True, evidence/KDE bypasses model.encode() and operates in raw
@@ -92,6 +92,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Performance-based weights for uncertainty aggregation.
         # Maps feature name → weight. Set via set_uncertainty_weights(); defaults to equal.
         self._uncertainty_weights: dict[str, float] = {}
+
+    @property
+    def n_experiments(self) -> int:
+        """Number of experiments used to fit the KDE evidence model."""
+        return self._n_exp
 
     def _assert_trained(self) -> DataModule:
         """Raise if the system has not been trained yet; return the active DataModule."""

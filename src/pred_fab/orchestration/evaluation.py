@@ -106,7 +106,11 @@ class EvaluationSystem(BaseOrchestrationSystem):
                             [features_dicts_S[s][f].reshape(-1) for s in valid_indices], dim=0,
                         )
                         model_tensors[f] = stacked
-                except RuntimeError:
+                except RuntimeError as exc:
+                    self.logger.warning(
+                        f"Batched eval failed for '{eval_model.output_performance}', "
+                        f"falling back to per-sample: {exc}"
+                    )
                     avgs_list = []
                     for s in valid_indices:
                         single = {f: features_dicts_S[s][f].reshape(-1).unsqueeze(0) for f in feat_codes}
