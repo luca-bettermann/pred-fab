@@ -831,57 +831,11 @@ class PredictionSystem(BaseOrchestrationSystem):
         new_norm_batch_S: torch.Tensor,
         new_weights_S: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Per-candidate Δ∫E with gradient flowing back into ``new_norm_batch_S``.
-
-        Routes through ``KernelFieldEstimator.integrated_evidence_perturbed_batched_joint_torch``
-        with ``L=1`` (each candidate is a single added kernel). Non-KernelField
-        estimators fall back to the numpy path + detach (gradient lost there).
-        """
-        S = int(new_norm_batch_S.shape[0])
-        dtype = new_norm_batch_S.dtype
-        if not self._model_kdes:
-            self.logger.console_warning("delta_integrated_evidence: no KDEs fitted → zeros")
-            return torch.zeros(S, dtype=dtype)
-        if S == 0:
-            return torch.zeros(S, dtype=dtype)
-
-        weights_S = (
-            torch.ones(S, dtype=dtype)
-            if new_weights_S is None
-            else new_weights_S.to(dtype=dtype)
+        """Per-candidate Δ∫E with L=1. Delegates to the joint method."""
+        weights_SL = new_weights_S.unsqueeze(1) if new_weights_S is not None else None
+        return self.delta_integrated_evidence_joint_batched_tensor(
+            new_norm_batch_S.unsqueeze(1), weights_SL,
         )
-
-        out = torch.zeros(S, dtype=dtype)
-        total_w = 0.0
-        for kde in self._model_kdes.values():
-            new_centers_z_active = self._encode_batch_from_norm_for_model_tensor(
-                kde.model, new_norm_batch_S, kde.active_mask,
-            ).to(dtype=dtype)  # (S, n_active)
-
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma, kde.domain_bounds)
-
-            # Compute E_old via the same ANOVA torch path (empty index + old as "new")
-            if index_old.is_empty:
-                E_old = 0.0
-            else:
-                empty_index = self._kernel_index(
-                    np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
-                )
-                old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)  # (1, n_old, D)
-                old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)  # (1, n_old)
-                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint_torch(
-                    empty_index, old_centers_t, old_weights_t,
-                )[0].item())
-
-            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
-                index_old,
-                new_centers_z_active.unsqueeze(1),
-                weights_S.unsqueeze(1),
-            )
-            out = out + float(kde.weight) * (E_new_per_s - E_old)
-            total_w += float(kde.weight)
-
-        return out / total_w if total_w > 0 else out
 
     def delta_integrated_evidence_joint_batched_tensor(
         self,
@@ -895,6 +849,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         L = int(new_norm_batch_SL.shape[1])
         dtype = new_norm_batch_SL.dtype
         if not self._model_kdes:
+            self.logger.console_warning("delta_integrated_evidence: no KDEs fitted → zeros")
             return torch.zeros(S, dtype=dtype)
 
         weights_SL = (
