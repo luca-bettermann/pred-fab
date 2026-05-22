@@ -318,8 +318,11 @@ class SolutionSpace:
     def _bounds_to_dm_norm(self, points: torch.Tensor) -> torch.Tensor:
         """Convert [0,1] bounds-normalised columns to DataModule normalization.
 
-        For each column: raw = bounds_val * (hi - lo) + lo, then apply
-        the DataModule's normaliser (e.g. z-score). Gradient flows through.
+        For columns with bounds: raw = bounds_val * (hi - lo) + lo, then
+        apply the DataModule's normaliser (e.g. z-score).
+        For columns without bounds (context features, iterator positions):
+        apply the normaliser on raw=0.0 (matching params_to_array default).
+        Gradient flows through.
         """
         dm = self._datamodule
         out = points.clone()
@@ -329,13 +332,14 @@ class SolutionSpace:
                 continue
             try:
                 lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
+                span = hi - lo
+                if span <= 0:
+                    out[..., c_idx] = stats.forward(torch.zeros_like(points[..., c_idx]))
+                else:
+                    raw = points[..., c_idx] * span + lo
+                    out[..., c_idx] = stats.forward(raw)
             except (ValueError, KeyError):
-                continue
-            span = hi - lo
-            if span <= 0:
-                continue
-            raw = points[..., c_idx] * span + lo
-            out[..., c_idx] = stats.forward(raw)
+                out[..., c_idx] = stats.forward(torch.zeros_like(points[..., c_idx]))
         return out
 
     def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:
