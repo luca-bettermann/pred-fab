@@ -732,13 +732,18 @@ def compute_evidence_gain_grid(
     centers: np.ndarray,
     weights: np.ndarray,
     sigma: float,
+    x_bounds: tuple[float, float] = (0.0, 1.0),
+    y_bounds: tuple[float, float] = (0.0, 1.0),
     resolution: int = 80,
     estimator: EvidenceEstimator | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute a 2D ΔE grid over [0,1]² using the KernelField ANOVA pipeline.
+    """Compute a 2D ΔE grid using the KernelField ANOVA pipeline.
 
-    Returns ``(xs, ys, gain_grid)`` where ``gain_grid[j, i] = E(old ∪ {(xs[i], ys[j])}) - E(old)``.
-    Same computation as the evidence gain concept figure.
+    Centers and sigma are in [0,1]^D (normalized space). ``x_bounds`` and
+    ``y_bounds`` define the parameter-space axes for the returned grid —
+    mapped to [0,1] internally for the KernelField computation.
+
+    Returns ``(xs, ys, gain_grid)`` in parameter space.
     """
     kf = estimator or KernelFieldEstimator()
     D = centers.shape[1]
@@ -751,11 +756,14 @@ def compute_evidence_gain_grid(
         empty_index, old_centers_t, old_weights_t,
     )[0].item())
 
-    xs = np.linspace(0, 1, resolution)
-    ys = np.linspace(0, 1, resolution)
+    xs_param = np.linspace(*x_bounds, resolution)
+    ys_param = np.linspace(*y_bounds, resolution)
+    xs_norm = (xs_param - x_bounds[0]) / (x_bounds[1] - x_bounds[0])
+    ys_norm = (ys_param - y_bounds[0]) / (y_bounds[1] - y_bounds[0])
+
     gain_grid = np.zeros((resolution, resolution))
     for j in range(resolution):
-        row_pts = np.stack([xs, np.full(resolution, ys[j])], axis=-1)
+        row_pts = np.stack([xs_norm, np.full(resolution, ys_norm[j])], axis=-1)
         row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
         weights_t = torch.ones(resolution, 1, dtype=torch.float64)
         e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
@@ -763,4 +771,4 @@ def compute_evidence_gain_grid(
         )
         gain_grid[j, :] = e_new.detach().cpu().numpy() - E_old
 
-    return xs, ys, gain_grid
+    return xs_param, ys_param, gain_grid
