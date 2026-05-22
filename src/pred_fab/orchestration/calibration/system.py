@@ -793,12 +793,23 @@ class CalibrationSystem(BaseOrchestrationSystem):
             p_sys = combined_score(perf_dict, self.performance_weights)
             de = self._compute_evidence_gain_for_params(best_params)
             acq = (1.0 - kappa) * p_sys + kappa * de
+
+            # Also evaluate through the optimizer's actual objective (joint path)
+            with torch.no_grad():
+                best_x_t = torch.from_numpy(np.atleast_1d(best_x)).double()
+                points, weights = space.decode(best_x_t)
+                full_S_NL = points.unsqueeze(1)
+                obj_val = float(self._acquisition_joint_batched_tensor(
+                    full_S_NL, kappa, perf_range, weights,
+                )[0].item())
+
             self.logger.console_info(
                 f"  Proposal diagnostics:\n"
-                f"    params   = {{{', '.join(f'{k}: {v:.4f}' for k, v in best_params.items() if isinstance(v, (int, float)))}}}\n"
-                f"    P_sys    = {p_sys:.4f}  (per-feature: {{{', '.join(f'{k}: {v:.3f}' for k, v in perf_dict.items() if v is not None)}}})\n"
-                f"    ΔE       = {de:.4f}\n"
-                f"    A(κ={kappa}) = {acq:.4f}"
+                f"    params     = {{{', '.join(f'{k}: {v:.4f}' for k, v in best_params.items() if isinstance(v, (int, float)))}}}\n"
+                f"    P_sys      = {p_sys:.4f}  (per-feature: {{{', '.join(f'{k}: {v:.3f}' for k, v in perf_dict.items() if v is not None)}}})\n"
+                f"    ΔE (point) = {de:.4f}\n"
+                f"    A (recomp) = {acq:.4f}\n"
+                f"    obj (real) = {obj_val:.4f}  (negated acquisition × scale)"
             )
 
         # Store trajectory plot data
