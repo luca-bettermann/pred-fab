@@ -240,8 +240,8 @@ class PfabAgent:
                         v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
                         try:
                             block.set_value(code, v)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            self.logger.warning(f"perf_fn_tensor: set_value({code}) failed: {exc}")
                     params_blocks.append(block)
                 return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
 

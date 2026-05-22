@@ -251,11 +251,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _compute_perf_dict_for_params(self, params: dict[str, Any]) -> dict[str, float | None]:
         """Compute a single-candidate ``{perf_code: float}`` via the tensor perf closure."""
         if self.perf_fn_tensor is None:
+            self.logger.warning("_compute_perf_dict_for_params: perf_fn_tensor is None")
             return {}
         try:
             with torch.no_grad():
                 t_out = self.perf_fn_tensor([params])
-        except Exception:
+        except Exception as exc:
+            self.logger.console_warning(f"_compute_perf_dict_for_params failed: {exc}")
             return {}
         out: dict[str, float | None] = {}
         for code, t in t_out.items():
@@ -375,14 +377,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         params_list: list[dict[str, Any]] = []
         for s in range(S):
             try:
-                # array_to_params is numpy-typed — but we want tensor values
-                # for continuous params. Strategy: build dict from numpy
-                # decode for concrete int / cat resolution, then overwrite
-                # continuous numerics with the differentiable tensor entries.
                 p_np = dm.array_to_params(X_SD[s].detach().cpu().numpy().reshape(-1))
                 p_with_grad = self._reattach_tensor_continuous(p_np, X_SD[s], dm)
                 params_list.append(p_with_grad)
-            except (ValueError, KeyError):
+            except (ValueError, KeyError) as exc:
+                self.logger.warning(f"_per_candidate_perf_tensor: candidate {s} decode failed: {exc}")
                 params_list.append(None)  # type: ignore[arg-type]
 
         valid_idx = [i for i, p in enumerate(params_list) if p is not None]
@@ -431,6 +430,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Categorical / integer / domain params stay as Python.
         """
         out = dict(params_np)
+        reattached = 0
         for j, col_name in enumerate(dm.input_columns):
             if col_name not in out:
                 continue
@@ -439,7 +439,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 continue
             if col_name in dm.categorical_mappings:
                 continue
-            out[col_name] = stats.reverse(x_norm[j])
+            val = stats.reverse(x_norm[j])
+            if isinstance(val, torch.Tensor) and x_norm.requires_grad and not val.requires_grad:
+                self.logger.console_warning(
+                    f"Gradient lost in _reattach_tensor_continuous for '{col_name}'"
+                )
+            out[col_name] = val
+            reattached += 1
+        if reattached == 0 and x_norm.requires_grad:
+            self.logger.console_warning(
+                "_reattach_tensor_continuous: no columns reattached — performance gradient is zero"
+            )
         return out
 
     def _acquisition_objective_tensor(
@@ -507,7 +517,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             params_dict = exp.parameters.get_values_dict()
             try:
                 sys_perf = self._compute_normalised_perf_for_params(params_dict)
-            except Exception:
+            except Exception as exc:
+                self.logger.warning(f"update_perf_range: failed for {code}: {exc}")
                 continue
 
             if raw_min is None or sys_perf < raw_min:
