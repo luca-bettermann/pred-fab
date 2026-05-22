@@ -124,12 +124,8 @@ def acquisition_topology(
 
     opt_idx = np.unravel_index(np.argmax(grid), grid.shape)
     opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
-    ax.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=65,
-               linewidths=1.2, zorder=12)
-    ax.annotate("$x_{\\mathrm{proposed}}$", (opt_xv, opt_yv),
-                xytext=(8, 8), textcoords="offset points",
-                fontsize=8, color="white",
-                arrowprops=dict(arrowstyle="->", color="white", lw=0.8))
+    ax.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
+               linewidths=1.8, zorder=12)
 
     subplot_label(ax, label or f"$A(x, y)$   $\\kappa={kappa}$")
     setup_axes(ax, x_label, y_label, x_bounds, y_bounds)

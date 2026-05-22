@@ -151,12 +151,8 @@ def main(
                          show_optimum=False)
     if exp_x:
         draw_experiments(ax_topo, exp_x, exp_y)
-    ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=65,
-                    linewidths=1.2, zorder=12)
-    ax_topo.annotate("inference\nproposal", (opt_xv, opt_yv),
-                     xytext=(10, 10), textcoords="offset points",
-                     fontsize=7, color=ZINC_700,
-                     arrowprops=dict(arrowstyle="->", color=ZINC_400, lw=0.8))
+    ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
+                    linewidths=1.8, zorder=12)
 
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)
