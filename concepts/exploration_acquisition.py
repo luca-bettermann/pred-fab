@@ -40,10 +40,10 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
+    evidence_fn: Callable[[dict[str, Any]], float],
+    score_fn: Callable[[dict[str, Any]], float],
+    acquisition_fn: Callable[[dict[str, Any]], float],
     save_path: str | None = None,
-    evidence_fn: Callable[[dict[str, Any]], float] | None = None,
-    score_fn: Callable[[dict[str, Any]], float] | None = None,
-    acquisition_fn: Callable[[dict[str, Any]], float] | None = None,
     kappa: float = 0.5,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
@@ -59,23 +59,6 @@ def main(
     fixed = fixed_params or {}
     x_lo, x_hi = x_bounds
     y_lo, y_hi = y_bounds
-
-    if evidence_fn is None:
-        def evidence_fn(params):
-            xn = (params.get(x_key, 0.075) - x_lo) / (x_hi - x_lo)
-            yn = (params.get(y_key, 2.0) - y_lo) / (y_hi - y_lo)
-            e = 0.6 * np.exp(-((xn-0.2)**2 + (yn-0.8)**2) / 0.06)
-            e += 0.45 * np.exp(-((xn-0.85)**2 + (yn-0.15)**2) / 0.08)
-            e += 0.3 * np.exp(-((xn-0.5)**2 + (yn-0.5)**2) / 0.15)
-            return float(np.clip(e, 0, 1))
-
-    if score_fn is None:
-        def score_fn(params):
-            xn = (params.get(x_key, 0.075) - x_lo) / (x_hi - x_lo)
-            yn = (params.get(y_key, 2.0) - y_lo) / (y_hi - y_lo)
-            f = 0.7 * np.exp(-((xn-0.4)**2 + (yn-0.55)**2) / 0.15)
-            f += 0.35 * np.exp(-((xn-0.8)**2 + (yn-0.25)**2) / 0.2)
-            return float(np.clip(1.0 - abs(f - 0.65) / 0.7, 0, 1))
 
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
@@ -93,7 +76,7 @@ def main(
             perf = score_fn(params)
             evidence_grid[j, i] = ev
             perf_grid[j, i] = perf
-            acq_grid[j, i] = acquisition_fn(params) if acquisition_fn else (1 - kappa) * perf + kappa * ev
+            acq_grid[j, i] = acquisition_fn(params)
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
