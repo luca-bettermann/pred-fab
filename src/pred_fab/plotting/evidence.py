@@ -138,36 +138,48 @@ def make_marginalized_evidence_fn(
     all_axes: list[AxisSpec],
     x_key: str,
     y_key: str,
-    n_samples: int = 32,
-    seed: int = 0,
+    n_quadrature: int = 5,
 ) -> Callable[[dict[str, Any]], float]:
     """Build a ``params → float`` wrapper that marginalizes over hidden dims.
 
-    Evaluates ``evidence_fn`` at ``n_samples`` Sobol points across the hidden
-    dimensions and returns the mean. Uses the actual evidence pipeline
-    (KernelField + ANOVA integration) — no simplified proxy.
+    Uses Gauss-Legendre quadrature (same integration method as the
+    KernelField shell probes) over hidden dimensions. Evaluates the full
+    evidence pipeline at each quadrature point — no simplified proxy.
+
+    For ``H`` hidden dims, each call evaluates ``evidence_fn`` at
+    ``n_quadrature ** H`` points.
     """
     hidden = [a for a in all_axes if a.key not in (x_key, y_key)]
     if not hidden:
         return evidence_fn
 
-    from scipy.stats.qmc import Sobol
-    sampler = Sobol(d=len(hidden), scramble=True, seed=seed)
-    sobol_01 = sampler.random(n_samples)
+    from numpy.polynomial.legendre import leggauss
+    nodes, weights = leggauss(n_quadrature)
+    nodes_01 = (nodes + 1.0) / 2.0
+    weights_01 = weights / 2.0
 
     hidden_keys = [a.key for a in hidden]
     hidden_lo = np.array([a.bounds[0] for a in hidden])  # type: ignore[index]
     hidden_hi = np.array([a.bounds[1] for a in hidden])  # type: ignore[index]
-    hidden_samples = hidden_lo + sobol_01 * (hidden_hi - hidden_lo)
+    hidden_range = hidden_hi - hidden_lo
+
+    grids = np.meshgrid(*[nodes_01] * len(hidden), indexing="ij")
+    quad_points = np.stack([g.ravel() for g in grids], axis=-1)
+    w_grids = np.meshgrid(*[weights_01] * len(hidden), indexing="ij")
+    quad_weights = np.ones(len(quad_points))
+    for wg in w_grids:
+        quad_weights *= wg.ravel()
+
+    quad_params = hidden_lo + quad_points * hidden_range
 
     def _fn(params: dict[str, Any]) -> float:
         total = 0.0
-        for row in hidden_samples:
+        for row, w in zip(quad_params, quad_weights):
             p = dict(params)
             for k, v in zip(hidden_keys, row):
                 p[k] = float(v)
-            total += evidence_fn(p)
-        return total / n_samples
+            total += w * evidence_fn(p)
+        return total
 
     return _fn
 
