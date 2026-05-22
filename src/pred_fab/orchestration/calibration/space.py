@@ -334,12 +334,12 @@ class SolutionSpace:
                 lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
                 span = hi - lo
                 if span <= 0:
-                    out[..., c_idx] = stats.forward(torch.zeros_like(points[..., c_idx]))
+                    out[..., c_idx] = 0.0
                 else:
                     raw = points[..., c_idx] * span + lo
                     out[..., c_idx] = stats.forward(raw)
             except (ValueError, KeyError):
-                out[..., c_idx] = stats.forward(torch.zeros_like(points[..., c_idx]))
+                out[..., c_idx] = 0.0
         return out
 
     def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:

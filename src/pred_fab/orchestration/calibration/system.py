@@ -37,7 +37,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self,
         schema: DatasetSchema,
         logger: PfabLogger,
-        uncertainty_fn: Callable[[np.ndarray], float],
         *,
         evidence: EvidenceBackend | None = None,
         n_exp_fn: Callable[[], int] | None = None,
@@ -49,7 +48,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn_tensor = perf_fn_tensor
-        self.uncertainty_fn = uncertainty_fn
         self.evidence = evidence if evidence is not None else EvidenceBackend()
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn

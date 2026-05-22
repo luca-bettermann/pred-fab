@@ -249,7 +249,6 @@ def build_calibration_system(
     tmp_path,
     dataset: Dataset,
     perf_fn: Optional[Callable] = None,
-    uncertainty_fn: Optional[Callable] = None,
     delta_integrated_evidence_fn: Optional[Callable] = None,
 ) -> CalibrationSystem:
     """Build a CalibrationSystem with lightweight no-op callables for unit tests.
@@ -306,7 +305,6 @@ def build_calibration_system(
     cal = CalibrationSystem(
         schema=schema,
         logger=logger,
-        uncertainty_fn=uncertainty_fn or (lambda x: 1.0),
         evidence=evidence,
         perf_fn_tensor=_perf_fn_tensor,
     )
