@@ -47,6 +47,7 @@ class _ModelKDE:
     active_mask: np.ndarray         # bool mask over latent dims
     n_active_dims: int
     weight: float = 1.0             # performance weight for model-level aggregation
+    domain_bounds: np.ndarray | None = None  # (n_active_dims, 2) lo/hi in latent space
 
 
 class PredictionSystem(BaseOrchestrationSystem):
@@ -524,6 +525,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             n_active_dims = projected.shape[1]
             sigma = self._resolve_sigma(n_active_dims)
 
+            bounds = self._compute_latent_domain_bounds(model, datamodule, active_mask)
+
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=projected,
@@ -532,6 +535,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 active_mask=active_mask,
                 n_active_dims=n_active_dims,
                 weight=self._get_model_weight(model),
+                domain_bounds=bounds,
             )
 
             self.logger.info(
@@ -614,6 +618,56 @@ class PredictionSystem(BaseOrchestrationSystem):
             f"Empty evidence initialized for {len(self._model_kdes)} models "
             f"(radius={self._radius}, estimator={self._estimator_config.type})."
         )
+
+    def _compute_latent_domain_bounds(
+        self, model: IPredictionModel, datamodule: DataModule, active_mask: np.ndarray,
+    ) -> np.ndarray | None:
+        """Compute per-dimension domain bounds in latent (encoded) space.
+
+        Encodes the parameter lo/hi bounds through the same normalization +
+        encode path used for KDE centers. Returns (n_active, 2) array.
+        """
+        if datamodule is None:
+            return None
+        input_cols = model.input_parameters + model.input_features
+        input_indices = datamodule.get_input_indices(input_cols, skip_missing=True)
+        if not input_indices:
+            return None
+
+        n_full = len(input_indices)
+        lo_vec = np.zeros(n_full)
+        hi_vec = np.zeros(n_full)
+        for j, col_idx in enumerate(input_indices):
+            col = datamodule.input_columns[col_idx]
+            stats = datamodule._parameter_stats.get(col)
+            if stats is None:
+                lo_vec[j] = 0.0
+                hi_vec[j] = 1.0
+                continue
+            schema_obj = self.schema.parameters.get(col) if self.schema and self.schema.parameters.has(col) else None
+            if schema_obj is not None:
+                c = schema_obj.constraints
+                raw_lo = c.get("min", None)
+                raw_hi = c.get("max", None)
+                if raw_lo is not None and raw_hi is not None:
+                    lo_vec[j] = float(stats.forward(np.array(float(raw_lo))))
+                    hi_vec[j] = float(stats.forward(np.array(float(raw_hi))))
+                    continue
+            lo_vec[j] = float(stats.forward(np.array(0.0)))
+            hi_vec[j] = float(stats.forward(np.array(0.0)))
+
+        if self._bypass_encoder:
+            z_lo = lo_vec
+            z_hi = hi_vec
+        else:
+            z_lo = model.encode(torch.from_numpy(lo_vec.reshape(1, -1)).float()).detach().cpu().numpy()[0]
+            z_hi = model.encode(torch.from_numpy(hi_vec.reshape(1, -1)).float()).detach().cpu().numpy()[0]
+
+        bounds = np.stack([
+            np.minimum(z_lo, z_hi),
+            np.maximum(z_lo, z_hi),
+        ], axis=-1)
+        return bounds[active_mask]
 
     def _resolve_sigma(self, n_dims: int = 1) -> float:
         """σ = radius (1D bandwidth). With ANOVA kernel, no √D scaling needed."""
@@ -743,11 +797,15 @@ class PredictionSystem(BaseOrchestrationSystem):
         K = cls._gaussian_density(z, centers, sigma)
         return (K * weights[None, :]).sum(axis=-1)
 
-    def _kernel_index(self, centers: np.ndarray, weights: np.ndarray, sigma: float) -> KernelIndex:
+    def _kernel_index(
+        self, centers: np.ndarray, weights: np.ndarray, sigma: float,
+        domain_bounds: np.ndarray | None = None,
+    ) -> KernelIndex:
         return KernelIndex(
             centers, weights, sigma,
             cutoff_sigmas=self._estimator_config.cutoff_sigmas,
             truncation_threshold=self._estimator_config.truncation_threshold,
+            domain_bounds=domain_bounds,
         )
 
     def _encode_batch_from_norm_for_model_tensor(
@@ -800,7 +858,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 kde.model, new_norm_batch_S, kde.active_mask,
             ).to(dtype=dtype)  # (S, n_active)
 
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma, kde.domain_bounds)
 
             # Compute E_old via the same ANOVA torch path (empty index + old as "new")
             if index_old.is_empty:
@@ -855,7 +913,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             ).to(dtype=dtype)  # (S*L, n_active)
             new_centers_SL = new_centers_flat.reshape(S, L, -1)
 
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma)
+            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma, kde.domain_bounds)
 
             # Compute E_old via the same ANOVA torch path
             if index_old.is_empty:

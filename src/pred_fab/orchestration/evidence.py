@@ -113,6 +113,7 @@ class KernelIndex:
         sigma: float,
         cutoff_sigmas: float = 5.0,
         truncation_threshold: int = 10,
+        domain_bounds: np.ndarray | torch.Tensor | None = None,
     ):
         self.centers = torch.as_tensor(
             centers if isinstance(centers, torch.Tensor) else np.asarray(centers, dtype=float),
@@ -127,6 +128,14 @@ class KernelIndex:
         self.truncation_threshold = int(truncation_threshold)
         self._n = len(self.centers)
         self._D = int(self.centers.shape[1]) if self.centers.ndim == 2 and self._n else 0
+        if domain_bounds is not None:
+            self.domain_bounds = torch.as_tensor(
+                domain_bounds if isinstance(domain_bounds, torch.Tensor)
+                else np.asarray(domain_bounds, dtype=float),
+                dtype=torch.float64,
+            )
+        else:
+            self.domain_bounds = None
 
     @property
     def is_empty(self) -> bool:
@@ -226,6 +235,15 @@ def kernel_field_probe_count(
 def _in_unit_cube_torch(points: torch.Tensor) -> torch.Tensor:
     """Boolean mask: all dims in [0, 1]."""
     return ((points >= 0.0) & (points <= 1.0)).all(dim=-1)
+
+
+def _in_domain_torch(points: torch.Tensor, domain_bounds: torch.Tensor | None) -> torch.Tensor:
+    """Boolean mask: all dims within domain_bounds (D, 2). Falls back to [0, 1]."""
+    if domain_bounds is None:
+        return _in_unit_cube_torch(points)
+    lo = domain_bounds[:, 0]
+    hi = domain_bounds[:, 1]
+    return ((points >= lo) & (points <= hi)).all(dim=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -400,11 +418,14 @@ class KernelFieldEstimator(EvidenceEstimator):
         old_w = index_old.weights.to(device=device, dtype=dtype) if n_old > 0 else None
 
         e_marginal = torch.zeros(S, dtype=dtype, device=device)
+        bounds = index_old.domain_bounds
 
         for d in range(D):
+            lo_d = float(bounds[d, 0]) if bounds is not None else 0.0
+            hi_d = float(bounds[d, 1]) if bounds is not None else 1.0
             new_d = new_centers_SL[:, :, d]                          # (S, L)
             probes_d = new_d[:, :, None] + probes_1d[None, None, :]  # (S, L, P)
-            in_dom_d = ((probes_d >= 0.0) & (probes_d <= 1.0)).to(dtype=dtype)
+            in_dom_d = ((probes_d >= lo_d) & (probes_d <= hi_d)).to(dtype=dtype)
 
             # 1D cross-influence between new kernels
             diff_nn = probes_d[:, :, :, None] - new_d[:, None, None, :]  # (S, L, P, L)
@@ -428,7 +449,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             if n_old > 0:
                 old_d = old_d_all[:, d]  # type: ignore[index]
                 probes_old_d = old_d[:, None] + probes_1d[None, :]    # (n_old, P)
-                in_dom_old = ((probes_old_d >= 0.0) & (probes_old_d <= 1.0)).to(dtype=dtype)
+                in_dom_old = ((probes_old_d >= lo_d) & (probes_old_d <= hi_d)).to(dtype=dtype)
                 # Old-to-old
                 diff_oo = probes_old_d[:, :, None] - old_d[None, None, :]
                 rho_oo = torch.exp(-diff_oo ** 2 * inv_2sig2) * old_w[None, None, :]  # type: ignore[index]
@@ -466,7 +487,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         n_old = len(index_old.centers) if not index_old.is_empty else 0
 
         probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
-        in_domain_new_SL = _in_unit_cube_torch(probes_new_SL.reshape(-1, D)).reshape(
+        in_domain_new_SL = _in_domain_torch(probes_new_SL.reshape(-1, D), index_old.domain_bounds).reshape(
             S, L, M
         ).to(dtype=dtype)
 
@@ -491,7 +512,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         old_weights = index_old.weights.to(device=device, dtype=dtype)
 
         probes_per_old = offsets[None, :, :] + old_centers[:, None, :]
-        in_domain_per_old = _in_unit_cube_torch(probes_per_old.reshape(-1, D)).reshape(
+        in_domain_per_old = _in_domain_torch(probes_per_old.reshape(-1, D), index_old.domain_bounds).reshape(
             n_old, M
         ).to(dtype=dtype)
 
@@ -652,8 +673,8 @@ class SobolLocalEstimator(EvidenceEstimator):
             ).sum(dim=-1)                                                      # (n_old, n, S)
 
             D_total_at_old = D_old_at_old.unsqueeze(-1) + D_new_at_old        # (n_old, n, S)
-            in_cube_old = _in_unit_cube_torch(
-                probes_old.reshape(-1, D),
+            in_cube_old = _in_domain_torch(
+                probes_old.reshape(-1, D), index_old.domain_bounds,
             ).reshape(n_old, n).to(dtype=dtype)                               # (n_old, n)
 
             integrand_old = (
@@ -684,8 +705,8 @@ class SobolLocalEstimator(EvidenceEstimator):
         ).sum(dim=-1)                                                          # (S, L, n)
 
         D_total_at_new = D_old_at_new + D_new_at_new                          # (S, L, n)
-        in_cube_new = _in_unit_cube_torch(
-            probes_new.reshape(-1, D),
+        in_cube_new = _in_domain_torch(
+            probes_new.reshape(-1, D), index_old.domain_bounds,
         ).reshape(S, L, n).to(dtype=dtype)                                     # (S, L, n)
 
         integrand_new = rho[None, None, :] / (1.0 + D_total_at_new) * in_cube_new  # (S, L, n)
