@@ -126,11 +126,6 @@ def acquisition_topology(
     ax.contourf(xs, ys, grid, levels=18, cmap=cm_a, norm=norm_a)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
 
-    opt_idx = np.unravel_index(np.argmax(grid), grid.shape)
-    opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
-    ax.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
-               linewidths=1.8, zorder=12)
-
     subplot_label(ax, label or f"$A(x, y)$   $\\kappa={kappa}$")
     setup_axes(ax, x_label, y_label, x_bounds, y_bounds)
     sm = ScalarMappable(norm=norm_a, cmap=cm_a)

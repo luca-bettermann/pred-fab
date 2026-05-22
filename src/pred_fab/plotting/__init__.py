@@ -48,6 +48,8 @@ from .evidence import (
     plot_evidence_gain_panel,
     plot_multi_angle,
     expand_experiments,
+    compute_grid_marginalized,
+    evidence_cell_fn,
 )
 from .parallel import plot_parallel_coordinates
 
@@ -84,5 +86,7 @@ __all__ = [
     "plot_evidence_gain_panel",
     "plot_multi_angle",
     "expand_experiments",
+    "compute_grid_marginalized",
+    "evidence_cell_fn",
     "plot_parallel_coordinates",
 ]

@@ -123,7 +123,7 @@ def _compute_grid(
 def _density_fn(D: float) -> float:
     return D
 
-def _evidence_fn(D: float) -> float:
+def evidence_cell_fn(D: float) -> float:
     """Evidence saturation D/(1+D) — high where points are, bounded [0, 1]."""
     return D / (1.0 + D)
 
@@ -156,7 +156,7 @@ def _marginal_factors(
     return factors
 
 
-def _compute_grid_marginalized(
+def compute_grid_marginalized(
     x_axis: AxisSpec,
     y_axis: AxisSpec,
     all_axes: list[AxisSpec],
@@ -280,11 +280,11 @@ def plot_evidence_panel(
     """
     pts, exp_ids, weights = expand_experiments(experiments, param_transform)
     if all_axes is not None:
-        xs, ys, grid = _compute_grid_marginalized(
-            x_axis, y_axis, all_axes, pts, weights, sigma, _evidence_fn, resolution,
+        xs, ys, grid = compute_grid_marginalized(
+            x_axis, y_axis, all_axes, pts, weights, sigma, evidence_cell_fn, resolution,
         )
     else:
-        xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _evidence_fn, resolution)
+        xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, evidence_cell_fn, resolution)
     grid_max = float(grid.max()) if grid.size > 0 else 1.0
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
                      cmap_name="evidence", contour_overlay=False, show_colorbar=True,
@@ -310,8 +310,8 @@ def plot_evidence_gain_panel(
     pts_b, _, w_b = expand_experiments(experiments_before, param_transform)
     pts_a, exp_ids_a, w_a = expand_experiments(experiments_after, param_transform)
 
-    _, _, grid_before = _compute_grid(x_axis, y_axis, pts_b, w_b, sigma, _evidence_fn, resolution)
-    _, _, grid_after = _compute_grid(x_axis, y_axis, pts_a, w_a, sigma, _evidence_fn, resolution)
+    _, _, grid_before = _compute_grid(x_axis, y_axis, pts_b, w_b, sigma, evidence_cell_fn, resolution)
+    _, _, grid_after = _compute_grid(x_axis, y_axis, pts_a, w_a, sigma, evidence_cell_fn, resolution)
     xs = np.linspace(x_axis.bounds[0], x_axis.bounds[1], resolution)  # type: ignore[index]
     ys = np.linspace(y_axis.bounds[0], y_axis.bounds[1], resolution)  # type: ignore[index]
     grid = grid_after - grid_before

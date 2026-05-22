@@ -1,22 +1,28 @@
 """Exploration concept: evidence gain + performance + acquisition topology.
 
 Three side-by-side topologies showing the κ-blend:
-  1. Evidence gain ΔE(x, y)  — where information is missing
-  2. Performance P(x, y)     — where quality is high
-  3. Acquisition A(x, y)     — what the optimizer sees
+  1. Evidence gain ΔE(x, y)  — where information is missing (marginalized)
+  2. Performance P_sys(x, y) — where quality is high
+  3. Acquisition A(x, y)     — (1-κ)·P_sys + κ·ΔE
 
 Usage with real model::
 
-    cal = agent.calibration_system
+    from pred_fab.plotting.evidence import compute_grid_marginalized, evidence_cell_fn
+    from pred_fab.plotting._style import AxisSpec
+
+    # Build marginalized evidence grid
+    all_axes = [AxisSpec(...), ...]  # all parameter axes with bounds
+    pts, _, weights = expand_experiments(experiments)
+    _, _, ev_grid = compute_grid_marginalized(
+        x_axis, y_axis, all_axes, pts, weights, sigma, evidence_cell_fn, resolution,
+    )
+
     main(
-        evidence_fn=cal.evidence_gain,
+        evidence_grid=ev_grid,
         score_fn=cal.system_performance,
-        acquisition_fn=lambda p: cal.acquisition(p, kappa=0.5),
         kappa=0.5,
         ...
     )
-
-All callables accept a raw params dict. No wrapping needed.
 """
 from __future__ import annotations
 
@@ -40,11 +46,10 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
-    evidence_fn: Callable[[dict[str, Any]], float],
+    evidence_grid: np.ndarray,
     score_fn: Callable[[dict[str, Any]], float],
-    acquisition_fn: Callable[[dict[str, Any]], float],
+    kappa: float,
     save_path: str | None = None,
-    kappa: float = 0.5,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
     x_bounds: tuple[float, float] = (0.05, 0.1),
@@ -63,20 +68,16 @@ def main(
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
 
-    evidence_grid = np.zeros((resolution, resolution))
     perf_grid = np.zeros((resolution, resolution))
-    acq_grid = np.zeros((resolution, resolution))
-
     for i in range(resolution):
         for j in range(resolution):
             params = dict(fixed)
             params[x_key] = float(xs[i])
             params[y_key] = float(ys[j])
-            ev = evidence_fn(params)
-            perf = score_fn(params)
-            evidence_grid[j, i] = ev
-            perf_grid[j, i] = perf
-            acq_grid[j, i] = acquisition_fn(params)
+            perf_grid[j, i] = score_fn(params)
+
+    ev_norm = evidence_grid / evidence_grid.max() if evidence_grid.max() > 0 else evidence_grid
+    acq_grid = (1 - kappa) * perf_grid + kappa * ev_norm
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
@@ -103,7 +104,7 @@ def main(
         draw_experiments(ax3, exp_x, exp_y)
 
     fig.text(0.5, 0.02,
-             "$A = (1 - \\kappa) \\cdot P + \\kappa \\cdot \\Delta E$",
+             "$A = (1 - \\kappa) \\cdot P_{\\mathrm{sys}} + \\kappa \\cdot \\Delta E$",
              ha="center", fontsize=11, color=ZINC_500)
 
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
@@ -112,4 +113,4 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    raise RuntimeError("Requires evidence_grid and score_fn — call main() directly.")
