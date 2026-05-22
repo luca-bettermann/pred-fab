@@ -40,6 +40,8 @@ def plot_performance_concept(
     fixed_params: dict[str, Any],
     experiments: list[Any] | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    score_curve_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    score_curve_label: str | None = None,
     resolution: int = 40,
 ) -> None:
     """Generate the performance concept figure.
@@ -125,7 +127,10 @@ def plot_performance_concept(
     ax2 = fig.add_subplot(gs[0, 1])
     f_lo, f_hi = float(feat_grid.min()), float(feat_grid.max())
     feat_range = np.linspace(f_lo, f_hi, 200)
-    perf_curve = np.clip(1.0 - np.abs(feat_range - target_value) / scaling, 0, 1)
+    if score_curve_fn is not None:
+        perf_curve = np.clip(score_curve_fn(feat_range), 0, 1)
+    else:
+        perf_curve = np.clip(1.0 - np.abs(feat_range - target_value) / scaling, 0, 1)
     ax2.fill_between(feat_range, perf_curve, alpha=FILL_ALPHA["area"], color=EMERALD_500)
     ax2.plot(feat_range, perf_curve, color=EMERALD_500, linewidth=1.8)
     ax2.axvline(target_value, color=ZINC_300, linewidth=0.8, linestyle="--", alpha=0.5)
@@ -133,7 +138,11 @@ def plot_performance_concept(
              color=ZINC_400, ha="center", va="bottom")
     if exp_feat:
         for fx in exp_feat[:6]:
-            py = max(0.0, 1.0 - abs(fx - target_value) / scaling)
+            py = float(np.clip(
+                score_curve_fn(np.array([fx]))[0] if score_curve_fn
+                else max(0.0, 1.0 - abs(fx - target_value) / scaling),
+                0, 1,
+            ))
             ax2.plot(fx, py, "o", color=STEEL_500, markersize=3.5, zorder=5,
                      markeredgecolor="white", markeredgewidth=0.4)
             ax2.plot([fx, fx], [0, py], color=ZINC_300, linewidth=0.4, linestyle=":")
@@ -142,8 +151,12 @@ def plot_performance_concept(
     subplot_label(ax2, "2. Scoring")
     ax2.set_ylim(0, 1.08)
     clean_spines(ax2)
-    ax2.text(0.5, -0.18, "$p = 1 - \\frac{|\\hat{f} - t|}{s}$",
-             fontsize=9, color=ZINC_500, ha="center", va="top", transform=ax2.transAxes)
+    if score_curve_label:
+        ax2.text(0.5, -0.18, score_curve_label,
+                 fontsize=9, color=ZINC_500, ha="center", va="top", transform=ax2.transAxes)
+    elif score_curve_fn is None:
+        ax2.text(0.5, -0.18, "$p = 1 - \\frac{|\\hat{f} - t|}{s}$",
+                 fontsize=9, color=ZINC_500, ha="center", va="top", transform=ax2.transAxes)
 
     # ── Panel 3: Performance topology ──
     ax3 = fig.add_subplot(gs[0, 2])
