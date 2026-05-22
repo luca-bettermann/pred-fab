@@ -213,6 +213,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 self.logger.console_warning(f"Performance attribute '{name}' not in schema; ignoring weight.")
 
     # ==================================================================
+    # § Public API — single-candidate evaluation from params dict
+    # ==================================================================
+
+    def predict_features(self, params: dict[str, Any]) -> dict[str, float | None]:
+        """Predict per-feature values for a single candidate.
+
+        Returns ``{feature_code: float}`` (NaN → None).
+        """
+        return self._compute_perf_dict_for_params(params)
+
+    def system_performance(self, params: dict[str, Any]) -> float:
+        """Weighted system performance P_sys for a single candidate."""
+        return self._compute_normalised_perf_for_params(params, self._perf_range)
+
+    def evidence_gain(self, params: dict[str, Any]) -> float:
+        """Evidence gain ΔE for a single candidate."""
+        return self._compute_evidence_gain_for_params(params)
+
+    # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================
     #
