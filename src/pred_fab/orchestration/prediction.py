@@ -1201,10 +1201,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         perf_codes: set[str] = set()
         for code in codes:
             exp = dm.dataset.get_experiment(code)
-            perf = exp.performance.get_values_dict()
-            if not perf and eval_system is not None:
+            if eval_system is not None:
                 eval_system.run_evaluation(exp)
-                perf = exp.performance.get_values_dict()
+            perf = exp.performance.get_values_dict()
             perf_codes.update(perf.keys())
             dim_names = exp.parameters.get_dim_names()
             if max_depth is not None and len(dim_names) > max_depth:
