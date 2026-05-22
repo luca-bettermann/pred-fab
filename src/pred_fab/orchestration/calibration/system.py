@@ -231,6 +231,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Evidence gain ΔE for a single candidate."""
         return self._compute_evidence_gain_for_params(params)
 
+    def acquisition(self, params: dict[str, Any], kappa: float) -> float:
+        """Acquisition score A = (1-κ)·P_sys + κ·ΔE for a single candidate."""
+        p = self.system_performance(params) if kappa < 1.0 else 0.0
+        e = self.evidence_gain(params) if kappa > 0.0 else 0.0
+        return (1.0 - kappa) * p + kappa * e
+
     # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================

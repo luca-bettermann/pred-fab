@@ -9,8 +9,9 @@ Usage with real model::
 
     cal = agent.calibration_system
     main(
-        evidence_fn=...,  # params → evidence gain float (from KDE)
-        score_fn=cal._compute_normalised_perf_for_params,  # params → combined [0,1]
+        evidence_fn=cal.evidence_gain,
+        score_fn=cal.system_performance,
+        acquisition_fn=lambda p: cal.acquisition(p, kappa=0.5),
         kappa=0.5,
         ...
     )
@@ -42,6 +43,7 @@ def main(
     save_path: str | None = None,
     evidence_fn: Callable[[dict[str, Any]], float] | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
+    acquisition_fn: Callable[[dict[str, Any]], float] | None = None,
     kappa: float = 0.5,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
@@ -91,7 +93,7 @@ def main(
             perf = score_fn(params)
             evidence_grid[j, i] = ev
             perf_grid[j, i] = perf
-            acq_grid[j, i] = (1 - kappa) * perf + kappa * ev
+            acq_grid[j, i] = acquisition_fn(params) if acquisition_fn else (1 - kappa) * perf + kappa * ev
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
