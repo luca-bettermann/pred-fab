@@ -658,6 +658,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                     lo_vec[j] = float(stats.forward(np.array(float(raw_lo))))
                     hi_vec[j] = float(stats.forward(np.array(float(raw_hi))))
                     continue
+            # No schema bounds → don't constrain. Evidence probes pass through unchecked.
             lo_vec[j] = -1e6
             hi_vec[j] = 1e6
 
