@@ -517,13 +517,15 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             latent_array = np.array(latent_points)
 
-            # Drop constant dimensions.
+            # Drop constant dimensions — they add no information to the KDE
+            # and would cause degenerate kernel density (zero variance).
             if latent_array.shape[0] > 1:
                 per_dim_std = np.std(latent_array, axis=0)
                 active_mask = per_dim_std > 1e-8
                 if not np.any(active_mask):
                     continue
             else:
+                # Single point: keep all dims (can't detect constant dims)
                 active_mask = np.ones(latent_array.shape[1], dtype=bool)
 
             projected = latent_array[:, active_mask]

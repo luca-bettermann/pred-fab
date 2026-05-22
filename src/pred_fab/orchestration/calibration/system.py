@@ -333,7 +333,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return float(out[0].item())
 
     def _kappa_blend(self, scores, perfs, evidences, kappa: float):
-        """Negated κ-weighted blend scaled by ``acquisition_scale``."""
+        """A = (1-κ)·P + κ·ΔE, negated and scaled for minimisation."""
         if perfs is not None and kappa < 1.0:
             scores = scores + (1.0 - kappa) * perfs
         if evidences is not None and kappa > 0.0:

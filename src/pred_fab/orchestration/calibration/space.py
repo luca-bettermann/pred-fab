@@ -214,6 +214,8 @@ class SolutionSpace:
     def _build_prior_fill(self) -> torch.Tensor:
         """Build template tensor for frozen columns (fixed params, categoricals)."""
         dm_cols = self._datamodule.input_columns
+        # Default 0.5 in [0,1] bounds space = midpoint of parameter range.
+        # _bounds_to_dm_norm converts to z-score after decode().
         fill = torch.full(
             (self._n_experiments, self._n_dm_cols), 0.5, dtype=torch.float64,
         )
@@ -318,11 +320,9 @@ class SolutionSpace:
     def _bounds_to_dm_norm(self, points: torch.Tensor) -> torch.Tensor:
         """Convert [0,1] bounds-normalised columns to DataModule normalization.
 
-        For columns with bounds: raw = bounds_val * (hi - lo) + lo, then
-        apply the DataModule's normaliser (e.g. z-score).
-        For columns without bounds (context features, iterator positions):
-        apply the normaliser on raw=0.0 (matching params_to_array default).
-        Gradient flows through.
+        Bounded columns: [0,1] → raw via bounds → z-score via normaliser.
+        Unbounded columns (context, iterators): set to z-score 0.0 (= training mean).
+        Gradient flows through the normaliser's forward().
         """
         dm = self._datamodule
         out = points.clone()
@@ -334,11 +334,13 @@ class SolutionSpace:
                 lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
                 span = hi - lo
                 if span <= 0:
+                    # Degenerate bounds → use training mean (z-score 0.0)
                     out[..., c_idx] = 0.0
                 else:
                     raw = points[..., c_idx] * span + lo
                     out[..., c_idx] = stats.forward(raw)
             except (ValueError, KeyError):
+                # No bounds (context features, iterator positions) → training mean
                 out[..., c_idx] = 0.0
         return out
 
