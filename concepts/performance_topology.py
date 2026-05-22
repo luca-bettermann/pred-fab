@@ -38,6 +38,7 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
+    save_path: str | None = None,
     predict_fn: Callable[[dict[str, Any]], dict[str, float]] | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     feature_code: str = "extrusion_consistency",
@@ -126,8 +127,8 @@ def main(
                          x_label, y_label, x_bounds, y_bounds)
     draw_experiments(ax_perf, exp_x, exp_y)
 
-    path = PLOTS_DIR / "performance_concept.png"
-    save_fig(str(path), dpi=200)
+    path = save_path or str(PLOTS_DIR / "performance_concept.png")
+    save_fig(path, dpi=200)
     print(f"Saved: {path}")
 
 

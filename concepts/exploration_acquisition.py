@@ -39,6 +39,7 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
+    save_path: str | None = None,
     evidence_fn: Callable[[dict[str, Any]], float] | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     kappa: float = 0.5,
@@ -121,8 +122,8 @@ def main(
              "$A = (1 - \\kappa) \\cdot P + \\kappa \\cdot \\Delta E$",
              ha="center", fontsize=11, color=ZINC_500)
 
-    path = PLOTS_DIR / "exploration_acquisition.png"
-    save_fig(str(path), dpi=200)
+    path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
+    save_fig(path, dpi=200)
     print(f"Saved: {path}")
 
 

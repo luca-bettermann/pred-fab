@@ -76,6 +76,7 @@ def _radar_panel(
 
 
 def main(
+    save_path: str | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     attribute_fn: Callable[[dict[str, Any]], dict[str, float | None]] | None = None,
     x_key: str = "V_fab",
@@ -165,8 +166,8 @@ def main(
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)
 
-    path = PLOTS_DIR / "inference_result.png"
-    save_fig(str(path), dpi=200)
+    path = save_path or str(PLOTS_DIR / "inference_result.png")
+    save_fig(path, dpi=200)
     print(f"Saved: {path}")
 
 
