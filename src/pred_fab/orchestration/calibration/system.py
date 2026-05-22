@@ -79,7 +79,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_exp_ids: list[int] | None = None
         self.acquisition_scale: float = 1000.0
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
-        self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None
+        self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None  # deprecated, use dimension_derivations
+        self.dimension_derivations: dict[str, Callable[[dict[str, Any]], int]] = {}
 
         # Set ordered weights
         self.schema = schema
@@ -364,14 +365,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return torch.zeros(0, dtype=X_SD.dtype)
         dm = self._active_datamodule
         if dm is None:
-            self.logger.console_warning("_per_candidate_perf_tensor: _active_datamodule is None → zeros")
-            return torch.zeros(S, dtype=X_SD.dtype)
+            raise RuntimeError("_per_candidate_perf_tensor: _active_datamodule is None")
         if self.perf_fn_tensor is None:
-            self.logger.console_warning("_per_candidate_perf_tensor: perf_fn_tensor is None → zeros")
-            return torch.zeros(S, dtype=X_SD.dtype)
+            raise RuntimeError("_per_candidate_perf_tensor: perf_fn_tensor is None")
         if not getattr(dm, "_is_fitted", True):
-            self.logger.console_warning("_per_candidate_perf_tensor: DataModule not fitted → zeros")
-            return torch.zeros(S, dtype=X_SD.dtype)
+            raise RuntimeError("_per_candidate_perf_tensor: DataModule not fitted")
 
         # Build per-candidate params dicts. Continuous values stay as 0-D
         # tensors for autograd; categorical / int / domain values resolve
@@ -393,13 +391,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if not valid_idx:
             return torch.zeros(S, dtype=X_SD.dtype)
 
-        try:
-            perf_dict_S = self.perf_fn_tensor(
-                [params_list[i] for i in valid_idx]  # type: ignore[index]
-            )
-        except Exception as exc:
-            self.logger.console_warning(f"perf_fn_tensor failed: {exc}")
-            return torch.zeros(S, dtype=X_SD.dtype)
+        perf_dict_S = self.perf_fn_tensor(
+            [params_list[i] for i in valid_idx]  # type: ignore[index]
+        )
 
         n_valid = len(valid_idx)
         out_valid = torch.zeros(n_valid, dtype=X_SD.dtype)

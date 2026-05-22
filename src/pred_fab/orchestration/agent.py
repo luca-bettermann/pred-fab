@@ -23,7 +23,7 @@ from pred_fab.utils.enum import SystemName
 from ..core.schema import DatasetSchema
 from ..core.dataset import Dataset, ExperimentData
 from ..core.datamodule import DataModule
-from ..core.data_objects import DataArray
+from ..core.data_objects import DataArray, DataDomainAxis
 from ..core import ParameterProposal, ExperimentSpec
 from ..orchestration import (
     FeatureSystem,
@@ -205,6 +205,7 @@ class PfabAgent:
             _pred = self.pred_system
             _eval = self.eval_system
             _ctx = self._context_snapshot
+            _agent = self
 
             def _perf_fn_tensor(
                 params_dicts: list[dict[str, Any]],
@@ -216,6 +217,18 @@ class PfabAgent:
                     m = dict(pd_)
                     if _ctx:
                         m.update(_ctx)
+                    cal = _agent.calibration_system
+                    if cal is not None:
+                        for code, obj in schema.parameters.items():
+                            if isinstance(obj, DataDomainAxis) and code not in m:
+                                if code in cal.dimension_derivations:
+                                    m[code] = cal.dimension_derivations[code](m)
+                                else:
+                                    raise ValueError(
+                                        f"Domain axis '{code}' missing from params and no "
+                                        f"derivation registered. Use "
+                                        f"cal.dimension_derivations['{code}'] = fn"
+                                    )
                     merged_list.append(m)
                 feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
                 params_blocks: list[Any] = []
