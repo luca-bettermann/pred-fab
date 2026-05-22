@@ -364,11 +364,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
             return torch.zeros(0, dtype=X_SD.dtype)
         dm = self._active_datamodule
         if dm is None:
+            self.logger.warning("_per_candidate_perf_tensor: _active_datamodule is None → zeros")
             return torch.zeros(S, dtype=X_SD.dtype)
         if self.perf_fn_tensor is None:
+            self.logger.warning("_per_candidate_perf_tensor: perf_fn_tensor is None → zeros")
             return torch.zeros(S, dtype=X_SD.dtype)
         if not getattr(dm, "_is_fitted", True):
-            self.logger.warning("DataModule not fitted; perf_tensor returns zeros.")
+            self.logger.warning("_per_candidate_perf_tensor: DataModule not fitted → zeros")
             return torch.zeros(S, dtype=X_SD.dtype)
 
         # Build per-candidate params dicts. Continuous values stay as 0-D
