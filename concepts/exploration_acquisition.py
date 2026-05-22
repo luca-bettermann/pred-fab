@@ -105,7 +105,8 @@ def main(
         draw_experiments(ax1, exp_x, exp_y)
 
     performance_topology(fig, ax2, xs, ys, perf_grid,
-                         x_label, y_label, x_bounds, y_bounds, show_optimum=False)
+                         x_label, y_label, x_bounds, y_bounds, show_optimum=False,
+                         label="$P_{\\mathrm{sys}}(x, y)$")
     if exp_x:
         draw_experiments(ax2, exp_x, exp_y)
 
