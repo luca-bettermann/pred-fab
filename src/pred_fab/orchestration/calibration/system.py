@@ -389,7 +389,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         valid_idx = [i for i, p in enumerate(params_list) if p is not None]
         if not valid_idx:
-            return torch.zeros(S, dtype=X_SD.dtype)
+            raise RuntimeError(f"_per_candidate_perf_tensor: all {S} candidates failed to decode")
 
         perf_dict_S = self.perf_fn_tensor(
             [params_list[i] for i in valid_idx]  # type: ignore[index]
