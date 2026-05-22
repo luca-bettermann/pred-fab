@@ -1383,23 +1383,27 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         has_adj = any('r2_adj' in m for m in results.values())
         has_mae = any('mae' in m for m in results.values())
-        header = f"  {'Feature':<25s}  {'R²':>8s}"
+        header = f"  {'Feature':<30s}  {'R²':>8s}"
         if has_adj:
             header += f"  {'R²_adj':>8s}"
         if has_mae:
             header += f"  {'MAE':>10s}"
         self.logger.console_new_line()
         self.logger.console_info(header)
-        self.logger.console_info(f"  {'─' * (27 + (10 if has_adj else 0) + (12 if has_mae else 0))}")
+        self.logger.console_info(f"  {'─' * len(header)}")
         for feat, m in results.items():
             r2 = m.get('r2', 0.0)
-            line = f"  {feat:<25s}  {r2:8.4f}"
+            line = f"  {feat:<30s}  {r2:8.4f}"
             if has_adj:
                 r2_adj = m.get('r2_adj')
                 line += f"  {r2_adj:8.4f}" if r2_adj is not None else f"  {'—':>8s}"
             if has_mae:
                 line += f"  {m.get('mae', 0.0):10.3f}"
             self.logger.console_info(line)
+        if not has_adj:
+            self.logger.console_warning(
+                "R²_adj missing — call agent.train(dm, validate=True) with performance weights configured"
+            )
 
         return results
 
