@@ -772,3 +772,60 @@ def compute_evidence_gain_grid(
         gain_grid[j, :] = e_new.detach().cpu().numpy() - E_old
 
     return xs_param, ys_param, gain_grid
+
+
+def compute_evidence_gain_grid_from_experiments(
+    experiments: list,
+    all_axes: list,
+    x_key: str,
+    y_key: str,
+    sigma: float,
+    resolution: int = 60,
+    param_transform=None,
+    estimator: EvidenceEstimator | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """High-level wrapper: experiments + axis specs → ΔE grid.
+
+    Handles ``expand_experiments`` → center extraction → normalization
+    to [0,1]^D → ``compute_evidence_gain_grid``.
+
+    Parameters
+    ----------
+    experiments : list of ExperimentSpec / ExperimentData / dict
+    all_axes : list of AxisSpec — ALL parameter axes (visible + hidden)
+    x_key, y_key : visible axis keys
+    sigma : KDE bandwidth (in [0,1] normalized space)
+    """
+    from ..plotting.evidence import expand_experiments
+
+    pts, _, pt_weights = expand_experiments(experiments, param_transform)
+    if not pts:
+        xs = np.linspace(*next(a.bounds for a in all_axes if a.key == x_key), resolution)
+        ys = np.linspace(*next(a.bounds for a in all_axes if a.key == y_key), resolution)
+        return xs, ys, np.zeros((resolution, resolution))
+
+    axis_keys = [a.key for a in all_axes]
+    axis_lo = np.array([a.bounds[0] for a in all_axes])
+    axis_hi = np.array([a.bounds[1] for a in all_axes])
+    axis_range = axis_hi - axis_lo
+
+    centers = np.array([
+        [(float(p.get(k, (lo + hi) / 2)) - lo) / rng
+         for k, lo, hi, rng in zip(axis_keys, axis_lo, axis_hi, axis_range)]
+        for p in pts
+    ])
+    centers = np.clip(centers, 0.0, 1.0)
+
+    x_idx = axis_keys.index(x_key)
+    y_idx = axis_keys.index(y_key)
+
+    x_axis = next(a for a in all_axes if a.key == x_key)
+    y_axis = next(a for a in all_axes if a.key == y_key)
+
+    return compute_evidence_gain_grid(
+        centers, np.array(pt_weights), sigma,
+        x_bounds=x_axis.bounds,
+        y_bounds=y_axis.bounds,
+        resolution=resolution,
+        estimator=estimator,
+    )
