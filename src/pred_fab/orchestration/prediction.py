@@ -696,7 +696,8 @@ class PredictionSystem(BaseOrchestrationSystem):
         try:
             X_norm = datamodule.params_to_array(params)
             return self._encode_from_norm_array_for_model(model, X_norm)
-        except Exception:
+        except Exception as exc:
+            self.logger.console_warning(f"_encode_params_for_model failed for {model.__class__.__name__}: {exc}")
             return None
 
     def _encode_from_norm_array_for_model(
@@ -780,7 +781,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         """
         S = int(new_norm_batch_S.shape[0])
         dtype = new_norm_batch_S.dtype
-        if not self._model_kdes or S == 0:
+        if not self._model_kdes:
+            self.logger.console_warning("delta_integrated_evidence: no KDEs fitted → zeros")
+            return torch.zeros(S, dtype=dtype)
+        if S == 0:
             return torch.zeros(S, dtype=dtype)
 
         weights_S = (

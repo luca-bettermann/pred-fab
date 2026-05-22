@@ -474,7 +474,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
 
             evidences: torch.Tensor | None = None
-            if kappa > 0.0 and self.evidence.batched_tensor is not None:
+            if kappa > 0.0:
+                if self.evidence.batched_tensor is None:
+                    raise RuntimeError(
+                        f"kappa={kappa} requires evidence but evidence.batched_tensor is None"
+                    )
                 evidences = self.evidence.batched_tensor(X_SD).to(dtype=X_SD.dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
