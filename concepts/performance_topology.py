@@ -1,10 +1,10 @@
-"""Performance concept: predicted feature topology + marginal scoring + performance topology.
+"""Performance concept: single 3-panel figure.
 
-Layout mirrors evidence_integration.py figure 2:
-  Plot 1: Joint feature topology (left) + marginal performance P(x), P(y) (right, stacked)
-  Plot 2: Performance topology (standalone, same size as evidence gain plot)
+  Panel 1: Feature topology f̂(x,y) — Greys
+  Panel 2: Marginal performance P(x) + P(y) stacked — RdYlGn gradient fill
+  Panel 3: Performance topology P(x,y) — RdYlGn
 
-Uses mock data by default. Wire in real predict_fn / score_fn for paper figures.
+Mirrors the evidence concept layout. Uses shared panels from panels.py.
 """
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ def main(
     score_fn: Callable[[dict[str, float], dict[str, Any]], float] | None = None,
     feature_code: str = "extrusion_consistency",
     target_value: float = 0.65,
-    scaling: float = 0.7,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
     x_bounds: tuple[float, float] = (0.05, 0.1),
@@ -59,7 +58,7 @@ def main(
     if score_fn is None:
         def score_fn(features, params):
             f = features.get(feature_code, 0.0)
-            return float(np.clip(1.0 - abs(f - target_value) / scaling, 0, 1))
+            return float(np.clip(1.0 - abs(f - target_value) / 0.7, 0, 1))
 
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
@@ -88,37 +87,35 @@ def main(
     exp_x = [e[x_key] for e in experiments]
     exp_y = [e[y_key] for e in experiments]
 
-    # ── Plot 1: Feature + marginal performance ──
+    # ── Single figure: 3 panels ──
     apply_style()
-    fig1 = plt.figure(figsize=(11, 5))
-    gs = fig1.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.15,
-                           left=0.06, right=0.95, top=0.92, bottom=0.12)
-    ax_joint = fig1.add_subplot(gs[:, 0])
-    ax_mx = fig1.add_subplot(gs[0, 1])
-    ax_my = fig1.add_subplot(gs[1, 1])
+    fig = plt.figure(figsize=(16, 5))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.3, 0.7, 1.3],
+                          hspace=0.5, wspace=0.25,
+                          left=0.05, right=0.96, top=0.92, bottom=0.10)
 
-    feature_topology(fig1, ax_joint, xs, ys, feat_grid,
+    # Panel 1: Feature topology (spans both rows)
+    ax_feat = fig.add_subplot(gs[:, 0])
+    feature_topology(fig, ax_feat, xs, ys, feat_grid,
                      x_label, y_label, x_bounds, y_bounds,
                      target_value=target_value)
-    draw_experiments(ax_joint, exp_x, exp_y)
+    draw_experiments(ax_feat, exp_x, exp_y)
 
+    # Panel 2: Marginal P(x) top, P(y) bottom
+    ax_mx = fig.add_subplot(gs[0, 1])
+    ax_my = fig.add_subplot(gs[1, 1])
     marginal_performance(ax_mx, xs, perf_along_x, x_label, "$P(x)$")
     marginal_performance(ax_my, ys, perf_along_y, y_label, "$P(y)$")
 
-    save_fig(str(PLOTS_DIR / "performance_prediction.png"), dpi=200)
-
-    # ── Plot 2: Performance topology ──
-    apply_style()
-    fig2, ax2 = plt.subplots(figsize=(6, 5.5))
-
-    performance_topology(fig2, ax2, xs, ys, perf_grid,
+    # Panel 3: Performance topology (spans both rows)
+    ax_perf = fig.add_subplot(gs[:, 2])
+    performance_topology(fig, ax_perf, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds)
-    draw_experiments(ax2, exp_x, exp_y)
+    draw_experiments(ax_perf, exp_x, exp_y)
 
-    save_fig(str(PLOTS_DIR / "performance_topology.png"), dpi=200)
-
-    print(f"Saved: {PLOTS_DIR / 'performance_prediction.png'}")
-    print(f"Saved: {PLOTS_DIR / 'performance_topology.png'}")
+    path = PLOTS_DIR / "performance_concept.png"
+    save_fig(str(path), dpi=200)
+    print(f"Saved: {path}")
 
 
 if __name__ == "__main__":
