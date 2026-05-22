@@ -147,7 +147,8 @@ def main(
     ax_topo = fig.add_subplot(gs[0, 0])
     performance_topology(fig, ax_topo, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
-                         show_optimum=False)
+                         show_optimum=False,
+                         label="$P_{\\mathrm{sys}}(x, y)$")
     if exp_x:
         draw_experiments(ax_topo, exp_x, exp_y)
     ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
