@@ -1,12 +1,8 @@
-"""Evidence density panels — reusable grid + scatter + trajectory plotting.
+"""Evidence panels — density and gain visualization via KernelField.
 
-Three panel types built on a single grid computation core:
-  - ``plot_density_panel``       — raw kernel density D(z)
-  - ``plot_evidence_panel``      — evidence integrand 1/(1+D)
-  - ``plot_evidence_gain_panel`` — ΔE between two point sets
-
-All accept ``ExperimentSpec`` lists directly and handle trajectory
-expansion (1/L weighting) automatically.
+All grid computation delegates to ``pred_fab.orchestration.evidence``
+(same KernelField ANOVA pipeline the optimizer uses). This module
+handles experiment expansion, overlay rendering, and panel composition.
 """
 from __future__ import annotations
 
@@ -80,125 +76,6 @@ def expand_experiments(
 
 
 # ======================================================================
-# Grid computation — single core with pluggable cell function
-# ======================================================================
-
-def _compute_grid(
-    x_axis: AxisSpec,
-    y_axis: AxisSpec,
-    points: list[dict[str, Any]],
-    weights: list[float],
-    sigma: float,
-    cell_fn: Callable[[float], float],
-    resolution: int = 40,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute a 2D grid by evaluating ``cell_fn(density)`` at each cell.
-
-    ``cell_fn`` maps density array ``D`` (one value per point set) to the
-    displayed quantity. For raw density: ``lambda D: D``. For evidence:
-    ``lambda D: 1/(1+D)``.
-    """
-    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
-    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
-    xs = np.linspace(x_lo, x_hi, resolution)
-    ys = np.linspace(y_lo, y_hi, resolution)
-    x_range = x_hi - x_lo
-    y_range = y_hi - y_lo
-
-    px = np.array([p.get(x_axis.key, 0) for p in points])
-    py = np.array([p.get(y_axis.key, 0) for p in points])
-    w = np.array(weights)
-    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
-
-    grid = np.zeros((resolution, resolution))
-    for i, x in enumerate(xs):
-        for j, y in enumerate(ys):
-            d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
-            density = np.sum(w * np.exp(-d2 * inv_2s2))
-            grid[j, i] = cell_fn(density)
-
-    return xs, ys, grid
-
-
-def _density_fn(D: float) -> float:
-    return D
-
-def evidence_cell_fn(D: float) -> float:
-    """Evidence saturation D/(1+D) — high where points are, bounded [0, 1]."""
-    return D / (1.0 + D)
-
-
-
-def _normal_cdf(x: float) -> float:
-    from math import erf, sqrt
-    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
-
-
-def _marginal_factors(
-    points: list[dict[str, Any]],
-    hidden_axes: list[AxisSpec],
-    sigma: float,
-) -> np.ndarray:
-    """Per-point marginal weight: how much of each kernel falls inside bounds
-    along the hidden dimensions.
-
-    Analytical Gaussian integral over [lo, hi] per hidden axis, multiplied
-    across all hidden axes. Returns shape ``(N_points,)``.
-    """
-    n = len(points)
-    factors = np.ones(n)
-    for ax in hidden_axes:
-        lo, hi = ax.bounds  # type: ignore[misc]
-        rng = hi - lo
-        for j in range(n):
-            u = (float(points[j].get(ax.key, (lo + hi) / 2)) - lo) / rng
-            f = _normal_cdf((1.0 - u) / sigma) - _normal_cdf(-u / sigma)
-            factors[j] *= f
-    return factors
-
-
-def compute_grid_marginalized(
-    x_axis: AxisSpec,
-    y_axis: AxisSpec,
-    all_axes: list[AxisSpec],
-    points: list[dict[str, Any]],
-    weights: list[float],
-    sigma: float,
-    cell_fn: Callable[[float], float],
-    resolution: int = 40,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """2D grid with analytical marginalization over hidden dimensions.
-
-    Each point's kernel contribution is scaled by the fraction of its
-    Gaussian that falls inside the bounds of the non-plotted dimensions.
-    Boundary points automatically show lower density/evidence.
-    """
-    hidden = [a for a in all_axes if a.key not in (x_axis.key, y_axis.key)]
-    m_factors = _marginal_factors(points, hidden, sigma)
-
-    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
-    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
-    xs = np.linspace(x_lo, x_hi, resolution)
-    ys = np.linspace(y_lo, y_hi, resolution)
-    x_range = x_hi - x_lo
-    y_range = y_hi - y_lo
-
-    px = np.array([p.get(x_axis.key, 0) for p in points])
-    py = np.array([p.get(y_axis.key, 0) for p in points])
-    w = np.array(weights) * m_factors
-    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
-
-    grid = np.zeros((resolution, resolution))
-    for i, x in enumerate(xs):
-        for j, y in enumerate(ys):
-            d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
-            density = np.sum(w * np.exp(-d2 * inv_2s2))
-            grid[j, i] = cell_fn(density)
-
-    return xs, ys, grid
-
-
-# ======================================================================
 # Scatter + trajectory overlay
 # ======================================================================
 
@@ -237,29 +114,8 @@ def _overlay_points(
 
 
 # ======================================================================
-# Panel functions — one axis pair, one subplot
+# Panel functions — delegate grid computation to orchestration.evidence
 # ======================================================================
-
-def plot_density_panel(
-    ax: plt.Axes,  # type: ignore[name-defined]
-    x_axis: AxisSpec,
-    y_axis: AxisSpec,
-    experiments: list[Any],
-    sigma: float,
-    *,
-    label: str | None = None,
-    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    resolution: int = 40,
-) -> None:
-    """Kernel density D(z) panel."""
-    pts, exp_ids, weights = expand_experiments(experiments, param_transform)
-    xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, _density_fn, resolution)
-    subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
-                     cmap_name="density", contour_overlay=False, show_colorbar=True)
-    if label:
-        subplot_label(ax, label)
-    _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
-
 
 def plot_evidence_panel(
     ax: plt.Axes,  # type: ignore[name-defined]
@@ -273,25 +129,21 @@ def plot_evidence_panel(
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     resolution: int = 40,
 ) -> None:
-    """Evidence integrand D/(1+D) panel with faithful marginalization.
+    """Evidence density panel using KernelField ANOVA integration."""
+    from ..orchestration.evidence import compute_evidence_density_grid
 
-    When ``all_axes`` is provided, hidden dimensions are marginalized
-    analytically — boundary points show reduced evidence because their
-    kernels extend outside the parameter space.
-    """
-    pts, exp_ids, weights = expand_experiments(experiments, param_transform)
-    if all_axes is not None:
-        xs, ys, grid = compute_grid_marginalized(
-            x_axis, y_axis, all_axes, pts, weights, sigma, evidence_cell_fn, resolution,
-        )
-    else:
-        xs, ys, grid = _compute_grid(x_axis, y_axis, pts, weights, sigma, evidence_cell_fn, resolution)
+    axes = all_axes or [x_axis, y_axis]
+    xs, ys, grid = compute_evidence_density_grid(
+        experiments, axes, x_axis.key, y_axis.key, sigma,
+        resolution=resolution, param_transform=param_transform,
+    )
     grid_max = float(grid.max()) if grid.size > 0 else 1.0
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
                      cmap_name="evidence", contour_overlay=False, show_colorbar=True,
                      vmin=0.0, vmax=1.0, cbar_lim=max(grid_max, 1e-6))
     if label:
         subplot_label(ax, label)
+    pts, exp_ids, _ = expand_experiments(experiments, param_transform)
     _overlay_points(ax, x_axis, y_axis, pts, exp_ids)
 
 
@@ -303,24 +155,34 @@ def plot_evidence_gain_panel(
     experiments_after: list[Any],
     sigma: float,
     *,
+    all_axes: list[AxisSpec] | None = None,
     label: str | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     resolution: int = 40,
 ) -> None:
-    """Evidence gain ΔE panel — difference between after and before."""
-    pts_b, _, w_b = expand_experiments(experiments_before, param_transform)
-    pts_a, exp_ids_a, w_a = expand_experiments(experiments_after, param_transform)
+    """Evidence gain ΔE panel — difference between after and before.
 
-    _, _, grid_before = _compute_grid(x_axis, y_axis, pts_b, w_b, sigma, evidence_cell_fn, resolution)
-    _, _, grid_after = _compute_grid(x_axis, y_axis, pts_a, w_a, sigma, evidence_cell_fn, resolution)
-    xs = np.linspace(x_axis.bounds[0], x_axis.bounds[1], resolution)  # type: ignore[index]
-    ys = np.linspace(y_axis.bounds[0], y_axis.bounds[1], resolution)  # type: ignore[index]
+    Uses the KernelField ANOVA pipeline for both grids.
+    """
+    from ..orchestration.evidence import compute_evidence_density_grid
+
+    axes_b = all_axes or [x_axis, y_axis]
+    axes_a = all_axes or [x_axis, y_axis]
+    _, _, grid_before = compute_evidence_density_grid(
+        experiments_before, axes_b, x_axis.key, y_axis.key, sigma,
+        resolution=resolution, param_transform=param_transform,
+    )
+    xs, ys, grid_after = compute_evidence_density_grid(
+        experiments_after, axes_a, x_axis.key, y_axis.key, sigma,
+        resolution=resolution, param_transform=param_transform,
+    )
     grid = grid_after - grid_before
 
     subplot_topology(ax, x_axis, y_axis, xs, ys, grid,
                      cmap_name="evidence_gain", contour_overlay=False, show_colorbar=True)
     if label:
         subplot_label(ax, label)
+    pts_a, exp_ids_a, _ = expand_experiments(experiments_after, param_transform)
     _overlay_points(ax, x_axis, y_axis, pts_a, exp_ids_a)
 
 
@@ -342,9 +204,7 @@ def plot_multi_angle(
 ) -> None:
     """Plot ``focus_axis`` against each axis in ``other_axes`` in a single row.
 
-    When using the default ``plot_evidence_panel``, hidden dimensions are
-    marginalized analytically so the 2D projection faithfully represents
-    the full-D evidence landscape.
+    Uses the KernelField ANOVA pipeline for evidence computation.
     """
     fn = panel_fn or plot_evidence_panel
     all_axes = [focus_axis] + list(other_axes)
@@ -368,4 +228,3 @@ def plot_multi_angle(
 
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
