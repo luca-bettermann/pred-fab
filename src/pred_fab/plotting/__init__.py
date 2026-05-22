@@ -49,6 +49,7 @@ from .evidence import (
     expand_experiments,
 )
 from .parallel import plot_parallel_coordinates
+from .sensitivity import plot_sensitivity_matrix
 
 __all__ = [
     "AxisSpec",
@@ -83,4 +84,5 @@ __all__ = [
     "plot_multi_angle",
     "expand_experiments",
     "plot_parallel_coordinates",
+    "plot_sensitivity_matrix",
 ]
