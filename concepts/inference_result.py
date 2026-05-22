@@ -61,8 +61,9 @@ def _radar_panel(
     ax.fill(angles, scores, color=EMERALD_500, alpha=0.15)
 
     ax.set_xticks(angles[:-1])
-    short_names = [n[:12] for n in attribute_names]
+    short_names = [n.replace("\n", " ")[:5] for n in attribute_names]
     ax.set_xticklabels(short_names, fontsize=FONT["tick"], color=ZINC_600)
+    ax.tick_params(axis="x", pad=12)
     ax.set_ylim(0, 1)
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
     ax.set_yticklabels(["0.25", "0.50", "0.75", "1.00"],
