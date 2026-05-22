@@ -658,8 +658,8 @@ class PredictionSystem(BaseOrchestrationSystem):
                     lo_vec[j] = float(stats.forward(np.array(float(raw_lo))))
                     hi_vec[j] = float(stats.forward(np.array(float(raw_hi))))
                     continue
-            lo_vec[j] = float(stats.forward(np.array(0.0)))
-            hi_vec[j] = float(stats.forward(np.array(0.0)))
+            lo_vec[j] = -1e6
+            hi_vec[j] = 1e6
 
         if self._bypass_encoder:
             z_lo = lo_vec
