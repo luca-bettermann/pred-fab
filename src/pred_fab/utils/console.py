@@ -318,32 +318,32 @@ class ConsoleReporter:
     # ── Training ────────────────────────────────────────────────────────
 
     def print_training_summary(self, feature_metrics: dict[str, dict[str, float]]) -> None:
-        """Print R², MAE, and R²_adj per feature in a table."""
+        """Print R², R²_adj, and MAE per feature in a table."""
         if not self.enabled:
             return
         has_adj = any('r2_adj' in m for m in feature_metrics.values())
         has_mae = any('mae' in m for m in feature_metrics.values())
 
         header = f"  {'Feature':<25s}  {'R²':>8s}"
-        if has_mae:
-            header += f"  {'MAE':>8s}"
         if has_adj:
             header += f"  {'R²_adj':>8s}"
+        if has_mae:
+            header += f"  {'MAE':>10s}"
         self._print(f"\n  {_B}Model quality{_R}")
         self._print(header)
-        self._print(f"  {'─' * (27 + (10 if has_mae else 0) + (10 if has_adj else 0))}")
+        self._print(f"  {'─' * (27 + (10 if has_adj else 0) + (12 if has_mae else 0))}")
         for name, metrics in feature_metrics.items():
             r2 = metrics.get('r2', 0.0)
-            line = f"  {name:<25s}  {_score_color(max(0.0, r2))}{r2:8.4f}{_R}"
-            if has_mae:
-                mae = metrics.get('mae', 0.0)
-                line += f"  {mae:8.4f}"
+            line = f"  {name:<25s}  {_score_color(r2)}{r2:8.4f}{_R}"
             if has_adj:
                 r2_adj = metrics.get('r2_adj')
                 if r2_adj is not None:
-                    line += f"  {_score_color(max(0.0, r2_adj))}{r2_adj:8.4f}{_R}"
+                    line += f"  {_score_color(r2_adj)}{r2_adj:8.4f}{_R}"
                 else:
                     line += f"  {'—':>8s}"
+            if has_mae:
+                mae = metrics.get('mae', 0.0)
+                line += f"  {mae:10.3f}"
             self._print(line)
 
     # ── Adaptation ──────────────────────────────────────────────────────

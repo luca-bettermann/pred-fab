@@ -1381,23 +1381,25 @@ class PredictionSystem(BaseOrchestrationSystem):
             else:
                 results.update(self._validate_flat(model, dm, X_split, y_split, importance_arr))
 
-        # Print compact validation table with line breaks for readability
         has_adj = any('r2_adj' in m for m in results.values())
+        has_mae = any('mae' in m for m in results.values())
         header = f"  {'Feature':<25s}  {'R²':>8s}"
         if has_adj:
             header += f"  {'R²_adj':>8s}"
+        if has_mae:
+            header += f"  {'MAE':>10s}"
         self.logger.console_new_line()
         self.logger.console_info(header)
-        self.logger.console_info(f"  {'─' * (36 if not has_adj else 46)}")
+        self.logger.console_info(f"  {'─' * (27 + (10 if has_adj else 0) + (12 if has_mae else 0))}")
         for feat, m in results.items():
-            line = f"  {feat:<25s}  {m['r2']:8.4f}"
-            if has_adj and 'r2_adj' in m:
-                line += f"  {m['r2_adj']:8.4f}"
+            r2 = m.get('r2', 0.0)
+            line = f"  {feat:<25s}  {r2:8.4f}"
+            if has_adj:
+                r2_adj = m.get('r2_adj')
+                line += f"  {r2_adj:8.4f}" if r2_adj is not None else f"  {'—':>8s}"
+            if has_mae:
+                line += f"  {m.get('mae', 0.0):10.3f}"
             self.logger.console_info(line)
-        self.logger.console_new_line()
-        self.logger.console_success(
-            f"Validation: {split} set, {len(X_split)} samples"
-        )
 
         return results
 

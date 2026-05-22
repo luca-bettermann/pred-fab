@@ -58,19 +58,12 @@ class Metrics:
             raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
 
         if len(y_true) == 0:
-            return {'mae': 0.0, 'rmse': 0.0, 'r2': 0.0, 'n_samples': 0}
+            return {'r2': 0.0, 'mae': 0.0, 'n_samples': 0}
 
         mae = float(np.mean(np.abs(y_true - y_pred)))
-        rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
         r2 = Metrics._r2(y_true, y_pred)
 
-        nonzero = np.abs(y_true) > 1e-10
-        if nonzero.any():
-            mape = float(np.mean(np.abs((y_true[nonzero] - y_pred[nonzero]) / y_true[nonzero])))
-        else:
-            mape = float("nan")
-
-        return {'mae': mae, 'rmse': rmse, 'r2': r2, 'mape': mape, 'n_samples': len(y_true)}
+        return {'r2': r2, 'mae': mae, 'n_samples': len(y_true)}
 
     @staticmethod
     def calculate_adjusted_r2(
