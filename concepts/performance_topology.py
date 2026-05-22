@@ -4,7 +4,17 @@
   Panel 2: Marginal performance P(x) + P(y) stacked — RdYlGn gradient fill
   Panel 3: Performance topology P(x,y) — RdYlGn
 
-Mirrors the evidence concept layout. Uses shared panels from panels.py.
+Usage with real model::
+
+    cal = agent.calibration_system
+    main(
+        predict_fn=cal._compute_perf_dict_for_params,   # params → {perf: float}
+        score_fn=cal._compute_normalised_perf_for_params, # params → combined [0,1]
+        ...
+    )
+
+Both accept a raw params dict — no normalization or wrapping needed.
+The plot fixes non-plotted params and sweeps the two axis params.
 """
 from __future__ import annotations
 
@@ -29,7 +39,7 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 def main(
     predict_fn: Callable[[dict[str, Any]], dict[str, float]] | None = None,
-    score_fn: Callable[[dict[str, float], dict[str, Any]], float] | None = None,
+    score_fn: Callable[[dict[str, Any]], float] | None = None,
     feature_code: str = "extrusion_consistency",
     target_value: float = 0.65,
     x_key: str = "V_fab",
@@ -56,7 +66,8 @@ def main(
             return {feature_code: float(np.clip(f, 0, 1))}
 
     if score_fn is None:
-        def score_fn(features, params):
+        def score_fn(params):
+            features = predict_fn(params)
             f = features.get(feature_code, 0.0)
             return float(np.clip(1.0 - abs(f - target_value) / 0.7, 0, 1))
 
@@ -72,7 +83,7 @@ def main(
             params[y_key] = float(ys[j])
             features = predict_fn(params)
             feat_grid[j, i] = features.get(feature_code, 0.0)
-            perf_grid[j, i] = score_fn(features, params)
+            perf_grid[j, i] = score_fn(params)
 
     perf_along_x = np.mean(perf_grid, axis=0)
     perf_along_y = np.mean(perf_grid, axis=1)

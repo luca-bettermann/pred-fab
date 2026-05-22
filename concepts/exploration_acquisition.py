@@ -5,7 +5,17 @@ Three side-by-side topologies showing the κ-blend:
   2. Performance P(x, y)     — where quality is high
   3. Acquisition A(x, y)     — what the optimizer sees
 
-Uses mock data by default. Pass evidence_fn, predict_fn, score_fn for real figures.
+Usage with real model::
+
+    cal = agent.calibration_system
+    main(
+        evidence_fn=...,  # params → evidence gain float (from KDE)
+        score_fn=cal._compute_normalised_perf_for_params,  # params → combined [0,1]
+        kappa=0.5,
+        ...
+    )
+
+All callables accept a raw params dict. No wrapping needed.
 """
 from __future__ import annotations
 
@@ -30,8 +40,7 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 def main(
     evidence_fn: Callable[[dict[str, Any]], float] | None = None,
-    predict_fn: Callable[[dict[str, Any]], dict[str, float]] | None = None,
-    score_fn: Callable[[dict[str, float], dict[str, Any]], float] | None = None,
+    score_fn: Callable[[dict[str, Any]], float] | None = None,
     kappa: float = 0.5,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
@@ -56,17 +65,12 @@ def main(
             e += 0.3 * np.exp(-((xn-0.5)**2 + (yn-0.5)**2) / 0.15)
             return float(np.clip(e, 0, 1))
 
-    if predict_fn is None:
-        def predict_fn(params):
+    if score_fn is None:
+        def score_fn(params):
             xn = (params.get(x_key, 0.075) - x_lo) / (x_hi - x_lo)
             yn = (params.get(y_key, 2.0) - y_lo) / (y_hi - y_lo)
             f = 0.7 * np.exp(-((xn-0.4)**2 + (yn-0.55)**2) / 0.15)
             f += 0.35 * np.exp(-((xn-0.8)**2 + (yn-0.25)**2) / 0.2)
-            return {"feature": float(np.clip(f, 0, 1))}
-
-    if score_fn is None:
-        def score_fn(features, params):
-            f = features.get("feature", 0.0)
             return float(np.clip(1.0 - abs(f - 0.65) / 0.7, 0, 1))
 
     xs = np.linspace(x_lo, x_hi, resolution)
@@ -82,8 +86,7 @@ def main(
             params[x_key] = float(xs[i])
             params[y_key] = float(ys[j])
             ev = evidence_fn(params)
-            features = predict_fn(params)
-            perf = score_fn(features, params)
+            perf = score_fn(params)
             evidence_grid[j, i] = ev
             perf_grid[j, i] = perf
             acq_grid[j, i] = (1 - kappa) * perf + kappa * ev

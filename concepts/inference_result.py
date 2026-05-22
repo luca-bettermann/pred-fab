@@ -4,7 +4,16 @@ Two panels:
   1. Performance topology with inference proposal marked
   2. Radar chart showing predicted performance attributes at the proposal
 
-Uses mock data by default. Pass predict_fn, score_fn, attribute_fns for real figures.
+Usage with real model::
+
+    cal = agent.calibration_system
+    main(
+        score_fn=cal._compute_normalised_perf_for_params,  # params → combined [0,1]
+        attribute_fn=cal._compute_perf_dict_for_params,    # params → {perf: float}
+        ...
+    )
+
+All callables accept a raw params dict. No wrapping needed.
 """
 from __future__ import annotations
 
@@ -67,9 +76,8 @@ def _radar_panel(
 
 
 def main(
-    predict_fn: Callable[[dict[str, Any]], dict[str, float]] | None = None,
-    score_fn: Callable[[dict[str, float], dict[str, Any]], float] | None = None,
-    attribute_fns: dict[str, Callable[[dict[str, float], dict[str, Any]], float]] | None = None,
+    score_fn: Callable[[dict[str, Any]], float] | None = None,
+    attribute_fn: Callable[[dict[str, Any]], dict[str, float | None]] | None = None,
     x_key: str = "V_fab",
     y_key: str = "calibrationFactor",
     x_bounds: tuple[float, float] = (0.05, 0.1),
@@ -84,27 +92,26 @@ def main(
     x_lo, x_hi = x_bounds
     y_lo, y_hi = y_bounds
 
-    if predict_fn is None:
-        def predict_fn(params):
+    if score_fn is None:
+        def score_fn(params):
             xn = (params.get(x_key, 0.075) - x_lo) / (x_hi - x_lo)
             yn = (params.get(y_key, 2.0) - y_lo) / (y_hi - y_lo)
             f = 0.7 * np.exp(-((xn-0.4)**2 + (yn-0.55)**2) / 0.15)
             f += 0.35 * np.exp(-((xn-0.8)**2 + (yn-0.25)**2) / 0.2)
-            return {"feature": float(np.clip(f, 0, 1))}
-
-    if score_fn is None:
-        def score_fn(features, params):
-            f = features.get("feature", 0.0)
             return float(np.clip(1.0 - abs(f - 0.65) / 0.7, 0, 1))
 
-    if attribute_fns is None:
-        attribute_fns = {
-            "structural\nintegrity": lambda feat, p: float(np.clip(feat.get("feature", 0) * 1.1, 0, 1)),
-            "material\ndeposition": lambda feat, p: float(np.clip(0.9 - abs(feat.get("feature", 0) - 0.5) * 0.8, 0, 1)),
-            "extrusion\nstability": lambda feat, p: float(np.clip(feat.get("feature", 0) * 0.95 + 0.05, 0, 1)),
-            "energy\nfootprint": lambda feat, p: float(np.clip(1.0 - (p.get(x_key, 0.075) - x_lo) / (x_hi - x_lo) * 0.4, 0, 1)),
-            "fabrication\ntime": lambda feat, p: float(np.clip(0.85 - (p.get(x_key, 0.075) - x_lo) / (x_hi - x_lo) * 0.3, 0, 1)),
-        }
+    if attribute_fn is None:
+        def attribute_fn(params):
+            xn = (params.get(x_key, 0.075) - x_lo) / (x_hi - x_lo)
+            yn = (params.get(y_key, 2.0) - y_lo) / (y_hi - y_lo)
+            f = 0.7 * np.exp(-((xn-0.4)**2 + (yn-0.55)**2) / 0.15)
+            return {
+                "structural\nintegrity": float(np.clip(f * 1.1, 0, 1)),
+                "material\ndeposition": float(np.clip(0.9 - abs(f - 0.5) * 0.8, 0, 1)),
+                "extrusion\nstability": float(np.clip(f * 0.95 + 0.05, 0, 1)),
+                "energy\nfootprint": float(np.clip(1.0 - xn * 0.4, 0, 1)),
+                "fabrication\ntime": float(np.clip(0.85 - xn * 0.3, 0, 1)),
+            }
 
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
@@ -115,8 +122,7 @@ def main(
             params = dict(fixed)
             params[x_key] = float(xs[i])
             params[y_key] = float(ys[j])
-            features = predict_fn(params)
-            perf_grid[j, i] = score_fn(features, params)
+            perf_grid[j, i] = score_fn(params)
 
     if experiments is None:
         np.random.seed(42)
@@ -134,10 +140,9 @@ def main(
     opt_params = dict(fixed)
     opt_params[x_key] = float(opt_xv)
     opt_params[y_key] = float(opt_yv)
-    opt_features = predict_fn(opt_params)
-
-    attr_names = list(attribute_fns.keys())
-    attr_scores = [attribute_fns[name](opt_features, opt_params) for name in attr_names]
+    attr_dict = attribute_fn(opt_params)
+    attr_names = list(attr_dict.keys())
+    attr_scores = [float(attr_dict[k] or 0) for k in attr_names]
 
     # ── Figure: topology + radar ──
     apply_style()
