@@ -347,6 +347,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             scores = scores + (1.0 - kappa) * perfs
         if evidences is not None and kappa > 0.0:
             scores = scores + kappa * evidences
+        if not hasattr(self, "_blend_logged"):
+            self._blend_logged = True
+            p_str = f"P=[{perfs.min():.4f}, {perfs.max():.4f}]" if perfs is not None else "P=None"
+            e_str = f"ΔE=[{evidences.min():.4f}, {evidences.max():.4f}]" if evidences is not None else "ΔE=None"
+            self.logger.console_warning(f"κ-blend scales: {p_str}  {e_str}  κ={kappa}")
         return -scores * self.acquisition_scale
 
     def _per_candidate_perf_tensor(
