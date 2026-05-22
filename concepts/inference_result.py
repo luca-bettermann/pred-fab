@@ -156,8 +156,12 @@ def main(
     ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
                     linewidths=1.8, zorder=12)
 
+    p_sys = score_fn(eval_params)
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)
+    ax_radar.text(0.95, 0.95, f"$P_{{\\mathrm{{sys}}}}$ = {p_sys:.2f}",
+                  transform=ax_radar.transAxes, ha="right", va="top",
+                  fontsize=10, color=EMERALD_500)
 
     path = save_path or str(PLOTS_DIR / "inference_result.png")
     save_fig(path, dpi=200)
