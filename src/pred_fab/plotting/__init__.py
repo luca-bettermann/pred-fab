@@ -50,6 +50,7 @@ from .evidence import (
     expand_experiments,
     compute_grid_marginalized,
     evidence_cell_fn,
+    make_marginalized_evidence_fn,
 )
 from .parallel import plot_parallel_coordinates
 
@@ -88,5 +89,6 @@ __all__ = [
     "expand_experiments",
     "compute_grid_marginalized",
     "evidence_cell_fn",
+    "make_marginalized_evidence_fn",
     "plot_parallel_coordinates",
 ]

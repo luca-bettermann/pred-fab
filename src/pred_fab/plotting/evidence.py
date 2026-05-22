@@ -128,6 +128,45 @@ def evidence_cell_fn(D: float) -> float:
     return D / (1.0 + D)
 
 
+def make_marginalized_evidence_fn(
+    experiments: list[Any],
+    all_axes: list[AxisSpec],
+    x_key: str,
+    y_key: str,
+    sigma: float,
+    param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> Callable[[dict[str, Any]], float]:
+    """Build a ``params → float`` evidence function with hidden-dim marginalization.
+
+    Pre-computes marginal factors once; each call evaluates a 2D KDE
+    at the (x_key, y_key) slice with analytically integrated hidden dims.
+    """
+    pts, _, weights = expand_experiments(experiments, param_transform)
+    x_axis = next(a for a in all_axes if a.key == x_key)
+    y_axis = next(a for a in all_axes if a.key == y_key)
+    hidden = [a for a in all_axes if a.key not in (x_key, y_key)]
+    m_factors = _marginal_factors(pts, hidden, sigma)
+
+    x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
+    y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
+    x_range = x_hi - x_lo
+    y_range = y_hi - y_lo
+
+    px = np.array([p.get(x_key, 0) for p in pts])
+    py = np.array([p.get(y_key, 0) for p in pts])
+    w = np.array(weights) * m_factors
+    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+
+    def _fn(params: dict[str, Any]) -> float:
+        x = float(params[x_key])
+        y = float(params[y_key])
+        d2 = ((px - x) / x_range) ** 2 + ((py - y) / y_range) ** 2
+        density = float(np.sum(w * np.exp(-d2 * inv_2s2)))
+        return evidence_cell_fn(density)
+
+    return _fn
+
+
 def _normal_cdf(x: float) -> float:
     from math import erf, sqrt
     return 0.5 * (1.0 + erf(x / sqrt(2.0)))
