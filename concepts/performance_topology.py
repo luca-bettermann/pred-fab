@@ -112,11 +112,13 @@ def main(
                      target_value=target_value)
     draw_experiments(ax_feat, exp_x, exp_y)
 
-    # Panel 2: Marginal P(x) top, P(y) bottom
+    # Panel 2 top: Marginal P(x)
     ax_mx = fig.add_subplot(gs[0, 1])
-    ax_my = fig.add_subplot(gs[1, 1])
     marginal_performance(ax_mx, xs, perf_along_x, x_label, "$P(x)$")
-    marginal_performance(ax_my, ys, perf_along_y, y_label, "$P(y)$")
+
+    # Panel 2 bottom: TBD
+    ax_placeholder = fig.add_subplot(gs[1, 1])
+    ax_placeholder.set_visible(False)
 
     # Panel 3: Performance topology (spans both rows)
     ax_perf = fig.add_subplot(gs[:, 2])
