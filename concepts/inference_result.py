@@ -87,7 +87,7 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
-    proposed_params: dict[str, Any] | None = None,
+    proposed_params: dict[str, Any],
     datapoints: list[dict[str, float]] | None = None,
     resolution: int = 60,
 ):
@@ -130,17 +130,10 @@ def main(
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
 
-    if proposed_params is not None:
-        opt_xv = float(proposed_params[x_key])
-        opt_yv = float(proposed_params[y_key])
-        eval_params = dict(fixed)
-        eval_params.update(proposed_params)
-    else:
-        opt_idx = np.unravel_index(np.argmax(perf_grid), perf_grid.shape)
-        opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
-        eval_params = dict(fixed)
-        eval_params[x_key] = float(opt_xv)
-        eval_params[y_key] = float(opt_yv)
+    opt_xv = float(proposed_params[x_key])
+    opt_yv = float(proposed_params[y_key])
+    eval_params = dict(fixed)
+    eval_params.update(proposed_params)
     attr_dict = attribute_fn(eval_params)
     attr_names = list(attr_dict.keys())
     attr_scores = [float(attr_dict[k] or 0) for k in attr_names]
