@@ -106,10 +106,6 @@ def main(
     if exp_x:
         draw_experiments(ax3, exp_x, exp_y)
 
-    fig.text(0.5, 0.02,
-             "$A = (1 - \\kappa) \\cdot P_{\\mathrm{sys}} + \\kappa \\cdot \\Delta E$",
-             ha="center", fontsize=11, color=ZINC_500)
-
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
     save_fig(path, dpi=200)
     print(f"Saved: {path}")
