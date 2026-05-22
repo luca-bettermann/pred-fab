@@ -77,6 +77,7 @@ def _radar_panel(
 
 
 def main(
+    proposed_params: dict[str, Any],
     save_path: str | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     attribute_fn: Callable[[dict[str, Any]], dict[str, float | None]] | None = None,
@@ -87,7 +88,6 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
-    proposed_params: dict[str, Any],
     datapoints: list[dict[str, float]] | None = None,
     resolution: int = 60,
 ):
