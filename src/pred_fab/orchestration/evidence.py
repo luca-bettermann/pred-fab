@@ -794,7 +794,7 @@ def compute_evidence_gain_grid(
     x_axis = next(a for a in all_axes if a.key == x_key)
     y_axis = next(a for a in all_axes if a.key == y_key)
 
-    pts, _, pt_weights = expand_experiments(experiments, param_transform)
+    pts, _, _ = expand_experiments(experiments, param_transform)
     if not pts:
         xs = np.linspace(*x_axis.bounds, resolution)
         ys = np.linspace(*y_axis.bounds, resolution)
@@ -811,7 +811,7 @@ def compute_evidence_gain_grid(
     ])
 
     return _evidence_gain_grid_from_centers(
-        centers_2d, np.array(pt_weights), sigma,
+        centers_2d, np.ones(len(pts)), sigma,
         x_bounds=x_axis.bounds,
         y_bounds=y_axis.bounds,
         resolution=resolution,
