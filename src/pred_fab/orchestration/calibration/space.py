@@ -232,6 +232,8 @@ class SolutionSpace:
                         fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
                     except (ValueError, KeyError):
                         pass
+        # _bounds_to_dm_norm converts all columns after decode(); prior_fill
+        # must stay in [0,1] bounds space so the conversion applies uniformly.
         return fill
 
     @property
@@ -308,9 +310,33 @@ class SolutionSpace:
             weights.extend([1.0 / L_i] * L_i)
 
         points = torch.cat(layer_rows, dim=1)  # (S, total_points, D_dm)
+        points = self._bounds_to_dm_norm(points)
         w = torch.tensor(weights, dtype=z_flat.dtype)
         w = w.unsqueeze(0).expand(S, -1)  # (S, total_points)
         return points, w
+
+    def _bounds_to_dm_norm(self, points: torch.Tensor) -> torch.Tensor:
+        """Convert [0,1] bounds-normalised columns to DataModule normalization.
+
+        For each column: raw = bounds_val * (hi - lo) + lo, then apply
+        the DataModule's normaliser (e.g. z-score). Gradient flows through.
+        """
+        dm = self._datamodule
+        out = points.clone()
+        for c_idx, col in enumerate(dm.input_columns):
+            stats = dm._parameter_stats.get(col)
+            if stats is None:
+                continue
+            try:
+                lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
+            except (ValueError, KeyError):
+                continue
+            span = hi - lo
+            if span <= 0:
+                continue
+            raw = points[..., c_idx] * span + lo
+            out[..., c_idx] = stats.forward(raw)
+        return out
 
     def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:
         """Convert optimised z-vector to ExperimentSpec instances."""
