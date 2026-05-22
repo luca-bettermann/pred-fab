@@ -8,17 +8,18 @@ import numpy as np
 def combined_score(
     performance: dict[str, Any],
     weights: dict[str, float],
-) -> float:
+) -> Any:
     """Weighted combined performance score.
 
     Computes sum(w_i * perf_i) / sum(w_i) over all keys in performance
     that have a non-None value and a corresponding weight.
+    Works with both Python floats and torch Tensors (preserves gradient).
     """
     total_w = sum(weights.values())
     if total_w == 0:
         return 0.0
     score = sum(
-        weights.get(k, 0.0) * float(v)
+        weights.get(k, 0.0) * v
         for k, v in performance.items() if v is not None
     )
     return score / total_w

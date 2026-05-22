@@ -401,17 +401,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
             self.logger.warning(f"perf_fn_tensor failed: {exc}")
             return torch.zeros(S, dtype=X_SD.dtype)
 
-        # System-perf aggregation: weighted sum across perf codes, normalised by perf_range.
-        out_valid = torch.zeros(len(valid_idx), dtype=X_SD.dtype)
-        weight_sum = sum(self.performance_weights.get(name, 1.0) for name in self.perf_names_order)
-        for name in self.perf_names_order:
-            if name not in perf_dict_S:
-                continue
-            w = float(self.performance_weights.get(name, 1.0))
-            vals = perf_dict_S[name].to(dtype=X_SD.dtype)
-            # NaN entries → 0 contribution (matches numpy nanmean handling).
-            vals = torch.where(torch.isnan(vals), torch.zeros_like(vals), vals)
-            out_valid = out_valid + (w / weight_sum) * vals
+        n_valid = len(valid_idx)
+        out_valid = torch.zeros(n_valid, dtype=X_SD.dtype)
+        for k in range(n_valid):
+            perf_k = {
+                name: perf_dict_S[name][k].to(dtype=X_SD.dtype)
+                for name in self.perf_names_order
+                if name in perf_dict_S and not torch.isnan(perf_dict_S[name][k])
+            }
+            out_valid[k] = combined_score(perf_k, self.performance_weights)
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
