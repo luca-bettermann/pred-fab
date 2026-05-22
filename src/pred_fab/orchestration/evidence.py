@@ -241,6 +241,10 @@ def _in_domain_torch(points: torch.Tensor, domain_bounds: torch.Tensor | None) -
     """Boolean mask: all dims within domain_bounds (D, 2). Falls back to [0, 1]."""
     if domain_bounds is None:
         return _in_unit_cube_torch(points)
+    if points.shape[-1] != domain_bounds.shape[0]:
+        raise ValueError(
+            f"Points last dim {points.shape[-1]} != bounds dim {domain_bounds.shape[0]}"
+        )
     lo = domain_bounds[:, 0]
     hi = domain_bounds[:, 1]
     return ((points >= lo) & (points <= hi)).all(dim=-1)
