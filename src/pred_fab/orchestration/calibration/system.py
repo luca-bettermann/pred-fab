@@ -782,6 +782,25 @@ class CalibrationSystem(BaseOrchestrationSystem):
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
 
+        # Diagnostic: evaluate the winning point through the real pipeline
+        if specs and kappa < 1.0:
+            best_params = dict(specs[0].initial_params.to_dict())
+            for code, obj in self.schema.parameters.items():
+                if isinstance(obj, DataDomainAxis) and code not in best_params:
+                    if code in self.dimension_derivations:
+                        best_params[code] = self.dimension_derivations[code](best_params)
+            perf_dict = self._compute_perf_dict_for_params(best_params)
+            p_sys = combined_score(perf_dict, self.performance_weights)
+            de = self._compute_evidence_gain_for_params(best_params)
+            acq = (1.0 - kappa) * p_sys + kappa * de
+            self.logger.console_info(
+                f"  Proposal diagnostics:\n"
+                f"    params   = {{{', '.join(f'{k}: {v:.4f}' for k, v in best_params.items() if isinstance(v, (int, float)))}}}\n"
+                f"    P_sys    = {p_sys:.4f}  (per-feature: {{{', '.join(f'{k}: {v:.3f}' for k, v in perf_dict.items() if v is not None)}}})\n"
+                f"    ΔE       = {de:.4f}\n"
+                f"    A(κ={kappa}) = {acq:.4f}"
+            )
+
         # Store trajectory plot data
         if space._D_traj > 0:
             traj_norms, traj_params, L_per_exp = space.get_trajectory_plot_data(best_x)
