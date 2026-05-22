@@ -803,13 +803,19 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     full_S_NL, kappa, perf_range, weights,
                 )[0].item())
 
+            # Compare the normalized vectors from both paths
+            x_from_params = datamodule.params_to_array(best_params)
+            x_from_decode = points[0, 0, :].detach().cpu().numpy()
             self.logger.console_info(
                 f"  Proposal diagnostics:\n"
                 f"    params     = {{{', '.join(f'{k}: {v:.4f}' for k, v in best_params.items() if isinstance(v, (int, float)))}}}\n"
                 f"    P_sys      = {p_sys:.4f}  (per-feature: {{{', '.join(f'{k}: {v:.3f}' for k, v in perf_dict.items() if v is not None)}}})\n"
                 f"    ΔE (point) = {de:.4f}\n"
                 f"    A (recomp) = {acq:.4f}\n"
-                f"    obj (real) = {obj_val:.4f}  (negated acquisition × scale)"
+                f"    obj (real) = {obj_val:.4f}  (negated acquisition × scale)\n"
+                f"    x_params   = [{', '.join(f'{v:.4f}' for v in x_from_params)}]\n"
+                f"    x_decode   = [{', '.join(f'{v:.4f}' for v in x_from_decode)}]\n"
+                f"    dm.cols    = {datamodule.input_columns}"
             )
 
         # Store trajectory plot data
