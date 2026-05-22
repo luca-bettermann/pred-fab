@@ -10,17 +10,16 @@ Usage with real model::
     from pred_fab.plotting import make_marginalized_evidence_fn, AxisSpec
 
     evidence_fn = make_marginalized_evidence_fn(
-        experiments, all_axes, x_key, y_key, sigma,
+        cal.evidence_gain, all_axes, x_key, y_key,
     )
     main(
         evidence_fn=evidence_fn,
         score_fn=cal.system_performance,
-        acquisition_fn=lambda p: cal.acquisition(p, kappa=0.5),
         kappa=0.5,
         ...
     )
 
-All callables accept a raw params dict. No wrapping needed.
+Acquisition grid is derived: A = (1-κ)·P_sys + κ·ΔE.
 """
 from __future__ import annotations
 
@@ -46,7 +45,6 @@ PLOTS_DIR.mkdir(exist_ok=True)
 def main(
     evidence_fn: Callable[[dict[str, Any]], float],
     score_fn: Callable[[dict[str, Any]], float],
-    acquisition_fn: Callable[[dict[str, Any]], float],
     kappa: float,
     save_path: str | None = None,
     x_key: str = "V_fab",
@@ -69,7 +67,6 @@ def main(
 
     evidence_grid = np.zeros((resolution, resolution))
     perf_grid = np.zeros((resolution, resolution))
-    acq_grid = np.zeros((resolution, resolution))
 
     for i in range(resolution):
         for j in range(resolution):
@@ -78,7 +75,8 @@ def main(
             params[y_key] = float(ys[j])
             evidence_grid[j, i] = evidence_fn(params)
             perf_grid[j, i] = score_fn(params)
-            acq_grid[j, i] = acquisition_fn(params)
+
+    acq_grid = (1 - kappa) * perf_grid + kappa * evidence_grid
 
     exp_x = [d[x_key] for d in datapoints] if datapoints else []
     exp_y = [d[y_key] for d in datapoints] if datapoints else []
@@ -114,4 +112,4 @@ def main(
 
 
 if __name__ == "__main__":
-    raise RuntimeError("Requires evidence_fn, score_fn, acquisition_fn — call main() directly.")
+    raise RuntimeError("Requires evidence_fn and score_fn — call main() directly.")
