@@ -1,10 +1,9 @@
 """Performance concept figure — predicted feature + scoring + performance topology.
 
-Accepts callables for prediction and evaluation so consumers wire in
-their actual models. The three panels show:
-  1. Predicted feature surface over a 2D parameter slice
-  2. Scoring function (feature → performance)
-  3. Performance topology (the composition)
+Accepts model methods directly — no lambdas or wrappers needed:
+  - ``predict_fn``: same signature as prediction model's predict
+  - ``score_fn``: same signature as ``IEvaluationModel._score_row``
+  - ``score_curve_fn``: optional, same signature as ``_score_row`` for panel 2 curve
 """
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from matplotlib.patches import FancyArrowPatch
 
 from ._style import (
     apply_style, clean_spines, save_fig, style_colorbar,
@@ -35,32 +33,36 @@ def plot_performance_concept(
     predict_fn: Callable[[dict[str, Any]], dict[str, float]],
     score_fn: Callable[[dict[str, float], dict[str, Any]], float],
     feature_code: str,
-    target_value: float,
-    scaling: float,
     fixed_params: dict[str, Any],
+    *,
+    score_curve_fn: Callable[[dict[str, float], dict[str, Any]], float] | None = None,
+    score_curve_label: str | None = None,
+    target_value: float | None = None,
     experiments: list[Any] | None = None,
     param_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-    score_curve_fn: Callable[[np.ndarray], np.ndarray] | None = None,
-    score_curve_label: str | None = None,
     resolution: int = 40,
 ) -> None:
     """Generate the performance concept figure.
 
     Args:
-        path: output file path
-        x_axis / y_axis: parameter axes for the 2D slice
-        predict_fn: ``(params_dict) -> {feat_code: predicted_value, ...}``
-        score_fn: ``(feature_values_dict, params_dict) -> float in [0, 1]``
-        feature_code: which predicted feature to show in panel 1
-        target_value: target for the scoring function curve (panel 2)
-        scaling: denominator for the scoring function curve
-        fixed_params: values for non-plotted parameters
-        experiments: optional list of ExperimentData / ExperimentSpec / dict
-        param_transform: optional param dict transform
-        resolution: grid resolution per axis
+        predict_fn: ``(params) -> {feat_code: value}``. Pass the model's
+            predict method directly — the plot injects axis values into params.
+        score_fn: ``(feature_values, params) -> float``. Same signature as
+            ``IEvaluationModel._score_row``. Used for the performance topology.
+        feature_code: which predicted feature to show in panel 1.
+        fixed_params: values for non-plotted parameters (including dimension
+            params like N_layers, N_nodes).
+        score_curve_fn: optional scoring function for panel 2's 1D curve.
+            Same ``_score_row`` signature. When None, uses ``score_fn``.
+        score_curve_label: optional formula annotation below panel 2.
+        target_value: optional target line on panels 1 and 2.
+        experiments: optional list of ExperimentData / ExperimentSpec / dict.
+        param_transform: optional param dict transform.
+        resolution: grid resolution per axis.
     """
     apply_style()
     transform = param_transform or (lambda d: d)
+    curve_fn = score_curve_fn or score_fn
 
     x_lo, x_hi = x_axis.bounds  # type: ignore[misc]
     y_lo, y_hi = y_axis.bounds  # type: ignore[misc]
@@ -113,9 +115,10 @@ def plot_performance_concept(
     if exp_x:
         ax1.scatter(exp_x, exp_y, s=30, c="white", edgecolors=ZINC_700,
                     linewidth=0.5, zorder=5)
-    tc = ax1.contour(xs, ys, feat_grid, levels=[target_value],
-                     colors=[ZINC_300], linewidths=1.2, linestyles="--")
-    ax1.clabel(tc, fmt=f"t={target_value:.2f}", fontsize=7, colors=ZINC_400)
+    if target_value is not None:
+        tc = ax1.contour(xs, ys, feat_grid, levels=[target_value],
+                         colors=[ZINC_300], linewidths=1.2, linestyles="--")
+        ax1.clabel(tc, fmt=f"t={target_value:.2f}", fontsize=7, colors=ZINC_400)
     ax1.set_xlabel(x_axis.display_label)
     ax1.set_ylabel(y_axis.display_label)
     subplot_label(ax1, f"1. Predicted feature ({feature_code})")
@@ -123,26 +126,25 @@ def plot_performance_concept(
     cb1 = plt.colorbar(im1, ax=ax1, shrink=0.8, pad=0.02)
     style_colorbar(cb1)
 
-    # ── Panel 2: Scoring function ──
+    # ── Panel 2: Scoring function (1D curve) ──
     ax2 = fig.add_subplot(gs[0, 1])
     f_lo, f_hi = float(feat_grid.min()), float(feat_grid.max())
     feat_range = np.linspace(f_lo, f_hi, 200)
-    if score_curve_fn is not None:
-        perf_curve = np.clip(score_curve_fn(feat_range), 0, 1)
-    else:
-        perf_curve = np.clip(1.0 - np.abs(feat_range - target_value) / scaling, 0, 1)
+    ref_params = dict(fixed_params)
+    ref_params = transform(ref_params)
+    perf_curve = np.array([
+        float(np.clip(curve_fn({feature_code: float(fv)}, ref_params), 0, 1))
+        for fv in feat_range
+    ])
     ax2.fill_between(feat_range, perf_curve, alpha=FILL_ALPHA["area"], color=EMERALD_500)
     ax2.plot(feat_range, perf_curve, color=EMERALD_500, linewidth=1.8)
-    ax2.axvline(target_value, color=ZINC_300, linewidth=0.8, linestyle="--", alpha=0.5)
-    ax2.text(target_value, 1.02, f"t={target_value:.2f}", fontsize=7,
-             color=ZINC_400, ha="center", va="bottom")
+    if target_value is not None:
+        ax2.axvline(target_value, color=ZINC_300, linewidth=0.8, linestyle="--", alpha=0.5)
+        ax2.text(target_value, 1.02, f"t={target_value:.2f}", fontsize=7,
+                 color=ZINC_400, ha="center", va="bottom")
     if exp_feat:
         for fx in exp_feat[:6]:
-            py = float(np.clip(
-                score_curve_fn(np.array([fx]))[0] if score_curve_fn
-                else max(0.0, 1.0 - abs(fx - target_value) / scaling),
-                0, 1,
-            ))
+            py = float(np.clip(curve_fn({feature_code: fx}, ref_params), 0, 1))
             ax2.plot(fx, py, "o", color=STEEL_500, markersize=3.5, zorder=5,
                      markeredgecolor="white", markeredgewidth=0.4)
             ax2.plot([fx, fx], [0, py], color=ZINC_300, linewidth=0.4, linestyle=":")
@@ -153,9 +155,6 @@ def plot_performance_concept(
     clean_spines(ax2)
     if score_curve_label:
         ax2.text(0.5, -0.18, score_curve_label,
-                 fontsize=9, color=ZINC_500, ha="center", va="top", transform=ax2.transAxes)
-    elif score_curve_fn is None:
-        ax2.text(0.5, -0.18, "$p = 1 - \\frac{|\\hat{f} - t|}{s}$",
                  fontsize=9, color=ZINC_500, ha="center", va="top", transform=ax2.transAxes)
 
     # ── Panel 3: Performance topology ──
@@ -176,18 +175,5 @@ def plot_performance_concept(
     clean_spines(ax3)
     cb3 = plt.colorbar(im3, ax=ax3, shrink=0.8, pad=0.02)
     style_colorbar(cb3)
-
-    # ── Section labels ──
-    fig.text(0.02, 0.96, "(a) Prediction and evaluation", fontsize=11,
-             color=ZINC_700, fontweight="bold", va="top")
-    fig.text(0.68, 0.96, "(b) Performance topology", fontsize=11,
-             color=ZINC_700, fontweight="bold", va="top")
-
-    arrow = FancyArrowPatch(
-        (0.585, 0.5), (0.64, 0.5),
-        transform=fig.transFigure, arrowstyle="->",
-        color=ZINC_400, linewidth=1.2, mutation_scale=12,
-    )
-    fig.patches.append(arrow)
 
     save_fig(path, dpi=200)
