@@ -32,7 +32,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from pred_fab.plotting._style import ZINC_500, save_fig
+from pred_fab.plotting._style import ZINC_500, ACCENT_YELLOW, save_fig
 from panels import (
     draw_experiments, evidence_gain_topology,
     performance_topology, acquisition_topology,
@@ -54,6 +54,7 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
+    proposed_params: dict[str, Any] | None = None,
     datapoints: list[dict[str, float]] | None = None,
     fit_colorbar: bool = True,
     resolution: int = 60,
@@ -99,6 +100,9 @@ def main(
 
     acquisition_topology(fig, ax3, xs, ys, acq_grid,
                          x_label, y_label, x_bounds, y_bounds, kappa=kappa)
+    if proposed_params is not None:
+        ax3.scatter([float(proposed_params[x_key])], [float(proposed_params[y_key])],
+                    marker="x", c=ACCENT_YELLOW, s=100, linewidths=1.8, zorder=12)
     if exp_x:
         draw_experiments(ax3, exp_x, exp_y)
 
