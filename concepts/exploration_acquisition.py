@@ -50,7 +50,7 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
-    experiments: list[dict[str, float]] | None = None,
+    datapoints: list[dict[str, float]] | None = None,
     resolution: int = 60,
 ):
     fixed = fixed_params or {}
@@ -92,15 +92,8 @@ def main(
             perf_grid[j, i] = perf
             acq_grid[j, i] = (1 - kappa) * perf + kappa * ev
 
-    if experiments is None:
-        np.random.seed(42)
-        experiments = [
-            {x_key: v, y_key: c}
-            for v, c in zip(np.random.uniform(x_lo+0.005, x_hi-0.005, 8),
-                            np.random.uniform(y_lo+0.05, y_hi-0.05, 8))
-        ]
-    exp_x = [e[x_key] for e in experiments]
-    exp_y = [e[y_key] for e in experiments]
+    exp_x = [d[x_key] for d in datapoints] if datapoints else []
+    exp_y = [d[y_key] for d in datapoints] if datapoints else []
 
     apply_style()
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16.5, 5))
@@ -108,15 +101,18 @@ def main(
 
     evidence_gain_topology(fig, ax1, xs, ys, evidence_grid,
                            x_label, y_label, x_bounds, y_bounds)
-    draw_experiments(ax1, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax1, exp_x, exp_y)
 
     performance_topology(fig, ax2, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds, show_optimum=False)
-    draw_experiments(ax2, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax2, exp_x, exp_y)
 
     acquisition_topology(fig, ax3, xs, ys, acq_grid,
                          x_label, y_label, x_bounds, y_bounds, kappa=kappa)
-    draw_experiments(ax3, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax3, exp_x, exp_y)
 
     fig.text(0.5, 0.02,
              "$A = (1 - \\kappa) \\cdot P + \\kappa \\cdot \\Delta E$",

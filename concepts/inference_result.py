@@ -86,7 +86,7 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
-    experiments: list[dict[str, float]] | None = None,
+    datapoints: list[dict[str, float]] | None = None,
     resolution: int = 60,
 ):
     fixed = fixed_params or {}
@@ -125,15 +125,8 @@ def main(
             params[y_key] = float(ys[j])
             perf_grid[j, i] = score_fn(params)
 
-    if experiments is None:
-        np.random.seed(42)
-        experiments = [
-            {x_key: v, y_key: c}
-            for v, c in zip(np.random.uniform(x_lo+0.005, x_hi-0.005, 8),
-                            np.random.uniform(y_lo+0.05, y_hi-0.05, 8))
-        ]
-    exp_x = [e[x_key] for e in experiments]
-    exp_y = [e[y_key] for e in experiments]
+    exp_x = [d[x_key] for d in datapoints] if datapoints else []
+    exp_y = [d[y_key] for d in datapoints] if datapoints else []
 
     opt_idx = np.unravel_index(np.argmax(perf_grid), perf_grid.shape)
     opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
@@ -155,7 +148,8 @@ def main(
     performance_topology(fig, ax_topo, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
                          show_optimum=False)
-    draw_experiments(ax_topo, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax_topo, exp_x, exp_y)
     ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=65,
                     linewidths=1.2, zorder=12)
     ax_topo.annotate("inference\nproposal", (opt_xv, opt_yv),

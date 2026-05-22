@@ -50,7 +50,7 @@ def main(
     x_label: str = "Print Speed [m/s]",
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
-    experiments: list[dict[str, float]] | None = None,
+    datapoints: list[dict[str, float]] | None = None,
     resolution: int = 80,
 ):
     fixed = fixed_params or {}
@@ -89,15 +89,8 @@ def main(
     perf_along_x = np.mean(perf_grid, axis=0)
     perf_along_y = np.mean(perf_grid, axis=1)
 
-    if experiments is None:
-        np.random.seed(42)
-        experiments = [
-            {x_key: v, y_key: c}
-            for v, c in zip(np.random.uniform(x_lo+0.005, x_hi-0.005, 8),
-                            np.random.uniform(y_lo+0.05, y_hi-0.05, 8))
-        ]
-    exp_x = [e[x_key] for e in experiments]
-    exp_y = [e[y_key] for e in experiments]
+    exp_x = [d[x_key] for d in datapoints] if datapoints else []
+    exp_y = [d[y_key] for d in datapoints] if datapoints else []
 
     # ── Single figure: 3 panels ──
     apply_style()
@@ -111,7 +104,8 @@ def main(
     feature_topology(fig, ax_feat, xs, ys, feat_grid,
                      x_label, y_label, x_bounds, y_bounds,
                      target_value=target_value)
-    draw_experiments(ax_feat, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax_feat, exp_x, exp_y)
 
     # Panel 2 top: Marginal P(x)
     ax_mx = fig.add_subplot(gs[0, 1])
@@ -125,7 +119,8 @@ def main(
     ax_perf = fig.add_subplot(gs[:, 2])
     performance_topology(fig, ax_perf, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds)
-    draw_experiments(ax_perf, exp_x, exp_y)
+    if exp_x:
+        draw_experiments(ax_perf, exp_x, exp_y)
 
     path = save_path or str(PLOTS_DIR / "performance_concept.png")
     save_fig(path, dpi=200)
