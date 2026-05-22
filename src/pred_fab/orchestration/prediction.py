@@ -17,7 +17,7 @@ from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, combined_score, profiler
+from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 from .evidence import (
@@ -1176,65 +1176,69 @@ class PredictionSystem(BaseOrchestrationSystem):
         return temp_datamodule
 
     @staticmethod
-    def _build_importance_weights(
+    @staticmethod
+    def _build_importance_per_feature(
         dm: DataModule,
         split: SplitType,
-        performance_weights: dict[str, float] | None,
+        eval_system: Any | None = None,
         floor: float = 0.1,
         steepness: float = 0.8,
-    ) -> np.ndarray | None:
-        """Build per-row importance weights via sigmoid centered at mean performance.
+    ) -> dict[str, np.ndarray]:
+        """Build per-feature importance weights from stored performance scores.
 
-        weight_i = floor + (1 - floor) * sigmoid(k * (perf_i - perf_mean))
+        For each performance attribute, constructs a per-row importance array
+        via sigmoid centered at that feature's mean score:
 
-        where k = steepness / perf_std adapts to the data spread. This gives:
-          - At mean performance: weight = midpoint = (1 + floor) / 2
-          - Above mean: weight climbs toward 1.0 (high-performing = important)
-          - Below mean: weight drops toward floor (low-performing = less important)
+            weight_i = floor + (1 - floor) * sigmoid(k * (score_i - mean))
 
-        The sigmoid ensures smooth transitions with no hard cutoffs. The gap
-        (R²_adj - R²) is interpretable relative to the mean:
-          gap > 0 → model predicts above-average experiments better
-          gap < 0 → model predicts above-average experiments worse
-          gap ≈ 0 → uniform prediction quality across performance range
-
-        Returns None if no performance_weights are provided.
+        Reads performance from the dataset (hierarchical load). If performance
+        is missing for an experiment and eval_system is provided, evaluates it.
         """
-        if not performance_weights:
-            return None
-
-        # Collect per-experiment combined scores
         codes = dm.get_split_codes(split)
         max_depth = getattr(dm, '_max_depth', None)
-        exp_scores: list[tuple[float, int]] = []  # (score, n_rows)
+
+        perf_per_exp: list[tuple[dict[str, float], int]] = []
+        perf_codes: set[str] = set()
         for code in codes:
             exp = dm.dataset.get_experiment(code)
             perf = exp.performance.get_values_dict()
-            score = combined_score(perf, performance_weights)
+            if not perf and eval_system is not None:
+                eval_system.run_evaluation(exp)
+                perf = exp.performance.get_values_dict()
+            perf_codes.update(perf.keys())
             dim_names = exp.parameters.get_dim_names()
             if max_depth is not None and len(dim_names) > max_depth:
                 dim_names = dim_names[:max_depth]
             n_rows = len(exp.parameters.get_dim_combinations(dim_names)) if dim_names else 1
-            exp_scores.append((score, n_rows))
+            perf_per_exp.append((perf, n_rows))
 
-        if not exp_scores:
-            return None
+        if not perf_per_exp:
+            return {}
 
-        # Compute mean and std of performance scores
-        all_scores = np.array([s for s, _ in exp_scores])
-        s_mean = float(all_scores.mean())
-        s_std = float(all_scores.std())
+        perf_importance: dict[str, np.ndarray] = {}
+        for perf_code in perf_codes:
+            scores = np.array([p.get(perf_code, 0.0) or 0.0 for p, _ in perf_per_exp])
+            s_mean = float(scores.mean())
+            s_std = float(scores.std())
+            k = steepness / s_std if s_std > 1e-10 else 0.0
+            rows: list[float] = []
+            for (perf, n_rows), score in zip(perf_per_exp, scores):
+                sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
+                weight = floor + (1.0 - floor) * sigmoid
+                rows.extend([weight] * n_rows)
+            perf_importance[perf_code] = np.array(rows, dtype=np.float64)
 
-        # Sigmoid weighting centered at mean, steepness adapts to spread
-        k = steepness / s_std if s_std > 1e-10 else 0.0
+        if eval_system is None:
+            return perf_importance
 
-        importance_rows: list[float] = []
-        for score, n_rows in exp_scores:
-            sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
-            weight = floor + (1.0 - floor) * sigmoid
-            importance_rows.extend([weight] * n_rows)
-
-        return np.array(importance_rows, dtype=np.float64)
+        result: dict[str, np.ndarray] = {}
+        for eval_model in eval_system.models:
+            perf_code = eval_model.output_performance
+            if perf_code not in perf_importance:
+                continue
+            for feat_code in eval_model.input_features:
+                result[feat_code] = perf_importance[perf_code]
+        return result
 
     def _validate_flat(
         self,
@@ -1242,7 +1246,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         dm: DataModule,
         X_split: torch.Tensor,
         y_split: torch.Tensor,
-        importance_arr: np.ndarray | None,
+        importance_dict: dict[str, np.ndarray],
     ) -> dict[str, dict[str, float]]:
         """Per-row validation for non-sequence models (MLP, deterministic)."""
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
@@ -1260,6 +1264,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         results: dict[str, dict[str, float]] = {}
         for i, feat in enumerate(model.outputs):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
+            importance_arr = importance_dict.get(feat)
             if importance_arr is not None and len(importance_arr) == len(y_true[:, i]):
                 adj = Metrics.calculate_adjusted_r2(y_true[:, i], y_pred[:, i], importance_arr)
                 feat_metrics['r2_adj'] = adj['r2_adj']
@@ -1271,7 +1276,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         model: IPredictionModel,
         dm: DataModule,
         split: SplitType,
-        importance_arr: np.ndarray | None,
+        importance_dict: dict[str, np.ndarray],
     ) -> dict[str, dict[str, float]]:
         """Sequence-aware validation for TransformerModel.
 
@@ -1322,6 +1327,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             if len(y_t) == 0:
                 continue
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
+            importance_arr = importance_dict.get(feat)
             if importance_arr is not None and len(importance_arr) == len(y_t):
                 adj = Metrics.calculate_adjusted_r2(y_t, y_p, importance_arr)
                 feat_metrics['r2_adj'] = adj['r2_adj']
@@ -1331,13 +1337,13 @@ class PredictionSystem(BaseOrchestrationSystem):
     def validate(
         self,
         use_test: bool = False,
-        performance_weights: dict[str, float] | None = None,
+        eval_system: Any | None = None,
     ) -> dict[str, dict[str, float]]:
         """Validate prediction models on validation or test set.
 
-        Returns per-feature metrics: {feature_name: {'r2': float, 'r2_adj': float, ...}}.
-        When performance_weights are provided, R²_adj is computed using combined
-        performance as the importance signal.
+        Returns per-feature metrics: {feature_name: {'r2': float, 'r2_adj': float, 'mae': float}}.
+        R²_adj uses per-feature importance from stored performance scores.
+        If eval_system is provided, missing performances are computed on the fly.
         """
         dm = self._assert_trained()
 
@@ -1367,19 +1373,16 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         self.logger.info(f"Evaluating {len(self.models)} models on {X_split.shape[0]} samples...")
 
-        # Build per-row importance for R²_adj: experiments near the performance
-        # optimum are weighted higher, so R²_adj measures prediction accuracy
-        # where it matters most for calibration.
-        importance_arr = self._build_importance_weights(dm, split, performance_weights)
+        importance_dict = self._build_importance_per_feature(dm, split, eval_system)
 
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
         for model in self.models:
             from ..models.transformer import TransformerModel
             if isinstance(model, TransformerModel):
-                results.update(self._validate_transformer(model, dm, split, importance_arr))
+                results.update(self._validate_transformer(model, dm, split, importance_dict))
             else:
-                results.update(self._validate_flat(model, dm, X_split, y_split, importance_arr))
+                results.update(self._validate_flat(model, dm, X_split, y_split, importance_dict))
 
         has_adj = any('r2_adj' in m for m in results.values())
         has_mae = any('mae' in m for m in results.values())
