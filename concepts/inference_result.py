@@ -78,6 +78,7 @@ def _radar_panel(
 
 def main(
     proposed_params: dict[str, Any],
+    proposed_score: float,
     save_path: str | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     attribute_fn: Callable[[dict[str, Any]], dict[str, float | None]] | None = None,
@@ -156,10 +157,9 @@ def main(
     ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
                     linewidths=1.8, zorder=12)
 
-    p_sys = score_fn(eval_params)
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)
-    ax_radar.text(0.95, 0.95, f"$P_{{\\mathrm{{sys}}}}$ = {p_sys:.2f}",
+    ax_radar.text(0.95, 0.95, f"$P_{{\\mathrm{{sys}}}}$ = {proposed_score:.2f}",
                   transform=ax_radar.transAxes, ha="right", va="top",
                   fontsize=10, color=EMERALD_500)
 
