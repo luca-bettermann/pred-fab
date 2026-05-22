@@ -89,6 +89,7 @@ def main(
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
     datapoints: list[dict[str, float]] | None = None,
+    fit_colorbar: bool = True,
     resolution: int = 60,
 ):
     fixed = fixed_params or {}
@@ -148,7 +149,8 @@ def main(
     performance_topology(fig, ax_topo, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
                          show_optimum=False,
-                         label="$P_{\\mathrm{sys}}(x, y)$")
+                         label="$P_{\\mathrm{sys}}(x, y)$",
+                         fit_colorbar=fit_colorbar)
     if exp_x:
         draw_experiments(ax_topo, exp_x, exp_y)
     ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,

@@ -51,6 +51,7 @@ def main(
     y_label: str = "Calibration Factor",
     fixed_params: dict[str, Any] | None = None,
     datapoints: list[dict[str, float]] | None = None,
+    fit_colorbar: bool = True,
     resolution: int = 80,
 ):
     fixed = fixed_params or {}
@@ -109,7 +110,8 @@ def main(
 
     # Panel 2 top: Marginal P(x)
     ax_mx = fig.add_subplot(gs[0, 1])
-    marginal_performance(ax_mx, xs, perf_along_x, x_label, "$P(x)$")
+    marginal_performance(ax_mx, xs, perf_along_x, x_label, "$P(x)$",
+                         fit_colorbar=fit_colorbar)
 
     # Panel 2 bottom: TBD
     ax_placeholder = fig.add_subplot(gs[1, 1])
@@ -118,7 +120,8 @@ def main(
     # Panel 3: Performance topology (spans both rows)
     ax_perf = fig.add_subplot(gs[:, 2])
     performance_topology(fig, ax_perf, xs, ys, perf_grid,
-                         x_label, y_label, x_bounds, y_bounds)
+                         x_label, y_label, x_bounds, y_bounds,
+                         fit_colorbar=fit_colorbar)
     if exp_x:
         draw_experiments(ax_perf, exp_x, exp_y)
 

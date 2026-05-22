@@ -68,10 +68,14 @@ def performance_topology(
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     show_optimum: bool = True,
     label: str = "$P(x, y)$",
+    fit_colorbar: bool = True,
 ) -> None:
     """Performance surface — RdYlGn (quality judgment)."""
     cm_p = cmap("performance")
-    norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
+    if fit_colorbar:
+        norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
+    else:
+        norm_p = Normalize(vmin=0, vmax=1)
     ax.contourf(xs, ys, grid, levels=18, cmap=cm_p, norm=norm_p)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
     if show_optimum:
@@ -137,13 +141,17 @@ def acquisition_topology(
 def marginal_performance(
     ax, vals: np.ndarray, curve: np.ndarray,
     axis_label: str, panel_label: str,
+    fit_colorbar: bool = True,
 ) -> None:
     """Marginal performance curve with gradient fill — RdYlGn."""
     cm_p = cmap("performance")
     line_color = cm_p(0.7)
-    y_min, y_max = float(curve.min()), float(curve.max())
-    pad = (y_max - y_min) * 0.05 or 0.05
-    y_lo, y_hi = y_min - pad, y_max + pad
+    if fit_colorbar:
+        y_min, y_max = float(curve.min()), float(curve.max())
+        pad = (y_max - y_min) * 0.05 or 0.05
+        y_lo, y_hi = y_min - pad, y_max + pad
+    else:
+        y_lo, y_hi = 0.0, 1.0
     res_y = 100
     extent = [float(vals[0]), float(vals[-1]), y_lo, y_hi]
     gradient = np.linspace(0, 1, res_y).reshape(-1, 1) * np.ones((1, len(vals)))
