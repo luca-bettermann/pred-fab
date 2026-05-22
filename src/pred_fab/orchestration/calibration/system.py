@@ -426,28 +426,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         ``array_to_params`` returns Python floats / ints — the gradient on
         ``x_norm`` is lost during that decode. For autograd, we preserve the
-        tensor entries for continuous params by reading them off ``x_norm``
-        directly via the schema's denormalisation map. Categorical / integer /
-        domain params stay as Python (no gradient through discrete choices).
+        tensor entries for continuous params by applying the normaliser's
+        differentiable ``reverse()`` to the z-score tensor values.
+        Categorical / integer / domain params stay as Python.
         """
-        # Walk DataModule input columns; for each continuous one, replace the
-        # decoded float with the gradient-traversable tensor value.
         out = dict(params_np)
         for j, col_name in enumerate(dm.input_columns):
             if col_name not in out:
                 continue
-            stats = getattr(dm, "_parameter_stats", {}).get(col_name)
+            stats = dm._parameter_stats.get(col_name)
             if stats is None:
                 continue
-            # Only continuous numeric stats define a min/max for affine reverse.
-            lo = stats.get("min") if isinstance(stats, dict) else getattr(stats, "min", None)
-            hi = stats.get("max") if isinstance(stats, dict) else getattr(stats, "max", None)
-            if lo is None or hi is None:
+            if col_name in dm.categorical_mappings:
                 continue
-            span = float(hi) - float(lo)
-            if span <= 0:
-                continue
-            out[col_name] = x_norm[j] * span + float(lo)
+            out[col_name] = stats.reverse(x_norm[j])
         return out
 
     def _acquisition_objective_tensor(
