@@ -33,11 +33,10 @@ class ProgressBar:
     green when improving, dim when stagnant.
     """
 
-    LABEL_WIDTH = 22
+    PREFIX_WIDTH = 32
 
     def __init__(self, label: str, *, info: dict[str, Any] | None = None,
                  bar_len: int = 12):
-        self._label = label.ljust(self.LABEL_WIDTH)
         self._len = bar_len
         self._fill = 0.0
         self._counters: dict[str, int] = {}
@@ -46,9 +45,10 @@ class ProgressBar:
 
         if info:
             parts = ", ".join(f"{k}={v}" for k, v in info.items())
-            self._info_str = f" ({parts})"
+            prefix = f"{label} ({parts})"
         else:
-            self._info_str = ""
+            prefix = label
+        self._prefix = prefix.ljust(self.PREFIX_WIDTH)
 
     def step(self, *, fill: float | None = None,
              metrics: dict[str, float] | None = None,
@@ -83,7 +83,7 @@ class ProgressBar:
         bar = "█" * filled + "░" * (self._len - filled)
         ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
         sys.stdout.write(
-            f"\r  {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}{metric_str}            "
+            f"\r  {self._prefix} [{bar}] {_D}{ctr}{_R}{metric_str}            "
         )
         sys.stdout.flush()
 
@@ -96,7 +96,7 @@ class ProgressBar:
         if best_parts:
             ctr += "  " + "  ".join(best_parts)
         sys.stdout.write(
-            f"\r{_G}✓{_R} {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}            \n"
+            f"\r{_G}✓{_R} {self._prefix} [{bar}] {_D}{ctr}{_R}            \n"
         )
         sys.stdout.flush()
 
