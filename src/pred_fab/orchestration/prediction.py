@@ -1168,21 +1168,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         eval_system: Any | None = None,
         floor: float = 0.1,
         steepness: float = 0.8,
-    ) -> dict[str, np.ndarray]:
-        """Build per-feature importance weights from stored performance scores.
+    ) -> dict[str, list[float]]:
+        """Build per-experiment importance weights from stored performance scores.
 
-        For each performance attribute, constructs a per-row importance array
-        via sigmoid centered at that feature's mean score:
-
-            weight_i = floor + (1 - floor) * sigmoid(k * (score_i - mean))
-
-        Reads performance from the dataset (hierarchical load). If performance
-        is missing for an experiment and eval_system is provided, evaluates it.
+        Returns ``{feat_code: [w_exp0, w_exp1, ...]}``. One weight per
+        experiment — the caller expands to rows based on actual batch sizes.
+        This avoids duplicating DataModule row-filtering logic.
         """
         codes = dm.get_split_codes(split)
-        max_depth = getattr(dm, '_max_depth', None)
 
-        perf_per_exp: list[tuple[dict[str, float], int]] = []
+        perf_per_exp: list[dict[str, float]] = []
         perf_codes: set[str] = set()
         for code in codes:
             exp = dm.dataset.get_experiment(code)
@@ -1190,47 +1185,27 @@ class PredictionSystem(BaseOrchestrationSystem):
                 eval_system.run_evaluation(exp)
             perf = exp.performance.get_values_dict()
             perf_codes.update(perf.keys())
-            dim_names = exp.parameters.get_dim_names()
-            if max_depth is not None and len(dim_names) > max_depth:
-                dim_names = dim_names[:max_depth]
-            if dim_names:
-                combos = exp.parameters.get_dim_combinations(dim_names)
-                # Respect DataModule row exclusions so importance length matches y_true
-                excluded = getattr(dm, "_excluded_rows", {}) or {}
-                if excluded:
-                    def _keep(combo):
-                        for axis_name, axis_vals in excluded.items():
-                            if axis_name in dim_names:
-                                idx = dim_names.index(axis_name)
-                                if combo[idx] in axis_vals:
-                                    return False
-                        return True
-                    combos = [c for c in combos if _keep(c)]
-                n_rows = len(combos)
-            else:
-                n_rows = 1
-            perf_per_exp.append((perf, n_rows))
+            perf_per_exp.append(perf)
 
         if not perf_per_exp:
             return {}
 
-        perf_importance: dict[str, np.ndarray] = {}
+        perf_importance: dict[str, list[float]] = {}
         for perf_code in perf_codes:
-            scores = np.array([p.get(perf_code, 0.0) or 0.0 for p, _ in perf_per_exp])
+            scores = np.array([p.get(perf_code, 0.0) or 0.0 for p in perf_per_exp])
             s_mean = float(scores.mean())
             s_std = float(scores.std())
             k = steepness / s_std if s_std > 1e-10 else 0.0
-            rows: list[float] = []
-            for (perf, n_rows), score in zip(perf_per_exp, scores):
+            weights = []
+            for score in scores:
                 sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
-                weight = floor + (1.0 - floor) * sigmoid
-                rows.extend([weight] * n_rows)
-            perf_importance[perf_code] = np.array(rows, dtype=np.float64)
+                weights.append(floor + (1.0 - floor) * sigmoid)
+            perf_importance[perf_code] = weights
 
         if eval_system is None:
             return perf_importance
 
-        result: dict[str, np.ndarray] = {}
+        result: dict[str, list[float]] = {}
         for eval_model in eval_system.models:
             perf_code = eval_model.output_performance
             if perf_code not in perf_importance:
@@ -1239,13 +1214,30 @@ class PredictionSystem(BaseOrchestrationSystem):
                 result[feat_code] = perf_importance[perf_code]
         return result
 
+    @staticmethod
+    def _expand_importance(
+        per_exp_weights: list[float],
+        cell_meta: torch.Tensor,
+    ) -> np.ndarray:
+        """Expand per-experiment importance to per-row using cell_meta exp_idx."""
+        exp_ids = cell_meta[:, 0].long().cpu().numpy()
+        unique_ids = np.unique(exp_ids)
+        if len(unique_ids) != len(per_exp_weights):
+            raise ValueError(
+                f"Importance has {len(per_exp_weights)} experiments but "
+                f"cell_meta has {len(unique_ids)} unique exp_ids"
+            )
+        id_to_weight = {int(uid): w for uid, w in zip(unique_ids, per_exp_weights)}
+        return np.array([id_to_weight[int(eid)] for eid in exp_ids], dtype=np.float64)
+
     def _validate_flat(
         self,
         model: IPredictionModel,
         dm: DataModule,
         X_split: torch.Tensor,
         y_split: torch.Tensor,
-        importance_dict: dict[str, np.ndarray],
+        cell_meta: torch.Tensor,
+        importance_dict: dict[str, list[float]],
     ) -> dict[str, dict[str, float]]:
         """Per-row validation for non-sequence models (MLP, deterministic)."""
         input_indices = dm.get_input_indices(model.input_parameters + model.input_features)
@@ -1263,14 +1255,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         results: dict[str, dict[str, float]] = {}
         for i, feat in enumerate(model.outputs):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
-            importance_arr = importance_dict.get(feat)
-            if importance_arr is not None:
-                if len(importance_arr) != len(y_true[:, i]):
-                    raise ValueError(
-                        f"R²_inf importance length mismatch for '{feat}': "
-                        f"importance={len(importance_arr)}, y_true={len(y_true[:, i])}. "
-                        f"Check that _build_importance_per_feature respects DataModule filters."
-                    )
+            per_exp = importance_dict.get(feat)
+            if per_exp is not None:
+                importance_arr = self._expand_importance(per_exp, cell_meta)
                 inf = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
@@ -1293,6 +1280,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         per_feat_true: dict[str, list[float]] = {f: [] for f in model.outputs}
         per_feat_pred: dict[str, list[float]] = {f: [] for f in model.outputs}
+        rows_per_exp: list[int] = []
 
         for code in codes:
             exp = dm.dataset.get_experiment(code)
@@ -1324,6 +1312,7 @@ class PredictionSystem(BaseOrchestrationSystem):
                 n = min(len(y_true_flat), len(y_pred_native))
                 per_feat_true[feat].extend(y_true_flat[:n].tolist())
                 per_feat_pred[feat].extend(y_pred_native[:n].tolist())
+            rows_per_exp.append(n)
 
         results: dict[str, dict[str, float]] = {}
         for feat in model.outputs:
@@ -1332,13 +1321,16 @@ class PredictionSystem(BaseOrchestrationSystem):
             if len(y_t) == 0:
                 continue
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
-            importance_arr = importance_dict.get(feat)
-            if importance_arr is not None:
+            per_exp = importance_dict.get(feat)
+            if per_exp is not None:
+                # Expand per-experiment weights to per-row
+                importance_arr = np.concatenate([
+                    np.full(nr, w) for w, nr in zip(per_exp, rows_per_exp)
+                ])
                 if len(importance_arr) != len(y_t):
                     raise ValueError(
                         f"R²_inf importance length mismatch for '{feat}': "
-                        f"importance={len(importance_arr)}, y_true={len(y_t)}. "
-                        f"Check that _build_importance_per_feature respects DataModule filters."
+                        f"importance={len(importance_arr)}, y_true={len(y_t)}"
                     )
                 inf = Metrics.calculate_informed_r2(y_t, y_p, importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
@@ -1377,11 +1369,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.console_warning(f"No batches returned for {split} set during validation.")
             return {}
 
-        # Concatenate batches; drop cell_meta (third tuple element).
         X_list = [b[0] for b in batches]
         y_list = [b[1] for b in batches]
+        meta_list = [b[2] for b in batches]
         X_split = torch.cat(X_list, dim=0)
         y_split = torch.cat(y_list, dim=0)
+        cell_meta = torch.cat(meta_list, dim=0)
 
         self.logger.info(f"Evaluating {len(self.models)} models on {X_split.shape[0]} samples...")
 
@@ -1394,7 +1387,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             if isinstance(model, TransformerModel):
                 results.update(self._validate_transformer(model, dm, split, importance_dict))
             else:
-                results.update(self._validate_flat(model, dm, X_split, y_split, importance_dict))
+                results.update(self._validate_flat(model, dm, X_split, y_split, cell_meta, importance_dict))
 
         has_inf = any('r2_inf' in m for m in results.values())
         has_mae = any('mae' in m for m in results.values())
