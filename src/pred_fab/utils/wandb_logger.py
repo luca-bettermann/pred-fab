@@ -36,7 +36,7 @@ class WandbLogger:
 
     def log_validation(self, results: dict[str, dict[str, float]]) -> None:
         flat: dict[str, float] = {}
-        keep = {"r2", "r2_adj", "mae"}
+        keep = {"r2", "r2_inf", "mae"}
         for feat, metrics in results.items():
             for k, v in metrics.items():
                 if k in keep:

@@ -333,15 +333,15 @@ class ConsoleReporter:
     # ── Training ────────────────────────────────────────────────────────
 
     def print_training_summary(self, feature_metrics: dict[str, dict[str, float]]) -> None:
-        """Print R², R²_adj, and MAE per feature in a table."""
+        """Print R², R²_inf, and MAE per feature in a table."""
         if not self.enabled:
             return
-        has_adj = any('r2_adj' in m for m in feature_metrics.values())
+        has_adj = any('r2_inf' in m for m in feature_metrics.values())
         has_mae = any('mae' in m for m in feature_metrics.values())
 
         header = f"  {'Feature':<30s}  {'R²':>8s}"
         if has_adj:
-            header += f"  {'R²_adj':>8s}"
+            header += f"  {'R²_inf':>8s}"
         if has_mae:
             header += f"  {'MAE':>10s}"
         self._print(f"\n  {_B}Model quality{_R}")
@@ -351,9 +351,9 @@ class ConsoleReporter:
             r2 = metrics.get('r2', 0.0)
             line = f"  {name:<30s}  {r2:8.4f}"
             if has_adj:
-                r2_adj = metrics.get('r2_adj')
-                if r2_adj is not None:
-                    line += f"  {r2_adj:8.4f}"
+                r2_inf = metrics.get('r2_inf')
+                if r2_inf is not None:
+                    line += f"  {r2_inf:8.4f}"
                 else:
                     line += f"  {'—':>8s}"
             if has_mae:

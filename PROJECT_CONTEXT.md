@@ -58,7 +58,7 @@ experiment parameters that balance exploration (evidence gain) and exploitation 
 
 ### Metrics
 - **R²** — standard coefficient of determination
-- **R²_adj** — importance-weighted R², per-feature (weighted by that feature's performance scores)
+- **R²_inf** — importance-weighted R², per-feature (weighted by that feature's performance scores)
 - **MAE** — mean absolute error
 - These are the only three metrics used everywhere (console, wandb, validation)
 

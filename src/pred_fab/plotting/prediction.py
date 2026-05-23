@@ -47,7 +47,7 @@ def plot_importance_weights(
     steepness: float = 0.8,
     validation_gaps: dict[str, float] | None = None,
 ) -> None:
-    """1x2: sigmoid importance curve with experiment dots + per-feature R²_adj gaps."""
+    """1x2: sigmoid importance curve with experiment dots + per-feature R²_inf gaps."""
     apply_style()
     scores = np.asarray(experiment_scores)
     s_mean = float(scores.mean())
@@ -104,7 +104,7 @@ def plot_importance_weights(
         ax2.set_yticklabels(features, fontsize=8)
         ax2.invert_yaxis()
         ax2.axvline(0, color="black", lw=1)
-        ax2.set_xlabel("Gap (R²_adj − R²)")
+        ax2.set_xlabel("Gap (R²_inf − R²)")
         ax2.set_title("Actual Validation Gaps")
         max_gap = max(abs(g) for g in gaps) if gaps else 0.05
         margin = max(max_gap * 1.5, 0.02)
