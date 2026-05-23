@@ -33,9 +33,11 @@ class ProgressBar:
     green when improving, dim when stagnant.
     """
 
+    LABEL_WIDTH = 22
+
     def __init__(self, label: str, *, info: dict[str, Any] | None = None,
                  bar_len: int = 12):
-        self._label = label
+        self._label = label.ljust(self.LABEL_WIDTH)
         self._len = bar_len
         self._fill = 0.0
         self._counters: dict[str, int] = {}

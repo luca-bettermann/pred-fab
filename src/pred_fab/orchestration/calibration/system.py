@@ -627,7 +627,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             n, variables, cat_codes, cat_assignments,
             datamodule=dm,
             kappa=1.0, source_step=SourceStep.DISCOVERY,
-            label="Local",
+            label="Local optimizer",
         )
 
         n_static = sum(1 for v in variables if isinstance(v, StaticVariable))
@@ -661,7 +661,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             1, variables, cat_codes, cat_assignments,
             datamodule=datamodule,
             kappa=kappa, source_step=source_step,
-            label="Local",
+            label="Local optimizer",
         )
         return specs[0]
 
@@ -766,7 +766,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.console_info(
             f"\n    {'ΔE':>8s}  {'P_sys':>8s}  {'κ':>6s}  {'A':>8s}\n"
             f"  {'─' * 38}\n"
-            f"    {de:8.4f}  {p_sys:8.4f}  {kappa:6.2f}  {a:8.4f}"
+            f"    {de:8.4f}  {p_sys:8.4f}  {kappa:6.2f}  {a:8.4f}\n"
         )
 
 
