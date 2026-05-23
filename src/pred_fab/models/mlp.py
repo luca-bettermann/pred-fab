@@ -251,7 +251,15 @@ class MLPModel(IPredictionModel):
                 epoch_logger.log_epoch(epoch, metrics)
 
             if progress_callback is not None:
-                progress_callback(epoch, self.EPOCHS, epoch_loss)
+                val_loss = None
+                if val_batches:
+                    with torch.no_grad():
+                        X_v = torch.cat([b[0] for b in val_batches], dim=0)
+                        y_v = torch.cat([b[1] for b in val_batches], dim=0)
+                        if y_v.ndim == 1:
+                            y_v = y_v.reshape(-1, 1)
+                        val_loss = float(loss_fn(net(self._embed_cats(X_v)), y_v))
+                progress_callback(epoch, self.EPOCHS, epoch_loss, val_loss)
 
         net.eval()
         self._cat_embeddings.eval()

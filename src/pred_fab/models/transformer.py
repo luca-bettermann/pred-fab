@@ -491,7 +491,7 @@ class TransformerModel(IPredictionModel):
                 })
 
             if progress_callback is not None:
-                progress_callback(epoch, self.EPOCHS, float(total_loss.detach()))
+                progress_callback(epoch, self.EPOCHS, float(total_loss.detach()), None)
 
         self._model.eval()
         self._is_trained = True

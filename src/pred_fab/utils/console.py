@@ -26,21 +26,21 @@ def _score_color(v: float) -> str:
 
 
 class ProgressBar:
-    """Inline ANSI progress bar for optimizer runs.
+    """Inline ANSI progress bar with named metrics that flash green/red.
 
-    Flexible: callers pass ``info`` (static labels like D=5, V=60) and
-    ``**counters`` (dynamic values like starts=3, iters=120) on each step.
-    ``fill`` (0–1) drives the bar; ``obj`` tracks best objective.
+    Callers pass ``**counters`` (epoch=300) and ``**metrics`` via
+    ``step()``. Each metric independently tracks its best value —
+    green when improving, dim when stagnant.
     """
 
     def __init__(self, label: str, *, info: dict[str, Any] | None = None,
-                 bar_len: int = 12, metric_name: str = "obj"):
+                 bar_len: int = 12):
         self._label = label
         self._len = bar_len
-        self._best_obj: float | None = None
-        self._metric_name = metric_name
         self._fill = 0.0
         self._counters: dict[str, int] = {}
+        self._best: dict[str, float] = {}
+        self._current: dict[str, float] = {}
 
         if info:
             parts = ", ".join(f"{k}={v}" for k, v in info.items())
@@ -48,29 +48,40 @@ class ProgressBar:
         else:
             self._info_str = ""
 
-    def step(self, *, fill: float | None = None, obj: float | None = None,
+    def step(self, *, fill: float | None = None,
+             metrics: dict[str, float] | None = None,
+             # legacy single-metric support
+             obj: float | None = None,
              **counters: int) -> None:
-        """Update bar and redraw. ``fill`` is [0, 1]; counters shown as key=value."""
+        """Update bar and redraw."""
         import sys
         if fill is not None:
             self._fill = fill
         self._counters.update(counters)
 
         if obj is not None:
-            first = self._best_obj is None
-            improved = first or obj < self._best_obj - 1e-15  # type: ignore[operator]
-            if improved:
-                self._best_obj = obj
-            color = _G if improved else _D
-            obj_str = f"  {color}{self._metric_name}={obj:.3f}{_R}"
-        else:
-            obj_str = ""
+            metrics = {**(metrics or {}), "obj": obj}
+
+        if metrics:
+            for name, val in metrics.items():
+                self._current[name] = val
+                if name not in self._best or val < self._best[name] - 1e-15:
+                    self._best[name] = val
+
+        metric_parts: list[str] = []
+        for name, val in self._current.items():
+            improved = abs(val - self._best.get(name, val)) < 1e-15
+            color = _G if improved else _RD
+            metric_parts.append(f"{color}{name}={val:.4f}{_R}")
+        metric_str = "  ".join(metric_parts)
+        if metric_str:
+            metric_str = "  " + metric_str
 
         filled = int(self._len * min(self._fill, 1.0))
         bar = "█" * filled + "░" * (self._len - filled)
         ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
         sys.stdout.write(
-            f"\r  {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}{obj_str}            "
+            f"\r  {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}{metric_str}            "
         )
         sys.stdout.flush()
 
@@ -79,8 +90,9 @@ class ProgressBar:
         import sys
         bar = "█" * self._len
         ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
-        if self._best_obj is not None:
-            ctr += f"  {self._metric_name}={self._best_obj:.3f}"
+        best_parts = [f"{k}={v:.4f}" for k, v in self._best.items()]
+        if best_parts:
+            ctr += "  " + "  ".join(best_parts)
         sys.stdout.write(
             f"\r{_G}✓{_R} {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}            \n"
         )
