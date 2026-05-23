@@ -371,16 +371,27 @@ class KernelFieldEstimator(EvidenceEstimator):
         new_centers_SL: torch.Tensor,
         new_weights_SL: torch.Tensor,
     ) -> torch.Tensor:
-        """Marginal-joint evidence with D/(D+1) weighting.
+        """ANOVA-decomposed evidence: marginal + joint integration.
 
-        Marginal: D independent 1D integrals — weighted D/(D+1).
-        Joint: D-dimensional shell-probe integral — weighted 1/(D+1).
+        E = α_marginal × e_marginal + α_joint × e_joint
 
-        Each marginal integral is one independent piece of per-dimension
-        information; the joint is one piece of full-dimensional information.
-        Equal weight per piece gives D/(D+1) for marginals. At D=1 this
-        reduces to 0.5/0.5; as D→∞ marginals dominate (correct — joint
-        becomes less informative in high-D).
+        Marginal: D independent 1D integrals. Each dimension's evidence
+        depends only on the 1D kernel density along that axis. Weight
+        D/(D+1) by default (configurable via marginal_weight).
+
+        Joint: one D-dimensional shell-probe integral using isotropic
+        Gaussian density. Captures multi-dimensional interactions.
+        Weight 1/(D+1) by default.
+
+        Known limitations at σ=0.05 in 4D:
+        - Marginals dominate (~80% weight) and saturate fast: 12 experiments
+          cover most 1D parameter values → evidence ~0.9 everywhere → ΔE
+          range is narrow (~0.2-0.36). Evidence signal is weak but present.
+        - Joint contributes ~0: at σ=0.05, kernel volume σ^4 ≈ 6e-6 of the
+          domain. No kernels overlap in all 4 dimensions, so joint density
+          is zero everywhere. Increasing σ doesn't help: large σ saturates
+          all kernels simultaneously, giving ΔE ≈ 0 again.
+        - See backlog: "Rethink evidence saturation for high-D spaces."
         """
         D = int(new_centers_SL.shape[2])
         if self.marginal_weight is not None:
@@ -398,8 +409,23 @@ class KernelFieldEstimator(EvidenceEstimator):
     ) -> float:
         """Ratio of kernel mass to domain volume for the given dimensions.
 
-        Converts expectation-based quadrature to a true integral normalized
-        by domain volume. Same formula for marginal (1 dim) and joint (D dims).
+        The KernelField quadrature uses normalized Gaussian weights (sum to 1),
+        which computes the EXPECTATION E_{z~ρ}[1/(1+D)], not the true integral
+        ∫ ρ/(1+D) dz. The true integral = expectation × kernel_mass. To get a
+        domain-normalized evidence in [0,1], divide by domain volume:
+
+            correction = (σ√2π)^D / ∏(hi_d - lo_d)
+
+        CURRENTLY DISABLED (vol_corr=1.0 at call sites). The correction is
+        mathematically correct but makes ΔE too small (~0.01 at σ=0.05) to
+        steer the optimizer. The expectation-based proxy gives ΔE~0.1-0.3
+        which is usable for acquisition blending with κ.
+
+        The tradeoff: without correction, evidence is not a true integral and
+        not strictly bounded by 1. With default settings (σ=0.05, D/(D+1)
+        marginals) ΔE stays below 1 in practice. Non-default σ or marginal
+        weights may exceed 1 — this is a known limitation documented in the
+        backlog task "Rethink evidence saturation for high-D spaces."
         """
         import math
         kernel_mass = (sigma * math.sqrt(2.0 * math.pi)) ** len(dims)
