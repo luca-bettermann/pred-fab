@@ -805,18 +805,6 @@ class PfabAgent:
         out = perf_fn_tensor([params])
         return {code: float(t[0].item()) for code, t in out.items()}
 
-    def predict_uncertainty(self, params: dict[str, Any], datamodule: DataModule) -> float:
-        """Return the predicted uncertainty (0–1) at params.
-
-        Uses the same evidence model the acquisition function queries.
-        Boundary evidence is included in the uncertainty computation.
-        Pass the current datamodule so params are normalized consistently.
-        Returns 1.0 (maximum uncertainty) if the evidence model is not yet fitted.
-        """
-        self._assert_initialized()
-        X = datamodule.params_to_array(params)
-        return float(self.pred_system.uncertainty(X))
-
     def update_context_snapshot(self, values: dict[str, float]) -> None:
         """Update the context feature snapshot injected into the calibration perf_fn.
 

@@ -796,29 +796,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         z_t = model.encode(torch.from_numpy(X_model))
         return z_t.detach().cpu().numpy()[0]
 
-    # --- Integrated evidence math (pure numpy, per-model subspace) ---
-
-    @staticmethod
-    def _gaussian_density(z: np.ndarray, centers: np.ndarray, sigma: float) -> np.ndarray:
-        """Peak-1 Gaussian density ``(M, D) × (N, D) → (M, N)`` matching `KernelIndex`.
-
-        KDE prediction uses ratios of weighted densities so the chosen
-        normalisation cancels; the peak-1 form keeps the kernel definition
-        consistent across the package.
-        """
-        d2 = np.sum((z[:, None, :] - centers[None, :, :]) ** 2, axis=-1)
-        return np.exp(-d2 / (2.0 * sigma ** 2))
-
-    @classmethod
-    def _raw_density(
-        cls, z: np.ndarray, centers: np.ndarray, weights: np.ndarray, sigma: float,
-    ) -> np.ndarray:
-        """D(z) = Σ_j w_j · ρ_j(z). Returns (M,)."""
-        if len(centers) == 0:
-            return np.zeros(z.shape[0])
-        K = cls._gaussian_density(z, centers, sigma)
-        return (K * weights[None, :]).sum(axis=-1)
-
     def _kernel_index(
         self, centers: np.ndarray, weights: np.ndarray, sigma: float,
         domain_bounds: np.ndarray | None = None,
@@ -1010,29 +987,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         return z_t.detach().cpu().numpy()
 
     # --- Aggregated public API ---
-
-    def uncertainty(self, X: np.ndarray) -> float:
-        """Pointwise uncertainty u(z) = 1 − E(z) = 1 / (1 + D(z)).
-
-        For visualization only — the optimizer uses `delta_integrated_evidence_aggregated`.
-        Aggregated as a performance-weighted average across per-model KDEs.
-        """
-        if not self._model_kdes:
-            return 1.0
-
-        total_w = 0.0
-        weighted_u = 0.0
-        for kde in self._model_kdes.values():
-            z = self._encode_from_norm_array_for_model(kde.model, X.reshape(-1))
-            z_active = z[kde.active_mask].reshape(1, -1)
-            D = float(self._raw_density(z_active, kde.latent_points, kde.point_weights, kde.sigma)[0])
-            u_i = 1.0 / (1.0 + D)
-            weighted_u += kde.weight * u_i
-            total_w += kde.weight
-
-        u = weighted_u / total_w if total_w > 0 else 1.0
-        self.logger.debug(f"uncertainty (aggregated): u={u:.4f}")
-        return u
 
     def predict_for_calibration_tensor(
         self,
