@@ -220,8 +220,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
             "n_experiments": self._get_n_exp(),
             "optimizer": {
                 "n_starts": self.engine.n_starts,
-                "raw_samples": self.engine.raw_samples,
-                "local_maxiter": self.engine.local_maxiter,
+                "n_sobol": self.engine.n_sobol,
+                "lr": self.engine.lr,
             },
         }
         if sigma is not None:
