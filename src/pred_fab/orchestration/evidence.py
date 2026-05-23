@@ -392,6 +392,25 @@ class KernelFieldEstimator(EvidenceEstimator):
         e_joint = self._joint_evidence_torch(index_old, new_centers_SL, new_weights_SL)
         return alpha_marginal * e_marginal + alpha_joint * e_joint
 
+    @staticmethod
+    def _volume_correction(
+        sigma: float, domain_bounds: torch.Tensor | None, dims: list[int],
+    ) -> float:
+        """Ratio of kernel mass to domain volume for the given dimensions.
+
+        Converts expectation-based quadrature to a true integral normalized
+        by domain volume. Same formula for marginal (1 dim) and joint (D dims).
+        """
+        import math
+        kernel_mass = (sigma * math.sqrt(2.0 * math.pi)) ** len(dims)
+        if domain_bounds is None:
+            domain_vol = 1.0  # [0,1]^D default
+        else:
+            domain_vol = 1.0
+            for d in dims:
+                domain_vol *= float(domain_bounds[d, 1] - domain_bounds[d, 0])
+        return kernel_mass / domain_vol if domain_vol > 1e-15 else 0.0
+
     def _marginal_evidence_torch(
         self,
         index_old: KernelIndex,
@@ -432,6 +451,8 @@ class KernelFieldEstimator(EvidenceEstimator):
         for d in range(D):
             lo_d = float(bounds[d, 0]) if bounds is not None else 0.0
             hi_d = float(bounds[d, 1]) if bounds is not None else 1.0
+            # Convert expectation → integral normalized by domain width
+            vol_corr = self._volume_correction(sigma, bounds, [d])
             new_d = new_centers_SL[:, :, d]                          # (S, L)
             probes_d = new_d[:, :, None] + probes_1d[None, None, :]  # (S, L, P)
             in_dom_d = ((probes_d >= lo_d) & (probes_d <= hi_d)).to(dtype=dtype)
@@ -452,7 +473,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             total_rho = self_dens_1d[None, None, :] * new_weights_SL[:, :, None] + rho_other + rho_old
             integrand = 1.0 / (1.0 + total_rho)
             integral_d = (quad_w[None, None, :] * integrand * in_dom_d).sum(dim=-1)
-            e_marginal = e_marginal + (new_weights_SL * integral_d).sum(dim=-1)
+            e_marginal = e_marginal + vol_corr * (new_weights_SL * integral_d).sum(dim=-1)
 
             # Old kernels' marginal integrals perturbation
             if n_old > 0:
@@ -471,7 +492,7 @@ class KernelFieldEstimator(EvidenceEstimator):
                 total_old = (self_old + rho_other_old)[:, :, None] + delta
                 integrand_old = 1.0 / (1.0 + total_old)
                 integral_old = (quad_w[None, :, None] * integrand_old * in_dom_old[:, :, None]).sum(dim=1)
-                e_marginal = e_marginal + (old_w[:, None] * integral_old).sum(dim=0)  # type: ignore[index]
+                e_marginal = e_marginal + vol_corr * (old_w[:, None] * integral_old).sum(dim=0)  # type: ignore[index]
 
         return e_marginal / D
 
@@ -485,6 +506,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
         D = int(new_centers_SL.shape[2])
+        # Convert expectation → integral normalized by D-dim domain volume
+        vol_corr = self._volume_correction(
+            index_old.sigma, index_old.domain_bounds, list(range(D)),
+        )
         dtype = new_centers_SL.dtype
         device = new_centers_SL.device
         sigma = index_old.sigma
@@ -515,7 +540,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             integral_new_SL = (
                 quad_weights[None, None, :] * integrand_new * in_domain_new_SL
             ).sum(dim=-1)
-            return (new_weights_SL * integral_new_SL).sum(dim=-1)
+            return vol_corr * (new_weights_SL * integral_new_SL).sum(dim=-1)
 
         old_centers = index_old.centers.to(device=device, dtype=dtype)
         old_weights = index_old.weights.to(device=device, dtype=dtype)
@@ -569,7 +594,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             quad_weights[None, None, :] * integrand_new * in_domain_new_SL
         ).sum(dim=-1)
 
-        return (
+        return vol_corr * (
             (old_weights[:, None] * integral_old_per_s).sum(dim=0)
             + (new_weights_SL * integral_new_SL).sum(dim=-1)
         )
