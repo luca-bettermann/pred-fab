@@ -15,6 +15,7 @@ Usage with real model::
                     "Print Speed [m/s]", "Calibration Factor"),
         fixed_params={"layer_height": 0.005, "path_offset": 0.04,
                       "V_fab": 0.075, "calibrationFactor": 2.0},
+        datapoints=dataset.export_params(),  # actual experiment param dicts
     )
 
 All callables accept a raw params dict. No wrapping needed.
@@ -78,7 +79,7 @@ def main(
         "Print Speed [m/s]", "Calibration Factor",
     ),
     fixed_params: dict[str, Any] | None = None,
-    experiments: list[dict[str, float]] | None = None,
+    datapoints: list[dict[str, float]] | None = None,
     resolution: int = 80,
 ):
     fixed = fixed_params or {}
@@ -116,11 +117,11 @@ def main(
                      target_value=target_value,
                      label=f"$\\hat{{f}}$({rx_key}, {ry_key})")
 
-    if experiments is not None:
-        l_exp_x = [e[lx_key] for e in experiments if lx_key in e]
-        l_exp_y = [e[ly_key] for e in experiments if ly_key in e]
-        r_exp_x = [e[rx_key] for e in experiments if rx_key in e]
-        r_exp_y = [e[ry_key] for e in experiments if ry_key in e]
+    if datapoints is not None:
+        l_exp_x = [d[lx_key] for d in datapoints if lx_key in d and ly_key in d]
+        l_exp_y = [d[ly_key] for d in datapoints if lx_key in d and ly_key in d]
+        r_exp_x = [d[rx_key] for d in datapoints if rx_key in d and ry_key in d]
+        r_exp_y = [d[ry_key] for d in datapoints if rx_key in d and ry_key in d]
         if l_exp_x:
             draw_experiments(ax_l, l_exp_x, l_exp_y)
         if r_exp_x:
