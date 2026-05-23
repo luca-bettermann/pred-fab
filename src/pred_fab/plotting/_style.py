@@ -59,8 +59,17 @@ class SemanticSurface:
     vmin: float = 0.0
     vmax: float = 1.0
 
+from matplotlib.colors import LinearSegmentedColormap as _LSC
+
+_EMERALD_SEQ = _LSC.from_list(
+    "emerald_sequential",
+    [ZINC_50, EMERALD_300, EMERALD_500, EMERALD_700, EMERALD_900],
+    N=256,
+)
+mpl.colormaps.register(_EMERALD_SEQ)
+
 SURFACES: dict[str, SemanticSurface] = {
-    "density":       SemanticSurface("Greys",  bounded=False),
+    "density":       SemanticSurface("emerald_sequential", bounded=False),
     "evidence":      SemanticSurface("Blues",   bounded=True),
     "evidence_gain": SemanticSurface("YlGn",   bounded=True),
     "performance":   SemanticSurface("RdYlGn", bounded=True),
