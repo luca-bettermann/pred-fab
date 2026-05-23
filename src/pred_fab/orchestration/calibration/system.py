@@ -288,14 +288,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def _compute_perf_dict_for_params(self, params: dict[str, Any]) -> dict[str, float | None]:
         """Compute a single-candidate ``{perf_code: float}`` via the tensor perf closure."""
         if self.perf_fn_tensor is None:
-            self.logger.warning("_compute_perf_dict_for_params: perf_fn_tensor is None")
-            return {}
-        try:
-            with torch.no_grad():
-                t_out = self.perf_fn_tensor([params])
-        except Exception as exc:
-            self.logger.console_warning(f"_compute_perf_dict_for_params failed: {exc}")
-            return {}
+            raise RuntimeError("_compute_perf_dict_for_params: perf_fn_tensor is None")
+        with torch.no_grad():
+            t_out = self.perf_fn_tensor([params])
         out: dict[str, float | None] = {}
         for code, t in t_out.items():
             v = float(t[0].item())
