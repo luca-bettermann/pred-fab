@@ -48,7 +48,7 @@ def feature_topology(
     cm_f = cmap("density")
     norm_f = Normalize(vmin=0.0, vmax=float(grid.max()))
     levels = np.linspace(0.02, float(grid.max()), 18)
-    ax.contourf(xs, ys, grid, levels=levels, cmap=cm_f, norm=norm_f, alpha=0.8)
+    ax.contourf(xs, ys, grid, levels=levels, cmap=cm_f, norm=norm_f, alpha=0.95)
     ax.contour(xs, ys, grid, levels=8, colors=[ZINC_300], linewidths=0.4)
     if target_value is not None:
         tc = ax.contour(xs, ys, grid, levels=[target_value],
@@ -76,7 +76,7 @@ def performance_topology(
         norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
         norm_p = Normalize(vmin=0, vmax=1)
-    ax.contourf(xs, ys, grid, levels=18, cmap=cm_p, norm=norm_p, alpha=0.8)
+    ax.contourf(xs, ys, grid, levels=18, cmap=cm_p, norm=norm_p, alpha=0.95)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
     if show_optimum:
         opt_idx = np.unravel_index(np.argmax(grid), grid.shape)
@@ -107,7 +107,7 @@ def evidence_gain_topology(
         norm_e = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
         norm_e = Normalize(vmin=0, vmax=1)
-    ax.contourf(xs, ys, grid, levels=18, cmap=cm_e, norm=norm_e, alpha=0.8)
+    ax.contourf(xs, ys, grid, levels=18, cmap=cm_e, norm=norm_e, alpha=0.95)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
     subplot_label(ax, label)
     setup_axes(ax, x_label, y_label, x_bounds, y_bounds)
@@ -127,7 +127,7 @@ def acquisition_topology(
     """Acquisition surface — magma (combined objective)."""
     cm_a = cmap("acquisition")
     norm_a = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
-    ax.contourf(xs, ys, grid, levels=18, cmap=cm_a, norm=norm_a, alpha=0.8)
+    ax.contourf(xs, ys, grid, levels=18, cmap=cm_a, norm=norm_a, alpha=0.95)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
 
     subplot_label(ax, label or f"$A(x, y)$   $\\kappa={kappa}$")
