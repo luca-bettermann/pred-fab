@@ -1193,7 +1193,22 @@ class PredictionSystem(BaseOrchestrationSystem):
             dim_names = exp.parameters.get_dim_names()
             if max_depth is not None and len(dim_names) > max_depth:
                 dim_names = dim_names[:max_depth]
-            n_rows = len(exp.parameters.get_dim_combinations(dim_names)) if dim_names else 1
+            if dim_names:
+                combos = exp.parameters.get_dim_combinations(dim_names)
+                # Respect DataModule row exclusions so importance length matches y_true
+                excluded = getattr(dm, "_excluded_rows", {}) or {}
+                if excluded:
+                    def _keep(combo):
+                        for axis_name, axis_vals in excluded.items():
+                            if axis_name in dim_names:
+                                idx = dim_names.index(axis_name)
+                                if combo[idx] in axis_vals:
+                                    return False
+                        return True
+                    combos = [c for c in combos if _keep(c)]
+                n_rows = len(combos)
+            else:
+                n_rows = 1
             perf_per_exp.append((perf, n_rows))
 
         if not perf_per_exp:
@@ -1249,7 +1264,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         for i, feat in enumerate(model.outputs):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
             importance_arr = importance_dict.get(feat)
-            if importance_arr is not None and len(importance_arr) == len(y_true[:, i]):
+            if importance_arr is not None:
+                if len(importance_arr) != len(y_true[:, i]):
+                    raise ValueError(
+                        f"R²_inf importance length mismatch for '{feat}': "
+                        f"importance={len(importance_arr)}, y_true={len(y_true[:, i])}. "
+                        f"Check that _build_importance_per_feature respects DataModule filters."
+                    )
                 inf = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
@@ -1312,7 +1333,13 @@ class PredictionSystem(BaseOrchestrationSystem):
                 continue
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
             importance_arr = importance_dict.get(feat)
-            if importance_arr is not None and len(importance_arr) == len(y_t):
+            if importance_arr is not None:
+                if len(importance_arr) != len(y_t):
+                    raise ValueError(
+                        f"R²_inf importance length mismatch for '{feat}': "
+                        f"importance={len(importance_arr)}, y_true={len(y_t)}. "
+                        f"Check that _build_importance_per_feature respects DataModule filters."
+                    )
                 inf = Metrics.calculate_informed_r2(y_t, y_p, importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
@@ -1389,9 +1416,12 @@ class PredictionSystem(BaseOrchestrationSystem):
                 line += f"  {m.get('mae', 0.0):10.3f}"
             self.logger.console_info(line)
         if not has_inf:
-            self.logger.console_warning(
-                "R²_inf missing — call agent.train(dm, validate=True) with performance weights configured"
-            )
+            if not importance_dict:
+                raise RuntimeError(
+                    "R²_inf not computed: no importance weights available. "
+                    "Pass eval_system to validate(), or ensure experiments "
+                    "have performance scores loaded."
+                )
 
         return results
 
