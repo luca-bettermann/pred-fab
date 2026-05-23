@@ -837,7 +837,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
                     params[code] = self.dimension_derivations[code](params)
         perf_dict = self._compute_perf_dict_for_params(params)
         p_sys = combined_score(perf_dict, self.performance_weights)
-        de = self._compute_evidence_gain_for_params(params)
+        de = self.evidence_gain(params)
         a = (1.0 - kappa) * p_sys + kappa * de
         self.logger.console_info(
             f"\n    {'ΔE':>8s}  {'P_sys':>8s}  {'κ':>6s}  {'A':>8s}\n"
