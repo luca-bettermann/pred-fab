@@ -265,8 +265,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 for code, derive_fn in self.dimension_derivations.items():
                     if code not in params:
                         params[code] = derive_fn(params)
-                ev_grid[j, i] = self.evidence_gain(params)
-                perf_grid[j, i] = self.system_performance(params)
+                if kappa > 0.0:
+                    ev_grid[j, i] = self.evidence_gain(params)
+                if kappa < 1.0:
+                    perf_grid[j, i] = self.system_performance(params)
 
         acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
         return xs, ys, ev_grid, perf_grid, acq_grid

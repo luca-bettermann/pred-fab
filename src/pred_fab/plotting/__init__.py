@@ -44,7 +44,6 @@ from .convergence import plot_convergence
 from .validation import plot_phase_proposals
 from .evidence import (
     plot_evidence_panel,
-    plot_evidence_gain_panel,
     plot_multi_angle,
     expand_experiments,
 )
@@ -80,7 +79,6 @@ __all__ = [
     "plot_convergence",
     "plot_phase_proposals",
     "plot_evidence_panel",
-    "plot_evidence_gain_panel",
     "plot_multi_angle",
     "expand_experiments",
     "plot_parallel_coordinates",
