@@ -278,6 +278,8 @@ class KernelFieldEstimator(EvidenceEstimator):
 
     radii: tuple[float, ...] = DEFAULT_RADII
     angular_gap_deg: float = DEFAULT_ANGULAR_GAP_DEG
+    # None → D/(D+1) default. Float in [0,1] → explicit marginal weight.
+    marginal_weight: float | None = None
 
     _cache: dict = field(default_factory=dict, repr=False, compare=False)
     _cache_torch: dict = field(default_factory=dict, repr=False, compare=False)
@@ -381,8 +383,11 @@ class KernelFieldEstimator(EvidenceEstimator):
         becomes less informative in high-D).
         """
         D = int(new_centers_SL.shape[2])
-        alpha_marginal = D / (D + 1)
-        alpha_joint = 1.0 / (D + 1)
+        if self.marginal_weight is not None:
+            alpha_marginal = self.marginal_weight
+        else:
+            alpha_marginal = D / (D + 1)
+        alpha_joint = 1.0 - alpha_marginal
         e_marginal = self._marginal_evidence_torch(index_old, new_centers_SL, new_weights_SL)
         e_joint = self._joint_evidence_torch(index_old, new_centers_SL, new_weights_SL)
         return alpha_marginal * e_marginal + alpha_joint * e_joint
@@ -736,6 +741,8 @@ class EstimatorConfig:
     box: float = 2.0
     n_samples: int | None = None  # None → match KernelField probe count at runtime
     seed: int = 0
+    # ANOVA marginal/joint balance: None → D/(D+1) default
+    marginal_weight: float | None = None
     # Shared
     cutoff_sigmas: float = 5.0
     truncation_threshold: int = 10
@@ -745,6 +752,7 @@ def make_estimator(config: EstimatorConfig) -> EvidenceEstimator:
     if config.type == "kernel_field":
         return KernelFieldEstimator(
             radii=config.radii, angular_gap_deg=config.angular_gap_deg,
+            marginal_weight=config.marginal_weight,
         )
     if config.type == "sobol_local":
         return SobolLocalEstimator(

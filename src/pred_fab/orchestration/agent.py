@@ -692,6 +692,7 @@ class PfabAgent:
         estimator: str | None = None,
         radii: tuple[float, ...] | None = None,
         angular_gap_deg: float | None = None,
+        marginal_weight: float | None = None,
         box: float | None = None,
         n_samples: int | None = None,
         seed: int | None = None,
@@ -704,18 +705,21 @@ class PfabAgent:
         probe count grows with D) or ``"sobol_local"`` (QMC cube with
         fixed ``n_samples`` per kernel — the high-D escape hatch).
 
+        ``marginal_weight``: ANOVA marginal/joint balance.
+        None → D/(D+1) default. 0.0 → pure joint (isotropic KDE).
+        0.5 → equal. 1.0 → pure marginal (per-dimension only).
+
         Per-estimator knobs:
           KernelField — ``radii``, ``angular_gap_deg``
           SobolLocal  — ``box``, ``n_samples``, ``seed``
         Shared — ``cutoff_sigmas``, ``truncation_threshold``.
-
-        Per-estimator-irrelevant knobs are accepted but ignored.
         """
         self._assert_initialized()
         self.pred_system.configure_evidence(
             estimator=estimator,
             radii=radii,
             angular_gap_deg=angular_gap_deg,
+            marginal_weight=marginal_weight,
             box=box,
             n_samples=n_samples,
             seed=seed,
