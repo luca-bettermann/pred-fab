@@ -67,7 +67,8 @@ def main(
     fig.subplots_adjust(wspace=0.30, left=0.04, right=0.97, bottom=0.12, top=0.90)
 
     evidence_gain_topology(fig, ax1, xs, ys, evidence_grid,
-                           x_label, y_label, xb, yb)
+                           x_label, y_label, xb, yb,
+                           fit_colorbar=fit_colorbar)
     if exp_x:
         draw_experiments(ax1, exp_x, exp_y)
 
