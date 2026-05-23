@@ -451,8 +451,10 @@ class KernelFieldEstimator(EvidenceEstimator):
         for d in range(D):
             lo_d = float(bounds[d, 0]) if bounds is not None else 0.0
             hi_d = float(bounds[d, 1]) if bounds is not None else 1.0
-            # Convert expectation → integral normalized by domain width
-            vol_corr = self._volume_correction(sigma, bounds, [d])
+            # Volume correction disabled — expectation-based evidence is the
+            # working proxy. True integral normalization makes ΔE too small
+            # to steer the optimizer. See backlog: "Rethink evidence saturation."
+            vol_corr = 1.0
             new_d = new_centers_SL[:, :, d]                          # (S, L)
             probes_d = new_d[:, :, None] + probes_1d[None, None, :]  # (S, L, P)
             in_dom_d = ((probes_d >= lo_d) & (probes_d <= hi_d)).to(dtype=dtype)
@@ -506,10 +508,8 @@ class KernelFieldEstimator(EvidenceEstimator):
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
         D = int(new_centers_SL.shape[2])
-        # Convert expectation → integral normalized by D-dim domain volume
-        vol_corr = self._volume_correction(
-            index_old.sigma, index_old.domain_bounds, list(range(D)),
-        )
+        # Volume correction disabled — see marginal comment above.
+        vol_corr = 1.0
         dtype = new_centers_SL.dtype
         device = new_centers_SL.device
         sigma = index_old.sigma
