@@ -34,10 +34,11 @@ class ProgressBar:
     """
 
     def __init__(self, label: str, *, info: dict[str, Any] | None = None,
-                 bar_len: int = 12):
+                 bar_len: int = 12, metric_name: str = "obj"):
         self._label = label
         self._len = bar_len
         self._best_obj: float | None = None
+        self._metric_name = metric_name
         self._fill = 0.0
         self._counters: dict[str, int] = {}
 
@@ -61,7 +62,7 @@ class ProgressBar:
             if improved:
                 self._best_obj = obj
             color = _G if improved else _D
-            obj_str = f"  {color}obj={obj:.3f}{_R}"
+            obj_str = f"  {color}{self._metric_name}={obj:.3f}{_R}"
         else:
             obj_str = ""
 
@@ -79,7 +80,7 @@ class ProgressBar:
         bar = "█" * self._len
         ctr = "  ".join(f"{k}={v}" for k, v in self._counters.items())
         if self._best_obj is not None:
-            ctr += f"  obj={self._best_obj:.3f}"
+            ctr += f"  {self._metric_name}={self._best_obj:.3f}"
         sys.stdout.write(
             f"\r{_G}✓{_R} {self._label}{self._info_str} [{bar}] {_D}{ctr}{_R}            \n"
         )

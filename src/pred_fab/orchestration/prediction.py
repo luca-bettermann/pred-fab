@@ -222,7 +222,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         n_epochs = getattr(model, "EPOCHS", None)
         if self.logger._console_output_enabled and n_epochs is not None:
-            bar = ProgressBar(f"Train {model_name}")
+            bar = ProgressBar(f"Train {model_name}", metric_name="loss")
             def _progress(epoch: int, total: int, loss: float) -> None:
                 bar.step(fill=(epoch + 1) / total, obj=loss, epoch=epoch + 1)
             kwargs["progress_callback"] = _progress
