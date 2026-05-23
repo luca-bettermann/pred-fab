@@ -885,6 +885,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             else:
                 empty_index = self._kernel_index(
                     np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
+                    kde.domain_bounds,
                 )
                 old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)
                 old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)
