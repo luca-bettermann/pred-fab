@@ -217,12 +217,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             model_train_batches = self._filter_batches_for_model(train_batches, model)
             model_val_batches = self._filter_batches_for_model(val_batches, model)
 
-        primary = model.outputs[0] if model.outputs else "unknown"
-        self.logger.info(f"Training model for features {model.outputs}...")
+        model_name = model.__class__.__name__
+        self.logger.info(f"Training {model_name} for {model.outputs}...")
 
         n_epochs = getattr(model, "EPOCHS", None)
         if self.logger._console_output_enabled and n_epochs is not None:
-            bar = ProgressBar(f"Train {primary}", info={"epochs": n_epochs})
+            bar = ProgressBar(f"Train {model_name}", info={"epochs": n_epochs})
             def _progress(epoch: int, total: int, loss: float) -> None:
                 bar.step(fill=(epoch + 1) / total, obj=loss, epoch=epoch + 1)
             kwargs["progress_callback"] = _progress
@@ -231,7 +231,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         else:
             model.train(model_train_batches, model_val_batches, **kwargs)
 
-        self.logger.info(f"Trained model for '{primary}'")
+        self.logger.info(f"Trained {model_name}")
 
     def _build_transformer_train_batches(
         self,
