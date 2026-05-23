@@ -234,6 +234,43 @@ class CalibrationSystem(BaseOrchestrationSystem):
         e = self.evidence_gain(params) if kappa > 0.0 else 0.0
         return (1.0 - kappa) * p + kappa * e
 
+    def compute_acquisition_grids(
+        self,
+        x_key: str,
+        y_key: str,
+        x_bounds: tuple[float, float],
+        y_bounds: tuple[float, float],
+        fixed_params: dict[str, Any],
+        kappa: float,
+        resolution: int = 60,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Compute 2D grids by slicing through the full-D acquisition at fixed_params.
+
+        Sweeps x_key and y_key over their bounds while holding all other
+        params fixed. Uses the same evidence_gain() and system_performance()
+        the optimizer uses — no separate computation path.
+
+        Returns (xs, ys, evidence_grid, perf_grid, acq_grid).
+        """
+        xs = np.linspace(*x_bounds, resolution)
+        ys = np.linspace(*y_bounds, resolution)
+        ev_grid = np.zeros((resolution, resolution))
+        perf_grid = np.zeros((resolution, resolution))
+
+        for i in range(resolution):
+            for j in range(resolution):
+                params = dict(fixed_params)
+                params[x_key] = float(xs[i])
+                params[y_key] = float(ys[j])
+                for code, derive_fn in self.dimension_derivations.items():
+                    if code not in params:
+                        params[code] = derive_fn(params)
+                ev_grid[j, i] = self.evidence_gain(params)
+                perf_grid[j, i] = self.system_performance(params)
+
+        acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
+        return xs, ys, ev_grid, perf_grid, acq_grid
+
     # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================
