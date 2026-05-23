@@ -747,7 +747,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if self.post_global_callback is not None:
             self.post_global_callback(self.last_global_specs)
 
+        if specs and kappa < 1.0 and console:
+            self._print_proposal_metrics(specs[0], kappa)
+
         return specs
+
+    def _print_proposal_metrics(self, spec: Any, kappa: float) -> None:
+        """Print ΔE, P_sys, κ, A at the proposed point."""
+        params = dict(spec.initial_params.to_dict())
+        for code, obj in self.schema.parameters.items():
+            if isinstance(obj, DataDomainAxis) and code not in params:
+                if code in self.dimension_derivations:
+                    params[code] = self.dimension_derivations[code](params)
+        perf_dict = self._compute_perf_dict_for_params(params)
+        p_sys = combined_score(perf_dict, self.performance_weights)
+        de = self._compute_evidence_gain_for_params(params)
+        a = (1.0 - kappa) * p_sys + kappa * de
+        self.logger.console_info(
+            f"\n    {'ΔE':>8s}  {'P_sys':>8s}  {'κ':>6s}  {'A':>8s}\n"
+            f"  {'─' * 38}\n"
+            f"    {de:8.4f}  {p_sys:8.4f}  {kappa:6.2f}  {a:8.4f}"
+        )
 
 
     def _acquisition_joint_batched_tensor(
