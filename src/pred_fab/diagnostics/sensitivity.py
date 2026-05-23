@@ -67,7 +67,7 @@ def _sobol(
     fixed_params: dict[str, Any],
     derivations: dict[str, Callable[[dict[str, Any]], int]],
 ) -> SensitivityResult:
-    from SALib.sample import saltelli
+    from SALib.sample import sobol as sobol_sample
     from SALib.analyze import sobol
 
     D = len(inputs)
@@ -76,7 +76,7 @@ def _sobol(
         warnings.append(f"Sample size N={n} may be too small for D={D} (recommended: N >= {64 * D})")
 
     problem = {"num_vars": D, "names": inputs, "bounds": [list(bounds[k]) for k in inputs]}
-    X = saltelli.sample(problem, n, calc_second_order=False, seed=seed)
+    X = sobol_sample.sample(problem, n, calc_second_order=False, seed=seed)
     out_codes, Y_dict = _evaluate_samples(X, inputs, predict_fn, fixed_params, derivations, outputs)
 
     n_out = len(out_codes)
