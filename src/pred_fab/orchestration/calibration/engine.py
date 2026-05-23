@@ -221,7 +221,7 @@ class OptimizationEngine:
         sobol_info: dict[str, Any] = {"D": D_display or D}
         if D_display is not None:
             sobol_info["V"] = D
-        bar = ProgressBar("Global optimizer", info=sobol_info) if show_progress else None
+        bar = ProgressBar("Global sampling", info=sobol_info) if show_progress else None
 
         with torch.no_grad():
             val_chunks: list[torch.Tensor] = []
