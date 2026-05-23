@@ -1,5 +1,6 @@
 """Dataset — in-memory experiment container validated against a DatasetSchema; persistence delegated to LocalData."""
 
+import json
 import numpy as np
 import pandas as pd
 import torch
@@ -182,6 +183,7 @@ class ExperimentSpec:
     """Initial parameter proposal plus optional per-dimension runtime schedules."""
     initial_params: 'ParameterProposal'
     trajectories: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
+    config_snapshot: dict[str, Any] = field(default_factory=dict)
 
     def apply_schedules(self, experiment: 'ExperimentData') -> None:
         """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
@@ -232,6 +234,7 @@ class ExperimentData:
         # to a named dataset (baseline / reference / test / exploration / etc.).
         self.dataset_code: str | None = dataset_code
         self.parameter_updates: list[ParameterUpdateEvent] = []
+        self.config_snapshot: dict[str, Any] | None = None
         # self.predicted_features = predicted_features
 
     # === Helper Methods for Validation ===
@@ -563,6 +566,7 @@ class Dataset:
         features: dict[str, np.ndarray] | None = None,
         parameter_updates: list[dict[str, Any]] | None = None,
         dataset_code: str | None = None,
+        config_snapshot: dict[str, Any] | None = None,
         recompute: bool = False
     ) -> ExperimentData:
         """Create and register a new experiment; raises ValueError if it already exists and recompute=False.
@@ -588,6 +592,8 @@ class Dataset:
             exp_code, parameters, performance, features, parameter_updates,
             dataset_code=dataset_code,
         )
+        if config_snapshot:
+            exp_data.config_snapshot = config_snapshot
         self._experiments[exp_code] = exp_data
         return exp_data
     
@@ -986,6 +992,15 @@ class Dataset:
             recompute=recompute,
             verbose=verbose
         )
+
+        # 2d. Save config snapshot (proposal settings at time of creation).
+        for code in codes_to_save:
+            exp = self.get_experiment(code)
+            if exp.config_snapshot:
+                path = self.local_data.get_file_path(code, "config.json")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    json.dump(exp.config_snapshot, f, indent=2)
 
         # 3. Save Performance
         self._hierarchical_save(

@@ -200,6 +200,34 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
+    def get_config_snapshot(self, kappa: float, sigma: float | None = None) -> dict[str, Any]:
+        """Serializable snapshot of user-facing settings that affect the proposal."""
+        param_bounds = {}
+        for code in self.data_objects.keys():
+            try:
+                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                param_bounds[code] = [lo, hi]
+            except (ValueError, KeyError):
+                pass
+        snapshot: dict[str, Any] = {
+            "kappa": kappa,
+            "performance_weights": dict(self.performance_weights),
+            "param_bounds": param_bounds,
+            "trust_regions": {k: v for k, v in self.trust_regions.items()},
+            "fixed_params": {k: v for k, v in self.fixed_params.items()
+                             if isinstance(v, (int, float, str, bool))},
+            "trajectory_configs": dict(self.trajectory_configs),
+            "n_experiments": self._get_n_exp(),
+            "optimizer": {
+                "n_starts": self.engine.n_starts,
+                "raw_samples": self.engine.raw_samples,
+                "local_maxiter": self.engine.local_maxiter,
+            },
+        }
+        if sigma is not None:
+            snapshot["sigma"] = sigma
+        return snapshot
+
     def set_performance_weights(self, weights: dict[str, float]) -> None:
         """Set weights for system performance calculation. Default is 1.0 for all."""
         for name, value in weights.items():
@@ -763,6 +791,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
+
+        config = self.get_config_snapshot(kappa)
+        for spec in specs:
+            spec.config_snapshot = config
+
 
         # Store trajectory plot data
         if space._D_traj > 0:
