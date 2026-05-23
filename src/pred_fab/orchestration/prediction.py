@@ -485,12 +485,11 @@ class PredictionSystem(BaseOrchestrationSystem):
             self.logger.info("All models are deterministic — uncertainty defaults to 0.0.")
             return
 
-        # Each layer point gets uniform weight 1.0. A trajectory experiment
-        # with L layers contributes L evidence units. Fractional weights (1/L)
-        # would be conceptually cleaner but break the evidence gain computation:
-        # the candidate kernel also uses weight 1.0, so mismatched weights
-        # cause ΔE to exceed the mathematical bound of 1.
+        # Each experiment contributes 1 total evidence unit.
+        # Trajectory layers get weight 1/L so they sum to 1.
+        # Candidate evaluation uses the same 1/L via _candidate_weight().
         exp_configs: list[dict[str, Any]] = []
+        config_weights: list[float] = []
         n_exp = 0
         for code in datamodule.get_split_codes(SplitType.TRAIN):
             exp = datamodule.dataset.get_experiment(code)
@@ -498,15 +497,21 @@ class PredictionSystem(BaseOrchestrationSystem):
 
             if not exp.parameter_updates:
                 exp_configs.append(exp.parameters.get_values_dict().copy())
+                config_weights.append(1.0)
             else:
                 events = sorted(exp.parameter_updates, key=lambda e: (e.iterator_code or "", e.step_index or 0))
                 seen_steps: set[int] = set()
+                layer_configs: list[dict[str, Any]] = []
                 for event in events:
                     step = event.step_index or 0
                     if step not in seen_steps:
                         seen_steps.add(step)
                         ctx = {event.iterator_code: step} if event.iterator_code else {}
-                        exp_configs.append(exp.get_effective_parameters_for_context(ctx))
+                        layer_configs.append(exp.get_effective_parameters_for_context(ctx))
+                w = 1.0 / len(layer_configs) if layer_configs else 1.0
+                for cfg in layer_configs:
+                    exp_configs.append(cfg)
+                    config_weights.append(w)
 
         self._n_exp = n_exp
         if not exp_configs:
@@ -523,11 +528,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Fit one evidence model per non-deterministic model.
         for model in kde_models:
             latent_points: list[np.ndarray] = []
+            latent_weights: list[float] = []
 
-            for params in exp_configs:
+            for params, w in zip(exp_configs, config_weights):
                 z = self._encode_params_for_model(model, params, datamodule)
                 if z is not None:
                     latent_points.append(z)
+                    latent_weights.append(w)
 
             if not latent_points:
                 continue
@@ -554,7 +561,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             self._model_kdes[id(model)] = _ModelKDE(
                 model=model,
                 latent_points=projected,
-                point_weights=np.ones(len(projected)),
+                point_weights=np.array(latent_weights),
                 sigma=sigma,
                 active_mask=active_mask,
                 n_active_dims=n_active_dims,

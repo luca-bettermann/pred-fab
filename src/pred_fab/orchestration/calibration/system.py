@@ -252,9 +252,15 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Weighted system performance P_sys for a single candidate (raw, unnormalized)."""
         return self._compute_normalised_perf_for_params(params)
 
+    def _candidate_weight(self, params: dict[str, Any]) -> float:
+        """1/L where L is derived from params. Matches SolutionSpace.decode()."""
+        if not self.derive_L_fn:
+            return 1.0
+        return 1.0 / max(1, self.derive_L_fn(params))
+
     def evidence_gain(self, params: dict[str, Any]) -> float:
-        """Evidence gain ΔE for a single candidate."""
-        return self._compute_evidence_gain_for_params(params)
+        """Evidence gain ΔE for a single candidate, weighted by 1/L."""
+        return self._compute_evidence_gain_for_params(params, self._candidate_weight(params))
 
     def acquisition(self, params: dict[str, Any], kappa: float) -> float:
         """Acquisition score A = (1-κ)·P_sys + κ·ΔE for a single candidate."""
@@ -334,15 +340,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_dict = self._compute_perf_dict_for_params(params)
         return self._normalize_perf_dict(perf_dict, perf_range)
 
-    def _compute_evidence_gain_for_params(self, params: dict[str, Any]) -> float:
+    def _compute_evidence_gain_for_params(
+        self, params: dict[str, Any], candidate_weight: float = 1.0,
+    ) -> float:
         """Single-candidate evidence gain ΔE for a params dict."""
         dm = self._active_datamodule
         if dm is None or self.evidence.batched_tensor is None:
             return 0.0
         x_norm = dm.params_to_array(params)
         X_SD = torch.from_numpy(np.atleast_2d(x_norm)).double()
+        w = torch.tensor([candidate_weight], dtype=torch.float64)
         with torch.no_grad():
-            ev = self.evidence.batched_tensor(X_SD)
+            ev = self.evidence.batched_tensor(X_SD, w)
         return float(ev[0].item())
 
     def _per_candidate_perf_batched(
