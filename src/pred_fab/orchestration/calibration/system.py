@@ -234,6 +234,45 @@ class CalibrationSystem(BaseOrchestrationSystem):
         e = self.evidence_gain(params) if kappa > 0.0 else 0.0
         return (1.0 - kappa) * p + kappa * e
 
+    def compute_acquisition_grids(
+        self,
+        x_key: str,
+        y_key: str,
+        x_bounds: tuple[float, float],
+        y_bounds: tuple[float, float],
+        fixed_params: dict[str, Any],
+        kappa: float,
+        resolution: int = 60,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Compute 2D grids by slicing through the full-D acquisition at fixed_params.
+
+        Sweeps x_key and y_key over their bounds while holding all other
+        params fixed. Uses the same evidence_gain() and system_performance()
+        the optimizer uses — no separate computation path.
+
+        Returns (xs, ys, evidence_grid, perf_grid, acq_grid).
+        """
+        xs = np.linspace(*x_bounds, resolution)
+        ys = np.linspace(*y_bounds, resolution)
+        ev_grid = np.zeros((resolution, resolution))
+        perf_grid = np.zeros((resolution, resolution))
+
+        for i in range(resolution):
+            for j in range(resolution):
+                params = dict(fixed_params)
+                params[x_key] = float(xs[i])
+                params[y_key] = float(ys[j])
+                for code, derive_fn in self.dimension_derivations.items():
+                    if code not in params:
+                        params[code] = derive_fn(params)
+                if kappa > 0.0:
+                    ev_grid[j, i] = self.evidence_gain(params)
+                if kappa < 1.0:
+                    perf_grid[j, i] = self.system_performance(params)
+
+        acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
+        return xs, ys, ev_grid, perf_grid, acq_grid
+
     # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================
@@ -627,7 +666,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             n, variables, cat_codes, cat_assignments,
             datamodule=dm,
             kappa=1.0, source_step=SourceStep.DISCOVERY,
-            label="Local",
+            label="Local optimizer",
         )
 
         n_static = sum(1 for v in variables if isinstance(v, StaticVariable))
@@ -661,7 +700,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             1, variables, cat_codes, cat_assignments,
             datamodule=datamodule,
             kappa=kappa, source_step=source_step,
-            label="Local",
+            label="Local optimizer",
         )
         return specs[0]
 
@@ -747,7 +786,27 @@ class CalibrationSystem(BaseOrchestrationSystem):
         if self.post_global_callback is not None:
             self.post_global_callback(self.last_global_specs)
 
+        if specs and kappa < 1.0 and console:
+            self._print_proposal_metrics(specs[0], kappa)
+
         return specs
+
+    def _print_proposal_metrics(self, spec: Any, kappa: float) -> None:
+        """Print ΔE, P_sys, κ, A at the proposed point."""
+        params = dict(spec.initial_params.to_dict())
+        for code, obj in self.schema.parameters.items():
+            if isinstance(obj, DataDomainAxis) and code not in params:
+                if code in self.dimension_derivations:
+                    params[code] = self.dimension_derivations[code](params)
+        perf_dict = self._compute_perf_dict_for_params(params)
+        p_sys = combined_score(perf_dict, self.performance_weights)
+        de = self._compute_evidence_gain_for_params(params)
+        a = (1.0 - kappa) * p_sys + kappa * de
+        self.logger.console_info(
+            f"\n    {'ΔE':>8s}  {'P_sys':>8s}  {'κ':>6s}  {'A':>8s}\n"
+            f"  {'─' * 38}\n"
+            f"    {de:8.4f}  {p_sys:8.4f}  {kappa:6.2f}  {a:8.4f}\n"
+        )
 
 
     def _acquisition_joint_batched_tensor(
