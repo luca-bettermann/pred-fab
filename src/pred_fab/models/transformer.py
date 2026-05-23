@@ -458,6 +458,7 @@ class TransformerModel(IPredictionModel):
         padding_mask = all_nan  # True = padded, ignore in attention
 
         epoch_logger = kwargs.get("epoch_logger")
+        progress_callback = kwargs.get("progress_callback")
 
         for epoch in range(self.EPOCHS):
             optimizer.zero_grad()
@@ -488,6 +489,9 @@ class TransformerModel(IPredictionModel):
                     "loss/total": float(total_loss.detach()),
                     **per_depth_loss,
                 })
+
+            if progress_callback is not None:
+                progress_callback(epoch, self.EPOCHS, float(total_loss.detach()))
 
         self._model.eval()
         self._is_trained = True

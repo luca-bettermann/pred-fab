@@ -220,6 +220,7 @@ class MLPModel(IPredictionModel):
             )
 
         epoch_logger = kwargs.get("epoch_logger")
+        progress_callback = kwargs.get("progress_callback")
 
         for epoch in range(self.EPOCHS):
             if use_minibatch:
@@ -248,6 +249,9 @@ class MLPModel(IPredictionModel):
                         val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
                         metrics["loss/val"] = val_loss
                 epoch_logger.log_epoch(epoch, metrics)
+
+            if progress_callback is not None:
+                progress_callback(epoch, self.EPOCHS, epoch_loss)
 
         net.eval()
         self._cat_embeddings.eval()
