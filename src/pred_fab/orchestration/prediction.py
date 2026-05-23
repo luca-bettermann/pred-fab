@@ -1250,8 +1250,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
             importance_arr = importance_dict.get(feat)
             if importance_arr is not None and len(importance_arr) == len(y_true[:, i]):
-                adj = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
-                feat_metrics['r2_inf'] = adj['r2_inf']
+                inf = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
+                feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
         return results
 
@@ -1313,8 +1313,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
             importance_arr = importance_dict.get(feat)
             if importance_arr is not None and len(importance_arr) == len(y_t):
-                adj = Metrics.calculate_informed_r2(y_t, y_p, importance_arr)
-                feat_metrics['r2_inf'] = adj['r2_inf']
+                inf = Metrics.calculate_informed_r2(y_t, y_p, importance_arr)
+                feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
         return results
 
@@ -1326,8 +1326,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Validate prediction models on validation or test set.
 
         Returns per-feature metrics: {feature_name: {'r2': float, 'r2_inf': float, 'mae': float}}.
-        R²_inf uses per-feature importance from stored performance scores.
-        If eval_system is provided, missing performances are computed on the fly.
+        R²_inf (informed R², a.k.a. predictive relevance) uses per-feature importance
+        from stored performance scores. If eval_system is provided, missing performances
+        are computed on the fly.
         """
         dm = self._assert_trained()
 
@@ -1368,10 +1369,10 @@ class PredictionSystem(BaseOrchestrationSystem):
             else:
                 results.update(self._validate_flat(model, dm, X_split, y_split, importance_dict))
 
-        has_adj = any('r2_inf' in m for m in results.values())
+        has_inf = any('r2_inf' in m for m in results.values())
         has_mae = any('mae' in m for m in results.values())
         header = f"  {'Feature':<30s}  {'R²':>8s}"
-        if has_adj:
+        if has_inf:
             header += f"  {'R²_inf':>8s}"
         if has_mae:
             header += f"  {'MAE':>10s}"
@@ -1381,13 +1382,13 @@ class PredictionSystem(BaseOrchestrationSystem):
         for feat, m in results.items():
             r2 = m.get('r2', 0.0)
             line = f"  {feat:<30s}  {r2:8.4f}"
-            if has_adj:
+            if has_inf:
                 r2_inf = m.get('r2_inf')
                 line += f"  {r2_inf:8.4f}" if r2_inf is not None else f"  {'—':>8s}"
             if has_mae:
                 line += f"  {m.get('mae', 0.0):10.3f}"
             self.logger.console_info(line)
-        if not has_adj:
+        if not has_inf:
             self.logger.console_warning(
                 "R²_inf missing — call agent.train(dm, validate=True) with performance weights configured"
             )

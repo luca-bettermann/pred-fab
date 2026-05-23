@@ -71,7 +71,7 @@ class Metrics:
         y_pred: np.ndarray,
         importance: np.ndarray,
     ) -> dict[str, float]:
-        """Performance-weighted R² that emphasizes high-importance samples.
+        """Performance-weighted R² (a.k.a. predictive relevance / informed R²).
 
         Returns dict with 'r2', 'r2_inf', and 'n_samples'.
 

@@ -10,7 +10,7 @@ Schema-agnostic plotting for every PFAB phase. Users pass `AxisSpec` objects tha
 |--------|-----------|-------------|
 | `_style.py` | `AxisSpec`, `save_fig`, helpers | Shared dataclass, palette constants, axis/subtitle utilities |
 | `baseline.py` | `plot_parameter_space`, `plot_parameter_space_3d`, `plot_dimensional_trajectories` | 1×3: scatter + truth + model; 3D scatter with Zinc z-color |
-| `prediction.py` | `plot_topology_comparison`, `plot_importance_weights` | Side-by-side topologies, R²_adj sigmoid |
+| `prediction.py` | `plot_topology_comparison`, `plot_importance_weights` | Side-by-side topologies, R²_inf sigmoid |
 | `exploration.py` | `plot_acquisition` | 3-panel: performance + evidence + combined acquisition |
 | `inference.py` | `plot_inference_result` | Single-shot result on predicted topology |
 | `schedule.py` | `plot_schedule_comparison` | Fixed vs schedule bars + per-step parameter schedules |

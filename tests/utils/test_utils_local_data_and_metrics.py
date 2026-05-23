@@ -83,4 +83,4 @@ def test_metrics_empty_arrays_return_zeros():
     assert result["n_samples"] == 0
 
 
-# R²_adj tests moved to tests/utils/test_r2_adj.py
+# R²_inf tests moved to tests/utils/test_r2_inf.py
