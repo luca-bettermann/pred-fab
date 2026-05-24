@@ -59,10 +59,11 @@ def main(
         def predict_fn(params):
             xn = (params.get(x_key, 0.5) - x_lo) / (x_hi - x_lo)
             yn = (params.get(y_key, 0.5) - y_lo) / (y_hi - y_lo)
-            f = 0.9 * np.exp(-((xn - 0.35) ** 2 + (yn - 0.6) ** 2) / 0.08)
-            f += 0.6 * np.exp(-((xn - 0.75) ** 2 + (yn - 0.3) ** 2) / 0.12)
-            f += 0.35 * np.exp(-((xn - 0.2) ** 2 + (yn - 0.2) ** 2) / 0.06)
-            f += 0.15 * np.sin(3.0 * np.pi * xn) * np.cos(2.5 * np.pi * yn) * 0.15
+            # Landscape designed so the 3 concept points get varied f̂ values
+            f = 0.85 * np.exp(-((xn - 0.3) ** 2 + (yn - 0.7) ** 2) / 0.06)
+            f += 0.5 * np.exp(-((xn - 0.7) ** 2 + (yn - 0.5) ** 2) / 0.15)
+            f += 0.3 * np.exp(-((xn - 0.5) ** 2 + (yn - 0.2) ** 2) / 0.08)
+            f += 0.1 * np.sin(4.0 * np.pi * xn) * np.cos(3.0 * np.pi * yn)
             return {feature_code: float(np.clip(f, 0, 1))}
 
     if score_fn is None:
