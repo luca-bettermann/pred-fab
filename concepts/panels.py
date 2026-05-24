@@ -27,13 +27,15 @@ def draw_experiments(
 ) -> None:
     """Data points with optional kernel radius and labels."""
     from pred_fab.plotting._style import draw_datapoints, ACCENT_RED
-    draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
-                    edgecolor="white", size=38)
     if labels:
+        draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
+                        edgecolor="white", size=38)
         for xi, yi, lbl in zip(exp_x, exp_y, labels):
             ax.annotate(lbl, (xi, yi), xytext=(6, 6),
                         textcoords="offset points", fontsize=8,
                         color=ZINC_700)
+    else:
+        draw_datapoints(ax, exp_x, exp_y, sigma=sigma)
 
 
 def setup_axes(ax, x_label: str, y_label: str,
