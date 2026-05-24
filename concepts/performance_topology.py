@@ -122,7 +122,7 @@ def main(
         if i < len(CONCEPT_LABELS):
             ax_score.annotate(CONCEPT_LABELS[i], (f_val, p_val), xytext=(6, 6),
                               textcoords="offset points", fontsize=8,
-                              fontweight="bold", color=ZINC_700)
+                              color=ZINC_700)
     ax_score.set_xlim(0, 1)
     ax_score.set_ylim(-0.05, 1.1)
     ax_score.set_xlabel(r"$\hat{f}$", fontsize=FONT["axis_label"], color=ZINC_600)

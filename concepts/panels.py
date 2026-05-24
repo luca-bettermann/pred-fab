@@ -33,7 +33,7 @@ def draw_experiments(
         for xi, yi, lbl in zip(exp_x, exp_y, labels):
             ax.annotate(lbl, (xi, yi), xytext=(6, 6),
                         textcoords="offset points", fontsize=8,
-                        fontweight="bold", color=ZINC_700)
+                        color=ZINC_700)
 
 
 def setup_axes(ax, x_label: str, y_label: str,
