@@ -59,11 +59,8 @@ def main(
         def predict_fn(params):
             xn = (params.get(x_key, 0.5) - x_lo) / (x_hi - x_lo)
             yn = (params.get(y_key, 0.5) - y_lo) / (y_hi - y_lo)
-            # Landscape designed so the 3 concept points get varied f̂ values
-            f = 0.85 * np.exp(-((xn - 0.3) ** 2 + (yn - 0.7) ** 2) / 0.06)
-            f += 0.5 * np.exp(-((xn - 0.7) ** 2 + (yn - 0.5) ** 2) / 0.15)
-            f += 0.3 * np.exp(-((xn - 0.5) ** 2 + (yn - 0.2) ** 2) / 0.08)
-            f += 0.1 * np.sin(4.0 * np.pi * xn) * np.cos(3.0 * np.pi * yn)
+            f = 0.9 * np.exp(-((xn - 0.55) ** 2 + (yn - 0.6) ** 2) / 0.18)
+            f += 0.15 * yn
             return {feature_code: float(np.clip(f, 0, 1))}
 
     if score_fn is None:
@@ -145,7 +142,7 @@ def main(
 
     performance_topology(fig2, ax2, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
-                         label=r"System performance  $P_{\mathrm{sys}}(x, y)$",
+                         label=r"Predicted system performance  $P_{\mathrm{sys}}(x, y)$",
                          fit_colorbar=True)
     draw_experiments(ax2, exp_x, exp_y, sigma=SIGMA_VIS, labels=CONCEPT_LABELS)
 
