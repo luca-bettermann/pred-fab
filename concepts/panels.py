@@ -20,11 +20,13 @@ from _style import (
 from pred_fab.plotting._style import FONT, FILL_ALPHA, surface as get_surface
 
 
-def draw_experiments(ax, exp_x: list[float], exp_y: list[float]) -> None:
-    """White dots with Zinc-700 edge — baseline experiment style."""
-    for ex, ey in zip(exp_x, exp_y):
-        ax.scatter([ex], [ey], c="white", s=30, edgecolors=ZINC_700,
-                   linewidth=0.5, zorder=10)
+def draw_experiments(
+    ax, exp_x: list[float], exp_y: list[float],
+    sigma: float | None = None,
+) -> None:
+    """Data points with optional kernel radius. Delegates to pred-fab helper."""
+    from pred_fab.plotting._style import draw_datapoints
+    draw_datapoints(ax, exp_x, exp_y, sigma=sigma)
 
 
 def setup_axes(ax, x_label: str, y_label: str,

@@ -507,6 +507,37 @@ class AxisSpec:
         return f"{self.label} [{self.unit}]" if self.unit else self.label
 
 
+def draw_datapoints(
+    ax,
+    x: list[float] | np.ndarray,
+    y: list[float] | np.ndarray,
+    *,
+    color: str = "white",
+    edgecolor: str | None = None,
+    size: float = 30,
+    sigma: float | None = None,
+    sigma_color: str = "white",
+    sigma_alpha: float = 0.3,
+    zorder: int = 10,
+) -> None:
+    """Draw data points with optional kernel radius circles.
+
+    Reusable across all topology plots. When ``sigma`` is provided,
+    draws dashed circles of that radius around each point.
+    """
+    edge = edgecolor or ZINC_700
+    for xi, yi in zip(x, y):
+        if sigma is not None:
+            circle = plt.Circle(
+                (xi, yi), sigma, fill=False, linestyle="--",
+                edgecolor=sigma_color, linewidth=0.5, alpha=sigma_alpha,
+                zorder=zorder - 1,
+            )
+            ax.add_patch(circle)
+        ax.scatter([xi], [yi], c=color, s=size, edgecolors=edge,
+                   linewidth=0.5, zorder=zorder)
+
+
 def save_fig(path: str, dpi: int = 150) -> None:
     """Save current figure and close.
 

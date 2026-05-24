@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from _config import EXISTING_POINTS, make_topology_marginal_layout
+from _config import EXISTING_POINTS, SIGMA, make_topology_marginal_layout
 from pred_fab.plotting._style import (
     save_fig, EMERALD_500, ZINC_600, ZINC_700, FONT,
 )
@@ -107,7 +107,7 @@ def main(
                      target_value=target_value,
                      label=r"Predicted feature  $\hat{f}(x, y)$")
     ax_feat.set_aspect("equal")
-    draw_experiments(ax_feat, exp_x, exp_y)
+    draw_experiments(ax_feat, exp_x, exp_y, sigma=SIGMA)
 
     ax_score.fill_between(feat_range, score_curve, alpha=0.15, color=EMERALD_500)
     ax_score.plot(feat_range, score_curve, color=EMERALD_500, linewidth=2)
@@ -141,7 +141,7 @@ def main(
                          x_label, y_label, x_bounds, y_bounds,
                          label=r"System performance  $P_{\mathrm{sys}}(x, y)$",
                          fit_colorbar=True)
-    draw_experiments(ax2, exp_x, exp_y)
+    draw_experiments(ax2, exp_x, exp_y, sigma=SIGMA)
 
     path2 = save_path_topology or str(PLOTS_DIR / "05_performance_topology.png")
     fig2.savefig(path2, dpi=200, bbox_inches="tight")
