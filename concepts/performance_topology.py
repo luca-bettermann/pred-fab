@@ -106,6 +106,7 @@ def main(
                      x_label, y_label, x_bounds, y_bounds,
                      target_value=target_value,
                      label=r"Predicted feature  $\hat{f}(x, y)$")
+    ax_feat.set_aspect("equal")
     draw_experiments(ax_feat, exp_x, exp_y)
 
     ax_score.fill_between(feat_range, score_curve, alpha=0.15, color=EMERALD_500)
@@ -134,6 +135,7 @@ def main(
     # ================================================================
     apply_style()
     fig2, ax2 = plt.subplots(figsize=(6, 5.5))
+    ax2.set_aspect("equal")
 
     performance_topology(fig2, ax2, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
