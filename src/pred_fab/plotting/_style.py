@@ -68,11 +68,23 @@ _EMERALD_SEQ = _LSC.from_list(
 )
 mpl.colormaps.register(_EMERALD_SEQ)
 
+def _desaturate_cmap(base_name: str, name: str, factor: float = 0.4) -> None:
+    """Register a desaturated copy of a matplotlib colormap."""
+    import numpy as np
+    base = mpl.colormaps[base_name]
+    xs = np.linspace(0, 1, 256)
+    rgba = base(xs).copy()
+    rgba[:, :3] = rgba[:, :3] * (1 - factor) + factor
+    cm = _LSC.from_list(name, rgba, N=256)
+    mpl.colormaps.register(cm)
+
+_desaturate_cmap("RdYlGn", "RdYlGn_soft", factor=0.4)
+
 SURFACES: dict[str, SemanticSurface] = {
     "density":       SemanticSurface("emerald_sequential", bounded=False),
     "evidence":      SemanticSurface("Blues",   bounded=True),
     "evidence_gain": SemanticSurface("YlGn",   bounded=True),
-    "performance":   SemanticSurface("RdYlGn", bounded=True),
+    "performance":   SemanticSurface("RdYlGn_soft", bounded=True),
     "acquisition":   SemanticSurface("magma",  bounded=True),
 }
 
@@ -112,6 +124,8 @@ LINES: dict[str, LineStyle] = {
 }
 
 # Fill alphas for consistent transparency.
+PUBLICATION_DPI: int = 300
+
 FILL_ALPHA: dict[str, float] = {
     "contour":    0.5,
     "area":       0.15,
@@ -172,6 +186,7 @@ def apply_style() -> None:
         "figure.facecolor": "white",
         "axes.facecolor": "white",
         "savefig.facecolor": "white",
+        "savefig.dpi": PUBLICATION_DPI,
     })
 
 
@@ -538,7 +553,7 @@ def draw_datapoints(
                    linewidth=0.8, zorder=zorder)
 
 
-def save_fig(path: str, dpi: int = 150) -> None:
+def save_fig(path: str, dpi: int | None = None) -> None:
     """Save current figure and close.
 
     If the active figure carries a PFAB subtitle (set by
@@ -551,7 +566,7 @@ def save_fig(path: str, dpi: int = 150) -> None:
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     else:
         plt.tight_layout()
-    plt.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(path, dpi=dpi or PUBLICATION_DPI, bbox_inches="tight")
     plt.close()
 
 

@@ -8,6 +8,7 @@ any specific schema or domain.
 from ._style import (
     AxisSpec,
     SemanticSurface,
+    PUBLICATION_DPI,
     save_fig,
     cmap,
     surface,
@@ -52,6 +53,7 @@ from .sensitivity import plot_sensitivity_matrix
 
 __all__ = [
     "AxisSpec",
+    "PUBLICATION_DPI",
     "save_fig",
     "cmap",
     "apply_style",
