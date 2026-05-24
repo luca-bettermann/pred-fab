@@ -23,11 +23,31 @@ from pred_fab.plotting._style import FONT, FILL_ALPHA, surface as get_surface
 def draw_experiments(
     ax, exp_x: list[float], exp_y: list[float],
     sigma: float | None = None,
+    sigma_xy: tuple[float, float] | None = None,
     labels: list[str] | None = None,
     styles: list[dict] | None = None,
 ) -> None:
-    """Data points with optional kernel radius, labels, or per-point styles."""
+    """Data points with optional kernel radius, labels, or per-point styles.
+
+    sigma_xy: (σ_x, σ_y) in data coordinates for elliptical radii
+              when axes have different physical scales.
+    sigma:    isotropic radius (for equal-aspect axes).
+    """
+    from matplotlib.patches import Ellipse
     from pred_fab.plotting._style import draw_datapoints, ACCENT_RED
+
+    def _draw_radius(ax_obj, xi, yi, zorder=4):
+        if sigma_xy is not None:
+            e = Ellipse((xi, yi), 2 * sigma_xy[0], 2 * sigma_xy[1],
+                        fill=False, linestyle="--", edgecolor="white",
+                        linewidth=0.6, alpha=0.4, zorder=zorder)
+            ax_obj.add_patch(e)
+        elif sigma is not None:
+            c = plt.Circle((xi, yi), sigma, fill=False, linestyle="--",
+                           edgecolor="white", linewidth=0.8, alpha=0.5,
+                           zorder=zorder)
+            ax_obj.add_patch(c)
+
     if labels:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
                         edgecolor="white", size=38)
@@ -37,13 +57,7 @@ def draw_experiments(
                         color=ZINC_700)
     elif styles:
         for xi, yi, st in zip(exp_x, exp_y, styles):
-            if sigma is not None:
-                circle = plt.Circle(
-                    (xi, yi), sigma, fill=False, linestyle="--",
-                    edgecolor="white", linewidth=0.8, alpha=0.5,
-                    zorder=st.get("zorder", 5) - 1,
-                )
-                ax.add_patch(circle)
+            _draw_radius(ax, xi, yi, st.get("zorder", 5) - 1)
             ax.scatter([xi], [yi], **st)
     else:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma)

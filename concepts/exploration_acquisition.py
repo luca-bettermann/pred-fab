@@ -76,12 +76,12 @@ def main(
 
         ax1, ax2, ax3 = axes[r]
 
-        sigma_phys = sigma * (xb[1] - xb[0]) if sigma else None
+        sigma_xy = (sigma * (xb[1] - xb[0]), sigma * (yb[1] - yb[0])) if sigma else None
 
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
                                xl, yl, xb, yb, fit_colorbar=True)
         if exp_x:
-            draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
+            draw_experiments(ax1, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
         if r == 0:
             from pred_fab.plotting._style import ZINC_700, STEEL_500
@@ -98,14 +98,15 @@ def main(
                                label="Proposed"),
                 )
             ax1.legend(handles=legend_items, loc="upper left", fontsize=7,
-                       framealpha=0.7, edgecolor="none")
+                       framealpha=0.85, facecolor="white", edgecolor="#D4D4D8",
+                       borderpad=0.6)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
                              fit_colorbar=True)
         if exp_x:
-            draw_experiments(ax2, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
+            draw_experiments(ax2, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa)
@@ -116,7 +117,7 @@ def main(
             ax3.scatter([px], [py], marker="x", c="white", s=80,
                         linewidths=1.5, zorder=12)
         if exp_x:
-            draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
+            draw_experiments(ax3, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
     save_fig(path)
