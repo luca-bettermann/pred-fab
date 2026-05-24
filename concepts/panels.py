@@ -142,25 +142,16 @@ def marginal_performance(
     axis_label: str, panel_label: str,
     fit_colorbar: bool = True,
 ) -> None:
-    """Marginal performance curve with gradient fill — RdYlGn."""
-    cm_p = cmap("performance")
-    line_color = cm_p(0.7)
+    """Marginal performance curve — emerald fill, matching evaluation plots."""
+    from pred_fab.plotting._style import EMERALD_500
     if fit_colorbar:
         y_min, y_max = float(curve.min()), float(curve.max())
         pad = (y_max - y_min) * 0.05 or 0.05
         y_lo, y_hi = y_min - pad, y_max + pad
     else:
         y_lo, y_hi = 0.0, 1.0
-    res_y = 100
-    extent = [float(vals[0]), float(vals[-1]), y_lo, y_hi]
-    gradient = np.linspace(0, 1, res_y).reshape(-1, 1) * np.ones((1, len(vals)))
-    curve_norm = (curve - y_lo) / (y_hi - y_lo)
-    gradient = gradient * curve_norm[None, :]
-    norm_fill = Normalize(vmin=0, vmax=1)
-    ax.imshow(gradient, aspect="auto", origin="lower", extent=extent,
-              cmap=cm_p, norm=norm_fill, alpha=0.7, zorder=0)
-    ax.fill_between(vals, curve, y_hi, color="white", zorder=1)
-    ax.plot(vals, curve, color=line_color, linewidth=1.5)
+    ax.fill_between(vals, curve, alpha=0.15, color=EMERALD_500)
+    ax.plot(vals, curve, color=EMERALD_500, linewidth=2)
     ax.set_xlim(float(vals[0]), float(vals[-1]))
     ax.set_ylim(y_lo, y_hi)
     ax.set_xlabel(axis_label, fontsize=FONT["axis_label"], color=ZINC_600)
