@@ -83,6 +83,23 @@ def main(
         if exp_x:
             draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
 
+        if r == 0:
+            from pred_fab.plotting._style import ZINC_700, STEEL_500
+            legend_items = [
+                plt.Line2D([0], [0], marker="o", color="none", markerfacecolor="white",
+                           markeredgecolor=ZINC_700, markersize=6, label="Discovery"),
+                plt.Line2D([0], [0], marker="o", color="none", markerfacecolor=STEEL_500,
+                           markeredgecolor=STEEL_500, markersize=6, label="Exploration"),
+            ]
+            if proposed_params is not None:
+                legend_items.append(
+                    plt.Line2D([0], [0], marker="x", color="none", markerfacecolor="white",
+                               markeredgecolor="white", markersize=7, markeredgewidth=1.5,
+                               label="Proposed"),
+                )
+            ax1.legend(handles=legend_items, loc="upper left", fontsize=7,
+                       framealpha=0.7, edgecolor="none")
+
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
