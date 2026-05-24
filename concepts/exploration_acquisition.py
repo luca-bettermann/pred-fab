@@ -28,7 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from pred_fab.plotting._style import save_fig
+from pred_fab.plotting._style import ACCENT_YELLOW, save_fig
 from panels import (
     draw_experiments, evidence_gain_topology,
     performance_topology, acquisition_topology,
@@ -44,6 +44,7 @@ def main(
     save_path: str | None = None,
     proposed_params: dict[str, Any] | None = None,
     fit_colorbar: bool = True,
+    sigma: float | None = None,
 ):
     """Render acquisition panels for one or more axis pairs.
 
@@ -82,18 +83,21 @@ def main(
 
         ax1, ax2, ax3 = axes[r]
 
+        # Scale sigma from [0,1] to physical x-axis units for radius circles
+        sigma_phys = sigma * (xb[1] - xb[0]) if sigma else None
+
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
                                xl, yl, xb, yb,
                                vmin_override=ev_min, vmax_override=ev_max)
         if exp_x:
-            draw_experiments(ax1, exp_x, exp_y)
+            draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
                              vmin_override=pf_min, vmax_override=pf_max)
         if exp_x:
-            draw_experiments(ax2, exp_x, exp_y)
+            draw_experiments(ax2, exp_x, exp_y, sigma=sigma_phys)
 
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa,
@@ -101,7 +105,7 @@ def main(
         if proposed_params is not None:
             from matplotlib.patheffects import withStroke
             px, py = float(proposed_params[xk]), float(proposed_params[yk])
-            ax3.scatter([px], [py], marker="x", c="white", s=120,
+            ax3.scatter([px], [py], marker="x", c=ACCENT_YELLOW, s=120,
                         linewidths=2.5, zorder=12,
                         path_effects=[withStroke(linewidth=4, foreground="black")])
         if exp_x:
