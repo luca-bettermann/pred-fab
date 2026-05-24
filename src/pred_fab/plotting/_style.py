@@ -517,7 +517,7 @@ def draw_datapoints(
     size: float = 30,
     sigma: float | None = None,
     sigma_color: str = "white",
-    sigma_alpha: float = 0.3,
+    sigma_alpha: float = 0.5,
     zorder: int = 10,
 ) -> None:
     """Draw data points with optional kernel radius circles.
@@ -530,12 +530,12 @@ def draw_datapoints(
         if sigma is not None:
             circle = plt.Circle(
                 (xi, yi), sigma, fill=False, linestyle="--",
-                edgecolor=sigma_color, linewidth=0.5, alpha=sigma_alpha,
+                edgecolor=sigma_color, linewidth=0.8, alpha=sigma_alpha,
                 zorder=zorder - 1,
             )
             ax.add_patch(circle)
         ax.scatter([xi], [yi], c=color, s=size, edgecolors=edge,
-                   linewidth=0.5, zorder=zorder)
+                   linewidth=0.8, zorder=zorder)
 
 
 def save_fig(path: str, dpi: int = 150) -> None:

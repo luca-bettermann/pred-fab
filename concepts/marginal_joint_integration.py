@@ -25,7 +25,7 @@ from _style import (
     add_kernel_radii_2d,
     ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
-from _config import SIGMA, make_topology_marginal_layout
+from _config import SIGMA, CONCEPT_POINTS, CONCEPT_LABELS, SIGMA_VIS, make_topology_marginal_layout
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
 from pred_fab.plotting._style import (
     SURFACES, MARKERS, LINES, FILL_ALPHA, FONT, RED, ACCENT_YELLOW,
@@ -35,13 +35,8 @@ from pred_fab.plotting._style import (
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
 
-CENTERS = np.array([
-    [0.25, 0.18],
-    [0.28, 0.82],
-    [0.78, 0.48],
-])
-LABELS = ["A", "B", "C"]
-SIGMA_VIS = 0.08
+CENTERS = CONCEPT_POINTS
+LABELS = CONCEPT_LABELS
 
 
 def _density_1d(xs, centers_1d, sigma):

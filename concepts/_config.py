@@ -31,6 +31,16 @@ EXISTING_POINTS: np.ndarray = np.array([
 # on the left and the 0.78,0.18 kernel on the right, so ΔE is non-trivial.
 Z_NEW: np.ndarray = np.array([0.50, 0.30])
 
+# 3 concept points for the integration/computation figures.
+# Used by both evidence and performance concept plots.
+CONCEPT_POINTS: np.ndarray = np.array([
+    [0.25, 0.18],
+    [0.28, 0.82],
+    [0.78, 0.48],
+])
+CONCEPT_LABELS: list[str] = ["A", "B", "C"]
+SIGMA_VIS: float = 0.08
+
 
 def make_topology_marginal_layout(fig_width: float = 11.0, fig_height: float = 5.0):
     """Shared layout: full-height topology left, two half-height marginals right.
