@@ -254,14 +254,29 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self._compute_normalised_perf_for_params(params)
 
     def density(self, params: dict[str, Any]) -> float:
-        """Raw kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²). Unbounded."""
+        """Raw kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²). Unbounded.
+
+        Distances are normalized by domain_bounds to [0,1] before applying σ,
+        so σ=0.05 means "5% of the parameter range." This differs from the
+        ANOVA integration path (evidence_gain) which operates in raw z-score
+        space. The normalization makes density meaningful for 2D slice
+        visualization — without it, σ=0.05 is negligible in z-score space
+        and D≈0 everywhere except at kernel centers.
+
+        See backlog: "Fix ANOVA marginal evidence saturation" for the plan
+        to unify both paths under consistent σ semantics.
+        """
         dm = self._active_datamodule
         if dm is None or self._density_fn is None:
             return 0.0
         return self._density_fn(dm.params_to_array(params))
 
     def evidence(self, params: dict[str, Any]) -> float:
-        """Pointwise evidence E(z) = D/(1+D) ∈ [0, 1). High near data."""
+        """Pointwise evidence E(z) = D/(1+D) ∈ [0, 1). High near data.
+
+        Built from density() — same [0,1]-normalized distances and same
+        σ semantics. Bounded by construction: D=0 → E=0, D→∞ → E→1.
+        """
         d = self.density(params)
         return d / (1.0 + d)
 
