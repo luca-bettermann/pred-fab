@@ -97,9 +97,9 @@ def main(
                                markeredgecolor="white", markersize=7, markeredgewidth=1.5,
                                label="Proposed"),
                 )
-            ax1.legend(handles=legend_items, loc="upper left", fontsize=7,
+            ax1.legend(handles=legend_items, loc="upper left", fontsize=9,
                        frameon=True, framealpha=0.85, facecolor="white",
-                       edgecolor="#D4D4D8", borderpad=0.6)
+                       edgecolor="#D4D4D8", borderpad=0.8, markerscale=1.3)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
