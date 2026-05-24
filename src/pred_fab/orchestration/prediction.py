@@ -838,14 +838,17 @@ class PredictionSystem(BaseOrchestrationSystem):
         return z_t.index_select(-1, active_idx)
 
     def density_at(self, X_norm: np.ndarray) -> float:
-        """Pointwise kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²).
+        """Pointwise kernel density D(z) in [0,1]-normalized space.
 
-        Same density formula the ANOVA integration uses internally.
-        Aggregated across per-model KDEs with performance weights.
+        Distances are normalized by domain_bounds before applying σ,
+        so σ=0.05 means "5% of the parameter range" regardless of the
+        underlying coordinate system (z-score, raw, etc.). This makes
+        the density meaningful for 2D slice visualization: points close
+        in the visible axes show overlap even when hidden dims differ.
 
-        Note: with σ=0.05 in z-score space, D≈0 except at kernel centers
-        (inter-point distances ~3 vs σ=0.05). This is the same limitation
-        the ANOVA marginals have — see "Rethink evidence saturation" backlog.
+        Different from the ANOVA integration (which operates in raw
+        z-score space). Both share the σ limitation documented in
+        "Rethink evidence saturation" backlog.
         """
         if not self._model_kdes:
             return 0.0
@@ -854,7 +857,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         for kde in self._model_kdes.values():
             z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
             z_active = z[kde.active_mask].reshape(1, -1)
-            d2 = np.sum((z_active - kde.latent_points) ** 2, axis=-1)
+            centers = kde.latent_points
+            # Normalize to [0,1] so σ has consistent meaning across coordinate systems
+            if kde.domain_bounds is not None:
+                lo = kde.domain_bounds[:, 0]
+                hi = kde.domain_bounds[:, 1]
+                span = hi - lo
+                span = np.where(span > 1e-10, span, 1.0)
+                z_active = (z_active - lo) / span
+                centers = (centers - lo) / span
+            d2 = np.sum((z_active - centers) ** 2, axis=-1)
             density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
             weighted_d += kde.weight * density
             total_w += kde.weight
