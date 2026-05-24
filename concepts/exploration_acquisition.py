@@ -72,23 +72,23 @@ def main(
         dp = p.get("datapoints") or []
         exp_x = [d[xk] for d in dp]
         exp_y = [d[yk] for d in dp]
+        pt_styles = p.get("styles")
 
         ax1, ax2, ax3 = axes[r]
 
-        # Scale sigma from [0,1] to physical x-axis units for radius circles
         sigma_phys = sigma * (xb[1] - xb[0]) if sigma else None
 
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
                                xl, yl, xb, yb, fit_colorbar=True)
         if exp_x:
-            draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys)
+            draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
                              fit_colorbar=True)
         if exp_x:
-            draw_experiments(ax2, exp_x, exp_y, sigma=sigma_phys)
+            draw_experiments(ax2, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
 
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa)
@@ -99,7 +99,7 @@ def main(
             ax3.scatter([px], [py], marker="x", c="white", s=80,
                         linewidths=1.5, zorder=12)
         if exp_x:
-            draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys)
+            draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys, styles=pt_styles)
 
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
     save_fig(path)

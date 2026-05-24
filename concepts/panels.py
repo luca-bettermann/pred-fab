@@ -24,8 +24,9 @@ def draw_experiments(
     ax, exp_x: list[float], exp_y: list[float],
     sigma: float | None = None,
     labels: list[str] | None = None,
+    styles: list[dict] | None = None,
 ) -> None:
-    """Data points with optional kernel radius and labels."""
+    """Data points with optional kernel radius, labels, or per-point styles."""
     from pred_fab.plotting._style import draw_datapoints, ACCENT_RED
     if labels:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
@@ -34,6 +35,16 @@ def draw_experiments(
             ax.annotate(lbl, (xi, yi), xytext=(6, 6),
                         textcoords="offset points", fontsize=8,
                         color=ZINC_700)
+    elif styles:
+        for xi, yi, st in zip(exp_x, exp_y, styles):
+            if sigma is not None:
+                circle = plt.Circle(
+                    (xi, yi), sigma, fill=False, linestyle="--",
+                    edgecolor="white", linewidth=0.8, alpha=0.5,
+                    zorder=st.get("zorder", 5) - 1,
+                )
+                ax.add_patch(circle)
+            ax.scatter([xi], [yi], **st)
     else:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma)
 
