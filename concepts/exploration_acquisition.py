@@ -95,11 +95,11 @@ def main(
         if proposed_params is not None:
             from matplotlib.patheffects import withStroke
             px, py = float(proposed_params[xk]), float(proposed_params[yk])
-            ax3.scatter([px], [py], marker="x", c=ACCENT_YELLOW, s=120,
-                        linewidths=2.5, zorder=12,
-                        path_effects=[withStroke(linewidth=4, foreground="black")])
+            ax3.scatter([px], [py], marker="x", c=ACCENT_YELLOW, s=80,
+                        linewidths=1.8, zorder=12,
+                        path_effects=[withStroke(linewidth=3, foreground="white")])
         if exp_x:
-            draw_experiments(ax3, exp_x, exp_y)
+            draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys)
 
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
     save_fig(path)
