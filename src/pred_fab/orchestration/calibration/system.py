@@ -9,6 +9,7 @@ from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAx
 from ...core import ParameterProposal, ExperimentSpec
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ..base_system import BaseOrchestrationSystem
+from ..evidence import evidence_from_density
 from .engine import OptimizationEngine
 from .bounds import BoundsManager
 from .space import SolutionSpace, StaticVariable, TrajectoryVariable, Variable
@@ -277,8 +278,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         Built from density() — same [0,1]-normalized distances and same
         σ semantics. Bounded by construction: D=0 → E=0, D→∞ → E→1.
         """
-        d = self.density(params)
-        return d / (1.0 + d)
+        return evidence_from_density(self.density(params))
 
     def _candidate_weight(self, params: dict[str, Any]) -> float:
         """1/L where L is derived from params. Matches SolutionSpace.decode()."""

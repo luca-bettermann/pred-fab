@@ -232,6 +232,11 @@ def kernel_field_probe_count(
     return 1 + len(radii) * _angular_gap_n_dirs(D, angular_gap_deg)
 
 
+def evidence_from_density(D: float) -> float:
+    """E = D/(1+D). Saturating transform: D=0→E=0, D→∞→E→1."""
+    return D / (1.0 + D)
+
+
 def _in_unit_cube_torch(points: torch.Tensor) -> torch.Tensor:
     """Boolean mask: all dims in [0, 1]."""
     return ((points >= 0.0) & (points <= 1.0)).all(dim=-1)
@@ -841,7 +846,7 @@ def compute_density_grid_from_centers(
         for j in range(resolution):
             d2 = (xs_norm[i] - c_norm[:, 0]) ** 2 + (ys_norm[j] - c_norm[:, 1]) ** 2
             D = float(np.sum(weights * np.exp(-d2 * inv_2s2)))
-            grid[j, i] = D / (1.0 + D)
+            grid[j, i] = evidence_from_density(D)
 
     return xs_param, ys_param, grid
 
