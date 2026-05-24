@@ -23,10 +23,17 @@ from pred_fab.plotting._style import FONT, FILL_ALPHA, surface as get_surface
 def draw_experiments(
     ax, exp_x: list[float], exp_y: list[float],
     sigma: float | None = None,
+    labels: list[str] | None = None,
 ) -> None:
-    """Data points with optional kernel radius. Delegates to pred-fab helper."""
-    from pred_fab.plotting._style import draw_datapoints
-    draw_datapoints(ax, exp_x, exp_y, sigma=sigma)
+    """Data points with optional kernel radius and labels."""
+    from pred_fab.plotting._style import draw_datapoints, ACCENT_RED
+    draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
+                    edgecolor="white", size=38)
+    if labels:
+        for xi, yi, lbl in zip(exp_x, exp_y, labels):
+            ax.annotate(lbl, (xi, yi), xytext=(6, 6),
+                        textcoords="offset points", fontsize=8,
+                        fontweight="bold", color=ZINC_700)
 
 
 def setup_axes(ax, x_label: str, y_label: str,
@@ -46,7 +53,7 @@ def feature_topology(
     target_value: float | None = None,
     label: str = "$\\hat{f}(x, y)$",
 ) -> None:
-    """Predicted feature surface — Greys (density, raw data)."""
+    """Predicted feature surface — emerald sequential."""
     cm_f = cmap("density")
     norm_f = Normalize(vmin=0.0, vmax=float(grid.max()))
     levels = np.linspace(0.02, float(grid.max()), 18)
@@ -72,7 +79,7 @@ def performance_topology(
     label: str = "$P(x, y)$",
     fit_colorbar: bool = True,
 ) -> None:
-    """Performance surface — RdYlGn (quality judgment)."""
+    """Performance surface — RdYlGn."""
     cm_p = cmap("performance")
     if fit_colorbar:
         norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))

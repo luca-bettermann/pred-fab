@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from _config import CONCEPT_POINTS, SIGMA_VIS, make_topology_marginal_layout
+from _config import CONCEPT_POINTS, CONCEPT_LABELS, SIGMA_VIS, make_topology_marginal_layout
 from pred_fab.plotting._style import (
     save_fig, EMERALD_500, ZINC_600, ZINC_700, FONT,
 )
@@ -108,16 +108,21 @@ def main(
                      target_value=target_value,
                      label=r"Predicted feature  $\hat{f}(x, y)$")
     ax_feat.set_aspect("equal")
-    draw_experiments(ax_feat, exp_x, exp_y, sigma=SIGMA_VIS)
+    draw_experiments(ax_feat, exp_x, exp_y, sigma=SIGMA_VIS, labels=CONCEPT_LABELS)
 
     ax_score.fill_between(feat_range, score_curve, alpha=0.15, color=EMERALD_500)
     ax_score.plot(feat_range, score_curve, color=EMERALD_500, linewidth=2)
     ax_score.axvline(target_value, color=EMERALD_500, ls='--', lw=1, alpha=0.5)
-    for px, py in zip(exp_x, exp_y):
+    from pred_fab.plotting._style import ACCENT_RED
+    for i, (px, py) in enumerate(zip(exp_x, exp_y)):
         f_val = predict_fn({x_key: px, y_key: py}).get(feature_code, 0.0)
         p_val = score_fn({x_key: px, y_key: py})
-        ax_score.scatter([f_val], [p_val], c="white", s=30,
-                         edgecolors=ZINC_700, linewidth=0.5, zorder=10)
+        ax_score.scatter([f_val], [p_val], c=ACCENT_RED, s=38,
+                         edgecolors="white", linewidth=0.8, zorder=10)
+        if i < len(CONCEPT_LABELS):
+            ax_score.annotate(CONCEPT_LABELS[i], (f_val, p_val), xytext=(6, 6),
+                              textcoords="offset points", fontsize=8,
+                              fontweight="bold", color=ZINC_700)
     ax_score.set_xlim(0, 1)
     ax_score.set_ylim(-0.05, 1.1)
     ax_score.set_xlabel(r"$\hat{f}$", fontsize=FONT["axis_label"], color=ZINC_600)
@@ -142,7 +147,7 @@ def main(
                          x_label, y_label, x_bounds, y_bounds,
                          label=r"System performance  $P_{\mathrm{sys}}(x, y)$",
                          fit_colorbar=True)
-    draw_experiments(ax2, exp_x, exp_y, sigma=SIGMA_VIS)
+    draw_experiments(ax2, exp_x, exp_y, sigma=SIGMA_VIS, labels=CONCEPT_LABELS)
 
     path2 = save_path_topology or str(PLOTS_DIR / "05_performance_topology.png")
     fig2.savefig(path2, dpi=200, bbox_inches="tight")

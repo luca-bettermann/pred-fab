@@ -68,24 +68,27 @@ _EMERALD_SEQ = _LSC.from_list(
 )
 mpl.colormaps.register(_EMERALD_SEQ)
 
-def _desaturate_cmap(base_name: str, name: str, factor: float = 0.4) -> None:
-    """Register a desaturated copy of a matplotlib colormap."""
-    import numpy as np
+def _truncate_cmap(
+    base_name: str, name: str, lo: float = 0.0, hi: float = 1.0,
+) -> None:
+    """Register a truncated copy of a matplotlib colormap."""
     base = mpl.colormaps[base_name]
-    xs = np.linspace(0, 1, 256)
-    rgba = base(xs).copy()
-    rgba[:, :3] = rgba[:, :3] * (1 - factor) + factor
-    cm = _LSC.from_list(name, rgba, N=256)
+    xs = np.linspace(lo, hi, 256)
+    cm = _LSC.from_list(name, base(xs), N=256)
     mpl.colormaps.register(cm)
 
-_desaturate_cmap("RdYlGn", "RdYlGn_soft", factor=0.4)
+_truncate_cmap("emerald_sequential", "emerald_sequential_soft", lo=0.0, hi=0.85)
+_truncate_cmap("Blues", "Blues_soft", lo=0.0, hi=0.85)
+_truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.85)
+_truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.15, hi=0.85)
+_truncate_cmap("magma", "magma_soft", lo=0.0, hi=0.85)
 
 SURFACES: dict[str, SemanticSurface] = {
-    "density":       SemanticSurface("emerald_sequential", bounded=False),
-    "evidence":      SemanticSurface("Blues",   bounded=True),
-    "evidence_gain": SemanticSurface("YlGn",   bounded=True),
+    "density":       SemanticSurface("emerald_sequential_soft", bounded=False),
+    "evidence":      SemanticSurface("Blues_soft",   bounded=True),
+    "evidence_gain": SemanticSurface("YlGn_soft",   bounded=True),
     "performance":   SemanticSurface("RdYlGn_soft", bounded=True),
-    "acquisition":   SemanticSurface("magma",  bounded=True),
+    "acquisition":   SemanticSurface("magma_soft",  bounded=True),
 }
 
 # Markers: semantic point types.
