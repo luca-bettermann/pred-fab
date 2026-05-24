@@ -48,7 +48,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn_tensor = perf_fn_tensor
-        self.evidence = evidence if evidence is not None else EvidenceBackend()
+        self._evidence_backend = evidence if evidence is not None else EvidenceBackend()
         self._density_fn: Callable[[np.ndarray], float] | None = None
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn
@@ -358,13 +358,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> float:
         """Single-candidate evidence gain ΔE for a params dict."""
         dm = self._active_datamodule
-        if dm is None or self.evidence.batched_tensor is None:
+        if dm is None or self._evidence_backend.batched_tensor is None:
             return 0.0
         x_norm = dm.params_to_array(params)
         X_SD = torch.from_numpy(np.atleast_2d(x_norm)).double()
         w = torch.tensor([candidate_weight], dtype=torch.float64)
         with torch.no_grad():
-            ev = self.evidence.batched_tensor(X_SD, w)
+            ev = self._evidence_backend.batched_tensor(X_SD, w)
         return float(ev[0].item())
 
     def _per_candidate_perf_batched(
@@ -550,11 +550,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
             evidences: torch.Tensor | None = None
             if kappa > 0.0:
-                if self.evidence.batched_tensor is None:
+                if self._evidence_backend.batched_tensor is None:
                     raise RuntimeError(
                         f"kappa={kappa} requires evidence but evidence.batched_tensor is None"
                     )
-                evidences = self.evidence.batched_tensor(X_SD).to(dtype=X_SD.dtype)
+                evidences = self._evidence_backend.batched_tensor(X_SD).to(dtype=X_SD.dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
 
@@ -882,10 +882,10 @@ class CalibrationSystem(BaseOrchestrationSystem):
                 perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1).to(dtype=dtype)
 
             evidence_S: torch.Tensor | None = None
-            if kappa > 0.0 and self.evidence.joint_batched_tensor is not None:
+            if kappa > 0.0 and self._evidence_backend.joint_batched_tensor is not None:
                 flat_per_candidate = full_S_NL.reshape(S, NL, D)
                 w = weights.reshape(S, NL) if weights is not None else None
-                evidence_S = self.evidence.joint_batched_tensor(flat_per_candidate, w).to(dtype=dtype)
+                evidence_S = self._evidence_backend.joint_batched_tensor(flat_per_candidate, w).to(dtype=dtype)
 
             return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
 
