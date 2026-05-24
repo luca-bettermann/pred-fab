@@ -94,10 +94,10 @@ def main(
                              xl, yl, xb, yb, kappa=kappa)
         if proposed_params is not None:
             px, py = float(proposed_params[xk]), float(proposed_params[yk])
-            ax3.scatter([px], [py], marker="x", c="white", s=120,
-                        linewidths=3.0, zorder=11)
-            ax3.scatter([px], [py], marker="x", c=ACCENT_YELLOW, s=80,
-                        linewidths=1.8, zorder=12)
+            ax3.scatter([px], [py], marker="x", c="black", s=100,
+                        linewidths=2.8, zorder=11)
+            ax3.scatter([px], [py], marker="x", c="white", s=80,
+                        linewidths=1.5, zorder=12)
         if exp_x:
             draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys)
 
