@@ -58,9 +58,12 @@ def main(
     if n_rows == 0:
         return
 
-    # Shared vmin/vmax across all rows
+    # Shared vmin/vmax across all rows for comparability
+    ev_min = min(float(np.nanmin(p["evidence_grid"])) for p in panels)
     ev_max = max(float(np.nanmax(p["evidence_grid"])) for p in panels)
+    pf_min = min(float(np.nanmin(p["perf_grid"])) for p in panels)
     pf_max = max(float(np.nanmax(p["perf_grid"])) for p in panels)
+    acq_min = min(float(np.nanmin(p["acq_grid"])) for p in panels)
     acq_max = max(float(np.nanmax(p["acq_grid"])) for p in panels)
 
     apply_style()
@@ -81,23 +84,26 @@ def main(
 
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
                                xl, yl, xb, yb,
-                               fit_colorbar=fit_colorbar, vmax_override=ev_max)
+                               vmin_override=ev_min, vmax_override=ev_max)
         if exp_x:
             draw_experiments(ax1, exp_x, exp_y)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
-                             fit_colorbar=fit_colorbar, vmax_override=pf_max)
+                             vmin_override=pf_min, vmax_override=pf_max)
         if exp_x:
             draw_experiments(ax2, exp_x, exp_y)
 
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa,
-                             vmax_override=acq_max)
+                             vmin_override=acq_min, vmax_override=acq_max)
         if proposed_params is not None:
-            ax3.scatter([float(proposed_params[xk])], [float(proposed_params[yk])],
-                        marker="x", c="white", s=100, linewidths=2.0, zorder=12)
+            from matplotlib.patheffects import withStroke
+            px, py = float(proposed_params[xk]), float(proposed_params[yk])
+            ax3.scatter([px], [py], marker="x", c="white", s=120,
+                        linewidths=2.5, zorder=12,
+                        path_effects=[withStroke(linewidth=4, foreground="black")])
         if exp_x:
             draw_experiments(ax3, exp_x, exp_y)
 

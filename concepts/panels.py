@@ -80,12 +80,15 @@ def performance_topology(
     show_optimum: bool = True,
     label: str = "Predicted $P(x, y)$",
     fit_colorbar: bool = True,
+    vmin_override: float | None = None,
     vmax_override: float | None = None,
 ) -> None:
     """Performance surface — RdYlGn."""
     cm_p = cmap("performance")
-    if vmax_override is not None:
-        norm_p = Normalize(vmin=0, vmax=vmax_override)
+    if vmin_override is not None or vmax_override is not None:
+        lo = vmin_override if vmin_override is not None else float(grid.min())
+        hi = vmax_override if vmax_override is not None else float(grid.max())
+        norm_p = Normalize(vmin=lo, vmax=hi)
     elif fit_colorbar:
         norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
@@ -114,12 +117,15 @@ def evidence_gain_topology(
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     label: str = "$\\Delta E(x, y)$",
     fit_colorbar: bool = True,
+    vmin_override: float | None = None,
     vmax_override: float | None = None,
 ) -> None:
     """Evidence gain surface — YlGn (exploration signal)."""
     cm_e = cmap("evidence_gain")
-    if vmax_override is not None:
-        norm_e = Normalize(vmin=0, vmax=vmax_override)
+    if vmin_override is not None or vmax_override is not None:
+        lo = vmin_override if vmin_override is not None else float(grid.min())
+        hi = vmax_override if vmax_override is not None else float(grid.max())
+        norm_e = Normalize(vmin=lo, vmax=hi)
     elif fit_colorbar:
         norm_e = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
@@ -140,14 +146,14 @@ def acquisition_topology(
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     kappa: float = 0.5,
     label: str | None = None,
+    vmin_override: float | None = None,
     vmax_override: float | None = None,
 ) -> None:
     """Acquisition surface — magma (combined objective)."""
     cm_a = cmap("acquisition")
-    if vmax_override is not None:
-        norm_a = Normalize(vmin=float(grid.min()), vmax=vmax_override)
-    else:
-        norm_a = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
+    lo = vmin_override if vmin_override is not None else float(grid.min())
+    hi = vmax_override if vmax_override is not None else float(grid.max())
+    norm_a = Normalize(vmin=lo, vmax=hi)
     ax.contourf(xs, ys, grid, levels=18, cmap=cm_a, norm=norm_a)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
 
