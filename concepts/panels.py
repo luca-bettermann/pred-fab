@@ -70,6 +70,7 @@ def setup_axes(ax, x_label: str, y_label: str,
                x_bounds: tuple[float, float], y_bounds: tuple[float, float]) -> None:
     ax.set_xlim(*x_bounds)
     ax.set_ylim(*y_bounds)
+    ax.set_box_aspect(1)
     ax.set_xlabel(x_label, fontsize=FONT["axis_label"], color=ZINC_600)
     ax.set_ylabel(y_label, fontsize=FONT["axis_label"], color=ZINC_600)
     clean_spines(ax)
