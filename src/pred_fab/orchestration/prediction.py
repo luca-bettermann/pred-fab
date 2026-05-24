@@ -841,7 +841,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         """Pointwise kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²).
 
         Aggregated across per-model KDEs with performance weights.
-        Returns the raw unbounded density at the normalized input point.
+        Distances are computed in [0,1]-normalized space (via domain_bounds)
+        so σ=0.05 means 5% of the parameter range, regardless of whether
+        the underlying data is in z-score or raw coordinates.
         """
         if not self._model_kdes:
             return 0.0
@@ -850,7 +852,16 @@ class PredictionSystem(BaseOrchestrationSystem):
         for kde in self._model_kdes.values():
             z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
             z_active = z[kde.active_mask].reshape(1, -1)
-            d2 = np.sum((z_active - kde.latent_points) ** 2, axis=-1)
+            centers = kde.latent_points
+            # Normalize to [0,1] using domain bounds so σ has consistent meaning
+            if kde.domain_bounds is not None:
+                lo = kde.domain_bounds[:, 0]
+                hi = kde.domain_bounds[:, 1]
+                span = hi - lo
+                span = np.where(span > 1e-10, span, 1.0)
+                z_active = (z_active - lo) / span
+                centers = (centers - lo) / span
+            d2 = np.sum((z_active - centers) ** 2, axis=-1)
             density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
             weighted_d += kde.weight * density
             total_w += kde.weight
