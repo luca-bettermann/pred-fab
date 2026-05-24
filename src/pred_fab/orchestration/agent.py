@@ -258,6 +258,7 @@ class PfabAgent:
                 push_virtual_fn=_pred.push_virtual_points,
                 pop_virtual_fn=_pred.pop_virtual_points,
             )
+            self.calibration_system._density_fn = _pred.density_at
             self.calibration_system._initialized = True
         else:
             self.calibration_system = None  # type: ignore[assignment]

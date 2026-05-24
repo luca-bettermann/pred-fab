@@ -57,12 +57,15 @@ def main(
             f += 0.15 * np.sin(3.0 * np.pi * xn) * np.cos(2.5 * np.pi * yn) * 0.15
             return {feature_code: float(np.clip(f, 0, 1))}
 
+    score_range = 0.5
     if score_fn is None:
-        # Quadratic scoring: peaks at target, drops off symmetrically
+        # Raised cosine: smooth bell centered at target
         def score_fn(params):
             features = predict_fn(params)
             f = features.get(feature_code, 0.0)
-            return float(np.clip(1.0 - ((f - target_value) / 0.5) ** 2, 0, 1))
+            if abs(f - target_value) > score_range:
+                return 0.0
+            return float(0.5 * (1.0 + np.cos(np.pi * (f - target_value) / score_range)))
 
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
@@ -82,7 +85,8 @@ def main(
     # Scoring curve: sweep feature value through the scoring function
     feat_range = np.linspace(0, 1, 200)
     score_curve = np.array([
-        float(np.clip(1.0 - ((f - target_value) / 0.5) ** 2, 0, 1))
+        0.5 * (1.0 + np.cos(np.pi * (f - target_value) / score_range))
+        if abs(f - target_value) <= score_range else 0.0
         for f in feat_range
     ])
 

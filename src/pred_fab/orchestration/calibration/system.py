@@ -49,6 +49,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         super().__init__(logger, random_seed=random_seed)
         self.perf_fn_tensor = perf_fn_tensor
         self.evidence = evidence if evidence is not None else EvidenceBackend()
+        self._density_fn: Callable[[np.ndarray], float] | None = None
         self._n_exp_fn = n_exp_fn
         self._fit_empty_kde_fn = fit_empty_kde_fn
         self._push_virtual_fn = push_virtual_fn
@@ -251,6 +252,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
     def system_performance(self, params: dict[str, Any]) -> float:
         """Weighted system performance P_sys for a single candidate (raw, unnormalized)."""
         return self._compute_normalised_perf_for_params(params)
+
+    def density(self, params: dict[str, Any]) -> float:
+        """Raw kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²). Unbounded."""
+        dm = self._active_datamodule
+        if dm is None or self._density_fn is None:
+            return 0.0
+        return self._density_fn(dm.params_to_array(params))
+
+    def evidence(self, params: dict[str, Any]) -> float:
+        """Pointwise evidence E(z) = D/(1+D) ∈ [0, 1). High near data."""
+        d = self.density(params)
+        return d / (1.0 + d)
 
     def _candidate_weight(self, params: dict[str, Any]) -> float:
         """1/L where L is derived from params. Matches SolutionSpace.decode()."""

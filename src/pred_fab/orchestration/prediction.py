@@ -837,6 +837,25 @@ class PredictionSystem(BaseOrchestrationSystem):
         z_t = model.encode(X_model, gradient_pass=True)
         return z_t.index_select(-1, active_idx)
 
+    def density_at(self, X_norm: np.ndarray) -> float:
+        """Pointwise kernel density D(z) = Σ w_j exp(-||z-c_j||²/2σ²).
+
+        Aggregated across per-model KDEs with performance weights.
+        Returns the raw unbounded density at the normalized input point.
+        """
+        if not self._model_kdes:
+            return 0.0
+        total_w = 0.0
+        weighted_d = 0.0
+        for kde in self._model_kdes.values():
+            z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
+            z_active = z[kde.active_mask].reshape(1, -1)
+            d2 = np.sum((z_active - kde.latent_points) ** 2, axis=-1)
+            density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
+            weighted_d += kde.weight * density
+            total_w += kde.weight
+        return weighted_d / total_w if total_w > 0 else 0.0
+
     def delta_integrated_evidence_batched_tensor(
         self,
         new_norm_batch_S: torch.Tensor,
