@@ -92,11 +92,14 @@ def main(
                            markeredgecolor=STEEL_500, markersize=6, label="Exploration"),
             ]
             if proposed_params is not None:
-                legend_items.append(
-                    plt.Line2D([0], [0], marker="x", color="none", markerfacecolor="black",
-                               markeredgecolor="black", markersize=7, markeredgewidth=1.5,
-                               label="Proposed"),
+                from matplotlib.patheffects import withStroke
+                proposed_handle = plt.Line2D(
+                    [0], [0], marker="x", color="none", markerfacecolor="white",
+                    markeredgecolor="white", markersize=7, markeredgewidth=1.5,
+                    label="Proposed",
                 )
+                proposed_handle.set_path_effects([withStroke(linewidth=3, foreground="black")])
+                legend_items.append(proposed_handle)
             ax1.legend(handles=legend_items, loc="upper left", fontsize=9,
                        frameon=True, framealpha=0.85, facecolor="white",
                        edgecolor="#D4D4D8", borderpad=0.8, markerscale=1.3)
