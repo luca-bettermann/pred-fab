@@ -1,10 +1,11 @@
-"""Performance concept: three equal panels explaining the performance pipeline.
+"""Performance concept: feature prediction → scoring → system performance.
 
-  Panel 1: Feature prediction f̂(x,y) — what the model predicts (Greys)
-  Panel 2: Marginal performance P(x) — how predictions become scores
-  Panel 3: System performance P_sys(x,y) — the combined objective (RdYlGn)
+  Panel 1: Feature prediction f̂(x,y) — emerald sequential
+  Panel 2: Scoring curve P(f̂) — emerald fill (centered, half height)
+  Panel 3: System performance P_sys(x,y) — RdYlGn
 
-All synthetic data — explains the pipeline, not domain-specific results.
+Uses shared EXISTING_POINTS from _config.py (same as evidence figures).
+Quadratic scoring function with target at 0.5.
 """
 from __future__ import annotations
 
@@ -17,10 +18,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from pred_fab.plotting._style import save_fig
+from _config import EXISTING_POINTS
+from pred_fab.plotting._style import save_fig, EMERALD_500, ZINC_600, FONT
 from panels import (
     draw_experiments, feature_topology, performance_topology,
-    marginal_performance,
+    marginal_performance, setup_axes, subplot_label, clean_spines,
 )
 
 PLOTS_DIR = Path(__file__).parent / "plots"
@@ -32,19 +34,15 @@ def main(
     predict_fn: Callable[[dict[str, Any]], dict[str, float]] | None = None,
     score_fn: Callable[[dict[str, Any]], float] | None = None,
     feature_code: str = "feature",
-    target_value: float = 0.65,
+    target_value: float = 0.5,
     x_key: str = "x",
     y_key: str = "y",
     x_bounds: tuple[float, float] = (0.0, 1.0),
     y_bounds: tuple[float, float] = (0.0, 1.0),
     x_label: str = "$x$",
     y_label: str = "$y$",
-    fixed_params: dict[str, Any] | None = None,
-    datapoints: list[dict[str, float]] | None = None,
-    fit_colorbar: bool = True,
     resolution: int = 80,
 ):
-    fixed = fixed_params or {}
     x_lo, x_hi = x_bounds
     y_lo, y_hi = y_bounds
 
@@ -52,16 +50,19 @@ def main(
         def predict_fn(params):
             xn = (params.get(x_key, 0.5) - x_lo) / (x_hi - x_lo)
             yn = (params.get(y_key, 0.5) - y_lo) / (y_hi - y_lo)
-            f = 0.7 * np.exp(-((xn - 0.4) ** 2 + (yn - 0.55) ** 2) / 0.15)
-            f += 0.35 * np.exp(-((xn - 0.8) ** 2 + (yn - 0.25) ** 2) / 0.2)
-            f += 0.1 * np.sin(2.5 * np.pi * xn) * np.cos(1.8 * np.pi * yn) * 0.2
+            # Multi-modal landscape for visual interest
+            f = 0.6 * np.exp(-((xn - 0.35) ** 2 + (yn - 0.6) ** 2) / 0.08)
+            f += 0.4 * np.exp(-((xn - 0.75) ** 2 + (yn - 0.3) ** 2) / 0.12)
+            f += 0.25 * np.exp(-((xn - 0.2) ** 2 + (yn - 0.2) ** 2) / 0.06)
+            f += 0.15 * np.sin(3.0 * np.pi * xn) * np.cos(2.5 * np.pi * yn) * 0.15
             return {feature_code: float(np.clip(f, 0, 1))}
 
     if score_fn is None:
+        # Quadratic scoring: peaks at target, drops off symmetrically
         def score_fn(params):
             features = predict_fn(params)
             f = features.get(feature_code, 0.0)
-            return float(np.clip(1.0 - abs(f - target_value) / 0.7, 0, 1))
+            return float(np.clip(1.0 - ((f - target_value) / 0.5) ** 2, 0, 1))
 
     xs = np.linspace(x_lo, x_hi, resolution)
     ys = np.linspace(y_lo, y_hi, resolution)
@@ -70,38 +71,62 @@ def main(
     perf_grid = np.zeros((resolution, resolution))
     for i in range(resolution):
         for j in range(resolution):
-            params = dict(fixed)
-            params[x_key] = float(xs[i])
-            params[y_key] = float(ys[j])
+            params = {x_key: float(xs[i]), y_key: float(ys[j])}
             features = predict_fn(params)
             feat_grid[j, i] = features.get(feature_code, 0.0)
             perf_grid[j, i] = score_fn(params)
 
+    # Marginal: average P across y for each x
     perf_along_x = np.mean(perf_grid, axis=0)
 
-    exp_x = [d[x_key] for d in datapoints] if datapoints else []
-    exp_y = [d[y_key] for d in datapoints] if datapoints else []
+    # Scoring curve: sweep feature value through the scoring function
+    feat_range = np.linspace(0, 1, 200)
+    score_curve = np.array([
+        float(np.clip(1.0 - ((f - target_value) / 0.5) ** 2, 0, 1))
+        for f in feat_range
+    ])
 
+    # Data points from shared config
+    exp_x = EXISTING_POINTS[:, 0].tolist()
+    exp_y = EXISTING_POINTS[:, 1].tolist()
+
+    # ── Figure: 3-column layout, scoring curve centered in middle ──
     apply_style()
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16.5, 5))
-    fig.subplots_adjust(wspace=0.30, left=0.04, right=0.97, bottom=0.12, top=0.90)
+    fig = plt.figure(figsize=(14, 5))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.3, 0.7, 1.3],
+                          hspace=0.4, wspace=0.25,
+                          left=0.05, right=0.96, top=0.92, bottom=0.10)
 
-    feature_topology(fig, ax1, xs, ys, feat_grid,
+    # Panel 1: Feature topology (full height)
+    ax_feat = fig.add_subplot(gs[:, 0])
+    feature_topology(fig, ax_feat, xs, ys, feat_grid,
                      x_label, y_label, x_bounds, y_bounds,
                      target_value=target_value,
                      label=r"$\hat{f}(x, y)$")
-    if exp_x:
-        draw_experiments(ax1, exp_x, exp_y)
+    draw_experiments(ax_feat, exp_x, exp_y)
 
-    marginal_performance(ax2, xs, perf_along_x, x_label,
-                         r"$\bar{P}(x)$", fit_colorbar=fit_colorbar)
+    # Panel 2: Scoring curve (centered, half height)
+    ax_score = fig.add_subplot(gs[0, 1])
+    ax_score.fill_between(feat_range, score_curve, alpha=0.15, color=EMERALD_500)
+    ax_score.plot(feat_range, score_curve, color=EMERALD_500, linewidth=2)
+    ax_score.axvline(target_value, color=EMERALD_500, ls='--', lw=1, alpha=0.5)
+    ax_score.set_xlim(0, 1)
+    ax_score.set_ylim(-0.05, 1.1)
+    ax_score.set_xlabel(r"$\hat{f}$", fontsize=FONT["axis_label"], color=ZINC_600)
+    subplot_label(ax_score, r"$P(\hat{f})$")
+    clean_spines(ax_score)
 
-    performance_topology(fig, ax3, xs, ys, perf_grid,
+    # Hide bottom-middle slot
+    ax_empty = fig.add_subplot(gs[1, 1])
+    ax_empty.set_visible(False)
+
+    # Panel 3: Performance topology (full height)
+    ax_perf = fig.add_subplot(gs[:, 2])
+    performance_topology(fig, ax_perf, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
                          label="$P_{\\mathrm{sys}}(x, y)$",
-                         fit_colorbar=fit_colorbar)
-    if exp_x:
-        draw_experiments(ax3, exp_x, exp_y)
+                         fit_colorbar=True)
+    draw_experiments(ax_perf, exp_x, exp_y)
 
     path = save_path or str(PLOTS_DIR / "performance_concept.png")
     save_fig(path, dpi=200)
