@@ -74,7 +74,7 @@ def main(
 
     performance_topology(fig, ax2, xs, ys, perf_grid,
                          x_label, y_label, xb, yb, show_optimum=False,
-                         label="$P_{\\mathrm{sys}}(x, y)$",
+                         label="Predicted $P_{\\mathrm{sys}}(x, y)$",
                          fit_colorbar=fit_colorbar)
     if exp_x:
         draw_experiments(ax2, exp_x, exp_y)
