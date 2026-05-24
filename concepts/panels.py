@@ -80,10 +80,13 @@ def performance_topology(
     show_optimum: bool = True,
     label: str = "Predicted $P(x, y)$",
     fit_colorbar: bool = True,
+    vmax_override: float | None = None,
 ) -> None:
     """Performance surface — RdYlGn."""
     cm_p = cmap("performance")
-    if fit_colorbar:
+    if vmax_override is not None:
+        norm_p = Normalize(vmin=0, vmax=vmax_override)
+    elif fit_colorbar:
         norm_p = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
         norm_p = Normalize(vmin=0, vmax=1)
@@ -111,10 +114,13 @@ def evidence_gain_topology(
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     label: str = "$\\Delta E(x, y)$",
     fit_colorbar: bool = True,
+    vmax_override: float | None = None,
 ) -> None:
     """Evidence gain surface — YlGn (exploration signal)."""
     cm_e = cmap("evidence_gain")
-    if fit_colorbar:
+    if vmax_override is not None:
+        norm_e = Normalize(vmin=0, vmax=vmax_override)
+    elif fit_colorbar:
         norm_e = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     else:
         norm_e = Normalize(vmin=0, vmax=1)
@@ -134,10 +140,14 @@ def acquisition_topology(
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     kappa: float = 0.5,
     label: str | None = None,
+    vmax_override: float | None = None,
 ) -> None:
     """Acquisition surface — magma (combined objective)."""
     cm_a = cmap("acquisition")
-    norm_a = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
+    if vmax_override is not None:
+        norm_a = Normalize(vmin=float(grid.min()), vmax=vmax_override)
+    else:
+        norm_a = Normalize(vmin=float(grid.min()), vmax=float(grid.max()))
     ax.contourf(xs, ys, grid, levels=18, cmap=cm_a, norm=norm_a)
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
 

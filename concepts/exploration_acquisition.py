@@ -28,7 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from _style import apply_style
-from pred_fab.plotting._style import ACCENT_YELLOW, save_fig
+from pred_fab.plotting._style import save_fig
 from panels import (
     draw_experiments, evidence_gain_topology,
     performance_topology, acquisition_topology,
@@ -39,56 +39,70 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 
 def main(
-    xs: np.ndarray,
-    ys: np.ndarray,
-    evidence_grid: np.ndarray,
-    perf_grid: np.ndarray,
-    acq_grid: np.ndarray,
+    panels: list[dict[str, Any]],
     kappa: float,
     save_path: str | None = None,
-    x_label: str = "Print Speed [m/s]",
-    y_label: str = "Calibration Factor",
-    x_bounds: tuple[float, float] | None = None,
-    y_bounds: tuple[float, float] | None = None,
     proposed_params: dict[str, Any] | None = None,
-    x_key: str = "V_fab",
-    y_key: str = "calibrationFactor",
-    datapoints: list[dict[str, float]] | None = None,
     fit_colorbar: bool = True,
 ):
-    xb = x_bounds or (float(xs[0]), float(xs[-1]))
-    yb = y_bounds or (float(ys[0]), float(ys[-1]))
+    """Render acquisition panels for one or more axis pairs.
 
-    exp_x = [d[x_key] for d in datapoints] if datapoints else []
-    exp_y = [d[y_key] for d in datapoints] if datapoints else []
+    Each entry in *panels* is a dict with keys:
+      xs, ys, evidence_grid, perf_grid, acq_grid,
+      x_label, y_label, x_bounds, y_bounds, x_key, y_key,
+      datapoints (list[dict])
+    When multiple panels are provided they are stacked as rows with
+    shared colorbar scales for direct comparability.
+    """
+    n_rows = len(panels)
+    if n_rows == 0:
+        return
+
+    # Shared vmin/vmax across all rows
+    ev_max = max(float(np.nanmax(p["evidence_grid"])) for p in panels)
+    pf_max = max(float(np.nanmax(p["perf_grid"])) for p in panels)
+    acq_max = max(float(np.nanmax(p["acq_grid"])) for p in panels)
 
     apply_style()
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16.5, 5))
-    fig.subplots_adjust(wspace=0.30, left=0.04, right=0.97, bottom=0.12, top=0.90)
+    fig, axes = plt.subplots(n_rows, 3, figsize=(16.5, 5 * n_rows), squeeze=False)
+    fig.subplots_adjust(wspace=0.30, left=0.04, right=0.97, bottom=0.08, top=0.92)
 
-    evidence_gain_topology(fig, ax1, xs, ys, evidence_grid,
-                           x_label, y_label, xb, yb,
-                           fit_colorbar=fit_colorbar)
-    if exp_x:
-        draw_experiments(ax1, exp_x, exp_y)
+    for r, p in enumerate(panels):
+        xs, ys = p["xs"], p["ys"]
+        xb = p.get("x_bounds") or (float(xs[0]), float(xs[-1]))
+        yb = p.get("y_bounds") or (float(ys[0]), float(ys[-1]))
+        xl, yl = p["x_label"], p["y_label"]
+        xk, yk = p["x_key"], p["y_key"]
+        dp = p.get("datapoints") or []
+        exp_x = [d[xk] for d in dp]
+        exp_y = [d[yk] for d in dp]
 
-    performance_topology(fig, ax2, xs, ys, perf_grid,
-                         x_label, y_label, xb, yb, show_optimum=False,
-                         label="Predicted $P_{\\mathrm{sys}}(x, y)$",
-                         fit_colorbar=fit_colorbar)
-    if exp_x:
-        draw_experiments(ax2, exp_x, exp_y)
+        ax1, ax2, ax3 = axes[r]
 
-    acquisition_topology(fig, ax3, xs, ys, acq_grid,
-                         x_label, y_label, xb, yb, kappa=kappa)
-    if proposed_params is not None:
-        ax3.scatter([float(proposed_params[x_key])], [float(proposed_params[y_key])],
-                    marker="x", c=ACCENT_YELLOW, s=100, linewidths=1.8, zorder=12)
-    if exp_x:
-        draw_experiments(ax3, exp_x, exp_y)
+        evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
+                               xl, yl, xb, yb,
+                               fit_colorbar=fit_colorbar, vmax_override=ev_max)
+        if exp_x:
+            draw_experiments(ax1, exp_x, exp_y)
+
+        performance_topology(fig, ax2, xs, ys, p["perf_grid"],
+                             xl, yl, xb, yb, show_optimum=False,
+                             label="Predicted $P_{\\mathrm{sys}}$",
+                             fit_colorbar=fit_colorbar, vmax_override=pf_max)
+        if exp_x:
+            draw_experiments(ax2, exp_x, exp_y)
+
+        acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
+                             xl, yl, xb, yb, kappa=kappa,
+                             vmax_override=acq_max)
+        if proposed_params is not None:
+            ax3.scatter([float(proposed_params[xk])], [float(proposed_params[yk])],
+                        marker="x", c="white", s=100, linewidths=2.0, zorder=12)
+        if exp_x:
+            draw_experiments(ax3, exp_x, exp_y)
 
     path = save_path or str(PLOTS_DIR / "exploration_acquisition.png")
-    save_fig(path, dpi=200)
+    save_fig(path)
     print(f"Saved: {path}")
 
 
