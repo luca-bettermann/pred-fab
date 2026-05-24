@@ -77,11 +77,11 @@ def _truncate_cmap(
     cm = _LSC.from_list(name, base(xs), N=256)
     mpl.colormaps.register(cm)
 
-_truncate_cmap("emerald_sequential", "emerald_sequential_soft", lo=0.0, hi=0.85)
-_truncate_cmap("Blues", "Blues_soft", lo=0.0, hi=0.85)
-_truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.85)
-_truncate_cmap("Greys", "Greys_soft", lo=0.0, hi=0.85)
-_truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.15, hi=0.85)
+_truncate_cmap("emerald_sequential", "emerald_sequential_soft", lo=0.0, hi=0.80)
+_truncate_cmap("Blues", "Blues_soft", lo=0.0, hi=0.80)
+_truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.80)
+_truncate_cmap("Greys", "Greys_soft", lo=0.0, hi=0.80)
+_truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.20, hi=0.80)
 SURFACES: dict[str, SemanticSurface] = {
     "density":       SemanticSurface("Greys_soft", bounded=False),
     "evidence":      SemanticSurface("Blues_soft",   bounded=True),
