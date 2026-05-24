@@ -59,14 +59,6 @@ def main(
     if n_rows == 0:
         return
 
-    # Shared vmin/vmax across all rows for comparability
-    ev_min = min(float(np.nanmin(p["evidence_grid"])) for p in panels)
-    ev_max = max(float(np.nanmax(p["evidence_grid"])) for p in panels)
-    pf_min = min(float(np.nanmin(p["perf_grid"])) for p in panels)
-    pf_max = max(float(np.nanmax(p["perf_grid"])) for p in panels)
-    acq_min = min(float(np.nanmin(p["acq_grid"])) for p in panels)
-    acq_max = max(float(np.nanmax(p["acq_grid"])) for p in panels)
-
     apply_style()
     fig, axes = plt.subplots(n_rows, 3, figsize=(16.5, 5 * n_rows), squeeze=False)
     fig.subplots_adjust(wspace=0.30, left=0.04, right=0.97, bottom=0.08, top=0.92)
@@ -87,21 +79,19 @@ def main(
         sigma_phys = sigma * (xb[1] - xb[0]) if sigma else None
 
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
-                               xl, yl, xb, yb,
-                               vmin_override=ev_min, vmax_override=ev_max)
+                               xl, yl, xb, yb, fit_colorbar=True)
         if exp_x:
             draw_experiments(ax1, exp_x, exp_y, sigma=sigma_phys)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
-                             vmin_override=pf_min, vmax_override=pf_max)
+                             fit_colorbar=True)
         if exp_x:
             draw_experiments(ax2, exp_x, exp_y, sigma=sigma_phys)
 
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
-                             xl, yl, xb, yb, kappa=kappa,
-                             vmin_override=acq_min, vmax_override=acq_max)
+                             xl, yl, xb, yb, kappa=kappa)
         if proposed_params is not None:
             from matplotlib.patheffects import withStroke
             px, py = float(proposed_params[xk]), float(proposed_params[yk])
