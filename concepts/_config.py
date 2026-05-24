@@ -32,6 +32,23 @@ EXISTING_POINTS: np.ndarray = np.array([
 Z_NEW: np.ndarray = np.array([0.50, 0.30])
 
 
+def make_topology_marginal_layout(fig_width: float = 11.0, fig_height: float = 5.0):
+    """Shared layout: full-height topology left, two half-height marginals right.
+
+    Used by both evidence integration and performance concept figures
+    for consistent proportions.
+    Returns (fig, ax_main, ax_top, ax_bottom).
+    """
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=(fig_width, fig_height))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.15,
+                          left=0.06, right=0.95, top=0.92, bottom=0.12)
+    ax_main = fig.add_subplot(gs[:, 0])
+    ax_top = fig.add_subplot(gs[0, 1])
+    ax_bottom = fig.add_subplot(gs[1, 1])
+    return fig, ax_main, ax_top, ax_bottom
+
+
 def gaussian_density(grid: np.ndarray, center: np.ndarray, sigma: float) -> np.ndarray:
     """Peak-1 Gaussian density — matches production (`ρ(c) = 1`).
 

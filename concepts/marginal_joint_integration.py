@@ -25,7 +25,7 @@ from _style import (
     add_kernel_radii_2d,
     ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
-from _config import SIGMA
+from _config import SIGMA, make_topology_marginal_layout
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
 from pred_fab.plotting._style import (
     SURFACES, MARKERS, LINES, FILL_ALPHA, FONT, RED, ACCENT_YELLOW,
@@ -222,12 +222,7 @@ def main():
     # Figure 2: Evidence integration — how we measure
     # ================================================================
     apply_style()
-    fig2 = plt.figure(figsize=(11, 5))
-    gs = fig2.add_gridspec(2, 2, width_ratios=[1.3, 1], hspace=0.5, wspace=0.15,
-                           left=0.06, right=0.95, top=0.92, bottom=0.12)
-    ax_joint = fig2.add_subplot(gs[:, 0])
-    ax_mx = fig2.add_subplot(gs[0, 1])
-    ax_my = fig2.add_subplot(gs[1, 1])
+    fig2, ax_joint, ax_mx, ax_my = make_topology_marginal_layout()
 
     cm_e = cmap("evidence")
     norm_e = Normalize(vmin=0, vmax=evidence_2d.max())
