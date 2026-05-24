@@ -93,11 +93,11 @@ def main(
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa)
         if proposed_params is not None:
-            from matplotlib.patheffects import withStroke
             px, py = float(proposed_params[xk]), float(proposed_params[yk])
+            ax3.scatter([px], [py], marker="x", c="white", s=120,
+                        linewidths=3.0, zorder=11)
             ax3.scatter([px], [py], marker="x", c=ACCENT_YELLOW, s=80,
-                        linewidths=1.8, zorder=12,
-                        path_effects=[withStroke(linewidth=3, foreground="white")])
+                        linewidths=1.8, zorder=12)
         if exp_x:
             draw_experiments(ax3, exp_x, exp_y, sigma=sigma_phys)
 
