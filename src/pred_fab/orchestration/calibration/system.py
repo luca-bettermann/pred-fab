@@ -335,6 +335,42 @@ class CalibrationSystem(BaseOrchestrationSystem):
         acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
         return xs, ys, ev_grid, perf_grid, acq_grid
 
+    def compute_evidence_grids(
+        self,
+        x_key: str,
+        y_key: str,
+        x_bounds: tuple[float, float],
+        y_bounds: tuple[float, float],
+        fixed_params: dict[str, Any],
+        resolution: int = 60,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Compute 2D density and evidence grids for visualization.
+
+        Same sweep as compute_acquisition_grids but calls density() and
+        evidence() — the pointwise [0,1]-normalized path. For evidence
+        topology plots where per-point coverage matters more than
+        integrated gain.
+
+        Returns (xs, ys, density_grid, evidence_grid).
+        """
+        xs = np.linspace(*x_bounds, resolution)
+        ys = np.linspace(*y_bounds, resolution)
+        d_grid = np.zeros((resolution, resolution))
+        e_grid = np.zeros((resolution, resolution))
+
+        for i in range(resolution):
+            for j in range(resolution):
+                params = dict(fixed_params)
+                params[x_key] = float(xs[i])
+                params[y_key] = float(ys[j])
+                for code, derive_fn in self.dimension_derivations.items():
+                    if code not in params:
+                        params[code] = derive_fn(params)
+                d_grid[j, i] = self.density(params)
+                e_grid[j, i] = evidence_from_density(d_grid[j, i])
+
+        return xs, ys, d_grid, e_grid
+
     # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================
