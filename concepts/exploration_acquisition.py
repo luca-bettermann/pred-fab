@@ -98,8 +98,8 @@ def main(
                                label="Proposed"),
                 )
             ax1.legend(handles=legend_items, loc="upper left", fontsize=7,
-                       framealpha=0.85, facecolor="white", edgecolor="#D4D4D8",
-                       borderpad=0.6)
+                       frameon=True, framealpha=0.85, facecolor="white",
+                       edgecolor="#D4D4D8", borderpad=0.6)
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
