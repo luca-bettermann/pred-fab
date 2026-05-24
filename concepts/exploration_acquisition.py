@@ -93,8 +93,8 @@ def main(
             ]
             if proposed_params is not None:
                 legend_items.append(
-                    plt.Line2D([0], [0], marker="x", color="none", markerfacecolor="white",
-                               markeredgecolor="white", markersize=7, markeredgewidth=1.5,
+                    plt.Line2D([0], [0], marker="x", color="none", markerfacecolor="black",
+                               markeredgecolor="black", markersize=7, markeredgewidth=1.5,
                                label="Proposed"),
                 )
             ax1.legend(handles=legend_items, loc="upper left", fontsize=9,
