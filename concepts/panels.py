@@ -36,15 +36,15 @@ def draw_experiments(
     from matplotlib.patches import Ellipse
     from pred_fab.plotting._style import draw_datapoints, ACCENT_RED
 
-    def _draw_radius(ax_obj, xi, yi, zorder=4):
+    def _draw_radius(ax_obj, xi, yi, zorder=4, color="white"):
         if sigma_xy is not None:
             e = Ellipse((xi, yi), 2 * sigma_xy[0], 2 * sigma_xy[1],
-                        fill=False, linestyle="--", edgecolor="white",
+                        fill=False, linestyle="--", edgecolor=color,
                         linewidth=0.6, alpha=0.4, zorder=zorder)
             ax_obj.add_patch(e)
         elif sigma is not None:
             c = plt.Circle((xi, yi), sigma, fill=False, linestyle="--",
-                           edgecolor="white", linewidth=0.8, alpha=0.5,
+                           edgecolor=color, linewidth=0.8, alpha=0.5,
                            zorder=zorder)
             ax_obj.add_patch(c)
 
@@ -57,7 +57,10 @@ def draw_experiments(
                         color=ZINC_700)
     elif styles:
         for xi, yi, st in zip(exp_x, exp_y, styles):
-            _draw_radius(ax, xi, yi, st.get("zorder", 5) - 1)
+            rc = st.get("edgecolors", st.get("c", "white"))
+            if isinstance(rc, list):
+                rc = rc[0] if rc else "white"
+            _draw_radius(ax, xi, yi, st.get("zorder", 5) - 1, color=rc)
             ax.scatter([xi], [yi], **st)
     else:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma)
