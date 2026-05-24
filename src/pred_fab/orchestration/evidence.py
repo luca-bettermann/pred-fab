@@ -812,6 +812,40 @@ def make_estimator(config: EstimatorConfig) -> EvidenceEstimator:
     raise ValueError(f"unknown estimator type: {config.type!r}")
 
 
+def compute_density_grid_from_centers(
+    centers: np.ndarray,
+    weights: np.ndarray,
+    sigma: float,
+    x_bounds: tuple[float, float] = (0.0, 1.0),
+    y_bounds: tuple[float, float] = (0.0, 1.0),
+    resolution: int = 80,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """2D evidence density E(x,y) = D/(1+D) from projected centers.
+
+    Same 2D projection as _evidence_gain_grid_from_centers but computes
+    pointwise density instead of integrated gain. For visualization only.
+    """
+    xs_param = np.linspace(*x_bounds, resolution)
+    ys_param = np.linspace(*y_bounds, resolution)
+    xs_norm = (xs_param - x_bounds[0]) / (x_bounds[1] - x_bounds[0])
+    ys_norm = (ys_param - y_bounds[0]) / (y_bounds[1] - y_bounds[0])
+
+    # Normalize centers to [0,1]²
+    c_norm = centers.copy()
+    c_norm[:, 0] = (centers[:, 0] - x_bounds[0]) / (x_bounds[1] - x_bounds[0])
+    c_norm[:, 1] = (centers[:, 1] - y_bounds[0]) / (y_bounds[1] - y_bounds[0])
+    inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+
+    grid = np.zeros((resolution, resolution))
+    for i in range(resolution):
+        for j in range(resolution):
+            d2 = (xs_norm[i] - c_norm[:, 0]) ** 2 + (ys_norm[j] - c_norm[:, 1]) ** 2
+            D = float(np.sum(weights * np.exp(-d2 * inv_2s2)))
+            grid[j, i] = D / (1.0 + D)
+
+    return xs_param, ys_param, grid
+
+
 def _evidence_gain_grid_from_centers(
     centers: np.ndarray,
     weights: np.ndarray,
