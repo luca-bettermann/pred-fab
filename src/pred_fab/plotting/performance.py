@@ -121,29 +121,18 @@ def radar_chart(
         ax.scatter([a], [s], c=color, s=40, zorder=6,
                    edgecolors="white", linewidth=0.6)
 
-    # Legend: mean dot + ±σ error bar
+    # Legend: mean dot + ±σ error bar (symbols only, no labels)
     from matplotlib.lines import Line2D
     handles = []
-    if label:
-        handles.append(Line2D([0], [0], marker="o", color="none",
-                              markerfacecolor=color, markeredgecolor="white",
-                              markersize=7, label=f"{label} (mean)"))
-    if stds is not None and label:
+    handles.append(Line2D([0], [0], marker="o", color="none",
+                          markerfacecolor=color, markeredgecolor="white",
+                          markersize=7, label="mean"))
+    if stds is not None:
         handles.append(Line2D([0], [0], color=color, linewidth=1.0,
                               marker="|", markersize=6, markeredgewidth=1.0,
-                              label=f"{label} (±σ)"))
-    if ref_label and ref_values is not None:
-        handles.append(Line2D([0], [0], marker="o", color="none",
-                              markerfacecolor=ref_color, markeredgecolor="white",
-                              markersize=6, alpha=0.6, label=f"{ref_label} (mean)"))
-    if ref_stds is not None and ref_label:
-        handles.append(Line2D([0], [0], color=ref_color, linewidth=1.0,
-                              marker="|", markersize=6, markeredgewidth=1.0,
-                              alpha=0.5, label=f"{ref_label} (±σ)"))
-    if handles:
-        ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"] - 1,
-                  frameon=True, framealpha=0.85, facecolor="white",
-                  edgecolor=ZINC_300, borderpad=0.6)
+                              label="±σ"))
+    ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"],
+              frameon=False, markerscale=1.3)
 
 
 def plot_performance_radar(

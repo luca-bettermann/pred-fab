@@ -131,11 +131,9 @@ def main(
 
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)
-    ax_radar.text(1.15, 1.05, f"$S$ = {proposed_score:.2f}",
+    ax_radar.text(1.15, 1.08, f"$S$ = {proposed_score:.2f}",
                   transform=ax_radar.transAxes, ha="right", va="top",
-                  fontsize=FONT["title"], color=EMERALD_500,
-                  bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
-                            edgecolor=ZINC_300, linewidth=0.6, alpha=0.9))
+                  fontsize=FONT["title"], color=EMERALD_500)
 
     path = save_path or str(PLOTS_DIR / "inference_result.png")
     save_fig(path, dpi=200)
