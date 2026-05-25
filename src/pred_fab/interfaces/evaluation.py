@@ -1,7 +1,7 @@
 """Abstract interface for evaluation models that score features into performance."""
 
 import numpy as np
-from typing import Any, final
+from typing import Any, Literal, final
 from abc import abstractmethod
 from numpy.typing import NDArray
 
@@ -45,6 +45,16 @@ class IEvaluationModel(BaseInterface):
         scoring (e.g., MLP predicts per-layer mean, measurement uses per-node).
         """
         return self.input_features
+
+    @property
+    def aggregate_input(self) -> Literal["sum", "mean"] | None:
+        """Aggregate per-row input features before scoring.
+
+        None (default): score each row independently, np.nanmean the scores.
+        'sum': sum features across rows, score the total once (cost-style).
+        'mean': mean features across rows, score the mean once.
+        """
+        return None
 
     @property
     @abstractmethod
@@ -100,6 +110,21 @@ class IEvaluationModel(BaseInterface):
         first_array = feature_arrays[first_code]
         n_rows = first_array.shape[0]
 
+        # Aggregate-before-scoring: sum or mean features, score once
+        if self.aggregate_input is not None:
+            fv: dict[str, float] = {}
+            for code in self.input_features:
+                vals = feature_arrays[code][:, -1]
+                valid = vals[~np.isnan(vals)]
+                if len(valid) == 0:
+                    return None, [None] * n_rows
+                if self.aggregate_input == "sum":
+                    fv[code] = float(np.sum(valid))
+                else:
+                    fv[code] = float(np.mean(valid))
+            score = float(np.clip(self._score_row(fv, params), 0.0, 1.0))
+            return score, [score]
+
         first_feat_obj = self._ref_features.get(first_code)
         if first_feat_obj is not None and isinstance(first_feat_obj, DataArray):
             dim_iterator_codes = list(first_feat_obj.columns[:-1])
@@ -112,19 +137,19 @@ class IEvaluationModel(BaseInterface):
             current_dim = first_array[i, :-1]
             current_dim_dict = dict(zip(dim_iterator_codes, current_dim))
 
-            fv: dict[str, float] = {}
+            fv_row: dict[str, float] = {}
             has_nan = False
             for code in self.input_features:
                 val = float(feature_arrays[code][i, -1])
                 if np.isnan(val):
                     has_nan = True
-                fv[code] = val
+                fv_row[code] = val
 
             if has_nan:
                 performance_list.append(None)
                 continue
 
-            score = self._score_row(fv, params, **current_dim_dict)
+            score = self._score_row(fv_row, params, **current_dim_dict)
             performance_list.append(float(np.clip(score, 0.0, 1.0)))
 
         perf_arr = np.array([v if v is not None else np.nan for v in performance_list])
@@ -147,6 +172,15 @@ class IEvaluationModel(BaseInterface):
         S = int(first.shape[0])
         if S == 0:
             return torch.zeros(0, dtype=first.dtype)
+
+        if self.aggregate_input is not None:
+            reduced: dict[str, torch.Tensor] = {}
+            for code, t in feature_tensors.items():
+                if self.aggregate_input == "sum":
+                    reduced[code] = t.sum(dim=1, keepdim=True)
+                else:
+                    reduced[code] = t.mean(dim=1, keepdim=True)
+            feature_tensors = reduced
 
         avgs = self._score_tensor(feature_tensors, parameters_list)
 
