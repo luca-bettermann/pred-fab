@@ -44,36 +44,9 @@ def _radar_panel(
     attribute_scores: list[float],
     label: str = "Predicted attributes",
 ):
-    """Radar chart for predicted performance attributes at the inference proposal."""
-    n = len(attribute_names)
-    if n < 3:
-        return
-
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
-    angles += angles[:1]
-    scores = list(attribute_scores) + [attribute_scores[0]]
-
-    ax.set_theta_offset(np.pi / 2)
-    ax.set_theta_direction(-1)
-    ax.set_rlabel_position(0)
-
-    ax.plot(angles, scores, color=EMERALD_500, linewidth=1.8)
-    ax.fill(angles, scores, color=EMERALD_500, alpha=0.15)
-
-    ax.set_xticks(angles[:-1])
-    short_names = [n.replace("\n", " ")[:5] for n in attribute_names]
-    ax.set_xticklabels(short_names, fontsize=FONT["tick"], color=ZINC_600)
-    ax.tick_params(axis="x", pad=12)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-    ax.set_yticklabels(["0.25", "0.50", "0.75", "1.00"],
-                       fontsize=6, color=ZINC_400)
-    ax.spines["polar"].set_color(ZINC_300)
-    ax.grid(color=ZINC_300, linewidth=0.4, alpha=0.5)
-
-    for angle, score, name in zip(angles[:-1], attribute_scores, attribute_names):
-        ax.scatter([angle], [score], c=EMERALD_500, s=20, zorder=5,
-                   edgecolors="white", linewidth=0.5)
+    """Radar chart — delegates to the shared radar_chart function."""
+    from pred_fab.plotting.performance import radar_chart
+    radar_chart(ax, attribute_names, attribute_scores)
 
 
 def main(

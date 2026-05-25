@@ -10,8 +10,88 @@ from matplotlib.lines import Line2D
 
 from ._style import (
     FONT, save_fig, apply_style, EMERALD_300, EMERALD_500,
+    STEEL_100, STEEL_500,
     ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600,
 )
+
+
+def radar_chart(
+    ax,
+    attribute_names: list[str],
+    values: list[float],
+    stds: list[float] | None = None,
+    *,
+    ref_values: list[float] | None = None,
+    ref_stds: list[float] | None = None,
+    color: str = EMERALD_500,
+    fill_color: str = EMERALD_300,
+    ref_color: str = ZINC_400,
+    label: str | None = None,
+    ref_label: str | None = None,
+) -> None:
+    """General-purpose radar/spider chart on a polar axes.
+
+    Modes:
+      - values only → single polygon
+      - values + stds → single polygon with ±1σ band
+      - values + ref_values (± stds) → two polygons with optional bands
+
+    The primary polygon uses ``color``/``fill_color`` (emerald by default).
+    The reference polygon is subtle: dashed outline, no fill, soft zinc.
+    """
+    n = len(attribute_names)
+    if n < 3:
+        return
+
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
+    angles_closed = angles + [angles[0]]
+
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_rlabel_position(0)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(["0.25", "0.50", "0.75", "1.00"],
+                       fontsize=FONT["tick"] - 3, color=ZINC_400)
+    ax.spines["polar"].set_color(ZINC_300)
+    ax.grid(color=ZINC_300, linewidth=0.4, alpha=0.5)
+
+    ax.set_xticks(angles)
+    ax.set_xticklabels(attribute_names, fontsize=FONT["tick"], color=ZINC_600)
+    ax.tick_params(axis="x", pad=12)
+
+    def _close(v):
+        return list(v) + [v[0]]
+
+    # Reference polygon (behind primary)
+    if ref_values is not None:
+        rc = _close(ref_values)
+        ax.plot(angles_closed, rc, color=ref_color, linewidth=1.2,
+                linestyle="--", alpha=0.6, zorder=3, label=ref_label)
+        if ref_stds is not None:
+            lo = _close([max(0, v - s) for v, s in zip(ref_values, ref_stds)])
+            hi = _close([min(1, v + s) for v, s in zip(ref_values, ref_stds)])
+            ax.fill_between(angles_closed, lo, hi, color=ref_color,
+                            alpha=0.08, zorder=2)
+        for a, s in zip(angles, ref_values):
+            ax.scatter([a], [s], c=ref_color, s=14, zorder=4,
+                       edgecolors="white", linewidth=0.4, alpha=0.6)
+
+    # Primary polygon
+    vc = _close(values)
+    ax.plot(angles_closed, vc, color=color, linewidth=1.8, zorder=5,
+            label=label)
+    ax.fill(angles_closed, vc, color=fill_color, alpha=0.15, zorder=4)
+
+    if stds is not None:
+        lo = _close([max(0, v - s) for v, s in zip(values, stds)])
+        hi = _close([min(1, v + s) for v, s in zip(values, stds)])
+        ax.fill_between(angles_closed, lo, hi, color=color,
+                        alpha=0.10, zorder=4)
+
+    for a, s in zip(angles, values):
+        ax.scatter([a], [s], c=color, s=20, zorder=6,
+                   edgecolors="white", linewidth=0.5)
 
 
 def plot_performance_radar(
