@@ -6,7 +6,7 @@
     Bottom right: empty (single scoring function, no second marginal)
 
   Figure 2 — Performance topology:
-    P_sys(x,y) — RdYlGn, standalone
+    S(x,y) — RdYlGn, standalone
 
 Uses shared CONCEPT_POINTS and layout from _config.py.
 """
@@ -142,7 +142,7 @@ def main(
 
     performance_topology(fig2, ax2, xs, ys, perf_grid,
                          x_label, y_label, x_bounds, y_bounds,
-                         label=r"Predicted system performance  $P_{\mathrm{sys}}(x, y)$",
+                         label=r"Predicted system performance  $S(\mathbf{x})$",
                          fit_colorbar=True)
     draw_experiments(ax2, exp_x, exp_y, sigma=SIGMA_VIS, labels=CONCEPT_LABELS)
 

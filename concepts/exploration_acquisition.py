@@ -2,8 +2,8 @@
 
 Three side-by-side topologies showing the κ-blend:
   1. Evidence gain ΔE(x, y)  — sliced through the full-D KDE
-  2. Performance P_sys(x, y) — sliced through the full-D model
-  3. Acquisition A(x, y)     — (1-κ)·P_sys + κ·ΔE
+  2. Performance S(x, y) — sliced through the full-D model
+  3. Acquisition A(x, y)     — (1-κ)·S + κ·ΔE
 
 Usage with real model::
 
@@ -114,7 +114,7 @@ def main(
 
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
-                             label="Predicted $P_{\\mathrm{sys}}$",
+                             label="Predicted $S(\\mathbf{x})$",
                              fit_colorbar=fit_colorbar)
         if exp_x:
             draw_experiments(ax2, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)

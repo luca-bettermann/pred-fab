@@ -115,7 +115,7 @@ def performance_topology(
     x_label: str, y_label: str,
     x_bounds: tuple[float, float], y_bounds: tuple[float, float],
     show_optimum: bool = True,
-    label: str = "Predicted $P(x, y)$",
+    label: str = "Predicted $S(x, y)$",
     fit_colorbar: bool = True,
     vmin_override: float | None = None,
     vmax_override: float | None = None,
