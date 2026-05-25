@@ -319,6 +319,8 @@ class PfabAgent:
             specs = self.eval_system.get_model_specs()
             input_params.extend(specs["input_parameters"])
             input_features.extend(specs["input_features"])
+            for em in self.eval_system.models:
+                input_features.extend(em.acquisition_features)
             output_performance_attrs.extend(specs["outputs"])
 
         if self.pred_system.is_initialized:
@@ -662,7 +664,7 @@ class PfabAgent:
         for eval_model in self.eval_system.models:
             perf_name = eval_model.output_performance
             if perf_name in weights:
-                for feat_name in eval_model.input_features:
+                for feat_name in eval_model.acquisition_features:
                     feature_weights[feat_name] = weights[perf_name]
         if feature_weights:
             self.pred_system.set_uncertainty_weights(feature_weights)

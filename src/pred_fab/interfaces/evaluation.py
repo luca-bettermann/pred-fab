@@ -33,8 +33,18 @@ class IEvaluationModel(BaseInterface):
     @property
     @abstractmethod
     def input_features(self) -> list[str]:
-        """Feature codes this model scores (one or more)."""
+        """Feature codes consumed at measurement time — iterated by _score_row."""
         ...
+
+    @property
+    def acquisition_features(self) -> list[str]:
+        """Feature codes consumed at acquisition time — looked up by _score_tensor.
+
+        Defaults to input_features. Override when prediction-time scoring
+        operates on a different feature granularity than measurement-time
+        scoring (e.g., MLP predicts per-layer mean, measurement uses per-node).
+        """
+        return self.input_features
 
     @property
     @abstractmethod

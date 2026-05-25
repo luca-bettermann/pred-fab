@@ -1249,7 +1249,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             perf_code = eval_model.output_performance
             if perf_code not in perf_importance:
                 continue
-            for feat_code in eval_model.input_features:
+            for feat_code in eval_model.acquisition_features:
                 result[feat_code] = perf_importance[perf_code]
         return result
 

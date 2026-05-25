@@ -90,7 +90,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
 
         with profiler.section("eval._evaluate_feature_dict_tensor"):
             for eval_model in self.models:
-                feat_codes = eval_model.input_features
+                feat_codes = eval_model.acquisition_features
 
                 valid_indices: list[int] = []
                 for s, feat_dict in enumerate(features_dicts_S):
