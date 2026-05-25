@@ -1248,6 +1248,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         for eval_model in eval_system.models:
             perf_code = eval_model.output_performance
             if perf_code not in perf_importance:
+                self.logger.warning(
+                    f"R²_inf: no measured performance for '{perf_code}' "
+                    f"(eval {eval_model.__class__.__name__}, "
+                    f"acquisition_features={eval_model.acquisition_features}). "
+                    f"These features will have no importance weighting. "
+                    f"Likely cause: eval skipped due to missing input features, "
+                    f"or no experiments have measured '{perf_code}'."
+                )
                 continue
             for feat_code in eval_model.acquisition_features:
                 result[feat_code] = perf_importance[perf_code]
