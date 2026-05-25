@@ -20,6 +20,14 @@ from _style import (
 from pred_fab.plotting._style import FONT, FILL_ALPHA, surface as get_surface
 
 
+def draw_proposal(ax, x: float, y: float, label: str = "$z^*$") -> None:
+    """Proposed point — white cross with black outline. Shared across all plots."""
+    ax.scatter([x], [y], marker="x", c="black", s=100, linewidths=2.8, zorder=11)
+    ax.scatter([x], [y], marker="x", c="white", s=80, linewidths=1.5, zorder=12)
+    ax.annotate(label, (x, y), xytext=(8, 8), textcoords="offset points",
+                fontsize=FONT["annotation"], color=ZINC_700)
+
+
 def draw_experiments(
     ax, exp_x: list[float], exp_y: list[float],
     sigma: float | None = None,
@@ -126,14 +134,7 @@ def performance_topology(
     ax.contour(xs, ys, grid, levels=8, colors="white", linewidths=0.3, alpha=0.4)
     if show_optimum:
         opt_idx = np.unravel_index(np.argmax(grid), grid.shape)
-        opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
-        ax.scatter([opt_xv], [opt_yv], marker="x", c="black", s=100,
-                   linewidths=2.8, zorder=11)
-        ax.scatter([opt_xv], [opt_yv], marker="x", c="white", s=80,
-                   linewidths=1.5, zorder=12)
-        ax.annotate("$z^*$", (opt_xv, opt_yv), xytext=(8, 8),
-                    textcoords="offset points", fontsize=FONT["annotation"],
-                    color=ZINC_700)
+        draw_proposal(ax, xs[opt_idx[1]], ys[opt_idx[0]])
     subplot_label(ax, label)
     setup_axes(ax, x_label, y_label, x_bounds, y_bounds)
     sm = ScalarMappable(norm=norm_p, cmap=cm_p)

@@ -26,6 +26,7 @@ from _style import (
     ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
 from _config import SIGMA, CONCEPT_POINTS, CONCEPT_LABELS, SIGMA_VIS, make_topology_marginal_layout
+from panels import draw_proposal
 from pred_fab.orchestration.evidence import DEFAULT_RADII, KernelFieldEstimator
 from pred_fab.plotting._style import (
     SURFACES, MARKERS, LINES, FILL_ALPHA, FONT, RED, ACCENT_YELLOW,
@@ -256,13 +257,7 @@ def main():
     gain_dark = cmap("evidence_gain")(0.95)
     _draw_existing_points(ax3, CENTERS, LABELS, label_color=gain_dark)
 
-    ax3.scatter([z_new[0]], [z_new[1]], marker="x", c="black", s=100,
-                linewidths=2.8, zorder=11)
-    ax3.scatter([z_new[0]], [z_new[1]], marker="x", c="white", s=80,
-                linewidths=1.5, zorder=12)
-    ax3.annotate(r"$z^*$", (z_new[0], z_new[1]), xytext=(8, 8),
-                 textcoords="offset points", fontsize=FONT["annotation"],
-                 color=ZINC_700, zorder=13)
+    draw_proposal(ax3, z_new[0], z_new[1])
 
     subplot_label(ax3, r"Evidence gain  $\Delta E$")
     _setup_2d_axes(ax3)

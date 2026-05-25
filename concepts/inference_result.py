@@ -32,7 +32,7 @@ from pred_fab.plotting._style import (
 )
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
-from panels import draw_experiments, performance_topology, setup_axes
+from panels import draw_experiments, draw_proposal, performance_topology, setup_axes
 
 PLOTS_DIR = Path(__file__).parent / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
@@ -154,8 +154,7 @@ def main(
                          fit_colorbar=fit_colorbar)
     if exp_x:
         draw_experiments(ax_topo, exp_x, exp_y)
-    ax_topo.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=100,
-                    linewidths=1.8, zorder=12)
+    draw_proposal(ax_topo, opt_xv, opt_yv)
 
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
     _radar_panel(ax_radar, attr_names, attr_scores)

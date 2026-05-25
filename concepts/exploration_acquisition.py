@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 from _style import apply_style
 from pred_fab.plotting._style import ACCENT_YELLOW, save_fig
 from panels import (
-    draw_experiments, evidence_gain_topology,
+    draw_experiments, draw_proposal, evidence_gain_topology,
     performance_topology, acquisition_topology,
 )
 
@@ -122,11 +122,7 @@ def main(
         acquisition_topology(fig, ax3, xs, ys, p["acq_grid"],
                              xl, yl, xb, yb, kappa=kappa)
         if proposed_params is not None:
-            px, py = float(proposed_params[xk]), float(proposed_params[yk])
-            ax3.scatter([px], [py], marker="x", c="black", s=100,
-                        linewidths=2.8, zorder=11)
-            ax3.scatter([px], [py], marker="x", c="white", s=80,
-                        linewidths=1.5, zorder=12)
+            draw_proposal(ax3, float(proposed_params[xk]), float(proposed_params[yk]))
         if exp_x:
             draw_experiments(ax3, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
