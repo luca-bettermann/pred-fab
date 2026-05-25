@@ -256,10 +256,13 @@ def main():
     gain_dark = cmap("evidence_gain")(0.95)
     _draw_existing_points(ax3, CENTERS, LABELS, label_color=gain_dark)
 
-    ax3.scatter([z_new[0]], [z_new[1]], c=ACCENT_YELLOW, s=80,
-                marker="X", edgecolors="white", linewidth=1.2, zorder=12)
-    ax3.text(z_new[0] + 0.03, z_new[1] + 0.03, r"$Z_{new}$", fontsize=8,
-             color=ACCENT_YELLOW, zorder=13)
+    ax3.scatter([z_new[0]], [z_new[1]], marker="x", c="black", s=100,
+                linewidths=2.8, zorder=11)
+    ax3.scatter([z_new[0]], [z_new[1]], marker="x", c="white", s=80,
+                linewidths=1.5, zorder=12)
+    ax3.annotate(r"$z^*$", (z_new[0], z_new[1]), xytext=(8, 8),
+                 textcoords="offset points", fontsize=FONT["annotation"],
+                 color=ZINC_700, zorder=13)
 
     subplot_label(ax3, r"Evidence gain  $\Delta E$")
     _setup_2d_axes(ax3)

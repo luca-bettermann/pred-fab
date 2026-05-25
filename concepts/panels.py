@@ -127,11 +127,13 @@ def performance_topology(
     if show_optimum:
         opt_idx = np.unravel_index(np.argmax(grid), grid.shape)
         opt_xv, opt_yv = xs[opt_idx[1]], ys[opt_idx[0]]
-        ax.scatter([opt_xv], [opt_yv], marker="x", c=ACCENT_YELLOW, s=55,
-                   linewidths=1.0, zorder=10)
-        ax.annotate("$x^*$", (opt_xv, opt_yv), xytext=(8, 8),
-                    textcoords="offset points", fontsize=8, color=ZINC_700,
-                    arrowprops=dict(arrowstyle="->", color=ZINC_400, lw=0.8))
+        ax.scatter([opt_xv], [opt_yv], marker="x", c="black", s=100,
+                   linewidths=2.8, zorder=11)
+        ax.scatter([opt_xv], [opt_yv], marker="x", c="white", s=80,
+                   linewidths=1.5, zorder=12)
+        ax.annotate("$z^*$", (opt_xv, opt_yv), xytext=(8, 8),
+                    textcoords="offset points", fontsize=FONT["annotation"],
+                    color=ZINC_700)
     subplot_label(ax, label)
     setup_axes(ax, x_label, y_label, x_bounds, y_bounds)
     sm = ScalarMappable(norm=norm_p, cmap=cm_p)

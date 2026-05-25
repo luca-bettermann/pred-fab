@@ -355,7 +355,7 @@ def add_kernel_radii_3d(
 
 def style_colorbar(cbar) -> None:
     """Apply PFAB tick / outline styling to a matplotlib Colorbar."""
-    cbar.ax.tick_params(colors=ZINC_500, labelsize=8)
+    cbar.ax.tick_params(colors=ZINC_500, labelsize=FONT["tick"])
     if cbar.outline is not None:
         cbar.outline.set_edgecolor(ZINC_300)  # type: ignore[attr-defined]
         cbar.outline.set_linewidth(0.6)  # type: ignore[attr-defined]
