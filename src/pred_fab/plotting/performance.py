@@ -18,7 +18,7 @@ from ._style import (
 def radar_chart(
     ax,
     attribute_names: list[str],
-    values: list[float],
+    values: list[float] | None = None,
     stds: list[float] | None = None,
     *,
     ref_values: list[float] | None = None,
@@ -32,13 +32,29 @@ def radar_chart(
     """General-purpose radar/spider chart on a polar axes.
 
     Modes:
-      - values only → single polygon
-      - values + stds → single polygon with ±1σ band
+      - values only → single primary polygon
+      - values + stds → primary polygon with ±1σ band
       - values + ref_values (± stds) → two polygons with optional bands
+      - ref_values only (values=None) → single polygon in ref_color
 
     The primary polygon uses ``color``/``fill_color`` (emerald by default).
     The reference polygon is subtle: dashed outline, no fill, soft zinc.
+    When only ref_values is provided, it renders as the primary polygon
+    using ref_color — for side-by-side comparison layouts.
     """
+    if values is None and ref_values is not None:
+        values = ref_values
+        stds = ref_stds
+        color = ref_color
+        fill_color = ref_color
+        label = ref_label
+        ref_values = None
+        ref_stds = None
+        ref_label = None
+
+    if values is None:
+        return
+
     n = len(attribute_names)
     if n < 3:
         return
