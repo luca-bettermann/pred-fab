@@ -82,7 +82,7 @@ _truncate_cmap("Blues", "Blues_soft", lo=0.0, hi=0.80)
 _truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.80)
 _truncate_cmap("Greys", "Greys_soft", lo=0.0, hi=0.80)
 _truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.20, hi=0.80)
-_truncate_cmap("magma", "magma_soft", lo=0.20, hi=1.0)
+_truncate_cmap("magma", "magma_soft", lo=0.10, hi=1.0)
 SURFACES: dict[str, SemanticSurface] = {
     "density":       SemanticSurface("Greys_soft", bounded=False),
     "evidence":      SemanticSurface("Blues_soft",   bounded=True),
