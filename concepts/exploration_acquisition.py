@@ -79,7 +79,7 @@ def main(
         sigma_xy = (sigma * (xb[1] - xb[0]), sigma * (yb[1] - yb[0])) if sigma else None
 
         evidence_gain_topology(fig, ax1, xs, ys, p["evidence_grid"],
-                               xl, yl, xb, yb, fit_colorbar=True)
+                               xl, yl, xb, yb, fit_colorbar=fit_colorbar)
         if exp_x:
             draw_experiments(ax1, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
@@ -115,7 +115,7 @@ def main(
         performance_topology(fig, ax2, xs, ys, p["perf_grid"],
                              xl, yl, xb, yb, show_optimum=False,
                              label="Predicted $P_{\\mathrm{sys}}$",
-                             fit_colorbar=True)
+                             fit_colorbar=fit_colorbar)
         if exp_x:
             draw_experiments(ax2, exp_x, exp_y, sigma_xy=sigma_xy, styles=pt_styles)
 
