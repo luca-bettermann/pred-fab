@@ -73,6 +73,9 @@ def radar_chart(
             hi = _close([min(1, v + s) for v, s in zip(ref_values, ref_stds)])
             ax.fill_between(angles_closed, lo, hi, color=ref_color,
                             alpha=0.08, zorder=2)
+            for a, vlo, vhi in zip(angles, lo, hi):
+                ax.plot([a, a], [vlo, vhi], color=ref_color, linewidth=0.8, alpha=0.4, zorder=3)
+                ax.scatter([a, a], [vlo, vhi], c=ref_color, s=8, alpha=0.4, zorder=3, edgecolors="none")
         for a, s in zip(angles, ref_values):
             ax.scatter([a], [s], c=ref_color, s=14, zorder=4,
                        edgecolors="white", linewidth=0.4, alpha=0.6)
@@ -88,6 +91,9 @@ def radar_chart(
         hi = _close([min(1, v + s) for v, s in zip(values, stds)])
         ax.fill_between(angles_closed, lo, hi, color=color,
                         alpha=0.10, zorder=4)
+        for a, vlo, vhi in zip(angles, lo, hi):
+            ax.plot([a, a], [vlo, vhi], color=color, linewidth=0.8, alpha=0.35, zorder=5)
+            ax.scatter([a, a], [vlo, vhi], c=color, s=10, alpha=0.5, zorder=5, edgecolors="none")
 
     for a, s in zip(angles, values):
         ax.scatter([a], [s], c=color, s=20, zorder=6,
