@@ -65,7 +65,7 @@ def draw_experiments(
                         color=ZINC_700)
     elif styles:
         for xi, yi, st in zip(exp_x, exp_y, styles):
-            rc = st.get("edgecolors", st.get("c", "white"))
+            rc = st.get("c", "white")
             if isinstance(rc, list):
                 rc = rc[0] if rc else "white"
             _draw_radius(ax, xi, yi, st.get("zorder", 5) - 1, color=rc)

@@ -535,7 +535,7 @@ def draw_datapoints(
     size: float = 65,
     alpha: float = 0.75,
     sigma: float | None = None,
-    sigma_color: str = "white",
+    sigma_color: str | None = None,
     sigma_alpha: float = 0.5,
     zorder: int = 10,
 ) -> None:
@@ -545,11 +545,12 @@ def draw_datapoints(
     draws dashed circles of that radius around each point.
     """
     edge = edgecolor or ZINC_700
+    radius_color = sigma_color or color
     for xi, yi in zip(x, y):
         if sigma is not None:
             circle = plt.Circle(
                 (xi, yi), sigma, fill=False, linestyle="--",
-                edgecolor=sigma_color, linewidth=0.8, alpha=sigma_alpha,
+                edgecolor=radius_color, linewidth=0.8, alpha=sigma_alpha,
                 zorder=zorder - 1,
             )
             ax.add_patch(circle)
