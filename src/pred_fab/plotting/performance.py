@@ -74,46 +74,76 @@ def radar_chart(
 
     ax.set_xticks(angles)
     ax.set_xticklabels(attribute_names, fontsize=FONT["tick"], color=ZINC_600)
-    ax.tick_params(axis="x", pad=12)
+    ax.tick_params(axis="x", pad=14)
 
     def _close(v):
         return list(v) + [v[0]]
+
+    CAP = 0.06
+
+    def _draw_errorbar(ax_obj, angle, vlo, vhi, c, alpha, zorder):
+        ax_obj.plot([angle, angle], [vlo, vhi], color=c,
+                    linewidth=1.0, alpha=alpha, zorder=zorder)
+        for end in (vlo, vhi):
+            ax_obj.plot([angle - CAP, angle + CAP], [end, end],
+                        color=c, linewidth=1.0, alpha=alpha, zorder=zorder)
 
     # Reference polygon (behind primary)
     if ref_values is not None:
         rc = _close(ref_values)
         ax.plot(angles_closed, rc, color=ref_color, linewidth=1.2,
-                linestyle="--", alpha=0.6, zorder=3, label=ref_label)
+                linestyle="--", alpha=0.6, zorder=3)
         if ref_stds is not None:
-            lo = _close([max(0, v - s) for v, s in zip(ref_values, ref_stds)])
-            hi = _close([min(1, v + s) for v, s in zip(ref_values, ref_stds)])
-            ax.fill_between(angles_closed, lo, hi, color=ref_color,
-                            alpha=0.08, zorder=2)
+            lo = [max(0, v - s) for v, s in zip(ref_values, ref_stds)]
+            hi = [min(1, v + s) for v, s in zip(ref_values, ref_stds)]
+            ax.fill_between(angles_closed, _close(lo), _close(hi),
+                            color=ref_color, alpha=0.08, zorder=2)
             for a, vlo, vhi in zip(angles, lo, hi):
-                ax.plot([a, a], [vlo, vhi], color=ref_color, linewidth=0.8, alpha=0.4, zorder=3)
-                ax.scatter([a, a], [vlo, vhi], c=ref_color, s=8, alpha=0.4, zorder=3, edgecolors="none")
+                _draw_errorbar(ax, a, vlo, vhi, ref_color, 0.4, 3)
         for a, s in zip(angles, ref_values):
-            ax.scatter([a], [s], c=ref_color, s=14, zorder=4,
-                       edgecolors="white", linewidth=0.4, alpha=0.6)
+            ax.scatter([a], [s], c=ref_color, s=35, zorder=4,
+                       edgecolors="white", linewidth=0.5, alpha=0.6)
 
     # Primary polygon
     vc = _close(values)
-    ax.plot(angles_closed, vc, color=color, linewidth=1.8, zorder=5,
-            label=label)
+    ax.plot(angles_closed, vc, color=color, linewidth=1.8, zorder=5)
     ax.fill(angles_closed, vc, color=fill_color, alpha=0.15, zorder=4)
 
     if stds is not None:
-        lo = _close([max(0, v - s) for v, s in zip(values, stds)])
-        hi = _close([min(1, v + s) for v, s in zip(values, stds)])
-        ax.fill_between(angles_closed, lo, hi, color=color,
-                        alpha=0.10, zorder=4)
+        lo = [max(0, v - s) for v, s in zip(values, stds)]
+        hi = [min(1, v + s) for v, s in zip(values, stds)]
+        ax.fill_between(angles_closed, _close(lo), _close(hi),
+                        color=color, alpha=0.10, zorder=4)
         for a, vlo, vhi in zip(angles, lo, hi):
-            ax.plot([a, a], [vlo, vhi], color=color, linewidth=0.8, alpha=0.35, zorder=5)
-            ax.scatter([a, a], [vlo, vhi], c=color, s=10, alpha=0.5, zorder=5, edgecolors="none")
+            _draw_errorbar(ax, a, vlo, vhi, color, 0.4, 5)
 
     for a, s in zip(angles, values):
-        ax.scatter([a], [s], c=color, s=20, zorder=6,
-                   edgecolors="white", linewidth=0.5)
+        ax.scatter([a], [s], c=color, s=40, zorder=6,
+                   edgecolors="white", linewidth=0.6)
+
+    # Legend: mean dot + ±σ error bar
+    from matplotlib.lines import Line2D
+    handles = []
+    if label:
+        handles.append(Line2D([0], [0], marker="o", color="none",
+                              markerfacecolor=color, markeredgecolor="white",
+                              markersize=7, label=f"{label} (mean)"))
+    if stds is not None and label:
+        handles.append(Line2D([0], [0], color=color, linewidth=1.0,
+                              marker="|", markersize=6, markeredgewidth=1.0,
+                              label=f"{label} (±σ)"))
+    if ref_label and ref_values is not None:
+        handles.append(Line2D([0], [0], marker="o", color="none",
+                              markerfacecolor=ref_color, markeredgecolor="white",
+                              markersize=6, alpha=0.6, label=f"{ref_label} (mean)"))
+    if ref_stds is not None and ref_label:
+        handles.append(Line2D([0], [0], color=ref_color, linewidth=1.0,
+                              marker="|", markersize=6, markeredgewidth=1.0,
+                              alpha=0.5, label=f"{ref_label} (±σ)"))
+    if handles:
+        ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"] - 1,
+                  frameon=True, framealpha=0.85, facecolor="white",
+                  edgecolor=ZINC_300, borderpad=0.6)
 
 
 def plot_performance_radar(
