@@ -132,7 +132,8 @@ def radar_chart(
                               marker="|", markersize=6, markeredgewidth=1.0,
                               label="±σ"))
     ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"],
-              frameon=False, markerscale=1.3)
+              frameon=False, markerscale=1.3,
+              bbox_to_anchor=(-0.15, 1.1))
 
 
 def plot_performance_radar(
