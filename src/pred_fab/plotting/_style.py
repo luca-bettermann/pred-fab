@@ -137,11 +137,11 @@ FILL_ALPHA: dict[str, float] = {
 
 # Font sizes.
 FONT: dict[str, int] = {
-    "title":      11,
-    "axis_label": 9,
-    "tick":       8,
-    "annotation": 8,
-    "legend":     8,
+    "title":      14,
+    "axis_label": 12,
+    "tick":       11,
+    "annotation": 10,
+    "legend":     10,
 }
 
 
@@ -169,23 +169,23 @@ def apply_style() -> None:
     """Set matplotlib rcParams to the PFAB visual-identity defaults."""
     mpl.rcParams.update({
         "font.family": "sans-serif",
-        "font.size": 9,
-        "axes.titlesize": 10,
+        "font.size": 11,
+        "axes.titlesize": 14,
         "axes.titlecolor": ZINC_700,
-        "axes.labelsize": 9,
+        "axes.labelsize": 12,
         "axes.labelcolor": ZINC_600,
         "axes.edgecolor": ZINC_300,
         "axes.linewidth": 0.8,
         "xtick.color": ZINC_500,
         "ytick.color": ZINC_500,
-        "xtick.labelsize": 8,
-        "ytick.labelsize": 8,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
         "xtick.major.size": 3,
         "ytick.major.size": 3,
         "xtick.major.width": 0.6,
         "ytick.major.width": 0.6,
         "legend.frameon": False,
-        "legend.fontsize": 8,
+        "legend.fontsize": 10,
         "figure.facecolor": "white",
         "axes.facecolor": "white",
         "savefig.facecolor": "white",
@@ -532,7 +532,8 @@ def draw_datapoints(
     *,
     color: str = "white",
     edgecolor: str | None = None,
-    size: float = 30,
+    size: float = 65,
+    alpha: float = 0.75,
     sigma: float | None = None,
     sigma_color: str = "white",
     sigma_alpha: float = 0.5,
@@ -553,7 +554,7 @@ def draw_datapoints(
             )
             ax.add_patch(circle)
         ax.scatter([xi], [yi], c=color, s=size, edgecolors=edge,
-                   linewidth=0.8, zorder=zorder)
+                   linewidth=0.8, zorder=zorder, alpha=alpha)
 
 
 def save_fig(path: str, dpi: int | None = None) -> None:

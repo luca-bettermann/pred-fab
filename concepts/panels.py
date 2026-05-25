@@ -50,10 +50,10 @@ def draw_experiments(
 
     if labels:
         draw_datapoints(ax, exp_x, exp_y, sigma=sigma, color=ACCENT_RED,
-                        edgecolor="white", size=38)
+                        edgecolor="white", size=65, alpha=0.75)
         for xi, yi, lbl in zip(exp_x, exp_y, labels):
-            ax.annotate(lbl, (xi, yi), xytext=(6, 6),
-                        textcoords="offset points", fontsize=8,
+            ax.annotate(lbl, (xi, yi), xytext=(7, 7),
+                        textcoords="offset points", fontsize=11,
                         color=ZINC_700)
     elif styles:
         for xi, yi, st in zip(exp_x, exp_y, styles):
