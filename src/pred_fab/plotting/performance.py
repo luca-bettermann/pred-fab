@@ -21,6 +21,8 @@ def radar_chart(
     values: list[float] | None = None,
     stds: list[float] | None = None,
     *,
+    score: float | None = None,
+    score_std: float | None = None,
     ref_values: list[float] | None = None,
     ref_stds: list[float] | None = None,
     color: str = EMERALD_500,
@@ -72,8 +74,9 @@ def radar_chart(
     ax.spines["polar"].set_color(ZINC_300)
     ax.grid(color=ZINC_300, linewidth=0.4, alpha=0.5)
 
+    wrapped = [n.replace(" ", "\n") if "\n" not in n else n for n in attribute_names]
     ax.set_xticks(angles)
-    ax.set_xticklabels(attribute_names, fontsize=FONT["tick"], color=ZINC_600)
+    ax.set_xticklabels(wrapped, fontsize=FONT["tick"], color=ZINC_600)
     ax.tick_params(axis="x", pad=14)
 
     def _close(v):
@@ -133,7 +136,14 @@ def radar_chart(
                               label="±σ"))
     ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"],
               frameon=False, markerscale=1.3,
-              bbox_to_anchor=(-0.15, 1.1))
+              bbox_to_anchor=(-0.25, 1.15))
+
+    if score is not None:
+        s_text = f"$S$ = {score:.2f}"
+        if score_std is not None:
+            s_text += f" ± {score_std:.2f}"
+        ax.text(1.15, 1.12, s_text, transform=ax.transAxes,
+                ha="right", va="top", fontsize=FONT["title"], color=color)
 
 
 def plot_performance_radar(

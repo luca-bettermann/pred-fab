@@ -135,6 +135,8 @@ FILL_ALPHA: dict[str, float] = {
     "background": 0.18,
 }
 
+SYSTEM_SCORE_LABEL = "$S$"
+
 # Font sizes.
 FONT: dict[str, int] = {
     "title":      14,

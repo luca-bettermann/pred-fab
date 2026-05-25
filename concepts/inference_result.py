@@ -42,11 +42,13 @@ def _radar_panel(
     ax,
     attribute_names: list[str],
     attribute_scores: list[float],
-    label: str = "Predicted attributes",
+    score: float | None = None,
+    score_std: float | None = None,
 ):
     """Radar chart — delegates to the shared radar_chart function."""
     from pred_fab.plotting.performance import radar_chart
-    radar_chart(ax, attribute_names, attribute_scores)
+    radar_chart(ax, attribute_names, attribute_scores,
+                score=score, score_std=score_std)
 
 
 def main(
@@ -130,10 +132,7 @@ def main(
     draw_proposal(ax_topo, opt_xv, opt_yv)
 
     ax_radar = fig.add_subplot(gs[0, 1], polar=True)
-    _radar_panel(ax_radar, attr_names, attr_scores)
-    ax_radar.text(1.15, 1.08, f"$S$ = {proposed_score:.2f}",
-                  transform=ax_radar.transAxes, ha="right", va="top",
-                  fontsize=FONT["title"], color=EMERALD_500)
+    _radar_panel(ax_radar, attr_names, attr_scores, score=proposed_score)
 
     path = save_path or str(PLOTS_DIR / "inference_result.png")
     save_fig(path, dpi=200)
