@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _add_fixed_subtitle,
+    AxisSpec, FONT, save_fig, _add_fixed_subtitle,
     apply_style, subplot_topology,
     ACCENT_YELLOW,
 )
@@ -49,6 +49,6 @@ def plot_inference_result(
     ax.plot(proposed[x_axis.key], proposed[y_axis.key], "x", color=ACCENT_YELLOW,
             ms=14, markeredgewidth=2.5, zorder=9, label=prop_label)
 
-    ax.legend(fontsize=8, loc="upper left")
+    ax.legend(fontsize=FONT["legend"], loc="upper left")
 
     save_fig(save_path)

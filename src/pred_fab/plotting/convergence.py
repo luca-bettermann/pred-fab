@@ -8,7 +8,7 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
 from ._style import (
-    save_fig, apply_style, clean_spines,
+    FONT, save_fig, apply_style, clean_spines,
     ACCENT_YELLOW, ZINC_300, ZINC_700, style_colorbar,
 )
 
@@ -84,9 +84,9 @@ def plot_convergence(
         margin = abs(v_max - v_min) * 0.05
         ax.set_ylim(v_min - margin, v_max + margin)
 
-    ax.set_xlabel("Iteration (per start)", fontsize=9, color=ZINC_700)
-    ax.set_ylabel("Objective", fontsize=9, color=ZINC_700)
-    ax.legend(fontsize=8, frameon=False, loc="upper right")
+    ax.set_xlabel("Iteration (per start)", fontsize=FONT["axis_label"], color=ZINC_700)
+    ax.set_ylabel("Objective", fontsize=FONT["axis_label"], color=ZINC_700)
+    ax.legend(fontsize=FONT["legend"], frameon=False, loc="upper right")
     ax.grid(True, alpha=0.2, color=ZINC_300, which="both")
     clean_spines(ax)
 
@@ -97,7 +97,7 @@ def plot_convergence(
         )
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
-        cbar.set_label("Sobol rank", fontsize=8, color=ZINC_700)
+        cbar.set_label("Sobol rank", fontsize=FONT["tick"], color=ZINC_700)
         style_colorbar(cbar)
         cbar.ax.axhline(best_rank, color=ACCENT_YELLOW, linewidth=2.5)
 

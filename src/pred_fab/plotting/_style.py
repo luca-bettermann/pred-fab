@@ -211,7 +211,7 @@ def clean_3d_panes(ax) -> None:
         pane.set_alpha(0.0)
         pane.set_edgecolor(ZINC_300)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        axis.set_tick_params(colors=ZINC_500, labelsize=7, pad=1)
+        axis.set_tick_params(colors=ZINC_500, labelsize=FONT["tick"], pad=1)
         axis.label.set_color(ZINC_600)
         axis.line.set_color(ZINC_300)
     ax.grid(False)
@@ -592,7 +592,7 @@ def _add_fixed_subtitle(
     if not fixed_params:
         return
     parts = [f"{k} = {v}" for k, v in fixed_params.items()]
-    figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=7)
+    figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=FONT["annotation"])
 
 
 def _plot_trajectory_ranges(

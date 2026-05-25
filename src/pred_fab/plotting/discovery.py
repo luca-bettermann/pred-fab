@@ -11,7 +11,7 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
-    AxisSpec, save_fig, _extract_xy, _add_fixed_subtitle,
+    AxisSpec, FONT, save_fig, _extract_xy, _add_fixed_subtitle,
     apply_style, subplot_topology,
     STEEL_500, ZINC_400, ZINC_600,
 )
@@ -42,9 +42,9 @@ def _setup_3d_figure(
     ax = fig.add_subplot(111, projection="3d")
     _add_fixed_subtitle(fig, fixed_params)
 
-    ax.set_xlabel(x_axis.display_label, labelpad=8, fontsize=9)
-    ax.set_ylabel(y_axis.display_label, labelpad=8, fontsize=9)
-    ax.set_zlabel(z_label, labelpad=8, fontsize=9)  # type: ignore[attr-defined]
+    ax.set_xlabel(x_axis.display_label, labelpad=8, fontsize=FONT["axis_label"])
+    ax.set_ylabel(y_axis.display_label, labelpad=8, fontsize=FONT["axis_label"])
+    ax.set_zlabel(z_label, labelpad=8, fontsize=FONT["axis_label"])  # type: ignore[attr-defined]
 
     if x_axis.bounds:
         ax.set_xlim(*x_axis.bounds)
@@ -232,7 +232,7 @@ def plot_parameter_space_3d(
         for i, (x, y, z) in enumerate(zip(px, py, pz)):
             ax.text(x, y, z, f" {i+1}", fontsize=6, color="#666", zorder=6)
         cb = fig.colorbar(sc, ax=ax, shrink=0.6, pad=0.1)
-        cb.set_label(z_axis.display_label, fontsize=9)
+        cb.set_label(z_axis.display_label, fontsize=FONT["axis_label"])
 
     if z_axis.bounds:
         ax.set_zlim(*z_axis.bounds)  # type: ignore[attr-defined]
@@ -306,7 +306,7 @@ def plot_dimensional_trajectories(
         if is_highlighted:
             for k in range(n_steps):
                 label = f" {ys[k]:.1f}" if len(set(ys)) > 1 else f" {xs[k]:.3f}"
-                ax.text(xs[k], ys[k], zs[k], label, fontsize=7,
+                ax.text(xs[k], ys[k], zs[k], label, fontsize=FONT["annotation"],
                         color=ZINC_600, zorder=6)
 
     ax.zaxis.set_major_locator(MaxNLocator(integer=True))  # type: ignore[attr-defined]

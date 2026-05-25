@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 
 from ._style import (
     AxisSpec,
+    FONT,
     apply_style,
     clean_spines,
     subplot_label,
@@ -101,7 +102,7 @@ def _overlay_points(
             ey = [py[j] for j in mask]
             ax.plot(ex, ey, color="#E8913A", linewidth=0.6, alpha=0.4, zorder=1)
         if mask:
-            ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=7,
+            ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=FONT["annotation"],
                        ha="center", va="bottom", xytext=(0, 5),
                        textcoords="offset points", color="#B06A1E")
 

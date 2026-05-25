@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _add_fixed_subtitle,
+    AxisSpec, FONT, save_fig, _add_fixed_subtitle,
     apply_style, subplot_topology,
     ACCENT_YELLOW,
 )
@@ -48,6 +48,6 @@ def plot_acquisition(
         axes[2].plot(proposed[x_axis.key], proposed[y_axis.key],
                      "x", color=ACCENT_YELLOW, ms=10,
                      markeredgewidth=2, zorder=8, label="Proposed")
-        axes[2].legend(fontsize=7, loc="upper left", framealpha=0.8)
+        axes[2].legend(fontsize=FONT["legend"], loc="upper left", framealpha=0.8)
 
     save_fig(save_path)

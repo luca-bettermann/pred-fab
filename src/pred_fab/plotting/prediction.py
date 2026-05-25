@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _add_fixed_subtitle, subplot_topology,
+    AxisSpec, FONT, save_fig, _add_fixed_subtitle, subplot_topology,
     apply_style, clean_spines, style_colorbar, ACCENT_RED, ZINC_300,
 )
 
@@ -85,7 +85,7 @@ def plot_importance_weights(
     ax1.set_title(f"sigmoid(k·(perf − mean)),  k = {steepness}/σ = {k:.1f}")
     ax1.set_xlim(0, 1)
     ax1.set_ylim(0, 1.08)
-    ax1.legend(fontsize=8)
+    ax1.legend(fontsize=FONT["legend"])
     ax1.grid(True, alpha=0.2, color=ZINC_300)
     clean_spines(ax1)
 

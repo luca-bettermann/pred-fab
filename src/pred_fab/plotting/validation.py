@@ -8,7 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _apply_axes,
+    AxisSpec, FONT, save_fig, _apply_axes,
     apply_style, clean_spines, subplot_label, subplot_topology, style_colorbar,
     STEEL_500, ZINC_200, ZINC_400, ZINC_600,
 )
@@ -100,7 +100,7 @@ def _draw_panel(
                 ey = [py[j] for j in mask]
                 ax.plot(ex, ey, color=ZINC_400, linewidth=0.6, alpha=0.4, zorder=1)
             if mask:
-                ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=7,
+                ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=FONT["annotation"],
                            ha="center", va="bottom", xytext=(0, 5),
                            textcoords="offset points", color=ZINC_400)
 
@@ -109,7 +109,7 @@ def _draw_panel(
 
     if exp_ids is None:
         for i, (x, y) in enumerate(zip(px, py)):
-            ax.annotate(f"{i+1}", (x, y), fontsize=7, ha="center", va="bottom",
+            ax.annotate(f"{i+1}", (x, y), fontsize=FONT["annotation"], ha="center", va="bottom",
                        xytext=(0, 5), textcoords="offset points", color=ZINC_400)
 
     # Pad axis limits so points at exact bounds aren't clipped by the frame

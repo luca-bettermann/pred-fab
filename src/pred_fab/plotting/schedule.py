@@ -3,7 +3,7 @@
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, apply_style, clean_spines,
+    AxisSpec, FONT, save_fig, apply_style, clean_spines,
     STEEL_500, ZINC_300,
 )
 
@@ -30,7 +30,7 @@ def plot_schedule_comparison(
     ax1.set_xlabel("Exploration Round")
     ax1.set_ylabel("Combined Score")
     ax1.set_title("Performance per Round")
-    ax1.legend(fontsize=8)
+    ax1.legend(fontsize=FONT["legend"])
     ax1.grid(True, alpha=0.2, axis="y", color=ZINC_300)
     clean_spines(ax1)
 
@@ -44,7 +44,7 @@ def plot_schedule_comparison(
     ax2.set_ylabel(y_axis.display_label)
     ax2.set_title(f"Per-Step {y_axis.display_label}")
     if any(y_axis.key in s for s in schedules):
-        ax2.legend(fontsize=7)
+        ax2.legend(fontsize=FONT["legend"])
     ax2.grid(True, alpha=0.2, color=ZINC_300)
     clean_spines(ax2)
 

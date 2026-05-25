@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from ._style import (
-    save_fig, apply_style, EMERALD_300, EMERALD_500,
+    FONT, save_fig, apply_style, EMERALD_300, EMERALD_500,
     ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600,
 )
 
@@ -96,7 +96,7 @@ def plot_performance_radar(
 
     if combined_score is not None:
         # Header
-        fig.text(0.80, 0.13, "System Performance", fontsize=9,
+        fig.text(0.80, 0.13, "System Performance", fontsize=FONT["axis_label"],
                  color=ZINC_500, ha="center", va="bottom")
         # Experiment score (green)
         pct = combined_score * 100
