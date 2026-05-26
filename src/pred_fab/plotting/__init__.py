@@ -40,7 +40,7 @@ from .exploration import plot_acquisition
 from .inference import plot_inference_result
 from .schedule import plot_schedule_comparison
 from .metrics import plot_metric_topology
-from .performance import radar_chart, RadarPanel, plot_radar_panels, plot_performance_radar
+from .performance import radar_chart, RadarPanel, plot_radar_panels
 from .convergence import plot_convergence
 from .validation import plot_phase_proposals
 from .evidence import (
@@ -80,7 +80,6 @@ __all__ = [
     "radar_chart",
     "RadarPanel",
     "plot_radar_panels",
-    "plot_performance_radar",
     "plot_convergence",
     "plot_phase_proposals",
     "plot_evidence_panel",
