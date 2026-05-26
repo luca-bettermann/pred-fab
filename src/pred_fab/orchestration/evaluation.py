@@ -26,8 +26,13 @@ class EvaluationSystem(BaseOrchestrationSystem):
         for code, tensor in exp_data.features.get_values_dict().items():
             features_dict[code] = exp_data.features.tensor_to_table(code, tensor, exp_data.parameters)
 
-        incomplete_features = {code: not exp_data.is_complete(code, 0, None)
-                               for code in exp_data.features.keys()}
+        incomplete_features = {}
+        for code in exp_data.features.keys():
+            arr = features_dict.get(code)
+            if arr is None:
+                incomplete_features[code] = True
+            else:
+                incomplete_features[code] = bool(np.all(np.isnan(arr[:, -1])))
 
         skip_for_code = {code: exp_data.performance.has_value(code)
                          for code in exp_data.performance.keys() if not recompute}
@@ -63,7 +68,7 @@ class EvaluationSystem(BaseOrchestrationSystem):
                 continue
 
             if any(incomplete_features.get(f, False) for f in eval_model.input_features):
-                self.logger.info(f"Skipping evaluation for '{eval_model.output_performance}' — input feature incomplete.")
+                self.logger.warning(f"Skipping evaluation for '{eval_model.output_performance}' — input feature entirely empty.")
                 continue
 
             if not all(f in features_dict for f in eval_model.input_features):
