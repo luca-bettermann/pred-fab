@@ -1,6 +1,10 @@
 """Radar performance plot — per-attribute visualization with dataset comparison."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import matplotlib
@@ -9,9 +13,9 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from ._style import (
-    FONT, save_fig, apply_style, EMERALD_300, EMERALD_500,
+    FONT, PUBLICATION_DPI, save_fig, apply_style, EMERALD_300, EMERALD_500,
     STEEL_100, STEEL_500,
-    ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600,
+    ZINC_200, ZINC_300, ZINC_400, ZINC_500, ZINC_600, ZINC_700,
 )
 
 
@@ -144,6 +148,67 @@ def radar_chart(
             s_text += f" ± {score_std:.2f}"
         ax.text(1.15, 1.12, s_text, transform=ax.transAxes,
                 ha="right", va="top", fontsize=FONT["title"], color=color)
+
+
+@dataclass
+class RadarPanel:
+    """Configuration for one panel in a radar figure."""
+    attribute_names: list[str]
+    values: list[float] | None = None
+    stds: list[float] | None = None
+    ref_values: list[float] | None = None
+    ref_stds: list[float] | None = None
+    score: float | None = None
+    score_std: float | None = None
+    title: str | None = None
+    label: str | None = None
+    ref_label: str | None = None
+    color: str = field(default=EMERALD_500)
+    fill_color: str = field(default=EMERALD_300)
+    ref_color: str = field(default=ZINC_400)
+
+
+def plot_radar_panels(
+    panels: list[RadarPanel],
+    *,
+    save_path: str | Path,
+    figsize_per_panel: tuple[float, float] = (5.5, 5.5),
+    suptitle: str | None = None,
+) -> None:
+    """Render N polar panels in a single row and save.
+
+    Each panel is delegated to ``radar_chart``. Figure layout, save,
+    and optional suptitle handled here.
+    """
+    n = len(panels)
+    if n == 0:
+        return
+
+    apply_style()
+    pw, ph = figsize_per_panel
+    fig, axes = plt.subplots(1, n, figsize=(pw * n, ph),
+                             subplot_kw=dict(projection="polar"), squeeze=False)
+
+    for ax, panel in zip(axes[0], panels):
+        radar_chart(
+            ax, panel.attribute_names,
+            values=panel.values, stds=panel.stds,
+            ref_values=panel.ref_values, ref_stds=panel.ref_stds,
+            score=panel.score, score_std=panel.score_std,
+            color=panel.color, fill_color=panel.fill_color,
+            ref_color=panel.ref_color,
+            label=panel.label, ref_label=panel.ref_label,
+        )
+        if panel.title:
+            ax.set_title(panel.title, fontsize=FONT["title"],
+                         color=ZINC_700, pad=20)
+
+    if suptitle:
+        fig.suptitle(suptitle, fontsize=FONT["title"], color=ZINC_700)
+
+    path = str(save_path)
+    save_fig(path)
+    print(f"Saved: {path}")
 
 
 def plot_performance_radar(
