@@ -811,7 +811,10 @@ class Dataset:
         if source != Loaders.LOCAL:
             raise NotImplementedError(f"Only {source.value} source is currently supported")
 
-        exp_codes = self.local_data.list_experiments()
+        local_codes = self.local_data.list_experiments()
+        external_codes = (self.external_data.list_codes(dataset=dataset)
+                          if self.external_data is not None else [])
+        exp_codes = sorted(set(local_codes) | set(external_codes))
         if dataset is not None:
             exp_codes = [c for c in exp_codes if f"/{dataset}/" in c or c.startswith(f"{dataset}/")]
         if exclude:

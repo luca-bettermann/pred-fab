@@ -15,7 +15,15 @@ class IExternalData(ABC):
         """Fetch parameters for given experiment codes; returns (missing_codes, code→params dict)."""
         ...
 
-    # === OPTIONAL METHODS ===        
+    # === OPTIONAL METHODS ===
+    def list_codes(self, dataset: str | None = None) -> list[str]:
+        """List experiment codes in external storage.
+
+        When ``dataset`` is given, restrict to codes in that namespace.
+        Default: empty list (external enumeration not supported).
+        """
+        return []
+
     def pull_performance(self, exp_codes: list[str]) -> tuple[list[str], dict[str, dict[str, Any]]]:
         """Fetch performance metrics for given codes; returns (missing_codes, code→metrics dict). Default: all missing."""
         missing_exp_codes = exp_codes
