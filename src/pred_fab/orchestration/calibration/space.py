@@ -4,6 +4,10 @@ All bound enforcement uses ``sigmoid(K · z)`` with a single sharpness
 constant K.  Steeper sigmoid → the full bounded range is reachable with
 modest z-values, and the optimizer has strong gradients throughout.
 
+``z`` is the *unconstrained* optimiser variable (logit space) — not the [0,1]
+decision vector (``sigmoid(K·z)``) nor the z-score model input. Full frame chain
+(u → [0,1] → z-score / physical): see ``ORCHESTRATION_CONTEXT.md``.
+
 Variable types own their decode:
   - StaticVariable: sigmoid(Kz) → normalised value
   - TrajectoryVariable: sigmoid(K · (z_mid + offset · slope)) → per-layer values
