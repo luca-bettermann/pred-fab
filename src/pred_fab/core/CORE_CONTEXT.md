@@ -25,7 +25,7 @@ Schema → Dataset → ExperimentData → DataModule (for training/calibration)
 - `DataModule` is shared between PredictionSystem (training) and CalibrationSystem (bounds + encoding)
 - **Categoricals** emit a single int-index `long` column per parent. Models learn `nn.Embedding(C, d)` per categorical (FastAI-sized); `cat_cardinalities` exposes `{col_idx: n_categories}` for `set_categorical_context`.
 - **Normalisation** is per-column via `NormMethod`; the corresponding `nn.Module` instance lives in `_parameter_stats` / `_feature_stats`. `module(x)` forward, `module.reverse(x)` inverse.
-- `fit_without_data()` sets up column mappings without any training rows (used by baseline generation)
+- `fit_without_data()` sets up column mappings without any training rows (used by discovery generation)
 - **Tensor-dict path:** `prepare_input_from_tensor_dict(X_dict)` is the canonical input encoder. Pandas no longer appears inside the framework hot path — only at user-facing I/O (`Dataset.export_to_dataframe`, parquet via `LocalData`).
 
 ## Open Risks

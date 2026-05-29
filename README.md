@@ -144,8 +144,8 @@ agent.configure_calibration(
     bounds={"speed": (20.0, 100.0), "feed_rate": (10.0, 60.0)},
 )
 
-# 4. Sample initial experiments via Latin Hypercube Sampling
-baseline_specs = agent.sample_baseline_experiments(n_samples=10)
+# 4. Propose initial space-filling experiments (κ=1 evidence maximisation)
+discovery_specs = agent.discovery_step(n=10)
 # → run physical experiments for each spec, record results
 
 # 5. Evaluate and train on recorded experiments
@@ -277,7 +277,7 @@ agent.initialize_systems(schema, verbose_flag=True)
 | `evaluate(exp_data)` | Run feature extraction and performance evaluation on an experiment |
 | `train(datamodule, validate, test)` | Train prediction models; returns validation metrics if requested |
 | `predict(exp_data, dimension, step_index)` | Predict features for an experiment or a specific step slice |
-| `sample_baseline_experiments(n_samples, param_bounds)` | Generate LHS-sampled initial experiment parameters |
+| `discovery_step(n)` | Propose n space-filling initial experiments via κ=1 evidence maximisation |
 | `exploration_step(datamodule, w_explore, n_optimization_rounds, current_params)` | UCB-acquisition proposal for the next experiment |
 | `inference_step(exp_data, datamodule, w_explore, n_optimization_rounds, current_params)` | Evaluate current experiment + propose next parameters |
 | `adaptation_step(dimension, step_index, exp_data, mode, w_explore, record)` | Online trust-region adaptation for a single fabrication step |

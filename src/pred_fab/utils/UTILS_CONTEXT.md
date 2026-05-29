@@ -13,7 +13,7 @@ Shared infrastructure with no dependencies on other pred_fab packages.
 | `metrics.py` | Regression metric helpers (MAE, RMSE, R², …) |
 
 ## Key Points
-- `Mode` (EXPLORATION / INFERENCE / BASELINE) is the primary dispatch enum in CalibrationSystem
-- `NormMethod.NONE` is used for baseline DataModule (no stats available without training data)
+- `Mode` (DISCOVERY / EXPLORATION / INFERENCE) is the primary dispatch enum in CalibrationSystem
+- `NormMethod.NONE` is used for discovery DataModule (no stats available without training data)
 - `SourceStep` tags each `ParameterProposal` with its origin for traceability
 - `LocalData` path conventions must stay stable — PredictionSystem uses them for artifact save/load
