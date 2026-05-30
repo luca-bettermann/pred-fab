@@ -142,14 +142,11 @@ preds = a.predict(exp_data=exp)
 ## 6. Calibrate (Optional)
 
 ```python
-a.configure_calibration(
-    performance_weights={"performance_1": 1.0},
-    bounds={"param_1": (0.0, 10.0), "param_2": (1, 5), "dim_1": (1, 4), "dim_2": (1, 4)},
-    adaptation_delta={"param_1": 0.2},
-)
+# Hard bounds come from the schema; tune the acquisition with configure_* methods.
+a.configure_performance(weights={"performance_1": 1.0})
 
-proposal = a.exploration_step(datamodule=dm, w_explore=0.5)
-print(proposal.to_dict())
+proposal = a.exploration_step(datamodule=dm, kappa=0.5)
+print(proposal.initial_params)
 ```
 
 ## 7. Persist Local Artifacts
