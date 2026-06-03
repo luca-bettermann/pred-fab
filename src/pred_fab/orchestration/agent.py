@@ -736,7 +736,6 @@ class PfabAgent:
         n_starts: int | None = None,
         n_sobol: int | None = None,
         lr: float | None = None,
-        acquisition_scale: float | None = None,
     ) -> None:
         """Set optimiser tuning parameters."""
         self._assert_initialized()
@@ -747,8 +746,6 @@ class PfabAgent:
             cal.engine.n_sobol = n_sobol
         if lr is not None:
             cal.engine.lr = lr
-        if acquisition_scale is not None:
-            cal.acquisition_scale = acquisition_scale
 
     def configure_trajectory(
         self,

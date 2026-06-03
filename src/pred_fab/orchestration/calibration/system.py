@@ -77,7 +77,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_process_points: list[dict[str, Any]] | None = None
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
-        self.acquisition_scale: float = 1000.0
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
         self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None  # deprecated, use dimension_derivations
         self.dimension_derivations: dict[str, Callable[[dict[str, Any]], int]] = {}
@@ -522,12 +521,12 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return float(out[0].item())
 
     def _kappa_blend(self, scores, perfs, evidences, kappa: float):
-        """A = (1-κ)·P + κ·ΔE, negated and scaled for minimisation."""
+        """A = (1-κ)·P + κ·ΔE, negated for minimisation."""
         if perfs is not None and kappa < 1.0:
             scores = scores + (1.0 - kappa) * perfs
         if evidences is not None and kappa > 0.0:
             scores = scores + kappa * evidences
-        return -scores * self.acquisition_scale
+        return -scores
 
     def _per_candidate_perf_tensor(
         self,
