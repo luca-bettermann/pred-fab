@@ -1170,7 +1170,9 @@ class Dataset:
         if not self.debug_flag and external_saver and saved:
             pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
             if pushed:
-                self._logging(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.", self.logger.console_pushed, verbose)
+                # A remote push is a significant, infrequent side-effect — always
+                # surface it on the console, not just the log (unlike local saves).
+                self.logger.console_pushed(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.")
             else:
                 self.logger.info(f"Skipped pushing {dtype} to external source due to missing implementation in ExternalData.")
         elif self.debug_flag:
