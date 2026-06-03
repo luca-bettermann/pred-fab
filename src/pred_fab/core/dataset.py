@@ -471,6 +471,7 @@ class Dataset:
         self.local_data = schema.local_data
         self.external_data = external_data
         self.debug_flag = debug_flag
+        self._external_push_made = False  # set in _hierarchical_save, summarised in save_experiments
 
         # Initialize local data handler and logger
         self.logger = PfabLogger.get_logger(schema.local_data.get_log_folder('logs'))
@@ -953,7 +954,8 @@ class Dataset:
         # Filter to experiments that exist in dataset
         codes_to_save = [code for code in exp_codes if self.has_experiment(code)]
 
-        self.logger.console_new_line()
+        self._external_push_made = False
+        self.logger.console_new_line(force=True)
         self._logging(f"Saving experiments {codes_to_save}...", self.logger.console_execute, verbose)
         
         if not codes_to_save:
@@ -1041,8 +1043,16 @@ class Dataset:
         #         feature_name=PRED_SUFFIX + name # pass to kwargs
         #     )
 
+        # One console summary for the whole external push (per-block detail is logged).
+        if self.external_data is not None and not self.debug_flag:
+            self.logger.console_status_clear()
+            if self._external_push_made:
+                count = len(codes_to_save)
+                self.logger.console_pushed(
+                    f"Pushed {count} experiment{'s' if count != 1 else ''} to external source."
+                )
         self.logger.info(f"Successfully saved experiments {codes_to_save}.")
-        
+
     def save_schema(self, recompute: bool = False, verbose: bool = True) -> None:
         """Save schema hierarchically."""        
         # 1. Save locally
@@ -1166,13 +1176,16 @@ class Dataset:
         else:
             self.logger.info(f"{dtype.capitalize()} already exist as local files.")
 
-        # 3. Save to external source (skip if local didn't write anything new)
+        # 3. Save to external source (skip if local didn't write anything new).
+        # Live, in-place status per block; save_experiments prints one summary
+        # line so a full-dataset push doesn't flood the terminal.
         if not self.debug_flag and external_saver and saved:
+            label = str(getattr(dtype, "name", dtype)).lower()
+            self.logger.console_status(f"Pushing {label}…")
             pushed = external_saver(codes_to_save, data_to_save, recompute, **kwargs)
             if pushed:
-                # A remote push is a significant, infrequent side-effect — always
-                # surface it on the console, not just the log (unlike local saves).
-                self.logger.console_pushed(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.")
+                self._external_push_made = True
+                self.logger.info(f"Pushed to external source: {dtype} for {len(codes_to_save)} experiments.")
             else:
                 self.logger.info(f"Skipped pushing {dtype} to external source due to missing implementation in ExternalData.")
         elif self.debug_flag:

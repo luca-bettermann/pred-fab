@@ -132,10 +132,23 @@ class PfabLogger:
         clean_message = self._strip_ansi_codes(message)
         self.logger.info(f"CONSOLE SUMMARY:\n\n{clean_message}")
 
-    def console_new_line(self) -> None:
-        """Print a new line to console."""
-        if self._console_output_enabled and not self._console_new_line:
+    def console_new_line(self, force: bool = False) -> None:
+        """Print a blank line to console (skipped if one was just printed; ``force`` always prints)."""
+        if self._console_output_enabled and (force or not self._console_new_line):
             print("")
+            self._console_new_line = True
+
+    def console_status(self, message: str) -> None:
+        """Transient in-place status line (no newline) — overwritten by the next
+        status, or erased by ``console_status_clear``. For live progress like pushes."""
+        if self._console_output_enabled:
+            print(f"\r\033[36m⟳\033[0m {message}\033[K", end="", flush=True)
+            self._console_new_line = False
+
+    def console_status_clear(self) -> None:
+        """Erase the current transient status line."""
+        if self._console_output_enabled:
+            print("\r\033[K", end="", flush=True)
             self._console_new_line = True
 
     # === PRIVATE METHODS ===
