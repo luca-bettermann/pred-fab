@@ -39,23 +39,14 @@ def test_validate_returns_per_feature_dict(trained_stack):
         assert isinstance(metrics, dict)
         assert "r2" in metrics
         assert "mae" in metrics
-        assert "rmse" in metrics
         assert "n_samples" in metrics
 
 
-def test_validate_without_weights_has_no_r2_inf(trained_stack):
-    """When no performance_weights are passed, R2_inf should not appear."""
+def test_validate_includes_r2_inf_when_performances_loaded(trained_stack):
+    """R²_inf is computed automatically from stored performance scores (the
+    fixture evaluates the experiments + configures performance weights)."""
     agent, dataset, datamodule = trained_stack
-    results = agent.pred_system.validate(performance_weights=None)
-    for key, metrics in results.items():
-        assert "r2_inf" not in metrics
-
-
-def test_validate_with_weights_includes_r2_inf(trained_stack):
-    """When performance_weights are passed, each feature should have R2_inf."""
-    agent, dataset, datamodule = trained_stack
-    weights = {"performance_1": 2.0, "performance_2": 1.3}
-    results = agent.pred_system.validate(performance_weights=weights)
+    results = agent.pred_system.validate(eval_system=agent.eval_system)
     assert len(results) > 0
     for key, metrics in results.items():
         assert "r2_inf" in metrics
@@ -86,8 +77,7 @@ def test_agent_train_no_validate_returns_none(trained_stack):
 def test_validate_r2_inf_is_finite(trained_stack):
     """R2_inf values should be finite numbers."""
     agent, dataset, datamodule = trained_stack
-    weights = {"performance_1": 2.0, "performance_2": 1.3}
-    results = agent.pred_system.validate(performance_weights=weights)
+    results = agent.pred_system.validate(eval_system=agent.eval_system)
     for key, metrics in results.items():
         assert np.isfinite(metrics["r2"])
         assert np.isfinite(metrics["r2_inf"])

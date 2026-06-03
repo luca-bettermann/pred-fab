@@ -47,6 +47,7 @@ def test_workflow_exploration_step_runs_from_configured_calibration(tmp_path):
         test_size=0.0,
         recompute=True,
     )
+    agent.train(datamodule=datamodule, validate=False, test=False)
     result = agent.exploration_step(datamodule=datamodule)
 
     assert result.initial_params.source_step == "exploration_step"

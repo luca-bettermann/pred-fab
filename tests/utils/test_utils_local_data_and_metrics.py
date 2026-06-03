@@ -71,14 +71,13 @@ def test_local_data_save_with_recompute_false_skips_existing_file(tmp_path):
 
 def test_metrics_returns_all_expected_keys():
     result = Metrics.calculate_regression_metrics(np.array([1.0, 2.0, 3.0]), np.array([1.1, 1.9, 3.1]))
-    assert set(result.keys()) == {"mae", "rmse", "r2", "n_samples"}
+    assert set(result.keys()) == {"mae", "r2", "n_samples"}
     assert result["n_samples"] == 3
 
 
 def test_metrics_empty_arrays_return_zeros():
     result = Metrics.calculate_regression_metrics(np.array([]), np.array([]))
     assert result["mae"] == 0.0
-    assert result["rmse"] == 0.0
     assert result["r2"] == 0.0
     assert result["n_samples"] == 0
 

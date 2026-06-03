@@ -55,7 +55,7 @@ def test_build_calibration_training_arrays_uses_latest_effective_parameters(tmp_
     exp.performance.set_values_from_dict({"performance_1": 0.5}, logger=dataset.logger)
     exp.record_parameter_update(
         ParameterProposal.from_dict({"param_1": 7.25}, source_step="adaptation_step"),
-        dimension="dim_1",
+        iterator_code="dim_1",
         step_index=1,
     )
 

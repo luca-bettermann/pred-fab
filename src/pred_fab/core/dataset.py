@@ -1229,9 +1229,13 @@ class Dataset:
                 iterator_features.append((f"{ic}_pos", ic, size))
 
             for row_idx, idx_tuple in enumerate(dim_combinations):
-                iterator_ctx: dict[str, int] = {
-                    dim_iterators[i]: idx_tuple[i] for i in range(len(dim_names))
-                }
+                # Key by both dimension name and iterator code: recorded updates
+                # are keyed by name (the row-based path matches on stride name),
+                # while the positional columns below look up by iterator code.
+                iterator_ctx: dict[str, int] = {}
+                for i in range(len(dim_names)):
+                    iterator_ctx[dim_names[i]] = idx_tuple[i]
+                    iterator_ctx[dim_iterators[i]] = idx_tuple[i]
                 row_dict = exp_data.get_effective_parameters_for_context(iterator_ctx)
 
                 for feat_code, axis_code, size in iterator_features:
@@ -1252,7 +1256,9 @@ class Dataset:
 
         return X_rows, y_rows, cell_meta
 
-    def export_to_dataframe(self, experiment_codes: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def export_to_dataframe(
+        self, experiment_codes: list[str], max_depth: int | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Export experiments to (X_params, y_features) DataFrames, expanding dimension combinations into rows.
 
         now a thin wrapper around ``_build_export_rows``;

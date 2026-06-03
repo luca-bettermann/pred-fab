@@ -271,7 +271,7 @@ def test_parameter_schedule_apply_records_update_events(tmp_path):
     assert len(exp.parameter_updates) == initial_count + 1
     event = exp.parameter_updates[-1]
     assert event.updates.get("speed") == pytest.approx(150.0)
-    assert event.dimension == "dim_1"
+    assert event.iterator_code == "dim_1"
     assert event.step_index == 1
 
 

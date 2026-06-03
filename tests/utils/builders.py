@@ -159,6 +159,10 @@ def configure_default_workflow_calibration(agent: PfabAgent) -> None:
     )
     agent.calibration_system.configure_fixed_params({"param_3": "B"})
     agent.calibration_system.configure_adaptation_delta({"speed": 10.0})  # only runtime-adjustable params may have deltas
+    # Domain-axis counts are derived so acquisition can expand the domain
+    # without each axis being a free param (a constant is fine for tests).
+    agent.calibration_system.dimension_derivations["n_layers"] = lambda params: 2
+    agent.calibration_system.dimension_derivations["n_segments"] = lambda params: 2
 
 
 def build_prepared_workflow_datamodule(
@@ -326,6 +330,9 @@ def build_real_agent_stack(tmp_path):
     agent.register_prediction_model(MixedPredictionModelD1)
     agent.register_prediction_model(MixedPredictionModelScalar)
     agent.initialize_systems(schema, verbose_flag=False)
+    # Domain-axis counts are derived so acquisition can expand the domain.
+    agent.calibration_system.dimension_derivations["dim_1"] = lambda params: 2
+    agent.calibration_system.dimension_derivations["dim_2"] = lambda params: 3
 
     datamodule = agent.create_datamodule(dataset)
     return agent, dataset, exp, datamodule
@@ -385,6 +392,9 @@ def build_runtime_agent_stack(tmp_path):
     agent.register_prediction_model(MixedPredictionModelD1)
     agent.register_prediction_model(MixedPredictionModelScalar)
     agent.initialize_systems(schema, verbose_flag=False)
+    # Domain-axis counts are derived so acquisition can expand the domain.
+    agent.calibration_system.dimension_derivations["dim_1"] = lambda params: 2
+    agent.calibration_system.dimension_derivations["dim_2"] = lambda params: 3
 
     datamodule = agent.create_datamodule(dataset)
     return agent, dataset, exp, datamodule

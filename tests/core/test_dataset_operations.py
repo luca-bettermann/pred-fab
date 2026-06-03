@@ -209,7 +209,7 @@ def test_get_effective_params_applies_update_at_correct_row(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     proposal = ParameterProposal.from_dict({"param_1": 9.9})
-    exp.record_parameter_update(proposal, dimension="dim_1", step_index=1)
+    exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=1)
 
     # Rows 0-2 should have base param_1=2.5
     assert exp.get_effective_parameters_for_row(0)["param_1"] == pytest.approx(2.5)
@@ -226,10 +226,10 @@ def test_get_effective_params_multiple_sequential_updates(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     prop1 = ParameterProposal.from_dict({"param_1": 5.0})
-    exp.record_parameter_update(prop1, dimension="dim_1", step_index=0)
+    exp.record_parameter_update(prop1, iterator_code="dim_1", step_index=0)
 
     prop2 = ParameterProposal.from_dict({"param_1": 8.0})
-    exp.record_parameter_update(prop2, dimension="dim_1", step_index=1)
+    exp.record_parameter_update(prop2, iterator_code="dim_1", step_index=1)
 
     assert exp.get_effective_parameters_for_row(0)["param_1"] == pytest.approx(5.0)
     assert exp.get_effective_parameters_for_row(3)["param_1"] == pytest.approx(8.0)
@@ -266,7 +266,7 @@ def test_get_num_rows_scales_with_dimensions(tmp_path):
 def test_parameter_update_event_to_dict_from_dict_roundtrip():
     event = ParameterUpdateEvent(
         updates={"param_1": 7.5},
-        dimension="dim_1",
+        iterator_code="dim_1",
         step_index=2,
         source_step="adaptation",
     )
@@ -274,7 +274,7 @@ def test_parameter_update_event_to_dict_from_dict_roundtrip():
     restored = ParameterUpdateEvent.from_dict(d)
 
     assert restored.updates == {"param_1": 7.5}
-    assert restored.dimension == "dim_1"
+    assert restored.iterator_code == "dim_1"
     assert restored.step_index == 2
     assert restored.source_step == "adaptation"
 
@@ -282,7 +282,7 @@ def test_parameter_update_event_to_dict_from_dict_roundtrip():
 def test_parameter_update_event_from_dict_handles_missing_optional_fields():
     d = {"updates": {"param_1": 5.0}}
     event = ParameterUpdateEvent.from_dict(d)
-    assert event.dimension is None
+    assert event.iterator_code is None
     assert event.step_index is None
     assert event.source_step is None
 
@@ -290,7 +290,7 @@ def test_parameter_update_event_from_dict_handles_missing_optional_fields():
 def test_parameter_update_event_to_dict_produces_serializable_output():
     event = ParameterUpdateEvent(
         updates={"param_1": 3.0},
-        dimension="dim_1",
+        iterator_code="dim_1",
         step_index=0,
     )
     d = event.to_dict()
@@ -305,7 +305,7 @@ def test_record_parameter_update_step_index_without_dimension_raises(tmp_path):
     exp = dataset.get_experiment("exp_001")
     proposal = ParameterProposal.from_dict({"param_1": 5.0})
     with pytest.raises(ValueError):
-        exp.record_parameter_update(proposal, dimension=None, step_index=1)
+        exp.record_parameter_update(proposal, iterator_code=None, step_index=1)
 
 
 def test_record_parameter_update_dimension_without_step_index_raises(tmp_path):
@@ -313,7 +313,7 @@ def test_record_parameter_update_dimension_without_step_index_raises(tmp_path):
     exp = dataset.get_experiment("exp_001")
     proposal = ParameterProposal.from_dict({"param_1": 5.0})
     with pytest.raises(ValueError):
-        exp.record_parameter_update(proposal, dimension="dim_1", step_index=None)
+        exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=None)
 
 
 def test_record_parameter_update_empty_proposal_returns_none(tmp_path):
@@ -339,7 +339,7 @@ def test_record_parameter_update_rejects_dimension_parameter(tmp_path):
     exp = dataset.get_experiment("exp_001")
     proposal = ParameterProposal.from_dict({"dim_1": 3})
     with pytest.raises(ValueError):
-        exp.record_parameter_update(proposal, dimension="dim_1", step_index=0)
+        exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=0)
 
 
 def test_record_parameter_update_appends_to_list(tmp_path):
@@ -348,7 +348,7 @@ def test_record_parameter_update_appends_to_list(tmp_path):
     assert len(exp.parameter_updates) == 0
 
     proposal = ParameterProposal.from_dict({"param_1": 7.0})
-    exp.record_parameter_update(proposal, dimension="dim_1", step_index=0)
+    exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=0)
 
     assert len(exp.parameter_updates) == 1
 
@@ -383,7 +383,7 @@ def test_trajectory_to_events_preserves_ordering_and_payload():
     )
     events = trajectory_to_events(traj)
     assert len(events) == 2
-    assert events[0].dimension == "layer"
+    assert events[0].iterator_code == "layer"
     assert events[0].step_index == 0
     assert events[0].updates == {"speed": 30.0}
     assert events[0].source_step == "explore"
@@ -394,9 +394,9 @@ def test_trajectory_to_events_preserves_ordering_and_payload():
 def test_events_to_trajectory_filters_by_dimension_and_sorts():
     """events_to_trajectory keeps only matching-dimension events; sorts by step_index."""
     events = [
-        ParameterUpdateEvent({"speed": 50.0}, dimension="layer", step_index=2),
-        ParameterUpdateEvent({"feed": 1.0}, dimension="segment", step_index=1),  # filtered out
-        ParameterUpdateEvent({"speed": 30.0}, dimension="layer", step_index=0),  # earlier
+        ParameterUpdateEvent({"speed": 50.0}, iterator_code="layer", step_index=2),
+        ParameterUpdateEvent({"feed": 1.0}, iterator_code="segment", step_index=1),  # filtered out
+        ParameterUpdateEvent({"speed": 30.0}, iterator_code="layer", step_index=0),  # earlier
     ]
     traj = events_to_trajectory(events, dimension="layer")
     assert traj.dimension == "layer"
@@ -409,8 +409,8 @@ def test_events_to_trajectory_filters_by_dimension_and_sorts():
 def test_events_to_trajectory_skips_events_without_step_index():
     """Events without step_index (e.g. initial-state events) are skipped."""
     events = [
-        ParameterUpdateEvent({"speed": 30.0}, dimension="layer", step_index=None),  # skipped
-        ParameterUpdateEvent({"speed": 50.0}, dimension="layer", step_index=1),
+        ParameterUpdateEvent({"speed": 30.0}, iterator_code="layer", step_index=None),  # skipped
+        ParameterUpdateEvent({"speed": 50.0}, iterator_code="layer", step_index=1),
     ]
     traj = events_to_trajectory(events, dimension="layer")
     assert len(traj.entries) == 1
@@ -451,6 +451,6 @@ def test_apply_uses_trajectory_to_events(tmp_path):
     )
     traj.apply(exp)
     assert len(exp.parameter_updates) == 1
-    assert exp.parameter_updates[0].dimension == "dim_1"
+    assert exp.parameter_updates[0].iterator_code == "dim_1"
     assert exp.parameter_updates[0].step_index == 1
     assert exp.parameter_updates[0].updates == {"param_1": 9.0}

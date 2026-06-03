@@ -58,12 +58,13 @@ def test_iterator_values_normalised_per_row(tmp_path):
         parameters={"param_1": 0.5, "n_layers": 4, "n_segments": 3},
     )
 
-    _, y_df = dataset.export_to_dataframe(["exp_001"])
+    X_df, _ = dataset.export_to_dataframe(["exp_001"])
 
-    assert "layer_idx_pos" in y_df.columns
+    # Iterator positions are implicit *inputs* (X), not features (y).
+    assert "layer_idx_pos" in X_df.columns
     # 4 layers × 3 segments = 12 rows; layer values at k ∈ {0, 1/3, 2/3, 1}.
     expected = sorted({0.0, 1 / 3, 2 / 3, 1.0})
-    actual = sorted(set(round(float(v), 6) for v in y_df["layer_idx_pos"]))
+    actual = sorted(set(round(float(v), 6) for v in X_df["layer_idx_pos"]))
     assert all(abs(a - e) < 1e-6 for a, e in zip(actual, expected))
 
 

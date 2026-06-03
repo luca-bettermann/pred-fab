@@ -1455,13 +1455,12 @@ class PredictionSystem(BaseOrchestrationSystem):
             if has_mae:
                 line += f"  {m.get('mae', 0.0):10.3f}"
             self.logger.console_info(line)
-        if not has_inf:
-            if not importance_dict:
-                raise RuntimeError(
-                    "R²_inf not computed: no importance weights available. "
-                    "Pass eval_system to validate(), or ensure experiments "
-                    "have performance scores loaded."
-                )
+        if not has_inf and not importance_dict:
+            self.logger.console_warning(
+                "R²_inf not computed: no importance weights available. "
+                "Pass eval_system to validate(), or ensure experiments "
+                "have performance scores loaded."
+            )
 
         return results
 

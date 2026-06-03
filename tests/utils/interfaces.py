@@ -449,11 +449,10 @@ class WorkflowPredictionModel(IPredictionModel):
         return "spatial", 2
 
     def forward_pass(self, X: torch.Tensor, gradient_pass: bool = False) -> dict[str, torch.Tensor]:
-        w = torch.from_numpy(self.weights).to(dtype=X.dtype)
-        if X.shape[1] != w.shape[0]:
-            y = X[:, : w.shape[0]] @ w
-        else:
-            y = X @ w
+        # Slice weights to the input width (like the MixedPredictionModels),
+        # so a wider weight matrix still matmuls against the declared inputs.
+        w = torch.from_numpy(self.weights[: X.shape[1], :]).to(dtype=X.dtype)
+        y = X @ w
         return {"feature_1": y[:, 0], "feature_2": y[:, 1]}
 
     def train(self, train_batches: List[Tuple[torch.Tensor, torch.Tensor]], val_batches: List[Tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:

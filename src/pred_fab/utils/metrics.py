@@ -50,7 +50,7 @@ class Metrics:
         y_true: np.ndarray,
         y_pred: np.ndarray,
     ) -> dict[str, float]:
-        """Compute MAE, RMSE, and R²; returns dict with 'mae', 'rmse', 'r2', 'n_samples'."""
+        """Compute MAE and R²; returns dict with 'mae', 'r2', 'n_samples'."""
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
 

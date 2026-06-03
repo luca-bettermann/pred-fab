@@ -10,7 +10,7 @@ def test_export_to_dataframe_applies_recorded_parameter_updates_by_step(tmp_path
     exp = populate_single_experiment_features(dataset)
 
     proposal = ParameterProposal.from_dict({"param_1": 9.0}, source_step="adaptation_step")
-    exp.record_parameter_update(proposal, dimension="dim_1", step_index=1)
+    exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=1)
 
     X_df, y_df = dataset.export_to_dataframe(["exp_001"])
     assert len(X_df) == 6
@@ -29,7 +29,7 @@ def test_record_parameter_update_rejects_dimension_updates(tmp_path):
 
     proposal = ParameterProposal.from_dict({"dim_1": 1}, source_step="adaptation_step")
     with pytest.raises(ValueError, match="domain axis parameter"):
-        exp.record_parameter_update(proposal, dimension="dim_1", step_index=1)
+        exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=1)
 
 
 def test_record_parameter_update_skips_no_change_delta(tmp_path):
@@ -37,7 +37,7 @@ def test_record_parameter_update_skips_no_change_delta(tmp_path):
     exp = dataset.get_experiment("exp_001")
 
     proposal = ParameterProposal.from_dict({"param_1": 2.5}, source_step="adaptation_step")
-    event = exp.record_parameter_update(proposal, dimension="dim_1", step_index=0)
+    event = exp.record_parameter_update(proposal, iterator_code="dim_1", step_index=0)
     assert event is None
     assert exp.parameter_updates == []
 
@@ -47,7 +47,7 @@ def test_parameter_update_events_roundtrip_via_save_load(tmp_path):
     exp = populate_single_experiment_features(dataset)
     exp.record_parameter_update(
         ParameterProposal.from_dict({"param_1": 8.5}, source_step="adaptation_step"),
-        dimension="dim_1",
+        iterator_code="dim_1",
         step_index=1,
     )
 
