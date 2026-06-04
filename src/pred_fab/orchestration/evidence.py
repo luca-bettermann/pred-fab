@@ -13,16 +13,13 @@ Both implement the identity
 — a sum of per-kernel self-integrals. Kernels outside the unit cube leak
 naturally because the integrand is masked to the unit cube.
 
-A `KernelIndex` wraps the existing kernel set and answers D(z) queries.
-For small kernel sets (`< truncation_threshold`, default 10) the index
-sums all kernels directly — guaranteeing a non-zero density everywhere
-the Gaussian tail reaches, so plots and gradients stay smooth on early
-samples. Above the threshold it falls back to cKDTree neighbour lookup
-within `cutoff_sigmas · σ` (default 5σ; exp(−12.5) ≈ 4×10⁻⁶) for cost.
+A `KernelIndex` bundles the kernel set (centres, weights, σ, domain bounds)
+that the estimators read; the current estimators sum all kernels densely.
+`cutoff_sigmas` / `truncation_threshold` are carried for a future
+neighbour-truncation path but are not consulted on the dense path.
 """
 from __future__ import annotations
 
-import logging
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -32,8 +29,6 @@ from typing import Literal
 import numpy as np
 import torch
 
-_logger = logging.getLogger(__name__)
-
 
 # Module-level KernelField defaults — change here, propagates everywhere.
 DEFAULT_RADII: tuple[float, ...] = (0.5, 1.0, 2.0)
@@ -41,69 +36,15 @@ DEFAULT_ANGULAR_GAP_DEG: float = 45.0
 
 
 # ---------------------------------------------------------------------------
-# Scale-aware regime dispatcher
-# ---------------------------------------------------------------------------
-
-# Thresholds for regime selection. The right metric is the expected number of
-# kernels contributing to a typical probe's density — n_active = N · V(5σ-ball)
-# capped at the unit cube — not n_kernels alone. The dense regime is always
-# correct; knn / cluster are approximations that pay off only at scale.
-_REGIME_DENSE_FLOOR = 100        # below: dense; KNN overhead doesn't pay
-_REGIME_CLUSTER_N_ACTIVE = 10000  # above n_active: cluster
-_REGIME_CLUSTER_N_KERNELS = 100000  # above n_kernels: cluster
-_REGIME_KNN_N_ACTIVE = 50         # below n_active: KNN
-_REGIME_KNN_ACTIVE_FRAC = 0.5     # n_active < frac · n_kernels: KNN
-
-# knn / cluster are not yet implemented — when selected, the dispatcher logs
-# at INFO and returns "dense" so the caller's code stays simple.
-_IMPLEMENTED_REGIMES: frozenset[str] = frozenset({"dense"})
-
-
-def _choose_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
-    """Ideal KDE regime for the given ``(n_kernels, sigma, D)``.
-
-    Pure threshold logic — returns the regime label the dispatcher *would
-    pick*, ignoring whether it's implemented. Use ``_resolve_kde_regime``
-    to get the regime that will actually run.
-    """
-    v_5sigma = min((pi ** (D / 2)) * ((5.0 * sigma) ** D) / gamma(D / 2 + 1), 1.0)
-    n_active = n_kernels * v_5sigma
-
-    if n_kernels < _REGIME_DENSE_FLOOR:
-        return "dense"
-    if n_active > _REGIME_CLUSTER_N_ACTIVE or n_kernels > _REGIME_CLUSTER_N_KERNELS:
-        return "cluster"
-    if n_active < _REGIME_KNN_N_ACTIVE or n_active < n_kernels * _REGIME_KNN_ACTIVE_FRAC:
-        return "knn"
-    return "dense"
-
-
-def _resolve_kde_regime(n_kernels: int, sigma: float, D: int) -> str:
-    """Regime to actually execute — falls back to "dense" for unimplemented choices.
-
-    Logs at INFO when the ideal regime is not yet implemented.
-    """
-    ideal = _choose_kde_regime(n_kernels, sigma, D)
-    if ideal not in _IMPLEMENTED_REGIMES:
-        _logger.info(
-            "KDE regime %r preferred (n_kernels=%d, σ=%.4f, D=%d) — not yet "
-            "implemented; falling back to dense.",
-            ideal, n_kernels, sigma, D,
-        )
-        return "dense"
-    return ideal
-
-
-# ---------------------------------------------------------------------------
-# Kernel index — O(M · log K) density evaluation via neighbour search
+# Kernel index — kernel-set holder read by the estimators
 # ---------------------------------------------------------------------------
 
 class KernelIndex:
-    """Spatial index over Gaussian kernel centres for fast D(z) evaluation.
+    """Holds a Gaussian kernel set (centres, weights, σ, domain bounds) that
+    the estimators sum densely.
 
-    For n_kernels < ``truncation_threshold`` (default 10), the full distance
-    is summed directly. Above the threshold, a 5σ-radius mask via
-    ``torch.cdist + torch.where`` keeps the contributing kernels only.
+    ``cutoff_sigmas`` / ``truncation_threshold`` are reserved for a future
+    neighbour-truncation path and are not used on the current dense path.
     """
 
     def __init__(
@@ -350,22 +291,11 @@ class KernelFieldEstimator(EvidenceEstimator):
         ``index_old.centers`` / ``.weights`` come from the numpy-typed
         ``KernelIndex`` and are converted at call entry; old kernels are
         treated as constants (no grad), new candidates carry whatever
-        ``requires_grad`` they were given. Regime dispatch via
-        ``_choose_kde_regime`` selects dense / knn / cluster; only dense is
-        implemented — knn / cluster log at INFO and fall back.
+        ``requires_grad`` they were given.
         """
         S = int(new_centers_SL.shape[0])
         if S == 0:
             return torch.zeros(0, dtype=new_centers_SL.dtype)
-        L = int(new_centers_SL.shape[1])
-        D = int(new_centers_SL.shape[2])
-        sigma = index_old.sigma
-        n_old = len(index_old.centers) if not index_old.is_empty else 0
-
-        # Resolve the regime (logs + falls back to dense for unimplemented choices).
-        # Only "dense" is implemented today; the call still routes correctly when
-        # knn / cluster land.
-        _resolve_kde_regime(n_old, sigma, D)
         return self._integrated_evidence_joint_dense(
             index_old, new_centers_SL, new_weights_SL,
         )
@@ -408,40 +338,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         e_joint = self._joint_evidence(index_old, new_centers_SL, new_weights_SL)
         return alpha_marginal * e_marginal + alpha_joint * e_joint
 
-    @staticmethod
-    def _volume_correction(
-        sigma: float, domain_bounds: torch.Tensor | None, dims: list[int],
-    ) -> float:
-        """Ratio of kernel mass to domain volume for the given dimensions.
-
-        The KernelField quadrature uses normalized Gaussian weights (sum to 1),
-        which computes the EXPECTATION E_{z~ρ}[1/(1+D)], not the true integral
-        ∫ ρ/(1+D) dz. The true integral = expectation × kernel_mass. To get a
-        domain-normalized evidence in [0,1], divide by domain volume:
-
-            correction = (σ√2π)^D / ∏(hi_d - lo_d)
-
-        CURRENTLY DISABLED (vol_corr=1.0 at call sites). The correction is
-        mathematically correct but makes ΔE too small (~0.01 at σ=0.05) to
-        steer the optimizer. The expectation-based proxy gives ΔE~0.1-0.3
-        which is usable for acquisition blending with κ.
-
-        The tradeoff: without correction, evidence is not a true integral and
-        not strictly bounded by 1. With default settings (σ=0.05, D/(D+1)
-        marginals) ΔE stays below 1 in practice. Non-default σ or marginal
-        weights may exceed 1 — this is a known limitation documented in the
-        backlog task "Rethink evidence saturation for high-D spaces."
-        """
-        import math
-        kernel_mass = (sigma * math.sqrt(2.0 * math.pi)) ** len(dims)
-        if domain_bounds is None:
-            domain_vol = 1.0  # [0,1]^D default
-        else:
-            domain_vol = 1.0
-            for d in dims:
-                domain_vol *= float(domain_bounds[d, 1] - domain_bounds[d, 0])
-        return kernel_mass / domain_vol if domain_vol > 1e-15 else 0.0
-
     def _marginal_evidence(
         self,
         index_old: KernelIndex,
@@ -482,10 +378,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         for d in range(D):
             lo_d = float(bounds[d, 0]) if bounds is not None else 0.0
             hi_d = float(bounds[d, 1]) if bounds is not None else 1.0
-            # Volume correction disabled — expectation-based evidence is the
-            # working proxy. True integral normalization makes ΔE too small
-            # to steer the optimizer. See backlog: "Rethink evidence saturation."
-            vol_corr = 1.0
             new_d = new_centers_SL[:, :, d]                          # (S, L)
             probes_d = new_d[:, :, None] + probes_1d[None, None, :]  # (S, L, P)
             in_dom_d = ((probes_d >= lo_d) & (probes_d <= hi_d)).to(dtype=dtype)
@@ -506,7 +398,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             total_rho = self_dens_1d[None, None, :] * new_weights_SL[:, :, None] + rho_other + rho_old
             integrand = 1.0 / (1.0 + total_rho)
             integral_d = (quad_w[None, None, :] * integrand * in_dom_d).sum(dim=-1)
-            e_marginal = e_marginal + vol_corr * (new_weights_SL * integral_d).sum(dim=-1)
+            e_marginal = e_marginal + (new_weights_SL * integral_d).sum(dim=-1)
 
             # Old kernels' marginal integrals perturbation
             if n_old > 0:
@@ -525,7 +417,7 @@ class KernelFieldEstimator(EvidenceEstimator):
                 total_old = (self_old + rho_other_old)[:, :, None] + delta
                 integrand_old = 1.0 / (1.0 + total_old)
                 integral_old = (quad_w[None, :, None] * integrand_old * in_dom_old[:, :, None]).sum(dim=1)
-                e_marginal = e_marginal + vol_corr * (old_w[:, None] * integral_old).sum(dim=0)  # type: ignore[index]
+                e_marginal = e_marginal + (old_w[:, None] * integral_old).sum(dim=0)  # type: ignore[index]
 
         return e_marginal / D
 
@@ -539,8 +431,6 @@ class KernelFieldEstimator(EvidenceEstimator):
         S = int(new_centers_SL.shape[0])
         L = int(new_centers_SL.shape[1])
         D = int(new_centers_SL.shape[2])
-        # Volume correction disabled — see marginal comment above.
-        vol_corr = 1.0
         dtype = new_centers_SL.dtype
         device = new_centers_SL.device
         sigma = index_old.sigma
@@ -571,7 +461,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             integral_new_SL = (
                 quad_weights[None, None, :] * integrand_new * in_domain_new_SL
             ).sum(dim=-1)
-            return vol_corr * (new_weights_SL * integral_new_SL).sum(dim=-1)
+            return (new_weights_SL * integral_new_SL).sum(dim=-1)
 
         old_centers = index_old.centers.to(device=device, dtype=dtype)
         old_weights = index_old.weights.to(device=device, dtype=dtype)
@@ -625,7 +515,7 @@ class KernelFieldEstimator(EvidenceEstimator):
             quad_weights[None, None, :] * integrand_new * in_domain_new_SL
         ).sum(dim=-1)
 
-        return vol_corr * (
+        return (
             (old_weights[:, None] * integral_old_per_s).sum(dim=0)
             + (new_weights_SL * integral_new_SL).sum(dim=-1)
         )

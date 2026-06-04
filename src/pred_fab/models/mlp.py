@@ -22,6 +22,7 @@ isn't justified at mock-scale (~50-200 rows). Threshold is class-level so
 subclasses can override.
 """
 
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -289,14 +290,16 @@ class MLPModel(IPredictionModel):
     ) -> dict[str, torch.Tensor]:
         """Inference forward → ``dict[feat_code, (batch,) tensor]``.
 
-        Applies categorical one-hot expansion before the network. Returns one
-        normalised-space (batch,) tensor per output feature.
+        Applies categorical embedding expansion (via ``_embed_cats``) before
+        the network. Returns one normalised-space (batch,) tensor per output
+        feature.
 
         ``gradient_pass=False`` (default): wraps in ``torch.no_grad()``.
         ``gradient_pass=True``: keeps the autograd tape live (gradient
-        acquisition). Categorical expansion via ``_embed_cats`` is non-
-        differentiable (discrete index → one-hot float), but it doesn't
-        break gradient flow on the non-categorical columns.
+        acquisition). Categorical expansion via ``_embed_cats`` looks up a
+        learned ``nn.Embedding`` per cat column; the discrete index lookup is
+        non-differentiable, but it doesn't break gradient flow on the
+        non-categorical columns.
         """
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
@@ -316,12 +319,8 @@ class MLPModel(IPredictionModel):
             return X
         X_expanded = self._embed_cats(X)
         layers = list(self._model.children())
-        if gradient_pass:
-            h = X_expanded
-            for layer in layers[:-1]:
-                h = layer(h)
-            return h
-        with torch.no_grad():
+        ctx: Any = nullcontext() if gradient_pass else torch.no_grad()
+        with ctx:
             h = X_expanded
             for layer in layers[:-1]:
                 h = layer(h)

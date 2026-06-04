@@ -41,6 +41,7 @@ attention sees prior positions' hidden states natively, so no explicit
 prev-position columns are required (and none are supported).
 """
 
+from contextlib import nullcontext
 from typing import Any, Callable
 
 import numpy as np
@@ -314,7 +315,7 @@ class TransformerModel(IPredictionModel):
         if not self._is_trained or self._model is None:
             zero = torch.zeros((X.shape[0],), dtype=torch.float32)
             return {feat: zero.clone() for feat in self.outputs}
-        ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
+        ctx: Any = torch.no_grad() if not gradient_pass else nullcontext()
         with ctx:
             x_seq = X.unsqueeze(1).to(dtype=torch.float32)  # (B, 1, n_input)
             axis_indices = torch.zeros((1, n_axes), dtype=torch.long)
@@ -335,7 +336,7 @@ class TransformerModel(IPredictionModel):
         """
         if not self._is_trained or self._model is None:
             return X
-        ctx: Any = torch.no_grad() if not gradient_pass else _NullContext()
+        ctx: Any = torch.no_grad() if not gradient_pass else nullcontext()
         with ctx:
             return self._model.encoder.input_proj(X.to(dtype=torch.float32))  # type: ignore[union-attr]
 
@@ -756,9 +757,3 @@ class _EncDecNet(nn.Module):
             actual = actual_extra_per_depth.get(depth)
             out[depth] = module(hidden, actual)
         return out
-
-
-class _NullContext:
-    """Context manager that does nothing — used when gradient_pass=True."""
-    def __enter__(self): return self
-    def __exit__(self, *args): return False

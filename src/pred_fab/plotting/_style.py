@@ -14,6 +14,7 @@ matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 
 
@@ -599,7 +600,7 @@ def _add_fixed_subtitle(
 
 
 def _plot_trajectory_ranges(
-    ax: "plt.Axes",  # type: ignore[name-defined]
+    ax: Axes,
     points: list[dict[str, Any]],
     x_axis: "AxisSpec",
     y_axis: "AxisSpec",
@@ -665,7 +666,7 @@ def _plot_trajectory_ranges(
 
 
 def _apply_axes(
-    ax: plt.Axes,  # type: ignore[name-defined]
+    ax: Axes,
     x_axis: AxisSpec,
     y_axis: AxisSpec,
 ) -> None:

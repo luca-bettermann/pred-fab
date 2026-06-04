@@ -127,7 +127,6 @@ def radar_chart(
                    edgecolors="white", linewidth=0.6)
 
     # Legend: mean dot + ±σ error bar (symbols only, no labels)
-    from matplotlib.lines import Line2D
     handles = []
     handles.append(Line2D([0], [0], marker="o", color="none",
                           markerfacecolor=color, markeredgecolor="white",
@@ -204,6 +203,4 @@ def plot_radar_panels(
     if suptitle:
         fig.suptitle(suptitle, fontsize=FONT["title"], color=ZINC_700)
 
-    path = str(save_path)
-    save_fig(path)
-    print(f"Saved: {path}")
+    save_fig(str(save_path))

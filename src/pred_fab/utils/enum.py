@@ -1,7 +1,5 @@
 from enum import Enum
 
-# PRED_SUFFIX = 'pred_'
-
 class SystemName(str, Enum):
     """Enumeration of system names in PFAB."""
     FEATURE = 'feature'
@@ -39,16 +37,15 @@ class SplitType(str, Enum):
     TEST = 'test'
 
 class BlockType(str, Enum):
-    """Enumeration of block types in a neural network."""
+    """Enumeration of data block types in a dataset/experiment."""
     PARAMETERS = 'parameters'
     PARAM_UPDATES = 'parameter_updates'
     PERF_ATTRS = 'performance_attrs'
     FEATURES = 'features'
     METADATA = 'metadata'
-    # FEATURES_PRED = 'features' + PRED_SUFFIX
 
-class Domain(str, Enum):
-    """Enumeration of workflow step domain."""
+class WorkflowDomain(str, Enum):
+    """Enumeration of workflow step domain (distinct from core.data_objects.Domain)."""
     OFFLINE = 'offline'
     ONLINE = 'online'
 
@@ -68,7 +65,7 @@ class Loaders(Enum):
     LOCAL = 'local files'
     EXTERNAL = 'external sources'
     
-class FileFormat(Enum):
+class FileFormat(str, Enum):
     CSV = 'csv'
     JSON = 'json'
 
