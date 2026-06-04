@@ -377,88 +377,134 @@ class ExperimentData:
     # === Helper Methods for Data Access ===
 
     def set_data(self, values: Any, block_type: BlockType, logger: PfabLogger) -> None:
-        """Set values for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            self.parameters.set_values_from_dict(values, logger)
-        elif block_type == BlockType.PARAM_UPDATES:
-            if isinstance(values, dict):
-                events_raw = values.get("events", [])
-            elif isinstance(values, list):
-                events_raw = values
-            else:
-                raise TypeError(
-                    f"Expected list/dict for parameter updates in experiment '{self.code}', "
-                    f"got {type(values).__name__}"
-                )
-            events = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
-            self.parameter_updates = [
-                ParameterUpdateEvent(
-                    updates=self.parameters.sanitize_values(e.updates, ignore_unknown=True),
-                    iterator_code=e.iterator_code,
-                    step_index=e.step_index,
-                    source_step=e.source_step,
-                )
-                for e in events
-            ]
-        elif block_type == BlockType.FEATURES:
-            self.features.set_values_from_df(values, logger, parameters=self.parameters)
-        elif block_type == BlockType.PERF_ATTRS:
-            self.performance.set_values_from_dict(values, logger)
-        elif block_type == BlockType.METADATA:
-            if not isinstance(values, dict):
-                raise TypeError(
-                    f"Expected dict for metadata in experiment '{self.code}', "
-                    f"got {type(values).__name__}"
-                )
-            self.dataset_code = values.get("dataset_code")
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     self.predicted_features.set_values_from_df(values, logger)
-        else:
-            raise ValueError(f"Unknown block type: {block_type}")
+        """Set values for a block type via its handler."""
+        self._block_handler(block_type).set(self, values, logger)
 
-    def get_data_dict(self, block_type: str) -> dict[str, Any]:
-        """Get values as dict for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            return self.parameters.get_values_dict()
-        elif block_type == BlockType.PARAM_UPDATES:
-            return {"events": [e.to_dict() for e in self.parameter_updates]}
-        elif block_type == BlockType.PERF_ATTRS:
-            return self.performance.get_values_dict()
-        elif block_type == BlockType.FEATURES:
-            return self.features.get_values_dict()
-        elif block_type == BlockType.METADATA:
-            if self.dataset_code is None:
-                return {}
-            return {"dataset_code": self.dataset_code}
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     return self.predicted_features.get_values_dict()
-        else:
-            raise ValueError(f"Unknown block type: {block_type}")
+    def get_data_dict(self, block_type: BlockType) -> dict[str, Any]:
+        """Get a block type's values as a dict via its handler."""
+        return self._block_handler(block_type).get(self)
 
     def has_data(self, block_type: BlockType) -> bool:
-        """Check if values are set for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            return bool(self.parameters.get_values_dict())
-        elif block_type == BlockType.PARAM_UPDATES:
-            return bool(self.parameter_updates)
-        elif block_type == BlockType.PERF_ATTRS:
-            return bool(self.performance.get_values_dict())
-        elif block_type == BlockType.FEATURES:
-            return bool(self.features.get_values_dict())
-        elif block_type == BlockType.METADATA:
-            return self.dataset_code is not None
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     return bool(self.predicted_features.get_values_dict())
-        else:
+        """Whether a block type has data, via its handler."""
+        return self._block_handler(block_type).has(self)
+
+    @staticmethod
+    def _block_handler(block_type: BlockType) -> "_BlockHandler":
+        handler = _BLOCK_HANDLERS.get(block_type)
+        if handler is None:
             raise ValueError(f"Unknown block type: {block_type}")
+        return handler
             
     def is_feature_populated(self, feature_name: str) -> bool:
         """Check if a specific feature is populated (not just initialized)."""
         return self.features.is_populated(feature_name)
-        
-    # def is_predicted_feature_populated(self, feature_name: str) -> bool:
-    #     """Check if a specific predicted feature is populated (not just initialized)."""
-    #     return self.predicted_features.is_populated(feature_name)
+
+
+# ---------------------------------------------------------------------------
+# BlockType handlers — one set/get/has strategy per block, keyed in the registry
+# ---------------------------------------------------------------------------
+
+class _BlockHandler:
+    """Strategy for one BlockType on an ExperimentData (set / get-dict / has)."""
+
+    def set(self, exp: "ExperimentData", values: Any, logger: PfabLogger) -> None:
+        raise NotImplementedError
+
+    def get(self, exp: "ExperimentData") -> dict[str, Any]:
+        raise NotImplementedError
+
+    def has(self, exp: "ExperimentData") -> bool:
+        raise NotImplementedError
+
+
+class _ParametersHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.parameters.set_values_from_dict(values, logger)
+
+    def get(self, exp):
+        return exp.parameters.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.parameters.get_values_dict())
+
+
+class _PerfAttrsHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.performance.set_values_from_dict(values, logger)
+
+    def get(self, exp):
+        return exp.performance.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.performance.get_values_dict())
+
+
+class _FeaturesHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.features.set_values_from_df(values, logger, parameters=exp.parameters)
+
+    def get(self, exp):
+        return exp.features.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.features.get_values_dict())
+
+
+class _ParamUpdatesHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        if isinstance(values, dict):
+            events_raw = values.get("events", [])
+        elif isinstance(values, list):
+            events_raw = values
+        else:
+            raise TypeError(
+                f"Expected list/dict for parameter updates in experiment '{exp.code}', "
+                f"got {type(values).__name__}"
+            )
+        events = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
+        exp.parameter_updates = [
+            ParameterUpdateEvent(
+                updates=exp.parameters.sanitize_values(e.updates, ignore_unknown=True),
+                iterator_code=e.iterator_code,
+                step_index=e.step_index,
+                source_step=e.source_step,
+            )
+            for e in events
+        ]
+
+    def get(self, exp):
+        return {"events": [e.to_dict() for e in exp.parameter_updates]}
+
+    def has(self, exp):
+        return bool(exp.parameter_updates)
+
+
+class _MetadataHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        if not isinstance(values, dict):
+            raise TypeError(
+                f"Expected dict for metadata in experiment '{exp.code}', "
+                f"got {type(values).__name__}"
+            )
+        exp.dataset_code = values.get("dataset_code")
+
+    def get(self, exp):
+        if exp.dataset_code is None:
+            return {}
+        return {"dataset_code": exp.dataset_code}
+
+    def has(self, exp):
+        return exp.dataset_code is not None
+
+
+_BLOCK_HANDLERS: dict[BlockType, _BlockHandler] = {
+    BlockType.PARAMETERS: _ParametersHandler(),
+    BlockType.PARAM_UPDATES: _ParamUpdatesHandler(),
+    BlockType.FEATURES: _FeaturesHandler(),
+    BlockType.PERF_ATTRS: _PerfAttrsHandler(),
+    BlockType.METADATA: _MetadataHandler(),
+}
+
 
 class Dataset:
     """Schema-validated experiment container with hierarchical load/save (memory → local → external)."""
@@ -773,7 +819,7 @@ class Dataset:
         exp = self._experiments[code]
         return exp.has_data(block_type)
     
-    def _get_exp_data(self, code: str, block_type: str) -> Any:
+    def _get_exp_data(self, code: str, block_type: BlockType) -> Any:
         if code not in self._experiments:
             return None
         exp = self._experiments[code]
