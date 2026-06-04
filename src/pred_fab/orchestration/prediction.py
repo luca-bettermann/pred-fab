@@ -1815,7 +1815,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         for model in self.models:
             self._validate_model_export(model)
         
-        self.logger.console_info("✓ All models validated successfully")
+        self.logger.console_success("All models validated successfully")
         
         # Build bundle dict
         bundle = self._create_bundle_dict(include_evaluation)
@@ -1824,7 +1824,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         with open(filepath, 'wb') as f:
             pickle.dump(bundle, f)
         
-        self.logger.console_success(f"✓ Exported inference bundle to: {filepath}")
+        self.logger.console_success(f"Exported inference bundle to: {filepath}")
         return filepath
     
     def _validate_model_export(self, model: IPredictionModel) -> None:

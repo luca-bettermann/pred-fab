@@ -35,6 +35,7 @@ from ..orchestration import (
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
 from ..utils import LocalData, PfabLogger, ConsoleReporter, Mode, SourceStep
+from ..utils.console import _B, _D, _R
 from .evidence import EstimatorConfig
 
 
@@ -372,10 +373,6 @@ class PfabAgent:
 
     def state_report(self) -> None:
         """Log an overview of all agent systems to the console."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         if not self._initialized:
             self.logger.console_warning("Agent not initialized. No models to report.")
             return
@@ -611,20 +608,10 @@ class PfabAgent:
         device_t = torch.device(device) if isinstance(device, str) else device
 
         for model in self.pred_system.models:
-            if hasattr(model, "_model") and model._model is not None:
-                model._model = model._model.to(device_t)
-            if hasattr(model, "_cat_embeddings"):
-                model._cat_embeddings = model._cat_embeddings.to(device_t)
-            if hasattr(model, "_compiled_forward") and model._compiled_forward is not None:
-                # torch.compile-d module; rebuild the compiled wrapper around
-                # the moved net at next first-call.
-                model._compiled_forward = None
+            model.to(device_t)
 
         if self.pred_system.datamodule is not None:
-            for stats in self.pred_system.datamodule._parameter_stats.values():
-                stats.to(device_t)
-            for stats in self.pred_system.datamodule._feature_stats.values():
-                stats.to(device_t)
+            self.pred_system.datamodule.to(device_t)
 
         # Record on PredictionSystem so KDE torch conversions target it.
         self.pred_system._device = device_t

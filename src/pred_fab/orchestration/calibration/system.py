@@ -8,6 +8,7 @@ from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
+from ...utils.console import _B, _D, _R
 from ..base_system import BaseOrchestrationSystem
 from ..evidence import evidence_from_density
 from .engine import OptimizationEngine
@@ -181,10 +182,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         lines = [f"\n  {_B}Calibration{_R}"]
 
         pw_parts = [f"{k}={v:g}" for k, v in self.performance_weights.items()]

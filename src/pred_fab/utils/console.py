@@ -7,6 +7,9 @@ from typing import Any
 from .logger import PfabLogger
 from .metrics import combined_score as _combined_score
 
+# Canonical ANSI style constants. Importable module-level — reused by
+# ``state_report``-style methods across the codebase (see agent.py,
+# core/schema.py, calibration/system.py). Do not redefine locally.
 _R  = "\033[0m"   # reset
 _B  = "\033[1m"   # bold
 _D  = "\033[2m"   # dim

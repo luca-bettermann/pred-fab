@@ -18,6 +18,7 @@ from .data_blocks import (
 )
 from .data_objects import DataArray, DataDomainAxis, Domain
 from ..utils.enum import Roles
+from ..utils.console import _B, _D, _R
 
 
 def assert_blocks_compatible(block_pairs: list[tuple[DataBlock, DataBlock]]) -> None:
@@ -97,10 +98,6 @@ class DatasetSchema:
 
     def state_report(self) -> None:
         """Print schema overview to console."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         lines = [f"\n  {_B}Schema: {self.name}{_R}"]
 
         # Parameters (exclude domain axis params)

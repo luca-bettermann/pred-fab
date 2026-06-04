@@ -547,11 +547,8 @@ class DataModule:
         for col_name in self.input_columns:
             if col_name in X_dict:
                 col_t = X_dict[col_name]
-                # Categoricals are long-typed; numerics are float.
-                if col_name in self.categorical_mappings:
-                    col_f = col_t.to(dtype=torch.float32)
-                else:
-                    col_f = col_t.to(dtype=torch.float32)
+                # Categoricals (long) and numerics (float) both cast to float32 here.
+                col_f = col_t.to(dtype=torch.float32)
                 # Replace NaNs (boundary cells) with 0 — matches _encode_inputs.
                 col_f = torch.nan_to_num(col_f, nan=0.0)
             else:
@@ -613,6 +610,14 @@ class DataModule:
         else:
             return data_obj.normalize_strategy
     
+    def to(self, device: Any) -> "DataModule":
+        """Move normaliser buffers to ``device``."""
+        for stats in self._parameter_stats.values():
+            stats.to(device)
+        for stats in self._feature_stats.values():
+            stats.to(device)
+        return self
+
     def get_normalization_state(self) -> dict[str, Any]:
         """Export normalisation state for inference bundle.
 

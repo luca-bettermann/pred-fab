@@ -191,11 +191,13 @@ class FeatureSystem(BaseOrchestrationSystem):
         evaluate_from: int = 0,
         evaluate_to: int | None = None,
         visualize: bool = False,
-        skip_feature_code: dict[str, bool] = {},
+        skip_feature_code: dict[str, bool] | None = None,
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
         feature_filter: str | None = None,
     ) -> dict[str, np.ndarray]:
         """Run feature models in dependency order and return {code: tensor} dict."""
+        if skip_feature_code is None:
+            skip_feature_code = {}
 
         feature_dict: dict[str, np.ndarray] = {}
 

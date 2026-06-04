@@ -356,6 +356,19 @@ class IPredictionModel(BaseInterface):
         """Validate this model on a split — flat default; sequence models override."""
         return system._validate_flat(self, dm, x_split, y_split, cell_meta, importance_dict)
 
+    def to(self, device: Any) -> "IPredictionModel":
+        """Move this model's torch state to ``device``. Override for extra state."""
+        net = getattr(self, "_model", None)
+        if net is not None:
+            setattr(self, "_model", net.to(device))
+        emb = getattr(self, "_cat_embeddings", None)
+        if emb is not None:
+            setattr(self, "_cat_embeddings", emb.to(device))
+        if getattr(self, "_compiled_forward", None) is not None:
+            # torch.compile-d module; rebuilt around the moved net on next call.
+            setattr(self, "_compiled_forward", None)
+        return self
+
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:
