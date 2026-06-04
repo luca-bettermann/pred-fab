@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Any, Literal
 import functools
 
-from .schema import DatasetSchema
+from .schema import DatasetSchema, assert_blocks_compatible
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,6 @@ from .data_objects import DataArray
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
-# from ..utils.enum import BlockType, PRED_SUFFIX, Loaders
 from ..utils.enum import BlockType, Loaders
 
 
@@ -223,7 +222,6 @@ class ExperimentData:
                  performance: PerformanceAttributes,
                  features: Features,
                  dataset_code: str | None = None,
-                #  predicted_features: Features
                  ):
         self.code = exp_code
         self.parameters = parameters
@@ -235,26 +233,16 @@ class ExperimentData:
         self.dataset_code: str | None = dataset_code
         self.parameter_updates: list[ParameterUpdateEvent] = []
         self.config_snapshot: dict[str, Any] | None = None
-        # self.predicted_features = predicted_features
 
     # === Helper Methods for Validation ===
 
     def is_valid(self, schema: 'DatasetSchema') -> bool:
-        """Check structural compatibility of exp with schema."""
-        # Check all blocks using helper function
-        block_checks = [
+        """Check structural compatibility of exp with schema (raises on mismatch)."""
+        assert_blocks_compatible([
             (self.parameters, schema.parameters),
             (self.performance, schema.performance_attrs),
             (self.features, schema.features),
-            # (self.predicted_features, schema.predicted_features)
-        ]
-        
-        for self_block, other_block in block_checks:
-            if not self_block.is_compatible(other_block):
-                raise ValueError(
-                    f"Schema block {self_block.__class__.__name__} is not identical "
-                    f"to {other_block.__class__.__name__}."
-                )        
+        ])
         return True
     
     def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: int | None) -> bool:
@@ -555,7 +543,6 @@ class Dataset:
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
         perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance_attrs)
         arrays_block = self._init_from_schema(Features, self.schema.features)
-        # pred_block = self._init_from_schema(Features, self.schema.features, suffix=PRED_SUFFIX)
 
         return ExperimentData(
             exp_code=exp_code,
@@ -563,7 +550,6 @@ class Dataset:
             performance=perf_block,
             features=arrays_block,
             dataset_code=dataset_code,
-            # predicted_features=pred_block
         )
     
     def _build_experiment_data(
@@ -574,7 +560,6 @@ class Dataset:
         metric_arrays: dict[str, np.ndarray] | None,
         parameter_updates: list[dict[str, Any]] | None = None,
         dataset_code: str | None = None,
-        # predicted_arrays: dict[str, np.ndarray] | None = None
     ) -> ExperimentData:
         """Build ExperimentData from loaded components."""
         # 1. Create shell with schema structure
@@ -585,8 +570,7 @@ class Dataset:
 
         # 3. Initialize feature arrays based on parameters
         exp_data.features.initialize_arrays(exp_data.parameters)
-        # exp_data.predicted_features.initialize_arrays(exp_data.parameters)
-        
+
         # 4. Set optional blocks
         if performance:
             exp_data.set_data(performance, BlockType.PERF_ATTRS, self.logger)
@@ -596,9 +580,6 @@ class Dataset:
 
         if parameter_updates:
             exp_data.set_data({"events": parameter_updates}, BlockType.PARAM_UPDATES, self.logger)
-            
-        # if predicted_arrays:
-        #     exp_data.set_data(predicted_arrays, BlockType.FEATURES_PRED, self.logger)
 
         # 5. Validate against schema
         exp_data.is_valid(self.schema)
@@ -697,19 +678,13 @@ class Dataset:
         """Log an overview of the current dataset to the console."""
         exp_codes = self.get_experiment_codes()
         total = len(exp_codes)
-        feature_names = list(self.schema.features.keys())
-        
+
         # Count parameter and performance presence
         count_params = sum(1 for c in exp_codes if self.get_experiment(c).has_data(BlockType.PARAMETERS))
         count_perf = sum(1 for c in exp_codes if self.get_experiment(c).has_data(BlockType.PERF_ATTRS))
         
         # Count completely populated features (using existing helper)
         count_features = len(self.get_populated_experiment_codes())
-
-        # # Count completely populated predicted features
-        # count_pred = sum(1 for c in exp_codes if all(
-        #     self.get_experiment(c).is_predicted_feature_populated(name) for name in feature_names
-        # ))
 
         summary = [
             f"===== 'Dataset State Report' =====",
@@ -718,7 +693,6 @@ class Dataset:
             f"  - Parameters: \t{count_params}/{total}",
             f"  - Features: \t\t{count_features}/{total}",
             f"  - Performance: \t{count_perf}/{total}",
-            # f"  - Predicted Features: {count_pred}/{total}",
         ]
 
         self.logger.console_new_line()
@@ -939,10 +913,9 @@ class Dataset:
 
             # Initialize feature arrays based on loaded parameters
             exp_data.features.initialize_arrays(exp_data.parameters, recompute_flag)
-            # exp_data.predicted_features.initialize_arrays(exp_data.parameters, recompute_flag)
 
-        # 3. Load Performance Metrics
-        missing_performance = self._hierarchical_load(
+        # 3. Load Performance Metrics (side-effecting: populates exp blocks in memory).
+        self._hierarchical_load(
             BlockType.PERF_ATTRS, exp_codes,
             loader=self.local_data.load_performance,
             setter=functools.partial(self._set_exp_data, block_type=BlockType.PERF_ATTRS),
@@ -952,10 +925,9 @@ class Dataset:
             verbose=verbose
         )
 
-        # 4. Load Features
-        missing_features_union = set()
+        # 4. Load Features (side-effecting per feature; missing sets are not surfaced).
         for name in self.schema.features.keys():
-            missing_features = self._hierarchical_load(
+            self._hierarchical_load(
                 name, exp_codes,
                 loader=self.local_data.load_features,
                 setter=functools.partial(self._set_exp_data, block_type=BlockType.FEATURES),
@@ -965,22 +937,6 @@ class Dataset:
                 verbose=verbose,
                 feature_name=name # Passed to kwargs
             )
-            missing_features_union.update(missing_features)
-
-        # # 5. Load Predicted Features
-        # missing_pred_features_union = set()
-        # for name in self.schema.features.keys():
-        #     missing_pred_features = self._hierarchical_load(
-        #         PRED_SUFFIX + name, exp_codes,
-        #         loader=self.local_data.load_features,
-        #         setter=functools.partial(self._set_exp_data, block_type=BlockType.FEATURES_PRED),
-        #         in_memory=lambda code: self.get_experiment(code).is_predicted_feature_populated(name),
-        #         external_loader=self.external_data.pull_features if self.external_data else None,
-        #         recompute_flag=recompute_flag,
-        #         verbose=verbose,
-        #         feature_name=PRED_SUFFIX + name # Passed to kwargs
-        #     )
-        #     missing_pred_features_union.update(missing_pred_features)
 
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
         self.logger.console_new_line()
@@ -1075,19 +1031,6 @@ class Dataset:
                 verbose=verbose,
                 feature_name=name # pass to kwargs
             )
-
-        # # 5. Save Predicted Features
-        # for name in self.schema.features.keys():
-        #     self._hierarchical_save(
-        #         PRED_SUFFIX + name, codes_to_save,
-        #         getter=functools.partial(self._get_exp_feature_array, feature_name=PRED_SUFFIX + name, block_type=BlockType.FEATURES_PRED),
-        #         saver=self.local_data.save_features,
-        #         external_saver=self.external_data.push_features if self.external_data else None,
-        #         recompute=recompute,
-        #         column_names=self._get_array_column_names(name),
-        #         verbose=verbose,
-        #         feature_name=PRED_SUFFIX + name # pass to kwargs
-        #     )
 
         # One console summary for the whole external push (per-block detail is logged).
         if self.external_data is not None and not self.debug_flag:

@@ -336,6 +336,26 @@ class IPredictionModel(BaseInterface):
         """
         del col_to_cardinality  # base impl ignores
 
+    def build_training_batches(
+        self, system: Any, train_batches: Any, val_batches: Any, kwargs: dict[str, Any],
+    ) -> tuple[Any, Any]:
+        """Build this model's (train, val) batches — flat column-filter default.
+
+        Sequence models override to build sequence-shaped batches. ``system`` is
+        the PredictionSystem, passed in for its batch-building helpers.
+        """
+        return (
+            system._filter_batches_for_model(train_batches, self),
+            system._filter_batches_for_model(val_batches, self),
+        )
+
+    def validate_split(
+        self, system: Any, dm: Any, split: Any, x_split: Any, y_split: Any,
+        cell_meta: Any, importance_dict: Any,
+    ) -> dict[str, dict[str, float]]:
+        """Validate this model on a split — flat default; sequence models override."""
+        return system._validate_flat(self, dm, x_split, y_split, cell_meta, importance_dict)
+
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:

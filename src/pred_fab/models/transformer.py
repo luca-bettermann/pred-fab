@@ -49,7 +49,7 @@ import torch
 import torch.nn as nn
 
 from ..interfaces import IPredictionModel
-from ..utils import PfabLogger
+from ..utils import PfabLogger, SplitType
 from .depth_decoders import PerNodeMLPDecoder
 
 
@@ -122,6 +122,20 @@ class TransformerModel(IPredictionModel):
             d = self._feat_depth(feat)
             groups.setdefault(d, []).append(feat)
         return groups
+
+    def build_training_batches(self, system, train_batches, val_batches, kwargs):
+        model_train, seq_axis_sizes, domain_axis_sizes = system._build_transformer_train_batches(
+            self, SplitType.TRAIN,
+        )
+        model_val, _, _ = system._build_transformer_train_batches(self, SplitType.VAL)
+        if seq_axis_sizes:
+            kwargs["seq_axis_sizes"] = seq_axis_sizes
+        if domain_axis_sizes:
+            kwargs["domain_axis_sizes"] = domain_axis_sizes
+        return model_train, model_val
+
+    def validate_split(self, system, dm, split, x_split, y_split, cell_meta, importance_dict):
+        return system._validate_transformer(self, dm, split, importance_dict)
 
     def _build_network(
         self,

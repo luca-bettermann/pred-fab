@@ -19,6 +19,22 @@ from .data_blocks import (
 from .data_objects import DataArray, DataDomainAxis, Domain
 from ..utils.enum import Roles
 
+
+def assert_blocks_compatible(block_pairs: list[tuple[DataBlock, DataBlock]]) -> None:
+    """Raise ``ValueError`` if any ``(block_a, block_b)`` pair is not structurally compatible.
+
+    Shared by ``DatasetSchema.is_compatible_with`` and
+    ``ExperimentData.is_valid`` — both validate the same parameter / performance
+    / feature blocks against a schema and raise on the first mismatch.
+    """
+    for block_a, block_b in block_pairs:
+        if not block_a.is_compatible(block_b):
+            raise ValueError(
+                f"Schema block '{block_a.__class__.__name__}' is not identical "
+                f"to {block_b.__class__.__name__}."
+            )
+
+
 class DatasetSchema:
     """Structural definition of a dataset (parameters, features, performance, domains); hash registered via SchemaRegistry."""
 
@@ -187,20 +203,12 @@ class DatasetSchema:
         return self.domains.get(domain_code) if self.domains.has(domain_code) else None
 
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
-        """Check structural compatibility with another schema."""
-        # Check all blocks using helper function
-        block_checks = [
+        """Check structural compatibility with another schema (raises on mismatch)."""
+        assert_blocks_compatible([
             (self.parameters, other.parameters),
             (self.performance_attrs, other.performance_attrs),
-            (self.features, other.features)
-        ]
-
-        for self_block, other_block in block_checks:
-            if not self_block.is_compatible(other_block):
-                raise ValueError(
-                    f"Schema block '{self_block.__class__.__name__}' is not identical "
-                    f"to {other_block.__class__.__name__}."
-                )
+            (self.features, other.features),
+        ])
         return True
 
 

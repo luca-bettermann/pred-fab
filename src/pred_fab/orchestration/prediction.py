@@ -201,21 +201,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         flat-batched models get the standard (N, n_input) batches via
         column filtering.
         """
-        from ..models.transformer import TransformerModel
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
-
-        if isinstance(model, TransformerModel):
-            model_train_batches, seq_axis_sizes, domain_axis_sizes = self._build_transformer_train_batches(
-                model, SplitType.TRAIN,
-            )
-            model_val_batches, _, _ = self._build_transformer_train_batches(model, SplitType.VAL)
-            if seq_axis_sizes:
-                kwargs["seq_axis_sizes"] = seq_axis_sizes
-            if domain_axis_sizes:
-                kwargs["domain_axis_sizes"] = domain_axis_sizes
-        else:
-            model_train_batches = self._filter_batches_for_model(train_batches, model)
-            model_val_batches = self._filter_batches_for_model(val_batches, model)
+        model_train_batches, model_val_batches = model.build_training_batches(
+            self, train_batches, val_batches, kwargs,
+        )
 
         model_name = model.__class__.__name__
         self.logger.info(f"Training {model_name} for {model.outputs}...")
@@ -1429,11 +1418,9 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
         for model in self.models:
-            from ..models.transformer import TransformerModel
-            if isinstance(model, TransformerModel):
-                results.update(self._validate_transformer(model, dm, split, importance_dict))
-            else:
-                results.update(self._validate_flat(model, dm, X_split, y_split, cell_meta, importance_dict))
+            results.update(
+                model.validate_split(self, dm, split, X_split, y_split, cell_meta, importance_dict)
+            )
 
         has_inf = any('r2_inf' in m for m in results.values())
         has_mae = any('mae' in m for m in results.values())
