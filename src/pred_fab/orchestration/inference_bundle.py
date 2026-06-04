@@ -14,6 +14,7 @@ import pickle
 import copy
 
 from ..interfaces.prediction import IPredictionModel
+from ..core.normalisers import normaliser_from_dict
 
 
 class InferenceBundle:
@@ -155,42 +156,12 @@ class InferenceBundle:
         return y
 
     def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Apply normalization to data array using pre-computed stats."""
-        method = stats['method']
-        
-        if method == 'none':
-            return data
-        elif method == 'standard':
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == 'min_max':
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.zeros_like(data, dtype=np.float64)
-            return (data - stats['min']) / (denom + 1e-8)
-        elif method == 'robust':
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            return data
+        """Apply normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).forward(data)
 
     def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Reverse normalization for data array."""
-        method = stats['method']
-        
-        if method == 'none':
-            return data_norm
-        elif method == 'standard':
-            return data_norm * stats['std'] + stats['mean']
-        elif method == 'min_max':
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
-            return data_norm * denom + stats['min']
-        elif method == 'robust':
-            iqr = stats['q3'] - stats['q1']
-            return data_norm * iqr + stats['median']
-        else:
-            return data_norm
+        """Reverse normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).reverse(data_norm)
     
     def _validate_inputs(self, X: pd.DataFrame) -> None:
         """Validate parameter columns against schema."""

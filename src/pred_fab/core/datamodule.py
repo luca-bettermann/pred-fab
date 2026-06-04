@@ -623,25 +623,11 @@ class DataModule:
         if not self._is_fitted:
             raise RuntimeError("DataModule has not been fitted yet.")
 
-        def _module_to_dict(m: NormaliserModule) -> dict[str, Any]:
-            d: dict[str, Any] = {"method": m.method}
-            if m.method == NormMethod.STANDARD:
-                d["mean"] = m["mean"]
-                d["std"] = m["std"]
-            elif m.method == NormMethod.MIN_MAX:
-                d["min"] = m["min"]
-                d["max"] = m["max"]
-            elif m.method == NormMethod.ROBUST:
-                d["median"] = m["median"]
-                d["q1"] = m["q1"]
-                d["q3"] = m["q3"]
-            return d
-
         return {
             'method': self._default_normalize,
             'is_fitted': True,
-            'feature_stats': {k: _module_to_dict(v) for k, v in self._feature_stats.items()},
-            'parameter_stats': {k: _module_to_dict(v) for k, v in self._parameter_stats.items()},
+            'feature_stats': {k: v.to_dict() for k, v in self._feature_stats.items()},
+            'parameter_stats': {k: v.to_dict() for k, v in self._parameter_stats.items()},
             'categorical_mappings': copy.deepcopy(self.categorical_mappings),
             'input_columns': copy.deepcopy(self.input_columns),
             'output_columns': copy.deepcopy(self.output_columns)

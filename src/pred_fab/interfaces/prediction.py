@@ -8,7 +8,7 @@ import torch
 
 from .base_interface import BaseInterface
 from ..utils.logger import PfabLogger
-from ..utils.enum import NormMethod
+from ..core.normalisers import normaliser_from_dict
 from ..core import DataObject, Dataset
 
 
@@ -507,39 +507,11 @@ class DeterministicModel(IPredictionModel):
 
     @staticmethod
     def _reverse_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Reverse normalization for a data array using pre-computed stats."""
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return data * stats['std'] + stats['mean']
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.full_like(data, fill_value=stats['min'], dtype=np.float64)
-            return data * (stats['max'] - stats['min']) + stats['min']
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return data * iqr + stats['median']
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
+        """Reverse normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).reverse(data)
 
     @staticmethod
     def _apply_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Apply normalization to a data array using pre-computed stats."""
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.zeros_like(data, dtype=np.float64)
-            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
+        """Apply normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).forward(data)
 

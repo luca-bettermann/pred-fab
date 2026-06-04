@@ -236,7 +236,7 @@ class SolutionSpace:
             for c_idx, col in enumerate(dm_cols):
                 if col in merged and col not in opt_codes:
                     try:
-                        lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
+                        lo, hi = self._bounds_manager.get_hierarchical_bounds_for_code(col)
                         span = hi - lo
                         fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
                     except (ValueError, KeyError):
@@ -341,7 +341,7 @@ class SolutionSpace:
             if stats is None:
                 continue
             try:
-                lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
+                lo, hi = self._bounds_manager.get_hierarchical_bounds_for_code(col)
                 span = hi - lo
                 if span <= 0:
                     raise ValueError("degenerate bounds")

@@ -34,7 +34,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
+from ..utils import LocalData, PfabLogger, ConsoleReporter, Mode, SourceStep
 from .evidence import EstimatorConfig
 
 
@@ -398,24 +398,6 @@ class PfabAgent:
         if self.pred_system:
             _add_model_section("Prediction System", self.pred_system.models)
 
-        # # Calibration System (config — not a trained system)
-        # cal = self.calibration_system
-        # lines.append(f"\n  {_D}Calibration System{_R}")
-        #
-        # pw_parts = [f"{k}={v:g}" for k, v in cal.performance_weights.items()]
-        # lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
-        #
-        # explore_parts = [f"radius={cal._exploration_radius:g}",
-        #                  f"buffer={cal._buffer:g}",
-        #                  f"decay_exp={cal._decay_exp:g}"]
-        # lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
-        #
-        # for code in cal.data_objects.keys():
-        #     low, high = cal._get_hierarchical_bounds_for_code(code)
-        #     bounds_str = f"[{low}, {high}]"
-        #     delta = cal.trust_regions.get(code, "─")
-        #     lines.append(f"    {code:<20s} {bounds_str:<15s} {_D}{delta}{_R}")
-
         self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
@@ -453,6 +435,8 @@ class PfabAgent:
         """Alias for acquisition_step with kappa > 0; ``None`` uses the configured default."""
         return self.acquisition_step(datamodule, kappa=kappa)
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION,
+              SystemName.PREDICTION, SystemName.CALIBRATION)
     def inference_step(
         self,
         exp_data: ExperimentData,
@@ -461,8 +445,6 @@ class PfabAgent:
         visualize: bool = False,
     ) -> ExperimentSpec:
         """Feature extraction + evaluation, then acquisition_step with kappa=0."""
-        self._check_systems(StepType.FULL)
-
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
@@ -524,6 +506,7 @@ class PfabAgent:
 
     # === ADDITIONAL API CALLS ===
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION)
     def extract(
         self,
         exp_data: ExperimentData,
@@ -536,12 +519,12 @@ class PfabAgent:
         When ``feature`` is provided (e.g. ``"extrusion"``, ``"vision"``),
         only feature models whose class name contains that string are run.
         """
-        self._check_systems(StepType.EVAL)
         return self.feature_system.run_feature_extraction(
             exp_data, 0, None, recompute=recompute, visualize=visualize,
             feature=feature,
         )
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION)
     def evaluate(
         self,
         exp_data: ExperimentData,
@@ -555,7 +538,6 @@ class PfabAgent:
         evaluation models are run.
         """
         self.extract(exp_data, recompute=recompute_flag, visualize=visualize, feature=feature)
-        self._check_systems(StepType.EVAL)
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag, feature=feature)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
@@ -870,19 +852,8 @@ class PfabAgent:
             self.logger.warning(
                 f"The following codes are defined in the schema but not used by any model: "
                 f"{unused}"
-            )        
+            )
 
-    
-    def _check_systems(self, step: StepType) -> None:
-        """Legacy bridge — maps StepType to _require()."""
-        if step == StepType.EVAL:
-            self._require(SystemName.FEATURE, SystemName.EVALUATION)
-        elif step == StepType.FULL:
-            self._require(SystemName.FEATURE, SystemName.EVALUATION,
-                          SystemName.PREDICTION, SystemName.CALIBRATION)
-        else:
-            self._assert_initialized()
-        
     def _step_config(
             self, 
             exp_data: ExperimentData | None, 

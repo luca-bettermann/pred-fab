@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable
-import warnings
 
 import numpy as np
 import torch
@@ -16,9 +15,6 @@ class _OptResult:
     n_starts: int
     score: float  # negated objective (higher = better)
     convergence_history: list[list[float]] = field(default_factory=list)
-
-
-warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class OptimizationEngine:

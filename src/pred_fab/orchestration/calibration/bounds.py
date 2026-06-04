@@ -188,13 +188,13 @@ class BoundsManager:
                 continue
             if code in self.fixed_params:
                 continue
-            lo, hi = self._get_hierarchical_bounds_for_code(code)
+            lo, hi = self.get_hierarchical_bounds_for_code(code)
             if hi - lo < 1e-12:
                 continue
             tunable.append(code)
         return tunable
 
-    def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
+    def get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
         """Return normalized optimization bounds over the full parameter space.
 
         categorical columns have integer bounds
@@ -216,14 +216,14 @@ class BoundsManager:
                 else:
                     low, high = 0.0, float(len(cats) - 1)
             else:
-                low, high = self._get_hierarchical_bounds_for_code(code)
+                low, high = self.get_hierarchical_bounds_for_code(code)
 
             n_low, n_high = self._normalize_bounds(code, low, high, datamodule)
             bounds_list.append((n_low, n_high))
 
         return np.array(bounds_list)
 
-    def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
+    def get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
         """Return normalized trust-region bounds centred on current_params.
 
         categorical columns clamp to current cat-index.
@@ -254,7 +254,7 @@ class BoundsManager:
 
         return np.array(bounds_list)
 
-    def _get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
+    def get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
         if code in self.fixed_params:
             val = self.fixed_params[code]
             low, high = val, val

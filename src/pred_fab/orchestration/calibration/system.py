@@ -60,8 +60,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.engine = OptimizationEngine(logger, random_seed=random_seed)
         self.bounds = BoundsManager(schema, logger)
 
-        # Active datamodule — set before each optimization run so that
-        # _acquisition_objective can call array_to_params.
+        # Active datamodule — set before each optimization run so the
+        # objective can decode candidates to parameter dicts.
         self._active_datamodule: DataModule | None = None
 
         # Set after each optimization call for external inspection.
@@ -165,13 +165,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self.bounds.get_tunable_params(datamodule)
 
     def _get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
-        return self.bounds._get_hierarchical_bounds_for_code(code)
+        return self.bounds.get_hierarchical_bounds_for_code(code)
 
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
-        return self.bounds._get_global_bounds(datamodule)
+        return self.bounds.get_global_bounds(datamodule)
 
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
-        return self.bounds._get_trust_region_bounds(datamodule, current_params)
+        return self.bounds.get_trust_region_bounds(datamodule, current_params)
 
     def _get_n_exp(self) -> int:
         """Current experiment count from the prediction system."""
@@ -193,7 +193,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         lines.append(f"\n    {_D}{'Parameter':<20s} {'Bounds':<20s} {'Delta':<8s}{_R}")
         for code in self.data_objects.keys():
-            low, high = self.bounds._get_hierarchical_bounds_for_code(code)
+            low, high = self.bounds.get_hierarchical_bounds_for_code(code)
             bounds_str = f"[{low}, {high}]"
             delta = self.trust_regions.get(code, "\u2500")
             lines.append(f"    {code:<20s} {bounds_str:<20s} {delta:<8}")
@@ -206,7 +206,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         param_bounds = {}
         for code in self.data_objects.keys():
             try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
                 param_bounds[code] = [lo, hi]
             except (ValueError, KeyError):
                 pass
@@ -295,6 +295,38 @@ class CalibrationSystem(BaseOrchestrationSystem):
         e = self.evidence_gain(params) if kappa > 0.0 else 0.0
         return (1.0 - kappa) * p + kappa * e
 
+    def _sweep_2d(
+        self,
+        x_key: str,
+        y_key: str,
+        x_bounds: tuple[float, float],
+        y_bounds: tuple[float, float],
+        fixed_params: dict[str, Any],
+        cell_fn: Callable[[int, int, dict[str, Any]], None],
+        resolution: int = 60,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Sweep (x_key, y_key) over their bounds, calling ``cell_fn`` per cell.
+
+        Shared 2D-slice skeleton for the grid builders: holds all other params
+        fixed, fills any ``dimension_derivations`` for derived codes, and invokes
+        ``cell_fn(i, j, params)`` where ``i`` indexes ``xs`` and ``j`` indexes
+        ``ys`` (grids are filled ``[j, i]`` by the callable). Returns (xs, ys).
+        """
+        xs = np.linspace(*x_bounds, resolution)
+        ys = np.linspace(*y_bounds, resolution)
+
+        for i in range(resolution):
+            for j in range(resolution):
+                params = dict(fixed_params)
+                params[x_key] = float(xs[i])
+                params[y_key] = float(ys[j])
+                for code, derive_fn in self.dimension_derivations.items():
+                    if code not in params:
+                        params[code] = derive_fn(params)
+                cell_fn(i, j, params)
+
+        return xs, ys
+
     def compute_acquisition_grids(
         self,
         x_key: str,
@@ -313,23 +345,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Returns (xs, ys, evidence_grid, perf_grid, acq_grid).
         """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
         ev_grid = np.zeros((resolution, resolution))
         perf_grid = np.zeros((resolution, resolution))
 
-        for i in range(resolution):
-            for j in range(resolution):
-                params = dict(fixed_params)
-                params[x_key] = float(xs[i])
-                params[y_key] = float(ys[j])
-                for code, derive_fn in self.dimension_derivations.items():
-                    if code not in params:
-                        params[code] = derive_fn(params)
-                if kappa > 0.0:
-                    ev_grid[j, i] = self.evidence_gain(params)
-                if kappa < 1.0:
-                    perf_grid[j, i] = self.system_performance(params)
+        def cell(i: int, j: int, params: dict[str, Any]) -> None:
+            if kappa > 0.0:
+                ev_grid[j, i] = self.evidence_gain(params)
+            if kappa < 1.0:
+                perf_grid[j, i] = self.system_performance(params)
+
+        xs, ys = self._sweep_2d(
+            x_key, y_key, x_bounds, y_bounds, fixed_params, cell, resolution,
+        )
 
         acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
         return xs, ys, ev_grid, perf_grid, acq_grid
@@ -352,21 +379,16 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Returns (xs, ys, density_grid, evidence_grid).
         """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
         d_grid = np.zeros((resolution, resolution))
         e_grid = np.zeros((resolution, resolution))
 
-        for i in range(resolution):
-            for j in range(resolution):
-                params = dict(fixed_params)
-                params[x_key] = float(xs[i])
-                params[y_key] = float(ys[j])
-                for code, derive_fn in self.dimension_derivations.items():
-                    if code not in params:
-                        params[code] = derive_fn(params)
-                d_grid[j, i] = self.density(params)
-                e_grid[j, i] = evidence_from_density(d_grid[j, i])
+        def cell(i: int, j: int, params: dict[str, Any]) -> None:
+            d_grid[j, i] = self.density(params)
+            e_grid[j, i] = evidence_from_density(d_grid[j, i])
+
+        xs, ys = self._sweep_2d(
+            x_key, y_key, x_bounds, y_bounds, fixed_params, cell, resolution,
+        )
 
         return xs, ys, d_grid, e_grid
 
@@ -599,6 +621,37 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Set the active DataModule for acquisition evaluation."""
         self._active_datamodule = datamodule
 
+    def _classify_param(
+        self, code: str, data_obj: DataObject,
+    ) -> tuple[str, tuple[float, float] | None]:
+        """Classify a schema parameter for optimisation/discovery composition.
+
+        Single source of truth for the cascade shared by
+        ``_build_schema_datamodule`` and ``_compose_variables``. Returns a
+        ``(kind, bounds)`` verdict; callers map each kind to their own outcome
+        (the categorical choices / degenerate auto-fix / warning text differ):
+
+        - ``"skip_fixed"``     — in ``fixed_params`` (silent).
+        - ``"categorical"``    — ``DataCategorical`` / ``DataBool``.
+        - ``"skip_no_bounds"`` — no hierarchical bounds (silent).
+        - ``"skip_infinite"``  — infinite bounds (caller logs); ``bounds`` set.
+        - ``"degenerate"``     — ``lo == hi``; ``bounds`` set.
+        - ``"optimizable"``    — finite, non-degenerate; ``bounds`` set.
+        """
+        if code in self.fixed_params:
+            return "skip_fixed", None
+        if isinstance(data_obj, (DataCategorical, DataBool)):
+            return "categorical", None
+        try:
+            lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
+        except ValueError:
+            return "skip_no_bounds", None
+        if lo == -np.inf or hi == np.inf:
+            return "skip_infinite", (lo, hi)
+        if lo == hi:
+            return "degenerate", (lo, hi)
+        return "optimizable", (lo, hi)
+
     def _build_schema_datamodule(self) -> DataModule:
         """Build a schema-only DataModule (no training data) for discovery generation.
 
@@ -606,21 +659,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         active_codes: list[str] = []
         for code, data_obj in self.data_objects.items():
-            if code in self.fixed_params:
+            kind, _ = self._classify_param(code, data_obj)
+            if kind == "skip_fixed" or kind == "skip_no_bounds":
                 continue
-            if isinstance(data_obj, (DataCategorical, DataBool)):
-                active_codes.append(code)
-                continue
-            try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-            except ValueError:
-                continue
-            if lo == -np.inf or hi == np.inf:
+            if kind == "skip_infinite":
                 self.logger.warning(
                     f"Parameter '{code}' has infinite bounds; "
                     "skipping in discovery generation."
                 )
                 continue
+            # categorical / degenerate / optimizable are all active here:
+            # the schema datamodule keeps degenerate + categorical columns.
             active_codes.append(code)
 
         dataset = Dataset(schema=self.schema, debug_flag=True)
@@ -650,22 +699,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         traj_set = set(self.trajectory_configs.keys())
 
         for code, data_obj in self.data_objects.items():
-            if code in self.fixed_params:
+            kind, bnds = self._classify_param(code, data_obj)
+            if kind == "skip_fixed" or kind == "skip_no_bounds":
                 continue
-            if isinstance(data_obj, DataCategorical):
-                categorical_params.append((code, list(data_obj.constraints["categories"])))
+            if kind == "categorical":
+                if isinstance(data_obj, DataCategorical):
+                    categorical_params.append((code, list(data_obj.constraints["categories"])))
+                else:  # DataBool
+                    categorical_params.append((code, [False, True]))
                 continue
-            if isinstance(data_obj, DataBool):
-                categorical_params.append((code, [False, True]))
-                continue
-            try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-            except ValueError:
-                continue
-            if lo == -np.inf or hi == np.inf:
+            if kind == "skip_infinite":
                 self.logger.warning(f"Parameter '{code}' has infinite bounds; skipping.")
                 continue
-            if lo == hi:
+            if kind == "degenerate":
+                lo, _ = bnds  # type: ignore[misc]
                 fixed_val = int(lo) if isinstance(data_obj, (DataInt, DataDomainAxis)) else float(lo)
                 self.bounds.fixed_params[code] = fixed_val
                 self.logger.debug(f"Auto-fixed '{code}' = {fixed_val} (degenerate bounds).")
@@ -674,7 +721,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         variables: list[Variable] = []
         for code, obj in optimizable:
-            lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+            lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
             if code in traj_set:
                 span = hi - lo
                 trust = self.bounds.trust_regions.get(code, span / 10.0)

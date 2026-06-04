@@ -7,7 +7,7 @@ Shared infrastructure with no dependencies on other pred_fab packages.
 
 | Module | Role |
 |--------|------|
-| `enum.py` | All shared enumerations: `Mode`, `NormMethod`, `SourceStep`, `StepType`, `SystemName`, … |
+| `enum.py` | All shared enumerations: `Mode`, `NormMethod`, `SourceStep`, `SystemName`, … |
 | `local_data.py` | Filesystem persistence (experiment snapshots, model artifacts, logs) |
 | `logger.py` | `PfabLogger` singleton wrapping Python logging + console helpers |
 | `metrics.py` | Regression metric helpers (MAE, RMSE, R², …) |

@@ -55,11 +55,6 @@ class Mode(str, Enum):
     EXPLORATION = 'exploration'
     INFERENCE = 'inference'
 
-class StepType(str, Enum):
-    """Enumeration of workflow step types."""
-    EVAL = 'evaluation_only'
-    FULL = 'full_step'
-
 class Loaders(Enum):
     MEMORY = 'memory'
     LOCAL = 'local files'
