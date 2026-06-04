@@ -872,18 +872,18 @@ class PredictionSystem(BaseOrchestrationSystem):
             total_w += kde.weight
         return weighted_d / total_w if total_w > 0 else 0.0
 
-    def delta_integrated_evidence_batched_tensor(
+    def delta_integrated_evidence_batched(
         self,
         new_norm_batch_S: torch.Tensor,
         new_weights_S: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Per-candidate Δ∫E with L=1. Delegates to the joint method."""
         weights_SL = new_weights_S.unsqueeze(1) if new_weights_S is not None else None
-        return self.delta_integrated_evidence_joint_batched_tensor(
+        return self.delta_integrated_evidence_joint_batched(
             new_norm_batch_S.unsqueeze(1), weights_SL,
         )
 
-    def delta_integrated_evidence_joint_batched_tensor(
+    def delta_integrated_evidence_joint_batched(
         self,
         new_norm_batch_SL: torch.Tensor,
         new_weights_SL: torch.Tensor | None = None,
@@ -926,11 +926,11 @@ class PredictionSystem(BaseOrchestrationSystem):
                 )
                 old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)
                 old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)
-                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint(
                     empty_index, old_centers_t, old_weights_t,
                 )[0].item())
 
-            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint(
                 index_old, new_centers_SL, weights_SL,
             )
             out = out + float(kde.weight) * (E_new_per_s - E_old)
@@ -1036,7 +1036,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Aggregated public API ---
 
-    def predict_for_calibration_tensor(
+    def predict_for_calibration(
         self,
         params_list: list[dict[str, Any]],
     ) -> list[dict[str, torch.Tensor]]:
@@ -1064,7 +1064,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not params_list:
             return []
 
-        with profiler.section("predict.predict_for_calibration_tensor"):
+        with profiler.section("predict.predict_for_calibration"):
             return self._predict_from_params_tensor(params_list)
 
     def _predict_from_params_tensor(

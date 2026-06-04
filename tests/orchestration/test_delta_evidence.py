@@ -1,8 +1,8 @@
 """Tests for tensor-typed Δ∫E.
 
 Equivalence and gradient flow for:
-  - PredictionSystem.delta_integrated_evidence_batched_tensor
-  - PredictionSystem.delta_integrated_evidence_joint_batched_tensor
+  - PredictionSystem.delta_integrated_evidence_batched
+  - PredictionSystem.delta_integrated_evidence_joint_batched
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def test_delta_evidence_batched_tensor_empty_returns_empty(tmp_path):
     sys = _build_pred_system(tmp_path)
     sys.models.append(_IdentityModel(logger=sys.logger))
 
-    out = sys.delta_integrated_evidence_batched_tensor(
+    out = sys.delta_integrated_evidence_batched(
         torch.zeros((0, 3), dtype=torch.float64),
     )
     assert out.shape == (0,)
@@ -64,7 +64,7 @@ def test_delta_evidence_joint_tensor_empty_returns_empty(tmp_path):
     sys = _build_pred_system(tmp_path)
     sys.models.append(_IdentityModel(logger=sys.logger))
 
-    out = sys.delta_integrated_evidence_joint_batched_tensor(
+    out = sys.delta_integrated_evidence_joint_batched(
         torch.zeros((0, 1, 3), dtype=torch.float64),
     )
     assert out.shape == (0,)

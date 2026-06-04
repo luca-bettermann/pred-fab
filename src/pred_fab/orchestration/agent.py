@@ -230,7 +230,7 @@ class PfabAgent:
                                         f"cal.dimension_derivations['{code}'] = fn"
                                     )
                     merged_list.append(m)
-                feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
+                feat_dicts_S = _pred.predict_for_calibration(merged_list)
                 params_blocks: list[Any] = []
                 for pd_ in merged_list:
                     block = copy.deepcopy(schema.parameters)
@@ -250,8 +250,8 @@ class PfabAgent:
                 logger=self.logger,
                 perf_fn_tensor=_perf_fn_tensor,
                 evidence=EvidenceBackend(
-                    batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
-                    joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
+                    batched_tensor=_pred.delta_integrated_evidence_batched,
+                    joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched,
                 ),
                 n_exp_fn=lambda: _pred.n_experiments,
                 fit_empty_kde_fn=_pred.fit_empty_kde,

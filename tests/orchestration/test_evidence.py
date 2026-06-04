@@ -20,7 +20,7 @@ from pred_fab.orchestration.evidence import (
     KernelFieldEstimator,
     KernelIndex,
     _choose_kde_regime,
-    _in_unit_cube_torch,
+    _in_unit_cube,
     make_estimator,
 )
 
@@ -33,7 +33,7 @@ def kf_estimator() -> KernelFieldEstimator:
     return est
 
 
-# ── _in_unit_cube_torch ───────────────────────────────────────────────────
+# ── _in_unit_cube ───────────────────────────────────────────────────
 
 
 def test_in_unit_cube_torch_basic():
@@ -45,7 +45,7 @@ def test_in_unit_cube_torch_basic():
         [0.5, 1.5, 0.5],   # out (>1)
     ])
     expected = torch.tensor([True, True, True, False, False])
-    assert torch.equal(_in_unit_cube_torch(pts), expected)
+    assert torch.equal(_in_unit_cube(pts), expected)
 
 
 # ── Regime dispatcher ─────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ def test_torch_positive_evidence_smoke(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers[:, None, :]).double(),
         torch.from_numpy(new_weights[:, None]).double(),
@@ -122,10 +122,10 @@ def test_torch_deterministic(kf_estimator):
     t_centers = torch.from_numpy(new_centers_SL).double()
     t_weights = torch.from_numpy(new_weights_SL).double()
 
-    r1 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    r1 = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
-    r2 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    r2 = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
     np.testing.assert_allclose(
@@ -147,7 +147,7 @@ def test_torch_empty_old_positive(kf_estimator):
 
     index_old = KernelIndex(np.zeros((0, D)), np.zeros(0), sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
@@ -171,7 +171,7 @@ def test_torch_nonuniform_weights_positive(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
@@ -196,13 +196,13 @@ def test_torch_marginal_joint_both_contribute(kf_estimator):
     t_centers = torch.from_numpy(rng.uniform(0.2, 0.8, size=(S, L, D))).double()
     t_weights = torch.ones((S, L), dtype=torch.float64)
 
-    e_marginal = kf_estimator._marginal_evidence_torch(index_old, t_centers, t_weights)
-    e_joint = kf_estimator._joint_evidence_torch(index_old, t_centers, t_weights)
+    e_marginal = kf_estimator._marginal_evidence(index_old, t_centers, t_weights)
+    e_joint = kf_estimator._joint_evidence(index_old, t_centers, t_weights)
 
     assert (e_marginal > 0).all(), "Marginal evidence should be positive"
     assert (e_joint > 0).all(), "Joint evidence should be positive"
     # Combined = (marginal + joint) / 2, both contribute
-    combined = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    combined = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
     D = t_centers.shape[2]
@@ -237,7 +237,7 @@ def test_grad_flows_through_kde(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -264,7 +264,7 @@ def test_grad_flows_with_no_old_kernels(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -293,7 +293,7 @@ def test_grad_flows_through_weights(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64, requires_grad=True)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -312,7 +312,7 @@ def test_torch_empty_s_returns_empty(kf_estimator):
     old_weights = np.array([1.0])
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.zeros((0, 1, D), dtype=torch.float64),
         torch.zeros((0, 1), dtype=torch.float64),
@@ -343,7 +343,7 @@ def test_torch_dispatcher_logs_when_non_dense_regime(kf_estimator, caplog):
     new_weights_SL = torch.ones((2, 1), dtype=torch.float64)
 
     with caplog.at_level(logging.INFO, logger="pred_fab.orchestration.evidence"):
-        kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+        kf_estimator.integrated_evidence_perturbed_batched_joint(
             index_old, new_centers_SL, new_weights_SL,
         )
 

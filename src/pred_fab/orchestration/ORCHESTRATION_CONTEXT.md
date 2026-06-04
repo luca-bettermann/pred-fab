@@ -10,7 +10,7 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `PfabAgent` | `agent.py` | Registration, initialization, step methods, `configure_*` API |
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Tensor-typed batched eval (`_evaluate_feature_dict_tensor`) |
-| `PredictionSystem` | `prediction.py` | Trains/infers prediction models. Canonical autoreg is `predict_for_calibration_tensor` (gradient-traversable). Owns per-model evidence (KDE) state. |
+| `PredictionSystem` | `prediction.py` | Trains/infers prediction models. Canonical autoreg is `predict_for_calibration` (gradient-traversable). Owns per-model evidence (KDE) state. |
 | `EvidenceEstimator` | `evidence.py` | Pluggable Δ∫E: `KernelFieldEstimator` (deterministic shells, gradient-traversable; probe count grows with D) or `SobolLocalEstimator` (QMC cube, fixed `n_samples` regardless of D — high-D escape hatch, also gradient-traversable). |
 | `_choose_kde_regime` / `_resolve_kde_regime` | `evidence.py` | σ/D-aware regime dispatcher (dense / knn / cluster); only dense implemented, others log INFO and fall back |
 | `CalibrationSystem` | `calibration/system.py` | Single-path optimisation orchestrator: Variables → SolutionSpace → Engine |

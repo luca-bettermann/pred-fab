@@ -237,15 +237,15 @@ def evidence_from_density(D: float) -> float:
     return D / (1.0 + D)
 
 
-def _in_unit_cube_torch(points: torch.Tensor) -> torch.Tensor:
+def _in_unit_cube(points: torch.Tensor) -> torch.Tensor:
     """Boolean mask: all dims in [0, 1]."""
     return ((points >= 0.0) & (points <= 1.0)).all(dim=-1)
 
 
-def _in_domain_torch(points: torch.Tensor, domain_bounds: torch.Tensor | None) -> torch.Tensor:
+def _in_domain(points: torch.Tensor, domain_bounds: torch.Tensor | None) -> torch.Tensor:
     """Boolean mask: all dims within domain_bounds (D, 2). Falls back to [0, 1]."""
     if domain_bounds is None:
-        return _in_unit_cube_torch(points)
+        return _in_unit_cube(points)
     if points.shape[-1] != domain_bounds.shape[0]:
         raise ValueError(
             f"Points last dim {points.shape[-1]} != bounds dim {domain_bounds.shape[0]}"
@@ -263,7 +263,7 @@ class EvidenceEstimator(ABC):
     """Estimator for ∫_{[0,1]^D} D/(1+D) dz via per-kernel self-integrals."""
 
     @abstractmethod
-    def integrated_evidence_perturbed_batched_joint_torch(
+    def integrated_evidence_perturbed_batched_joint(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -339,7 +339,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         self._cache_torch[key] = (offsets, weights, self_density)
         return offsets, weights, self_density
 
-    def integrated_evidence_perturbed_batched_joint_torch(
+    def integrated_evidence_perturbed_batched_joint(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -366,11 +366,11 @@ class KernelFieldEstimator(EvidenceEstimator):
         # Only "dense" is implemented today; the call still routes correctly when
         # knn / cluster land.
         _resolve_kde_regime(n_old, sigma, D)
-        return self._integrated_evidence_joint_dense_torch(
+        return self._integrated_evidence_joint_dense(
             index_old, new_centers_SL, new_weights_SL,
         )
 
-    def _integrated_evidence_joint_dense_torch(
+    def _integrated_evidence_joint_dense(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -404,8 +404,8 @@ class KernelFieldEstimator(EvidenceEstimator):
         else:
             alpha_marginal = D / (D + 1)
         alpha_joint = 1.0 - alpha_marginal
-        e_marginal = self._marginal_evidence_torch(index_old, new_centers_SL, new_weights_SL)
-        e_joint = self._joint_evidence_torch(index_old, new_centers_SL, new_weights_SL)
+        e_marginal = self._marginal_evidence(index_old, new_centers_SL, new_weights_SL)
+        e_joint = self._joint_evidence(index_old, new_centers_SL, new_weights_SL)
         return alpha_marginal * e_marginal + alpha_joint * e_joint
 
     @staticmethod
@@ -442,7 +442,7 @@ class KernelFieldEstimator(EvidenceEstimator):
                 domain_vol *= float(domain_bounds[d, 1] - domain_bounds[d, 0])
         return kernel_mass / domain_vol if domain_vol > 1e-15 else 0.0
 
-    def _marginal_evidence_torch(
+    def _marginal_evidence(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -529,7 +529,7 @@ class KernelFieldEstimator(EvidenceEstimator):
 
         return e_marginal / D
 
-    def _joint_evidence_torch(
+    def _joint_evidence(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -552,7 +552,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         n_old = len(index_old.centers) if not index_old.is_empty else 0
 
         probes_new_SL = offsets[None, None, :, :] + new_centers_SL[:, :, None, :]
-        in_domain_new_SL = _in_domain_torch(probes_new_SL.reshape(-1, D), index_old.domain_bounds).reshape(
+        in_domain_new_SL = _in_domain(probes_new_SL.reshape(-1, D), index_old.domain_bounds).reshape(
             S, L, M
         ).to(dtype=dtype)
 
@@ -577,7 +577,7 @@ class KernelFieldEstimator(EvidenceEstimator):
         old_weights = index_old.weights.to(device=device, dtype=dtype)
 
         probes_per_old = offsets[None, :, :] + old_centers[:, None, :]
-        in_domain_per_old = _in_domain_torch(probes_per_old.reshape(-1, D), index_old.domain_bounds).reshape(
+        in_domain_per_old = _in_domain(probes_per_old.reshape(-1, D), index_old.domain_bounds).reshape(
             n_old, M
         ).to(dtype=dtype)
 
@@ -658,7 +658,7 @@ class SobolLocalEstimator(EvidenceEstimator):
             return int(self.n_samples)
         return kernel_field_probe_count(D)
 
-    def _sobol_offsets_torch(
+    def _sobol_offsets(
         self,
         D: int,
         sigma: float,
@@ -676,7 +676,7 @@ class SobolLocalEstimator(EvidenceEstimator):
             unit = engine.draw(n).to(dtype=dtype, device=device)
         return box_side * (unit - 0.5)  # (n, D)
 
-    def integrated_evidence_perturbed_batched_joint_torch(
+    def integrated_evidence_perturbed_batched_joint(
         self,
         index_old: KernelIndex,
         new_centers_SL: torch.Tensor,
@@ -703,7 +703,7 @@ class SobolLocalEstimator(EvidenceEstimator):
         box_side = 2.0 * self.box * sigma
         volume = box_side ** D
 
-        offsets = self._sobol_offsets_torch(D, sigma, dtype, device)  # (n, D)
+        offsets = self._sobol_offsets(D, sigma, dtype, device)  # (n, D)
         n = offsets.shape[0]
 
         # Peak-1 Gaussian density at offset distance — same for every kernel
@@ -738,7 +738,7 @@ class SobolLocalEstimator(EvidenceEstimator):
             ).sum(dim=-1)                                                      # (n_old, n, S)
 
             D_total_at_old = D_old_at_old.unsqueeze(-1) + D_new_at_old        # (n_old, n, S)
-            in_cube_old = _in_domain_torch(
+            in_cube_old = _in_domain(
                 probes_old.reshape(-1, D), index_old.domain_bounds,
             ).reshape(n_old, n).to(dtype=dtype)                               # (n_old, n)
 
@@ -770,7 +770,7 @@ class SobolLocalEstimator(EvidenceEstimator):
         ).sum(dim=-1)                                                          # (S, L, n)
 
         D_total_at_new = D_old_at_new + D_new_at_new                          # (S, L, n)
-        in_cube_new = _in_domain_torch(
+        in_cube_new = _in_domain(
             probes_new.reshape(-1, D), index_old.domain_bounds,
         ).reshape(S, L, n).to(dtype=dtype)                                     # (S, L, n)
 
@@ -868,7 +868,7 @@ def _evidence_gain_grid_from_centers(
     empty_index = KernelIndex(np.empty((0, D)), np.empty(0), sigma)
     old_centers_t = index_old.centers.unsqueeze(0).double()
     old_weights_t = index_old.weights.unsqueeze(0).double()
-    E_old = float(kf.integrated_evidence_perturbed_batched_joint_torch(
+    E_old = float(kf.integrated_evidence_perturbed_batched_joint(
         empty_index, old_centers_t, old_weights_t,
     )[0].item())
 
@@ -882,7 +882,7 @@ def _evidence_gain_grid_from_centers(
         row_pts = np.stack([xs_norm, np.full(resolution, ys_norm[j])], axis=-1)
         row_pts_t = torch.from_numpy(row_pts).double().unsqueeze(1)
         weights_t = torch.ones(resolution, 1, dtype=torch.float64)
-        e_new = kf.integrated_evidence_perturbed_batched_joint_torch(
+        e_new = kf.integrated_evidence_perturbed_batched_joint(
             index_old, row_pts_t, weights_t,
         )
         gain_grid[j, :] = e_new.detach().cpu().numpy() - E_old
