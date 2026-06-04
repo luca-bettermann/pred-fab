@@ -79,7 +79,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
-        self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None  # deprecated, use dimension_derivations
         self.dimension_derivations: dict[str, Callable[[dict[str, Any]], int]] = {}
 
         # Set ordered weights
@@ -278,9 +277,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _candidate_weight(self, params: dict[str, Any]) -> float:
         """1/L where L is derived from params. Matches SolutionSpace.decode()."""
-        if not self.derive_L_fn:
+        dims = sorted(set(self.trajectory_configs.values()))
+        deriv = self.dimension_derivations.get(dims[0]) if dims else None
+        if deriv is None:
             return 1.0
-        return 1.0 / max(1, self.derive_L_fn(params))
+        return 1.0 / max(1, int(deriv(params)))
 
     def evidence_gain(self, params: dict[str, Any]) -> float:
         """Evidence gain ΔE for a single candidate, weighted by 1/L."""
@@ -848,7 +849,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             cat_codes=cat_codes,
             cat_assignments=cat_assignments,
             schema_sanitize=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
-            derive_L_fn=self.derive_L_fn,
+            dimension_derivations=self.dimension_derivations,
             source_step=source_step,
         )
 

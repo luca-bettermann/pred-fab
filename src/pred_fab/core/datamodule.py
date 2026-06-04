@@ -1,12 +1,17 @@
 """DataModule — ML preprocessing (normalization, splitting, batching) for Dataset instances."""
 
-from typing import Any, cast
+from typing import Any, cast, TYPE_CHECKING
 import pandas as pd
 import numpy as np
 import torch
 import copy
 from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
+
+if TYPE_CHECKING:
+    # Runtime import is kept local (inside methods) to avoid a circular import;
+    # this TYPE_CHECKING import only resolves the string annotations below.
+    from .dataset import ExportedTensorDict
 from .normalisers import (
     NormaliserModule,
     make_normaliser,

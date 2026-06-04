@@ -162,7 +162,7 @@ class SolutionSpace:
         cat_codes: list[str],
         cat_assignments: list[tuple[Any, ...]],
         schema_sanitize: Callable[[dict[str, Any]], dict[str, Any]],
-        derive_L_fn: Callable[[dict[str, Any]], int] | None = None,
+        dimension_derivations: dict[str, Callable[[dict[str, Any]], int]] | None = None,
         source_step: str | None = None,
     ):
         self._n_experiments = n_experiments
@@ -172,7 +172,7 @@ class SolutionSpace:
         self._cat_codes = cat_codes
         self._cat_assignments = cat_assignments
         self._schema_sanitize = schema_sanitize
-        self._derive_L_fn = derive_L_fn
+        self._dimension_derivations = dimension_derivations or {}
         self._source_step = source_step
 
         # Separate variables by type
@@ -254,8 +254,9 @@ class SolutionSpace:
         return self._n_experiments * self._D_per_exp
 
     def _derive_L_per_exp(self, static_z: torch.Tensor) -> list[int]:
-        """Compute layers per experiment from current static z-values."""
-        if self._derive_L_fn is None or self._D_traj == 0:
+        """Layers per experiment, from the primary trajectory dimension's derivation."""
+        deriv = self._dimension_derivations.get(self._primary_dim_code)
+        if self._D_traj == 0 or deriv is None:
             return [1] * self._n_experiments
         Ls = []
         for i in range(self._n_experiments):
@@ -264,7 +265,7 @@ class SolutionSpace:
                 z_val = static_z[i, si].detach()
                 norm = float(sv.decode(z_val).item())
                 p[sv.code] = sv.to_real(norm)
-            Ls.append(max(1, self._derive_L_fn(p)))
+            Ls.append(max(1, int(deriv(p))))
         return Ls
 
     def decode(self, z_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

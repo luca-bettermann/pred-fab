@@ -214,6 +214,7 @@ class MLPModel(IPredictionModel):
         # so a cached pre-loop expansion would be stale after the first update.
         use_minibatch = n_rows > self.MINIBATCH_THRESHOLD
 
+        loader: DataLoader | None = None
         if use_minibatch:
             batch_size = min(self.MINIBATCH_SIZE, max(n_rows // 4, 1))
             loader = DataLoader(
@@ -224,7 +225,7 @@ class MLPModel(IPredictionModel):
         progress_callback = kwargs.get("progress_callback")
 
         for epoch in range(self.EPOCHS):
-            if use_minibatch:
+            if loader is not None:
                 epoch_loss = 0.0
                 for X_b, y_b in loader:
                     optimizer.zero_grad()

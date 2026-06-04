@@ -1004,7 +1004,7 @@ class Dataset:
         for code in codes_to_save:
             exp = self.get_experiment(code)
             if exp.config_snapshot:
-                path = self.local_data.get_file_path(code, "config.json")
+                path = self.local_data.get_experiment_file_path(code, "config.json")
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f:
                     json.dump(exp.config_snapshot, f, indent=2)
@@ -1115,7 +1115,9 @@ class Dataset:
             for code, data in external_data.items():
                 if isinstance(data, np.ndarray) and "feature_name" in kwargs:
                     col_names = self._get_array_column_names(kwargs["feature_name"])
-                    data = pd.DataFrame(data, columns=col_names)
+                    # pandas-stubs types `columns` too narrowly (Axes | None); a
+                    # plain list[str] is valid at runtime. False positive.
+                    data = pd.DataFrame(data, columns=col_names)  # type: ignore[arg-type]
                 setter(code, data)
             self._check_for_retrieved_codes(local_missing, external_missing, dtype, Loaders.EXTERNAL, verbose)
         elif self.debug_flag:

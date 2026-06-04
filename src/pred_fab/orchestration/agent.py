@@ -2,10 +2,13 @@
 
 import copy
 import functools
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from .base_system import BaseOrchestrationSystem
 
 
 def requires(*systems: "SystemName"):

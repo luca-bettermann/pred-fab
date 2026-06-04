@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
+from matplotlib.patches import Circle
 
 
 # Visual Identity — core palette
@@ -551,7 +552,7 @@ def draw_datapoints(
     radius_color = sigma_color or color
     for xi, yi in zip(x, y):
         if sigma is not None:
-            circle = plt.Circle(
+            circle = Circle(
                 (xi, yi), sigma, fill=False, linestyle="--",
                 edgecolor=radius_color, linewidth=0.8, alpha=sigma_alpha,
                 zorder=zorder - 1,

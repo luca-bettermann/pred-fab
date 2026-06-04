@@ -1338,6 +1338,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             if exported.is_empty():
                 continue
 
+            # All outputs of one experiment share the same row count; track the
+            # last computed n. Bound to 0 so an empty model.outputs is safe.
+            n = 0
             for feat in model.outputs:
                 y_pred_native = preds[feat].detach().cpu().numpy().ravel()
                 # export_to_tensor_dict returns raw values; predict() also
