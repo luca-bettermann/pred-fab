@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import torch
 
 from pred_fab.orchestration.inference_bundle import InferenceBundle
 from pred_fab.utils import SplitType
@@ -40,7 +41,7 @@ def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
 
 
 def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
-    """_acquisition_objective combines perf_fn with delta_integrated_evidence_fn via κ."""
+    """_blend_objective combines perf with Δ∫E via κ — the single objective path."""
     dataset = build_dataset_with_single_experiment(tmp_path)
 
     perf_calls = []
@@ -71,9 +72,14 @@ def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
     )
     calibration._active_datamodule = datamodule
 
-    X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
+    # Drive the single objective core directly: one candidate, one point.
+    # raw_pts (perf) / zscore_pts (evidence) values are irrelevant to the stubs.
+    D = len(datamodule.input_columns)
+    raw_pts = torch.zeros((1, 1, D), dtype=torch.float64)
+    zscore_pts = torch.zeros((1, 1, D), dtype=torch.float64)
+    weights = torch.ones((1, 1), dtype=torch.float64)
     w = 0.5
-    result = calibration._acquisition_objective(X, kappa=w)
+    result = float(calibration._blend_objective(raw_pts, zscore_pts, weights, kappa=w)[0].item())
 
     assert len(perf_calls) == 1
     assert len(de_calls) == 1
@@ -83,7 +89,8 @@ def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
 
 def test_inference_bundle_handles_degenerate_minmax():
     bundle = InferenceBundle(prediction_models=[], normalization_state={"method": "none"}, schema_dict={})
-    stats = {"method": "minmax", "min": 2.0, "max": 2.0}
+    # NormMethod.MIN_MAX's value is "min_max" — the bundle now matches the enum.
+    stats = {"method": "min_max", "min": 2.0, "max": 2.0}
 
     x = np.array([1.0, 2.0, 3.0])
     x_norm = bundle._apply_normalization(x, stats)

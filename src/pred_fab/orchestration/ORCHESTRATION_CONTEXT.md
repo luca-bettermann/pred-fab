@@ -61,7 +61,7 @@ Calibration threads four frames. The code names the optimiser variable `z`, but 
 |---|---|---|---|
 | `u` (named `z` in code) | ℝ^D | what LBFGS moves; Sobol seeds in [−`Z_RANGE`, `Z_RANGE`] | — |
 | `norm` (normalised) | [0,1]^D | bound-by-construction decision vector; evidence kernel + plotting live here | `SolutionSpace.decode`: `norm = σ(K·u)` |
-| z-score | standardised | prediction-model input (matches training stats) | `_bounds_to_dm_norm`: `norm` → raw → z-score |
+| z-score | standardised | prediction-model input (matches training stats) | `_decode_frames`: `norm` → (raw, z-score) |
 | physical | [x_lo, x_hi] | experiment specs + schema bounds | `Variable.to_real`: `x = x_lo + norm·(x_hi−x_lo)` |
 
 The sigmoid is the only bound enforcement (no clipping). Physical units appear **only** when emitting specs (`decode_to_specs`); the model never sees them. Integers skip the sigmoid (straight-through rounding). `K = SIGMOID_K` (3.0); the MPC-lookahead path (`engine.py`, `raw_z=False`) instead reparametrises with a plain `σ` over its own bounds.

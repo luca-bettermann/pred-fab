@@ -471,21 +471,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             ev = self._evidence_backend.batched_tensor(X_SD, w)
         return float(ev[0].item())
 
-    def _per_candidate_perf_batched(
-        self,
-        X_SD: np.ndarray,
-        perf_range: tuple[float, float] | None,
-    ) -> np.ndarray:
-        """No-grad numpy shim around `_per_candidate_perf_tensor`."""
-        S = X_SD.shape[0]
-        if S == 0:
-            return np.empty((0,), dtype=np.float64)
-        with torch.no_grad():
-            out_t = self._per_candidate_perf_tensor(
-                torch.from_numpy(np.ascontiguousarray(X_SD)).double(), perf_range,
-            )
-        return out_t.detach().cpu().numpy().astype(np.float64)
-
     def _normalize_perf_dict(
         self,
         perf_dict: dict[str, float | None],
@@ -504,22 +489,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
         return float(sys_perf)
 
-    def _acquisition_objective(
-        self,
-        x_flat: np.ndarray,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> float:
-        """DE-compatible (negated) acquisition for single-candidate phases.
-
-        Thin no-grad numpy shim around `_acquisition_objective_tensor` —
-        wraps the 1-D x_flat as a (1, D) batch and pulls out the scalar.
-        """
-        with torch.no_grad():
-            X_SD = torch.from_numpy(np.atleast_2d(x_flat)).double()
-            out = self._acquisition_objective_tensor(X_SD, kappa, perf_range)
-        return float(out[0].item())
-
     def _kappa_blend(self, scores, perfs, evidences, kappa: float):
         """A = (1-κ)·P + κ·ΔE, negated for minimisation."""
         if perfs is not None and kappa < 1.0:
@@ -528,139 +497,88 @@ class CalibrationSystem(BaseOrchestrationSystem):
             scores = scores + kappa * evidences
         return -scores
 
-    def _per_candidate_perf_tensor(
+    def _point_perf(
         self,
-        X_SD: torch.Tensor,
+        raw_SD: torch.Tensor,
         perf_range: tuple[float, float] | None,
     ) -> torch.Tensor:
-        """Per-candidate weighted performance ``(S,)``, gradient-traversable.
+        """Per-point weighted performance ``(S,)``, gradient-traversable.
 
-        Routes through ``perf_fn_tensor`` for autograd. When the tensor closure
-        is unavailable (test fixtures) or raises, falls back to a scalar loop
-        — gradient is lost on that path.
+        ``raw_SD`` is physical-frame (one row per point). Builds a param dict
+        per row directly from raw — continuous values stay grad-bearing tensors,
+        categorical / integer / domain values resolve to Python — and scores via
+        ``perf_fn_tensor``. No normalization round-trip (the model re-normalises).
         """
-        S = int(X_SD.shape[0])
+        S = int(raw_SD.shape[0])
         if S == 0:
-            return torch.zeros(0, dtype=X_SD.dtype)
+            return torch.zeros(0, dtype=raw_SD.dtype)
         dm = self._active_datamodule
         if dm is None:
-            raise RuntimeError("_per_candidate_perf_tensor: _active_datamodule is None")
+            raise RuntimeError("_point_perf: _active_datamodule is None")
         if self.perf_fn_tensor is None:
-            raise RuntimeError("_per_candidate_perf_tensor: perf_fn_tensor is None")
+            raise RuntimeError("_point_perf: perf_fn_tensor is None")
         if not getattr(dm, "_is_fitted", True):
-            raise RuntimeError("_per_candidate_perf_tensor: DataModule not fitted")
+            raise RuntimeError("_point_perf: DataModule not fitted")
 
-        # Build per-candidate params dicts. Continuous values stay as 0-D
-        # tensors for autograd; categorical / int / domain values resolve
-        # to concrete Python types at decode time (no grad through them).
-        params_list: list[dict[str, Any]] = []
-        for s in range(S):
-            try:
-                p_np = dm.array_to_params(X_SD[s].detach().cpu().numpy().reshape(-1))
-                p_with_grad = self._reattach_tensor_continuous(p_np, X_SD[s], dm)
-                params_list.append(p_with_grad)
-            except (ValueError, KeyError) as exc:
-                self.logger.warning(f"_per_candidate_perf_tensor: candidate {s} decode failed: {exc}")
-                params_list.append(None)  # type: ignore[arg-type]
+        params_list = [self._raw_row_to_params(raw_SD[s], dm) for s in range(S)]
+        perf_dict_S = self.perf_fn_tensor(params_list)
 
-        valid_idx = [i for i, p in enumerate(params_list) if p is not None]
-        if not valid_idx:
-            raise RuntimeError(f"_per_candidate_perf_tensor: all {S} candidates failed to decode")
-
-        perf_dict_S = self.perf_fn_tensor(
-            [params_list[i] for i in valid_idx]  # type: ignore[index]
-        )
-
-        n_valid = len(valid_idx)
-        out_valid = torch.zeros(n_valid, dtype=X_SD.dtype)
-        for k in range(n_valid):
+        out = torch.zeros(S, dtype=raw_SD.dtype)
+        for k in range(S):
             perf_k = {
-                name: perf_dict_S[name][k].to(dtype=X_SD.dtype)
+                name: perf_dict_S[name][k].to(dtype=raw_SD.dtype)
                 for name in self.perf_names_order
                 if name in perf_dict_S and not torch.isnan(perf_dict_S[name][k])
             }
-            out_valid[k] = combined_score(perf_k, self.performance_weights)
+            out[k] = combined_score(perf_k, self.performance_weights)
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
-            if span > 1e-10:
-                out_valid = (out_valid - float(pmin)) / float(span)
-            else:
-                out_valid = torch.full_like(out_valid, 0.5)
-
-        out_full = torch.zeros(S, dtype=X_SD.dtype)
-        for k, i in enumerate(valid_idx):
-            out_full[i] = out_valid[k]
-        return out_full
-
-    def _reattach_tensor_continuous(
-        self,
-        params_np: dict[str, Any],
-        x_norm: torch.Tensor,
-        dm: DataModule,
-    ) -> dict[str, Any]:
-        """Replace continuous numeric values in ``params_np`` with their
-        gradient-bearing counterparts decoded from ``x_norm``.
-
-        ``array_to_params`` returns Python floats / ints — the gradient on
-        ``x_norm`` is lost during that decode. For autograd, we preserve the
-        tensor entries for continuous params by applying the normaliser's
-        differentiable ``reverse()`` to the z-score tensor values.
-        Categorical / integer / domain params stay as Python.
-        """
-        out = dict(params_np)
-        reattached = 0
-        for j, col_name in enumerate(dm.input_columns):
-            if col_name not in out:
-                continue
-            stats = dm._parameter_stats.get(col_name)
-            if stats is None:
-                continue
-            if col_name in dm.categorical_mappings:
-                continue
-            val = stats.reverse(x_norm[j])
-            if isinstance(val, torch.Tensor) and x_norm.requires_grad and not val.requires_grad:
-                self.logger.console_warning(
-                    f"Gradient lost in _reattach_tensor_continuous for '{col_name}'"
-                )
-            out[col_name] = val
-            reattached += 1
-        if reattached == 0 and x_norm.requires_grad:
-            self.logger.console_warning(
-                "_reattach_tensor_continuous: no columns reattached — performance gradient is zero"
-            )
+            out = (out - float(pmin)) / float(span) if span > 1e-10 else torch.full_like(out, 0.5)
         return out
 
-    def _acquisition_objective_tensor(
-        self,
-        X_SD: torch.Tensor,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> torch.Tensor:
-        """Vectorised (negated) acquisition for the gradient optimiser.
+    def _raw_row_to_params(self, raw_row: torch.Tensor, dm: DataModule) -> dict[str, Any]:
+        """Physical-frame ``(D,)`` row → param dict (perf-path decode).
 
-        Takes ``(S, D)`` torch tensor — one row per candidate — and returns
-        ``(S,)`` of negated scores (lower = better). Mirrors
-        ``_acquisition_objective_vectorized`` but routes through the tensor
-        APIs added in so gradient flows from each
-        candidate's score back through the per-candidate parameters.
+        Mirrors ``DataModule.array_to_params`` minus the reverse-normalisation
+        (input is already physical). Continuous values stay grad-bearing tensors;
+        categorical → label, integer / domain → Python int. Context columns are
+        injected by the perf closure, so they are skipped here.
         """
-        with profiler.section("acq._acquisition_objective_tensor"):
-            S = int(X_SD.shape[0])
+        params: dict[str, Any] = {}
+        ctx = set(dm._context_feature_codes)
+        for j, col in enumerate(dm.input_columns):
+            if col in ctx:
+                continue
+            if col in dm.categorical_mappings:
+                cats = dm.categorical_mappings[col]
+                idx = int(round(float(raw_row[j].item())))
+                params[col] = cats[max(0, min(idx, len(cats) - 1))]
+            elif isinstance(self.data_objects.get(col), DataInt):
+                params[col] = int(round(float(raw_row[j].item())))
+            else:
+                params[col] = raw_row[j]
+        return params
 
-            perfs: torch.Tensor | None = None
-            if kappa < 1.0:
-                perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
+    def _candidate_perf(
+        self,
+        raw_pts: torch.Tensor,
+        perf_range: tuple[float, float] | None,
+    ) -> torch.Tensor:
+        """Per-candidate performance ``(S,)`` — mean over the candidate's points."""
+        S, NL, D = raw_pts.shape
+        perf_flat = self._point_perf(raw_pts.reshape(S * NL, D), perf_range)
+        return perf_flat.reshape(S, NL).mean(dim=-1)
 
-            evidences: torch.Tensor | None = None
-            if kappa > 0.0:
-                if self._evidence_backend.batched_tensor is None:
-                    raise RuntimeError(
-                        f"kappa={kappa} requires evidence but evidence.batched_tensor is None"
-                    )
-                evidences = self._evidence_backend.batched_tensor(X_SD).to(dtype=X_SD.dtype)
-
-            return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
+    def _candidate_evidence(
+        self,
+        zscore_pts: torch.Tensor,
+        weights: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Per-candidate Δ∫E ``(S,)`` from z-score points via the evidence backend."""
+        if self._evidence_backend.joint_batched_tensor is None:
+            raise RuntimeError("evidence requested but evidence.joint_batched_tensor is None")
+        return self._evidence_backend.joint_batched_tensor(zscore_pts, weights).to(dtype=zscore_pts.dtype)
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -897,9 +815,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_range = None
 
         def objective(x_flat: torch.Tensor) -> torch.Tensor:
-            points, weights = space.decode(x_flat)
-            full_S_NL = points.unsqueeze(1)  # (S, 1, total_points, D)
-            return self._acquisition_joint_batched_tensor(full_S_NL, kappa, perf_range, weights)
+            raw_pts, zscore_pts, weights = space.decode(x_flat)
+            return self._blend_objective(raw_pts, zscore_pts, weights, kappa, perf_range)
 
         self.logger.info(
             f"{label}: N={n}, D={space._D_per_exp}, V={space.total_vars}"
@@ -963,35 +880,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
 
-    def _acquisition_joint_batched_tensor(
+    def _blend_objective(
         self,
-        full_S_NL: torch.Tensor,
+        raw_pts: torch.Tensor,
+        zscore_pts: torch.Tensor,
+        weights: torch.Tensor | None,
         kappa: float,
-        perf_range: tuple[float, float] | None,
-        weights: torch.Tensor | None = None,
+        perf_range: tuple[float, float] | None = None,
     ) -> torch.Tensor:
-        """Negated κ-weighted joint acquisition ``(S,)``, gradient-traversable.
+        """Negated κ-blend acquisition ``(S,)``, gradient-traversable — THE objective.
 
-        ``weights`` shape ``(S, NL)`` — per-point evidence weight. None = 1.0.
+        Single path for production (``_optimize`` closure) and tests. Perf reads
+        the physical-frame ``raw_pts``; evidence reads ``zscore_pts``; both
+        ``(S, NL, D)`` with per-point ``weights`` ``(S, NL)`` (None = 1.0).
         """
-        with profiler.section("acq._acquisition_joint_batched_tensor"):
-            S, N, L, D = full_S_NL.shape
-            NL = N * L
-            dtype = full_S_NL.dtype
-
-            perfs_S: torch.Tensor | None = None
-            if kappa < 1.0:
-                flat_rows = full_S_NL.reshape(S * NL, D)
-                perfs_flat = self._per_candidate_perf_tensor(flat_rows, perf_range)
-                perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1).to(dtype=dtype)
-
-            evidence_S: torch.Tensor | None = None
-            if kappa > 0.0 and self._evidence_backend.joint_batched_tensor is not None:
-                flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                w = weights.reshape(S, NL) if weights is not None else None
-                evidence_S = self._evidence_backend.joint_batched_tensor(flat_per_candidate, w).to(dtype=dtype)
-
-            return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
+        with profiler.section("acq._blend_objective"):
+            S = int(raw_pts.shape[0])
+            dtype = raw_pts.dtype
+            perfs = self._candidate_perf(raw_pts, perf_range) if kappa < 1.0 else None
+            if perfs is not None:
+                perfs = perfs.to(dtype=dtype)
+            evidence = (
+                self._candidate_evidence(zscore_pts, weights)
+                if kappa > 0.0 and self._evidence_backend.joint_batched_tensor is not None
+                else None
+            )
+            return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs, evidence, kappa)
 
     # ==================================================================
     # § Model wrappers

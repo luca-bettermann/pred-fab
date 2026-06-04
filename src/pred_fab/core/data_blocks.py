@@ -238,7 +238,8 @@ class Parameters(DataBlock):
         # Extract dimension values
         dim_values = self._get_domain_axis_values(dim_codes)
         if len(dim_values) < len(dim_codes):
-            missing_dims = [dim for dim in dim_codes if dim not in dim_values]
+            present = {obj.code for obj in self._get_domain_axis_objects(dim_codes)}
+            missing_dims = [dim for dim in dim_codes if dim not in present]
             raise KeyError(f"Missing dimensions: {', '.join(missing_dims)}")
 
         # Generate dimensional combinations

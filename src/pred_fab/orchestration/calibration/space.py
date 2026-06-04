@@ -87,12 +87,15 @@ class StaticVariable(Variable):
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         if self.is_integer:
-            return z + (z.round() - z).detach()
+            # STE round in the [0,range] optimiser frame, then ÷range so the
+            # norm frame is uniformly [0,1] (matches the continuous sigmoid).
+            rounded = z + (z.round() - z).detach()
+            return rounded / self.span if self.span > 0 else torch.zeros_like(z)
         return _sigmoid_k(z)
 
     def to_real(self, norm: float) -> float | int:
         if self.is_integer:
-            return int(np.clip(np.round(norm) + self.lo, self.lo, self.hi))
+            return int(np.clip(np.round(norm * self.span) + self.lo, self.lo, self.hi))
         return float(norm * self.span + self.lo)
 
 
@@ -219,7 +222,7 @@ class SolutionSpace:
         """Build template tensor for frozen columns (fixed params, categoricals)."""
         dm_cols = self._datamodule.input_columns
         # Default 0.5 in [0,1] bounds space = midpoint of parameter range.
-        # _bounds_to_dm_norm converts to z-score after decode().
+        # _decode_frames converts to raw / z-score after decode().
         fill = torch.full(
             (self._n_experiments, self._n_dm_cols), 0.5, dtype=torch.float64,
         )
@@ -238,7 +241,7 @@ class SolutionSpace:
                         fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
                     except (ValueError, KeyError):
                         pass
-        # _bounds_to_dm_norm converts all columns after decode(); prior_fill
+        # _decode_frames converts all columns after decode(); prior_fill
         # must stay in [0,1] bounds space so the conversion applies uniformly.
         return fill
 
@@ -264,11 +267,12 @@ class SolutionSpace:
             Ls.append(max(1, self._derive_L_fn(p)))
         return Ls
 
-    def decode(self, z_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """z-space decision vector -> (S, total_points, D_dm) tensor + (S, total_points) weights.
+    def decode(self, z_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """z-space decision vector -> (raw_points, zscore_points, weights).
 
-        Applies per-variable sigmoid decode. Single definition — called by
-        Sobol eval, LBFGS eval, and spec decode.
+        Per-variable sigmoid/STE decode lands in [0,1] norm, then _decode_frames
+        produces the physical-frame (raw, for perf) and z-score (for evidence)
+        tensors. Single definition — called by the acquisition objective.
         """
         S = int(z_flat.shape[0])
         z = z_flat.reshape(S, self._n_experiments, self._D_per_exp)
@@ -315,21 +319,23 @@ class SolutionSpace:
             layer_rows.append(expanded)
             weights.extend([1.0 / L_i] * L_i)
 
-        points = torch.cat(layer_rows, dim=1)  # (S, total_points, D_dm)
-        points = self._bounds_to_dm_norm(points)
+        norm_points = torch.cat(layer_rows, dim=1)  # (S, total_points, D_dm) in [0,1]
+        raw, zscore = self._decode_frames(norm_points)
         w = torch.tensor(weights, dtype=z_flat.dtype)
         w = w.unsqueeze(0).expand(S, -1)  # (S, total_points)
-        return points, w
+        return raw, zscore, w
 
-    def _bounds_to_dm_norm(self, points: torch.Tensor) -> torch.Tensor:
-        """Convert [0,1] bounds-normalised columns to DataModule normalization.
+    def _decode_frames(self, norm_points: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Map [0,1] norm columns to (physical-frame, z-score) tensors.
 
         Bounded columns: [0,1] → raw via bounds → z-score via normaliser.
-        Unbounded columns (context, iterators): set to z-score 0.0 (= training mean).
+        Unbounded / degenerate columns (context, iterators): training mean →
+        z-score 0.0. No-stats columns pass through unchanged in both frames.
         Gradient flows through the normaliser's forward().
         """
         dm = self._datamodule
-        out = points.clone()
+        raw = norm_points.clone()
+        zscore = norm_points.clone()
         for c_idx, col in enumerate(dm.input_columns):
             stats = dm._parameter_stats.get(col)
             if stats is None:
@@ -338,15 +344,15 @@ class SolutionSpace:
                 lo, hi = self._bounds_manager._get_hierarchical_bounds_for_code(col)
                 span = hi - lo
                 if span <= 0:
-                    # Degenerate bounds → use training mean (z-score 0.0)
-                    out[..., c_idx] = 0.0
-                else:
-                    raw = points[..., c_idx] * span + lo
-                    out[..., c_idx] = stats.forward(raw)
+                    raise ValueError("degenerate bounds")
+                raw_col = norm_points[..., c_idx] * span + lo
+                raw[..., c_idx] = raw_col
+                zscore[..., c_idx] = stats.forward(raw_col)
             except (ValueError, KeyError):
-                # No bounds (context features, iterator positions) → training mean
-                out[..., c_idx] = 0.0
-        return out
+                # No/degenerate bounds (context, iterators) → training mean (z-score 0)
+                zscore[..., c_idx] = 0.0
+                raw[..., c_idx] = stats.reverse(torch.zeros_like(norm_points[..., c_idx]))
+        return raw, zscore
 
     def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:
         """Convert optimised z-vector to ExperimentSpec instances."""

@@ -49,11 +49,11 @@ experiment parameters that balance exploration (evidence gain) and exploitation 
 ### Performance System
 - **predict_features()** → per-feature predictions via perf_fn_tensor closure
 - **system_performance()** → weighted P_sys via combined_score (single source of truth)
-- **Gradient flow** — stats.reverse() for differentiable z-score → raw conversion in _reattach_tensor_continuous
+- **Gradient flow** — decode emits grad-bearing raw directly; perf reads raw, evidence reads z-score (no inversion)
 
 ### Normalization
 - **DataModule** — z-score normalization (StandardScalerModule) for ML training
-- **SolutionSpace** — sigmoid decode to [0,1] bounds, then _bounds_to_dm_norm converts to z-score
+- **SolutionSpace** — sigmoid/STE decode to [0,1] norm, then _decode_frames produces both raw and z-score
 - **Context features** — default to z-score 0.0 (training mean) when not in optimization vector
 
 ### Metrics

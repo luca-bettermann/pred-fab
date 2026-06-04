@@ -100,36 +100,43 @@ class InferenceBundle:
         return pd.DataFrame(predictions)
     
     def _prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Prepare input DataFrame for inference (one-hot + normalize)."""
+        """Prepare input DataFrame for inference (cat-index encode + normalize).
+
+        Categoricals are emitted as a single integer-index column — the index
+        into the sorted category list — matching the training-time
+        ``DataModule._encode_inputs`` encoding (the model expands them
+        internally via embedding/one-hot). Cat columns are absent from
+        ``parameter_stats``, so they pass through unnormalised, same as
+        training.
+        """
         X = X_df.copy()
-        
+
         categorical_mappings = self.normalization_state.get('categorical_mappings', {})
         input_columns = self.normalization_state.get('input_columns', [])
         parameter_stats = self.normalization_state.get('parameter_stats', {})
-        
-        # One-hot encode
-        if categorical_mappings:
-            for col, categories in categorical_mappings.items():
-                if col not in X.columns:
-                    continue
-                for category in categories:
-                    col_name = f"{col}_{category}"
-                    X[col_name] = (X[col] == category).astype(float)
-                X = X.drop(columns=[col])
-        
-        # Ensure columns match and are ordered correctly
+
+        # Categorical → single cat-index column; keep the parent column name so
+        # it aligns with input_columns (which holds the parent code, not one-hots).
+        for col, categories in categorical_mappings.items():
+            if col not in X.columns:
+                continue
+            cat_to_idx = {c: i for i, c in enumerate(categories)}
+            X[col] = X[col].map(lambda v: cat_to_idx.get(v, 0))
+
+        # Ensure columns match and are ordered correctly (missing → 0).
         for col in input_columns:
             if col not in X.columns:
                 X[col] = 0.0
-        
+
         X = X[input_columns]
         X_arr = X.values.astype(np.float32)
-        
-        # Normalize
+
+        # Normalize numeric columns; cat-index columns are not in
+        # parameter_stats and pass through unchanged.
         for i, col in enumerate(input_columns):
             if col in parameter_stats:
                 X_arr[:, i] = self._apply_normalization(X_arr[:, i], parameter_stats[col])
-                
+
         return X_arr
 
     def _denormalize_values(self, values: np.ndarray, feature_names: list[str]) -> np.ndarray:
@@ -155,7 +162,7 @@ class InferenceBundle:
             return data
         elif method == 'standard':
             return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == 'minmax':
+        elif method == 'min_max':
             denom = stats['max'] - stats['min']
             if abs(denom) < 1e-12:
                 return np.zeros_like(data, dtype=np.float64)
@@ -174,7 +181,7 @@ class InferenceBundle:
             return data_norm
         elif method == 'standard':
             return data_norm * stats['std'] + stats['mean']
-        elif method == 'minmax':
+        elif method == 'min_max':
             denom = stats['max'] - stats['min']
             if abs(denom) < 1e-12:
                 return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)

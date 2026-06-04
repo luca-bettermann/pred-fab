@@ -1199,9 +1199,8 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return temp_datamodule
 
-    @staticmethod
-    @staticmethod
     def _build_importance_per_feature(
+        self,
         dm: DataModule,
         split: SplitType,
         eval_system: Any | None = None,
