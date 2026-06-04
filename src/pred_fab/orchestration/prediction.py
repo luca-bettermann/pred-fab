@@ -18,6 +18,7 @@ from ..core.data_objects import DataDomainAxis, DataArray
 from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler
+from ..utils.console import format_metrics_table
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 from .evidence import (
@@ -1422,25 +1423,10 @@ class PredictionSystem(BaseOrchestrationSystem):
                 model.validate_split(self, dm, split, X_split, y_split, cell_meta, importance_dict)
             )
 
-        has_inf = any('r2_inf' in m for m in results.values())
-        has_mae = any('mae' in m for m in results.values())
-        header = f"  {'Feature':<30s}  {'R²':>8s}"
-        if has_inf:
-            header += f"  {'R²_inf':>8s}"
-        if has_mae:
-            header += f"  {'MAE':>10s}"
         self.logger.console_new_line()
-        self.logger.console_info(header)
-        self.logger.console_info(f"  {'─' * len(header)}")
-        for feat, m in results.items():
-            r2 = m.get('r2', 0.0)
-            line = f"  {feat:<30s}  {r2:8.4f}"
-            if has_inf:
-                r2_inf = m.get('r2_inf')
-                line += f"  {r2_inf:8.4f}" if r2_inf is not None else f"  {'—':>8s}"
-            if has_mae:
-                line += f"  {m.get('mae', 0.0):10.3f}"
+        for line in format_metrics_table(results):
             self.logger.console_info(line)
+        has_inf = any('r2_inf' in m for m in results.values())
         if not has_inf and not importance_dict:
             self.logger.console_warning(
                 "R²_inf not computed: no importance weights available. "
@@ -1572,53 +1558,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             'iterator_feats': iterator_feats,
             'total_positions': total_positions,
         }
-
-    def _build_X_dict_flat(
-        self,
-        dm: "DataModule",
-        dim_info_list: list[dict[str, Any]],
-        cell_indices: list[tuple[int, ...]] | np.ndarray,
-        iterator_feats: list[tuple[str, int, int]],
-    ) -> dict[str, torch.Tensor]:
-        """Build per-column tensors for the (S × n_cells, n_input_cols) batch.
-
-        Each ``dim_info`` in ``dim_info_list`` carries a ``param_base`` dict —
-        the (param_code → value) map for that S-row. ``cell_indices`` lists the
-        cell-index tuples within the dimension. Output is keyed by
-        ``dm.input_columns`` and ready for ``prepare_input_from_tensor_dict``.
-        Categoricals emit cat-index ``int64`` tensors; iterator features emit
-        normalised positions; numeric params/features emit float scalars.
-        """
-        S = len(dim_info_list)
-        n_cells = len(cell_indices)
-        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
-        X_dict_flat: dict[str, torch.Tensor] = {}
-        for col_name in dm.input_columns:
-            if col_name in dm.categorical_mappings:
-                cats = dm.categorical_mappings[col_name]
-                cat_to_idx = {c: i for i, c in enumerate(cats)}
-                idx_vals: list[int] = []
-                for s in range(S):
-                    param_base = dim_info_list[s]['param_base']
-                    v = param_base.get(col_name, cats[0] if cats else None)
-                    cell_val = cat_to_idx.get(v, 0)
-                    idx_vals.extend([cell_val] * n_cells)
-                X_dict_flat[col_name] = torch.tensor(idx_vals, dtype=torch.long)
-            elif col_name in iter_feat_lookup:
-                axis_pos, size = iter_feat_lookup[col_name]
-                vals: list[float] = []
-                for _s in range(S):
-                    for idx in cell_indices:
-                        vals.append(float(idx[axis_pos]) / max(size - 1, 1))
-                X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
-            else:
-                num_vals: list[float] = []
-                for s in range(S):
-                    param_base = dim_info_list[s]['param_base']
-                    v = float(param_base.get(col_name, 0.0))
-                    num_vals.extend([v] * n_cells)
-                X_dict_flat[col_name] = torch.tensor(num_vals, dtype=torch.float32)
-        return X_dict_flat
 
     def _predict_from_params(
         self,

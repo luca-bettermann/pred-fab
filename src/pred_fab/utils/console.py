@@ -104,6 +104,28 @@ class ProgressBar:
         sys.stdout.flush()
 
 
+def format_metrics_table(feature_metrics: dict[str, dict[str, float]]) -> list[str]:
+    """Format R²/R²_inf/MAE per-feature metrics into aligned table lines (header + rows)."""
+    has_inf = any('r2_inf' in m for m in feature_metrics.values())
+    has_mae = any('mae' in m for m in feature_metrics.values())
+    header = f"  {'Feature':<30s}  {'R²':>8s}"
+    if has_inf:
+        header += f"  {'R²_inf':>8s}"
+    if has_mae:
+        header += f"  {'MAE':>10s}"
+    lines = [header, f"  {'─' * len(header)}"]
+    for name, metrics in feature_metrics.items():
+        r2 = metrics.get('r2', 0.0)
+        line = f"  {name:<30s}  {r2:8.4f}"
+        if has_inf:
+            r2_inf = metrics.get('r2_inf')
+            line += f"  {r2_inf:8.4f}" if r2_inf is not None else f"  {'—':>8s}"
+        if has_mae:
+            line += f"  {metrics.get('mae', 0.0):10.3f}"
+        lines.append(line)
+    return lines
+
+
 class ConsoleReporter:
     """Schema-aware formatted console output for agent steps.
 
@@ -339,29 +361,8 @@ class ConsoleReporter:
         """Print R², R²_inf, and MAE per feature in a table."""
         if not self.enabled:
             return
-        has_inf = any('r2_inf' in m for m in feature_metrics.values())
-        has_mae = any('mae' in m for m in feature_metrics.values())
-
-        header = f"  {'Feature':<30s}  {'R²':>8s}"
-        if has_inf:
-            header += f"  {'R²_inf':>8s}"
-        if has_mae:
-            header += f"  {'MAE':>10s}"
         self._print(f"\n  {_B}Model quality{_R}")
-        self._print(header)
-        self._print(f"  {'─' * len(header)}")
-        for name, metrics in feature_metrics.items():
-            r2 = metrics.get('r2', 0.0)
-            line = f"  {name:<30s}  {r2:8.4f}"
-            if has_inf:
-                r2_inf = metrics.get('r2_inf')
-                if r2_inf is not None:
-                    line += f"  {r2_inf:8.4f}"
-                else:
-                    line += f"  {'—':>8s}"
-            if has_mae:
-                mae = metrics.get('mae', 0.0)
-                line += f"  {mae:10.3f}"
+        for line in format_metrics_table(feature_metrics):
             self._print(line)
 
     # ── Adaptation ──────────────────────────────────────────────────────
