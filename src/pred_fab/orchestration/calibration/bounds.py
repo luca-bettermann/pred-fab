@@ -12,7 +12,7 @@ from ...utils import PfabLogger
 # ======================================================================
 
 class BoundsManager:
-    """Schema-aware parameter bounds, fixed params, trust regions, and schedule configs."""
+    """Schema-aware parameter bounds, fixed params, trust regions, and trajectory configs."""
 
     def __init__(self, schema: DatasetSchema, logger: PfabLogger):
         self.schema = schema
@@ -124,7 +124,7 @@ class BoundsManager:
 
         if code in self.trajectory_configs and not force:
             self.logger.console_warning(
-                f"Parameter '{code}' already has a schedule configuration for "
+                f"Parameter '{code}' already has a trajectory configuration for "
                 f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
             )
             return
@@ -135,7 +135,7 @@ class BoundsManager:
             if lo != -np.inf and hi != np.inf:
                 self.trust_regions[code] = (hi - lo) / 10.0
         self.logger.debug(
-            f"Configured schedule for '{code}' stepping through '{dimension_code}'."
+            f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
         )
 
     def _validate_and_clean_config(

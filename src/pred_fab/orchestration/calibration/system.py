@@ -33,7 +33,7 @@ class EvidenceBackend:
 # ======================================================================
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: acquisition-driven exploration, inference, batch discovery, and joint schedule optimization."""
+    """Active-learning calibration engine: acquisition-driven exploration, inference, batch discovery, and joint trajectory optimization."""
 
     def __init__(
         self,
@@ -94,7 +94,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Running min/max of predicted system performance across training data.
 
-        self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
+        self._trajectory_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
     # ==================================================================

@@ -38,7 +38,7 @@ from .discovery import plot_parameter_space, plot_parameter_space_per_cell, plot
 from .prediction import plot_topology_comparison, plot_importance_weights
 from .exploration import plot_acquisition
 from .inference import plot_inference_result
-from .schedule import plot_schedule_comparison
+from .trajectory import plot_trajectory_comparison
 from .metrics import plot_metric_topology
 from .performance import radar_chart, RadarPanel, plot_radar_panels
 from .convergence import plot_convergence
@@ -75,7 +75,7 @@ __all__ = [
     "plot_importance_weights",
     "plot_acquisition",
     "plot_inference_result",
-    "plot_schedule_comparison",
+    "plot_trajectory_comparison",
     "plot_metric_topology",
     "radar_chart",
     "RadarPanel",

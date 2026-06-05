@@ -171,8 +171,8 @@ def test_generate_discovery_returns_experiment_spec_instances(tmp_path):
         assert isinstance(spec.initial_params, ParameterProposal)
 
 
-def test_generate_discovery_has_empty_schedules(tmp_path):
-    """run_discovery() always returns ExperimentSpecs with empty schedules."""
+def test_generate_discovery_has_empty_trajectories(tmp_path):
+    """run_discovery() always returns ExperimentSpecs with empty trajectories."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
@@ -205,7 +205,7 @@ def test_generate_discovery_experiment_spec_supports_dict_like_access(tmp_path):
 
 # ===== configure_trajectory_parameter() =====
 
-def test_configure_schedule_parameter_sets_config(tmp_path):
+def test_configure_trajectory_parameter_sets_config(tmp_path):
     """configure_trajectory_parameter() stores the dimension code for the given runtime param."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -214,7 +214,7 @@ def test_configure_schedule_parameter_sets_config(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
-def test_configure_schedule_parameter_raises_for_non_runtime_param(tmp_path):
+def test_configure_trajectory_parameter_raises_for_non_runtime_param(tmp_path):
     """configure_trajectory_parameter() raises ValueError when the parameter is not runtime-adjustable."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -223,7 +223,7 @@ def test_configure_schedule_parameter_raises_for_non_runtime_param(tmp_path):
         calibration.configure_trajectory_parameter("param_1", "n_layers")
 
 
-def test_configure_schedule_parameter_blocked_without_force(tmp_path):
+def test_configure_trajectory_parameter_blocked_without_force(tmp_path):
     """Calling configure_trajectory_parameter twice without force is silently blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -235,8 +235,8 @@ def test_configure_schedule_parameter_blocked_without_force(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
-def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
-    """force=True overwrites an existing schedule configuration."""
+def test_configure_trajectory_parameter_with_force_overwrites(tmp_path):
+    """force=True overwrites an existing trajectory configuration."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
@@ -246,7 +246,7 @@ def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_segments"
 
 
-def test_configure_schedule_parameter_ignores_unknown_param(tmp_path):
+def test_configure_trajectory_parameter_ignores_unknown_param(tmp_path):
     """configure_trajectory_parameter() silently skips params not in the schema."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -257,16 +257,16 @@ def test_configure_schedule_parameter_ignores_unknown_param(tmp_path):
 
 # ===== ParameterTrajectory.apply() =====
 
-def test_parameter_schedule_apply_records_update_events(tmp_path):
+def test_parameter_trajectory_apply_records_update_events(tmp_path):
     """ParameterTrajectory.apply() records each entry as a ParameterUpdateEvent."""
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     # "speed" initial = 100.0; change to 150.0 at step 1 of dim_1.
     proposal = ParameterProposal.from_dict({"speed": 150.0})
-    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
+    traj = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
 
     initial_count = len(exp.parameter_updates)
-    schedule.apply(exp)
+    traj.apply(exp)
 
     assert len(exp.parameter_updates) == initial_count + 1
     event = exp.parameter_updates[-1]
@@ -275,19 +275,19 @@ def test_parameter_schedule_apply_records_update_events(tmp_path):
     assert event.step_index == 1
 
 
-def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
-    """ExperimentSpec.apply_schedules() applies all dimensional schedules to the experiment."""
+def test_experiment_spec_apply_trajectories_records_all_entries(tmp_path):
+    """ExperimentSpec.apply_trajectories() applies all dimensional trajectories to the experiment."""
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     proposal = ParameterProposal.from_dict({"speed": 180.0})
-    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
+    traj = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
     spec = ExperimentSpec(
         initial_params=ParameterProposal.from_dict({"speed": 100.0}),
-        trajectories={"dim_1": schedule},
+        trajectories={"dim_1": traj},
     )
 
     initial_count = len(exp.parameter_updates)
-    spec.apply_schedules(exp)
+    spec.apply_trajectories(exp)
 
     assert len(exp.parameter_updates) == initial_count + 1
 

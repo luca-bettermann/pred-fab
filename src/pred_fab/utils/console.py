@@ -324,7 +324,7 @@ class ConsoleReporter:
 
         self._logger.console_new_line()
 
-    def print_schedule_table(
+    def print_trajectory_table(
         self,
         param_code: str,
         exp_codes: list[str],
@@ -332,7 +332,7 @@ class ConsoleReporter:
         *,
         short_name: str | None = None,
     ) -> None:
-        """Print a per-step trajectory table for one schedule parameter."""
+        """Print a per-step trajectory table for one trajectory parameter."""
         if not self.enabled or not per_exp_values:
             return
         n_steps = max(len(v) for v in per_exp_values)

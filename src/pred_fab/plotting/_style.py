@@ -615,7 +615,7 @@ def _plot_trajectory_ranges(
     step_dot_cmap: str = "Blues",
     step_dot_size: float = 14,
 ) -> None:
-    """Draw T-ended range lines + per-step dots for scheduled parameters."""
+    """Draw T-ended range lines + per-step dots for trajectory parameters."""
     if not trajectories or not codes:
         return
 

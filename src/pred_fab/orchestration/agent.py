@@ -730,7 +730,7 @@ class PfabAgent:
         """Configure a parameter to vary per step of a dimension.
 
         ``smoothing`` knob dropped — under the
-        gradient schedule path, smoothness emerges naturally from the
+        gradient trajectory path, smoothness emerges naturally from the
         differentiable autoreg coupling between adjacent steps and the
         delta-constraint penalty.
         """

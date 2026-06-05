@@ -13,7 +13,7 @@ Schema-agnostic plotting for every PFAB phase. Users pass `AxisSpec` objects tha
 | `prediction.py` | `plot_topology_comparison`, `plot_importance_weights` | Side-by-side topologies, R²_inf sigmoid |
 | `exploration.py` | `plot_acquisition` | 3-panel: performance + evidence + combined acquisition |
 | `inference.py` | `plot_inference_result` | Single-shot result on predicted topology |
-| `schedule.py` | `plot_schedule_comparison` | Fixed vs schedule bars + per-step parameter schedules |
+| `trajectory.py` | `plot_trajectory_comparison` | Fixed vs trajectory bars + per-step parameter trajectories |
 | `performance.py` | `plot_performance_radar` | Radar/spider per-attribute plot with dataset avg overlay, score colors |
 | `metrics.py` | `plot_metric_topology` | Per-metric + combined heatmaps |
 | `convergence.py` | `plot_convergence` | Optimizer convergence curves per phase |

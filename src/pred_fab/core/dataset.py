@@ -113,12 +113,12 @@ class ParameterUpdateEvent:
 
 @dataclass
 class ParameterTrajectory:
-    """Sparse ordered schedule of runtime parameter changes for one dimension level."""
+    """Sparse ordered trajectory of runtime parameter changes for one dimension level."""
     dimension: str
     entries: list[tuple[int, 'ParameterProposal']] = field(default_factory=list)
 
     def apply(self, experiment: 'ExperimentData') -> None:
-        """Record all schedule entries as ParameterUpdateEvents on the experiment.
+        """Record all trajectory entries as ParameterUpdateEvents on the experiment.
 
         Pure conversion goes through :func:`trajectory_to_events`; experiment-
         side delta + sanitize + append is then handled by
@@ -163,7 +163,7 @@ def events_to_trajectory(
     Filters events to those whose ``dimension`` matches; sorts ascending by
     ``step_index``; wraps each event's ``updates`` into a ``ParameterProposal``.
     Events without a ``step_index`` (i.e. initial-state events not bound to a
-    schedule step) are skipped. Inverse of :func:`trajectory_to_events`.
+    trajectory step) are skipped. Inverse of :func:`trajectory_to_events`.
     """
     matched = [e for e in events if e.iterator_code == dimension and e.step_index is not None]
     matched.sort(key=lambda e: e.step_index)  # type: ignore[arg-type, return-value]
@@ -179,15 +179,15 @@ def events_to_trajectory(
 
 @dataclass
 class ExperimentSpec:
-    """Initial parameter proposal plus optional per-dimension runtime schedules."""
+    """Initial parameter proposal plus optional per-dimension runtime trajectories."""
     initial_params: 'ParameterProposal'
     trajectories: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
 
-    def apply_schedules(self, experiment: 'ExperimentData') -> None:
-        """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
-        for schedule in self.trajectories.values():
-            schedule.apply(experiment)
+    def apply_trajectories(self, experiment: 'ExperimentData') -> None:
+        """Apply all dimensional trajectories to the experiment as ParameterUpdateEvents."""
+        for trajectory in self.trajectories.values():
+            trajectory.apply(experiment)
 
     # dict-like delegation to initial_params for backward compatibility.
 

@@ -277,7 +277,7 @@ def plot_dimensional_trajectories(
         for k in range(n_steps):
             x = float(params.get(x_axis.key, 0))
             y = float(params.get(y_axis.key, 0))
-            # Override from schedule if available
+            # Override from trajectory if available
             if code and trajectories and code in trajectories and k < len(trajectories[code]):
                 step = trajectories[code][k]
                 x = float(step.get(x_axis.key, x))

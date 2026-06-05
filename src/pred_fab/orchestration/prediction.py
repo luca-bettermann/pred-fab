@@ -928,7 +928,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return out / total_w if total_w > 0 else out
 
-    # --- Stacking / virtual evidence for sequential-phase schedule mode ---
+    # --- Stacking / virtual evidence for sequential-phase trajectory mode ---
 
     def push_virtual_points(
         self,
@@ -938,8 +938,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Append (params, weight) pairs as temporary evidence in each KDE.
 
-        Used by the sequential-stacked schedule mode to represent
-        not-yet-scheduled experiments as stacks at their step0 with weight L_j.
+        Used by the sequential-stacked trajectory mode to represent
+        not-yet-run experiments as stacks at their step0 with weight L_j.
         Restore via `pop_virtual_points`.
         """
         if not self._model_kdes:
