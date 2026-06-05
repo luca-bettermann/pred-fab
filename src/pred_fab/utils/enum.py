@@ -76,5 +76,6 @@ class SourceStep(str, Enum):
     EXPLORATION = 'exploration_step'
     INFERENCE = 'inference_step'
     ADAPTATION = 'adaptation_step'
+    SOBOL = 'sobol_step'  # data-independent space-filling test/validation design
 
     

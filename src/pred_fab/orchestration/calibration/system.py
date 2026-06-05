@@ -7,6 +7,7 @@ import torch
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
+from ...core.designs import SobolDesign
 from ...core.frames import raw_scalar_to_param
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ...utils.console import _B, _D, _R
@@ -785,6 +786,60 @@ class CalibrationSystem(BaseOrchestrationSystem):
             f"Discovery: {n} experiments "
             f"({n_static} static, {n_traj} trajectory, "
             f"{len(cat_codes)} categorical)."
+        )
+        return specs
+
+    # ==================================================================
+    # § Sobol — data-independent space-filling test/validation design
+    # ==================================================================
+
+    def run_sobol(self, n: int) -> list["ExperimentSpec"]:
+        """Generate ``n`` space-filling (Sobol) proposals — a data-independent test design.
+
+        Unlike :meth:`run_discovery` (evidence-optimised, κ=1), this draws low-discrepancy
+        points directly in normalised ``[0,1]`` space and maps them to real parameters via
+        each ``Variable.to_real`` — uniform over the parameter bounds, independent of model
+        and collected data, so it serves as a fair generalisation yardstick (the held-out
+        Sobol probe; see the KB note *First-class dataset concept in pred-fab*). Sampling
+        in u-space would inherit the optimiser's sigmoid, ~25× denser at the centre than the
+        bounds — unusable for space-filling — hence the direct ``to_real`` path.
+
+        Categoricals are stratified (reusing ``_compose_variables``); integers are int-typed;
+        deterministic given ``random_seed``. Trajectory parameters need their own Sobol design
+        (space-filling over layer trajectories) and are not yet covered here — raises if any
+        are configured rather than silently emitting incomplete test experiments.
+        """
+        if n <= 0:
+            return []
+
+        variables, cat_codes, cat_assignments = self._compose_variables(n)
+        traj_vars = [v for v in variables if isinstance(v, TrajectoryVariable)]
+        if traj_vars:
+            raise NotImplementedError(
+                "run_sobol does not yet cover trajectory parameters "
+                f"({[v.code for v in traj_vars]}); a Sobol test design over layer "
+                "trajectories is a follow-up — see 'First-class dataset concept in pred-fab'."
+            )
+        statics = [v for v in variables if isinstance(v, StaticVariable)]
+        if not statics and not cat_codes:
+            self.logger.warning("No valid parameters for Sobol test design.")
+            return []
+
+        pts = SobolDesign().unit_points(n, len(statics), seed=self._random_seed)
+        specs: list[ExperimentSpec] = []
+        for i in range(n):
+            bp: dict[str, Any] = dict(self.fixed_params)
+            for d_cat, code in enumerate(cat_codes):
+                bp[code] = cat_assignments[i][d_cat]
+            for di, sv in enumerate(statics):
+                bp[sv.code] = sv.to_real(float(pts[i, di]))
+            bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
+            proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.SOBOL)
+            specs.append(ExperimentSpec(initial_params=proposal, trajectories={}))
+
+        self.logger.info(
+            f"Sobol test design: {n} experiments "
+            f"({len(statics)} static, {len(cat_codes)} categorical)."
         )
         return specs
 
