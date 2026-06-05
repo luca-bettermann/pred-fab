@@ -7,7 +7,7 @@ Integrates with DataModule for normalization and batching.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, overload
+from typing import Any, Callable
 import copy
 import numpy as np
 import torch
@@ -15,6 +15,7 @@ import pickle
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
+from ..core.frames import to_unit_frame
 from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
 from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler
@@ -36,35 +37,6 @@ any single point."""
 
 RADIUS_DEFAULT: float = 0.05
 """Default kernel radius in normalised [0,1] space. σ = radius × √D."""
-
-
-@overload
-def _to_unit_frame(points: np.ndarray, domain_bounds: np.ndarray | torch.Tensor | None) -> np.ndarray: ...
-@overload
-def _to_unit_frame(points: torch.Tensor, domain_bounds: np.ndarray | torch.Tensor | None) -> torch.Tensor: ...
-def _to_unit_frame(
-    points: np.ndarray | torch.Tensor,
-    domain_bounds: np.ndarray | torch.Tensor | None,
-) -> np.ndarray | torch.Tensor:
-    """Map latent points to [0,1] by ``domain_bounds`` so σ is a *fraction of range*.
-
-    Shared by ``density_at`` (visualisation) and the acquisition Δ∫E path so both
-    read σ in the same coordinate frame — otherwise the optimiser sees a different
-    effective kernel width than the plots. Accepts numpy or torch and returns the
-    same type; broadcasts ``domain_bounds`` (D, 2) over the trailing dim. No-op
-    when ``domain_bounds`` is None (raw-frame fallback).
-    """
-    if domain_bounds is None:
-        return points
-    lo = domain_bounds[:, 0]
-    span = domain_bounds[:, 1] - domain_bounds[:, 0]
-    if isinstance(points, torch.Tensor):
-        lo = torch.as_tensor(lo, dtype=points.dtype, device=points.device)
-        span = torch.as_tensor(span, dtype=points.dtype, device=points.device)
-        span = torch.where(span > 1e-10, span, torch.ones_like(span))
-        return (points - lo) / span
-    span = np.where(span > 1e-10, span, 1.0)
-    return (points - np.asarray(lo)) / span
 
 
 @dataclass
@@ -877,8 +849,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
             # Normalize to [0,1] so σ means "fraction of range" — shared with the
             # acquisition Δ∫E path via _to_unit_frame (one σ-frame, see its docstring).
-            z_active = _to_unit_frame(z[kde.active_mask].reshape(1, -1), kde.domain_bounds)
-            centers = _to_unit_frame(kde.latent_points, kde.domain_bounds)
+            z_active = to_unit_frame(z[kde.active_mask].reshape(1, -1), kde.domain_bounds)
+            centers = to_unit_frame(kde.latent_points, kde.domain_bounds)
             d2 = np.sum((z_active - centers) ** 2, axis=-1)
             density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
             weighted_d += kde.weight * density
@@ -931,8 +903,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             # "fraction of range", matching density_at. The optimiser and the
             # plots then share one effective kernel width. Centers are now in the
             # unit cube, so the integration domain is [0,1] (domain_bounds=None).
-            new_centers_SL = _to_unit_frame(new_centers_SL, kde.domain_bounds)
-            old_centers = _to_unit_frame(kde.latent_points, kde.domain_bounds)
+            new_centers_SL = to_unit_frame(new_centers_SL, kde.domain_bounds)
+            old_centers = to_unit_frame(kde.latent_points, kde.domain_bounds)
 
             index_old = self._kernel_index(old_centers, kde.point_weights, kde.sigma)
 

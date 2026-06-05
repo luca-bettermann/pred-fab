@@ -27,6 +27,7 @@ import numpy as np
 import torch
 
 from ...core import DataModule, ExperimentSpec, ParameterProposal, ParameterTrajectory
+from ...core.frames import param_value_to_fill
 from ...core.data_objects import DataObject
 from .bounds import BoundsManager
 
@@ -238,25 +239,15 @@ class SolutionSpace:
             for c_idx, col in enumerate(dm_cols):
                 if col not in merged or col in opt_codes:
                     continue
-                # Categoricals carry no normaliser stats, so _decode_frames passes
-                # the column through unchanged — place the raw cat-index directly
-                # (the label's position in the datamodule's sorted category list),
-                # which perf reads as cats[round(raw)] and evidence feeds to encode.
-                # Without this, float(label) raises → column stays 0.5 → every
-                # stratum decodes to cats[0] (categorical inert in the objective).
-                if col in self._datamodule.categorical_mappings:
-                    cats = self._datamodule.categorical_mappings[col]
-                    try:
-                        fill[i, c_idx] = float(cats.index(merged[col]))
-                    except ValueError:
-                        pass
-                    continue
-                # Numeric frozen column: normalise to [0,1] so _decode_frames
-                # (norm·span + lo) recovers the physical value uniformly.
+                # Frozen column → prior-fill frame. Categoricals carry no normaliser
+                # stats (decode passes them through), so they hold the raw cat-index;
+                # numeric columns are [0,1] by bounds. param_value_to_fill owns that
+                # rule (inverse of _raw_row_to_params). Unknown label / missing bounds
+                # → leave the 0.5 midpoint default.
+                cats = self._datamodule.categorical_mappings.get(col)
                 try:
-                    lo, hi = self._bounds_manager.get_hierarchical_bounds_for_code(col)
-                    span = hi - lo
-                    fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
+                    bounds = None if cats is not None else self._bounds_manager.get_hierarchical_bounds_for_code(col)
+                    fill[i, c_idx] = param_value_to_fill(merged[col], categories=cats, bounds=bounds)
                 except (ValueError, KeyError):
                     pass
         return fill

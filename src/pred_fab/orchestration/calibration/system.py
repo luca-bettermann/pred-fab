@@ -7,6 +7,7 @@ import torch
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
+from ...core.frames import raw_scalar_to_param
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ...utils.console import _B, _D, _R
 from ..base_system import BaseOrchestrationSystem
@@ -570,14 +571,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
         for j, col in enumerate(dm.input_columns):
             if col in ctx:
                 continue
-            if col in dm.categorical_mappings:
-                cats = dm.categorical_mappings[col]
-                idx = int(round(float(raw_row[j].item())))
-                params[col] = cats[max(0, min(idx, len(cats) - 1))]
-            elif isinstance(self.data_objects.get(col), DataInt):
-                params[col] = int(round(float(raw_row[j].item())))
-            else:
-                params[col] = raw_row[j]
+            params[col] = raw_scalar_to_param(
+                raw_row[j],
+                categories=dm.categorical_mappings.get(col),
+                is_integer=isinstance(self.data_objects.get(col), DataInt),
+            )
         return params
 
     def _candidate_perf(
