@@ -1205,10 +1205,7 @@ class DataModule:
         """
         if split not in (SplitType.TRAIN, SplitType.VAL, SplitType.TEST):
             raise ValueError(f"set_split_dataset: unknown split {split!r}.")
-        codes = [
-            code for code, exp in self.dataset._experiments.items()
-            if exp.dataset_code == dataset_code
-        ]
+        codes = self.dataset.select(lambda exp: exp.dataset_code == dataset_code)
         if not codes:
             raise ValueError(
                 f"set_split_dataset: no experiments tagged with dataset_code "
@@ -1227,11 +1224,8 @@ class DataModule:
             raise ValueError(f"set_split_datasets: unknown split {split!r}.")
         codes: list[str] = []
         for dc in dataset_codes:
-            matched = [
-                code for code, exp in self.dataset._experiments.items()
-                if exp.dataset_code == dc
-            ]
-            codes.extend(matched)
+            # per-code select preserves grouped-by-dataset_code order (non-breaking)
+            codes.extend(self.dataset.select(lambda exp, dc=dc: exp.dataset_code == dc))
         if not codes:
             raise ValueError(
                 f"set_split_datasets: no experiments tagged with any of "

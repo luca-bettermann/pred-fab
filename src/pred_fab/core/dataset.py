@@ -641,6 +641,21 @@ class Dataset:
         """Get list of all experiment codes in dataset."""
         return list(self._experiments.keys())
 
+    def select(self, predicate: Callable[[ExperimentData], bool]) -> list[str]:
+        """Experiment codes whose ``ExperimentData`` satisfies ``predicate``, in dataset order.
+
+        The **selection primitive**: a dataset / split is a *query* over experiments,
+        not a stored partition. ``dataset_code`` matching, provenance (``source_step``
+        on the initial ``parameter_updates`` event), parameter-region, and completeness
+        filters are all just predicates over ``ExperimentData``. This is the building
+        block the split helpers (``DataModule.set_split_*``) and the first-class dataset
+        layer delegate to — see the KB note *First-class dataset concept in pred-fab*.
+
+        Returns codes (the lingua franca of splits and folds); call
+        :meth:`get_experiment` for the data behind a code.
+        """
+        return [code for code, exp in self._experiments.items() if predicate(exp)]
+
     def list_dataset_codes(self) -> list[str]:
         """Return distinct ``dataset_code`` values across loaded experiments, preserving insertion order."""
         seen: dict[str, None] = {}

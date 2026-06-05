@@ -172,3 +172,51 @@ def test_set_split_datasets_raises_when_none_match(tmp_path):
     _, dm = _build_dm_with_tagged_experiments(tmp_path)
     with pytest.raises(ValueError, match="no experiments tagged"):
         dm.set_split_datasets(["nonexistent"])
+
+
+# ===== Dataset.select (the selection primitive) =====
+
+def _build_varied_dataset(tmp_path) -> Dataset:
+    """Five experiments with distinct param_1 values and dataset_codes."""
+    schema = build_mixed_feature_schema(tmp_path)
+    dataset = Dataset(schema=schema, debug_flag=True)
+    for code, p1, ds_code in [
+        ("e1", 1.0, "discovery"),
+        ("e2", 5.0, "discovery"),
+        ("e3", 9.0, "exploration"),
+        ("e4", 3.0, None),
+        ("e5", 7.0, "test"),
+    ]:
+        dataset.create_experiment(
+            code, parameters={"param_1": p1, "dim_1": 2, "dim_2": 3},
+            dataset_code=ds_code,
+        )
+    return dataset
+
+
+def test_select_filters_by_dataset_code_predicate(tmp_path):
+    """select() with a dataset_code predicate returns matching codes (what set_split delegates to)."""
+    dataset = _build_varied_dataset(tmp_path)
+    assert dataset.select(lambda e: e.dataset_code == "discovery") == ["e1", "e2"]
+
+
+def test_select_preserves_dataset_order(tmp_path):
+    """select() returns codes in dataset insertion order, not predicate-evaluation order."""
+    dataset = _build_varied_dataset(tmp_path)
+    assert dataset.select(lambda e: e.dataset_code is not None) == ["e1", "e2", "e3", "e5"]
+
+
+def test_select_by_param_region(tmp_path):
+    """Arbitrary predicate: select over a parameter region — beyond what dataset_code allows."""
+    dataset = _build_varied_dataset(tmp_path)
+    codes = dataset.select(
+        lambda e: e.parameters.has_value("param_1") and e.parameters.get_value("param_1") >= 5.0
+    )
+    assert codes == ["e2", "e3", "e5"]
+
+
+def test_select_all_and_none(tmp_path):
+    """Trivial predicates: True selects every code, False selects nothing (no raise — caller's policy)."""
+    dataset = _build_varied_dataset(tmp_path)
+    assert dataset.select(lambda e: True) == ["e1", "e2", "e3", "e4", "e5"]
+    assert dataset.select(lambda e: False) == []
