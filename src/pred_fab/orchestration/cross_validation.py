@@ -20,7 +20,7 @@ Mechanics (per that note):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -119,6 +119,12 @@ class CVResult:
                 "n_samples": tw,
             }
         return out
+
+    def diagnose(
+        self, coverage_fn: Callable[[dict[str, Any]], float], **kwargs: Any,
+    ) -> "ErrorCoverageDiagnostic":
+        """Read this error field against coverage — see :func:`diagnose_error_coverage`."""
+        return diagnose_error_coverage(self, coverage_fn, **kwargs)
 
 
 class CrossValidator:
@@ -226,3 +232,111 @@ class CrossValidator:
             f"Cross-validation ({mode}): {len(held)} held-out experiments across {len(folds)} folds."
         )
         return CVResult(held_out=held, mode=mode, n_folds=len(folds))
+
+
+# ======================================================================
+# Error-vs-coverage diagnostic — read-only model interpretation (concept 3)
+# ======================================================================
+# Pairs each CV held-out error with that point's coverage E(z) to *explain* a failure:
+# is the model wrong where it has data (a model problem), or just extrapolating into a
+# sparse region (under-explored)? It informs; it decides nothing — the CV-vs-Sobol
+# instrument choice stays the experimenter's upfront, setting-driven call.
+
+MODEL_PROBLEM = "model_problem"      # high error, high coverage → model fails where it has data
+UNDER_EXPLORED = "under_explored"    # high error, low coverage  → extrapolation, not a model fault
+TRUSTWORTHY = "trustworthy"          # low error,  high coverage → validated operating region
+SPARSE_OK = "sparse_ok"              # low error,  low coverage  → fine, but on thin evidence
+
+
+@dataclass
+class DiagnosedPoint:
+    """One held-out point's error paired with its coverage, and the resulting label."""
+    exp_code: str
+    feature: str
+    params: dict[str, Any]
+    error: float
+    coverage: float
+    label: str
+
+
+@dataclass
+class ErrorCoverageDiagnostic:
+    """The labelled error-vs-coverage field plus convenience reads over it."""
+    points: list[DiagnosedPoint]
+    error_threshold: float
+    coverage_threshold: float
+
+    def by_label(self, label: str) -> list[DiagnosedPoint]:
+        return [p for p in self.points if p.label == label]
+
+    def model_problems(self) -> list[DiagnosedPoint]:
+        """High error where coverage is high — the model genuinely fails (act: fix the model)."""
+        return self.by_label(MODEL_PROBLEM)
+
+    def under_explored(self) -> list[DiagnosedPoint]:
+        """High error where coverage is low — extrapolation, not a model fault (act: explore here)."""
+        return self.by_label(UNDER_EXPLORED)
+
+    def summary(self) -> dict[str, int]:
+        """Count of points per label (sums to ``len(points)``)."""
+        out = {MODEL_PROBLEM: 0, UNDER_EXPLORED: 0, TRUSTWORTHY: 0, SPARSE_OK: 0}
+        for p in self.points:
+            out[p.label] = out.get(p.label, 0) + 1
+        return out
+
+
+def _label(error: float, coverage: float, err_thr: float, cov_thr: float) -> str:
+    high_err = error >= err_thr
+    high_cov = coverage >= cov_thr
+    if high_err:
+        return MODEL_PROBLEM if high_cov else UNDER_EXPLORED
+    return TRUSTWORTHY if high_cov else SPARSE_OK
+
+
+def diagnose_error_coverage(
+    cv_result: CVResult,
+    coverage_fn: Callable[[dict[str, Any]], float],
+    *,
+    feature: str | None = None,
+    error_metric: str = "mae",
+    error_threshold: float | None = None,
+    coverage_threshold: float | None = None,
+) -> ErrorCoverageDiagnostic:
+    """Read a CV error field against the coverage field — a model diagnostic (concept 3).
+
+    For each held-out experiment, pairs its CV error (per feature) with its coverage
+    ``E(z) = coverage_fn(params)`` (in production, ``CalibrationSystem.evidence``) and
+    labels the quadrant: :data:`MODEL_PROBLEM`, :data:`UNDER_EXPLORED`, :data:`TRUSTWORTHY`,
+    :data:`SPARSE_OK`. Coverage is per-experiment (computed once); error is per feature.
+
+    Read-only: it *informs* (model vs under-exploration), never decides spend. Thresholds
+    default to the **medians** of the observed errors / coverages — self-calibrating, since
+    absolute error and coverage scales are problem-specific; pass explicit thresholds to fix
+    them (e.g. ``coverage_threshold=0.5`` ⟺ density ``D=1``). ``feature=None`` diagnoses
+    every predicted feature in the field.
+    """
+    feats = [feature] if feature is not None else cv_result.features()
+    cov_by_code = {h.exp_code: float(coverage_fn(h.params)) for h in cv_result.held_out}
+
+    # (code, feature, params, error, coverage) for every (experiment, feature) with this metric
+    raw: list[tuple[str, str, dict[str, Any], float, float]] = []
+    for h in cv_result.held_out:
+        for feat in feats:
+            m = h.metrics.get(feat)
+            if m is not None and error_metric in m:
+                raw.append((h.exp_code, feat, h.params, float(m[error_metric]), cov_by_code[h.exp_code]))
+
+    if not raw:
+        return ErrorCoverageDiagnostic(points=[], error_threshold=float("nan"), coverage_threshold=float("nan"))
+
+    err_thr = error_threshold if error_threshold is not None else float(np.median([r[3] for r in raw]))
+    cov_thr = coverage_threshold if coverage_threshold is not None else float(np.median([r[4] for r in raw]))
+
+    points = [
+        DiagnosedPoint(
+            exp_code=code, feature=feat, params=params,
+            error=err, coverage=cov, label=_label(err, cov, err_thr, cov_thr),
+        )
+        for code, feat, params, err, cov in raw
+    ]
+    return ErrorCoverageDiagnostic(points=points, error_threshold=err_thr, coverage_threshold=cov_thr)

@@ -12,6 +12,8 @@ from pred_fab.orchestration.cross_validation import (
     CVResult,
     HeldOutError,
     make_experiment_folds,
+    diagnose_error_coverage,
+    DiagnosedPoint,
 )
 from tests.utils.builders import (
     build_workflow_stack,
@@ -130,3 +132,72 @@ def test_cv_requires_at_least_two_experiments(cv_stack):
     agent, dataset, base_dm, codes = cv_stack
     with pytest.raises(ValueError, match="2 populated experiments"):
         CrossValidator.from_agent(agent).run(dataset, base_dm, codes=["exp_001"])
+
+
+# ===== error-vs-coverage diagnostic (concept 3) =====
+
+def _craft_cv(points: list[tuple[str, float, float]]) -> CVResult:
+    """CVResult from (code, mae, x) triples — x is a coverage proxy on params['x']."""
+    held = [
+        HeldOutError(exp_code=c, params={"x": x}, metrics={"f": {"mae": mae, "n_samples": 1.0}})
+        for c, mae, x in points
+    ]
+    return CVResult(held_out=held, mode="loo", n_folds=len(held))
+
+
+def test_diagnose_labels_the_four_quadrants():
+    # errors [1,1,0,0] → median 0.5; coverages [.9,.1,.9,.1] → median 0.5
+    cv = _craft_cv([("a", 1.0, 0.9), ("b", 1.0, 0.1), ("c", 0.0, 0.9), ("d", 0.0, 0.1)])
+    diag = diagnose_error_coverage(cv, coverage_fn=lambda p: p["x"])
+    label = {pt.exp_code: pt.label for pt in diag.points}
+    assert label == {
+        "a": "model_problem",     # high error, high coverage
+        "b": "under_explored",    # high error, low coverage
+        "c": "trustworthy",       # low error, high coverage
+        "d": "sparse_ok",         # low error, low coverage
+    }
+    assert diag.summary() == {
+        "model_problem": 1, "under_explored": 1, "trustworthy": 1, "sparse_ok": 1
+    }
+    assert [p.exp_code for p in diag.model_problems()] == ["a"]
+    assert [p.exp_code for p in diag.under_explored()] == ["b"]
+
+
+def test_diagnose_thresholds_default_to_medians():
+    cv = _craft_cv([("a", 1.0, 0.9), ("b", 1.0, 0.1), ("c", 0.0, 0.9), ("d", 0.0, 0.1)])
+    diag = diagnose_error_coverage(cv, coverage_fn=lambda p: p["x"])
+    assert diag.error_threshold == 0.5
+    assert diag.coverage_threshold == 0.5
+
+
+def test_diagnose_explicit_thresholds_override_medians():
+    cv = _craft_cv([("a", 0.4, 0.9), ("b", 0.6, 0.2)])
+    # Fix coverage cut at 0.5 (D=1) and error cut at 0.5: a low-err/high-cov, b high-err/low-cov.
+    diag = diagnose_error_coverage(
+        cv, coverage_fn=lambda p: p["x"], error_threshold=0.5, coverage_threshold=0.5,
+    )
+    label = {pt.exp_code: pt.label for pt in diag.points}
+    assert label == {"a": "trustworthy", "b": "under_explored"}
+
+
+def test_diagnose_empty_field_is_safe():
+    diag = diagnose_error_coverage(CVResult([], "loo", 0), coverage_fn=lambda p: 0.0)
+    assert diag.points == []
+    assert diag.summary() == {
+        "model_problem": 0, "under_explored": 0, "trustworthy": 0, "sparse_ok": 0
+    }
+
+
+def test_diagnose_runs_over_real_cv_field(cv_stack):
+    """End-to-end: diagnose a real CV field via CVResult.diagnose (stub coverage proxy;
+    CalibrationSystem.evidence is the production coverage_fn, exercised elsewhere)."""
+    agent, dataset, base_dm, codes = cv_stack
+    result = CrossValidator.from_agent(agent).run(dataset, base_dm)
+
+    diag = result.diagnose(coverage_fn=lambda p: float(p.get("param_1", 0.0)))
+    assert diag.points
+    valid = {"model_problem", "under_explored", "trustworthy", "sparse_ok"}
+    assert all(isinstance(p, DiagnosedPoint) and p.label in valid for p in diag.points)
+    assert sum(diag.summary().values()) == len(diag.points)
+    # one diagnosed point per (held-out experiment, feature)
+    assert len(diag.points) == len(result.held_out) * len(result.features())
