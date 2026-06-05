@@ -176,6 +176,46 @@ def test_run_calibration_online_with_no_trust_regions_and_no_runtime_params_pass
     assert result["param_1"] == pytest.approx(current_params["param_1"], abs=0.01)
 
 
+def test_inference_optimizes_nondifferentiable_surrogate(tmp_path):
+    """INFERENCE must genuinely optimise a *non-differentiable* surrogate, not return the seed.
+
+    Regression for the isarc inference bug: online calibration used L-BFGS-B (with
+    n_rounds=0) over a piecewise-constant RandomForest, so the finite-difference
+    gradient was ~0 and the proposal never left current_params. The gradient-free
+    Sobol search moves toward the performance optimum even on a step objective.
+    """
+    from pred_fab.core import Dataset, DatasetSchema
+    from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+    from pred_fab.core.data_objects import Feature, Parameter, PerformanceAttribute
+
+    speed = Parameter.real("speed", min_val=0.0, max_val=200.0, runtime=True)
+    schema = DatasetSchema(
+        root_folder=str(tmp_path), name="schema_inf_opt",
+        parameters=Parameters.from_list([speed]),
+        features=Features.from_list([Feature.array("f1")]),
+        performance=PerformanceAttributes.from_list([PerformanceAttribute.score("performance_1")]),
+    )
+    dataset = Dataset(schema=schema, debug_flag=True)
+
+    OPT = 120.0
+
+    def perf_fn(params):
+        s = float(params["speed"])
+        # 20-wide staircase → piecewise-constant (non-differentiable), peak at OPT.
+        return {"performance_1": -abs(round(s / 20.0) * 20.0 - OPT)}
+
+    cal = build_calibration_system(tmp_path, dataset, perf_fn=perf_fn)
+    cal.configure_adaptation_delta({"speed": 200.0})  # trust region wide enough to reach OPT
+    dm = cal._build_schema_datamodule()
+
+    seed = {"speed": 20.0}
+    result = cal.run_calibration(dm, mode=Mode.INFERENCE, target_indices={}, current_params=seed)
+
+    # OLD code returned the seed (20.0); the gradient-free search reaches the ~120 step.
+    assert abs(result["speed"] - OPT) < abs(seed["speed"] - OPT)
+    assert result["speed"] > 100.0
+
+
 def test_run_calibration_online_raises_when_runtime_param_missing_trust_region(tmp_path):
     """
     Schema with a runtime parameter but no configured trust region → RuntimeError.

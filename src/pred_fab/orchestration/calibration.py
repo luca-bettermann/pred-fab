@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional, Any, Tuple, Callable
 import numpy as np
-from scipy.optimize import minimize
+from scipy.stats import qmc
 
 import warnings
 import functools
@@ -32,6 +32,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.similarity_fn = similarity_fn
         self._random_seed = random_seed
         self.rng = np.random.RandomState(random_seed)
+        # Dense quasi-random budget for the gradient-free optimiser (the surrogate
+        # is a non-differentiable RandomForest, so we sample rather than descend).
+        self.n_optimization_samples: int = 512
 
         # Active datamodule — set before each optimization run so that
         # _inference_func / _acquisition_func can call array_to_params.
@@ -541,40 +544,43 @@ class CalibrationSystem(BaseOrchestrationSystem):
         n_rounds: int,
         fixed_param_values: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Run the acquisition function optimization."""
-        # Start from current params if available
-        x0_list = []
+        """Gradient-free global search: evaluate x0 + a dense Sobol sample over ``bounds``, pick best.
+
+        The prediction surrogate is a non-differentiable sklearn RandomForest, so the
+        previous ``L-BFGS-B`` inner solve had a ~zero finite-difference gradient and never
+        left its start — inference returned the seed unchanged. Quasi-random global
+        sampling optimises any black-box objective; ``x0`` is always a candidate, so the
+        result never regresses below the seed and a zero-degree-of-freedom trust region
+        returns the current params.
+        """
+        D = int(bounds.shape[0]) if bounds.ndim == 2 else 0
+
+        # Candidate pool: the seed (if any) + a dense quasi-random sample over the bounds.
+        candidates: List[np.ndarray] = []
         if x0_params:
-            x0_list.append(datamodule.params_to_array(x0_params))
+            candidates.append(datamodule.params_to_array(x0_params))
+        if D > 0:
+            n_samples = max(self.n_optimization_samples, n_rounds)
+            candidates.extend(self._sobol_samples(bounds, n_samples))
 
-        # Random restarts
-        for _ in range(n_rounds):
-            x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
+        if not candidates:
+            self.logger.warning("No optimisation candidates; returning fallback parameters.")
+            if x0_params:
+                return x0_params
+            raise RuntimeError("No valid parameters could be proposed.")
 
-        if not x0_list:
-             # Fallback if no x0_params and n_rounds=0 (unlikely)
-             x0_list.append(self.rng.uniform(bounds[:, 0], bounds[:, 1]))
+        self.logger.info(f"Optimizing over {len(candidates)} candidates (gradient-free Sobol).")
 
-        n_starts = len(x0_list)
-        self.logger.info(f"Optimizing with {n_starts} starting point(s) (1 from x0, {n_starts - 1} random restarts)")
-
-        # Run optimization from each starting point
+        # Evaluate the black-box objective at every candidate and keep the best.
         best_x, best_val = None, np.inf
-        for i, x0 in enumerate(x0_list):
+        for x in candidates:
             try:
-                res = minimize(
-                    fun=objective_func,
-                    x0=x0,
-                    bounds=bounds,
-                    method='L-BFGS-B'
-                )
-                if res.fun < best_val:
-                    best_val = res.fun
-                    best_x = res.x
-                self.logger.debug(f"  start {i + 1}/{n_starts}: val={res.fun:.6f}, converged={res.success}")
+                val = float(objective_func(x))
             except Exception as e:
-                self.logger.warning(f"Optimization round failed with error: {e}")
+                self.logger.warning(f"Objective evaluation failed: {e}")
                 continue
+            if val < best_val:
+                best_val, best_x = val, x
 
         # Handle failure
         if best_x is None:
@@ -599,6 +605,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
             proposed_params,
             ignore_unknown=True
         )
+
+    def _sobol_samples(self, bounds: np.ndarray, n_samples: int) -> np.ndarray:
+        """Scrambled-Sobol sample of >= ``n_samples`` points within ``bounds`` (D, 2)."""
+        D = int(bounds.shape[0])
+        m = max(1, int(np.ceil(np.log2(max(2, n_samples)))))
+        seed = int(self.rng.randint(0, 2**31 - 1))
+        unit = qmc.Sobol(d=D, scramble=True, seed=seed).random_base2(m)  # (2^m, D)
+        return bounds[:, 0] + unit * (bounds[:, 1] - bounds[:, 0])
 
     # === BOUNDS FOR OPTIMIZATION ===
 
