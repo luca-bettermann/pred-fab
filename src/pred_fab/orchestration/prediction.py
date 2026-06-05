@@ -7,7 +7,7 @@ Integrates with DataModule for normalization and batching.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, overload
 import copy
 import numpy as np
 import torch
@@ -36,6 +36,35 @@ any single point."""
 
 RADIUS_DEFAULT: float = 0.05
 """Default kernel radius in normalised [0,1] space. σ = radius × √D."""
+
+
+@overload
+def _to_unit_frame(points: np.ndarray, domain_bounds: np.ndarray | torch.Tensor | None) -> np.ndarray: ...
+@overload
+def _to_unit_frame(points: torch.Tensor, domain_bounds: np.ndarray | torch.Tensor | None) -> torch.Tensor: ...
+def _to_unit_frame(
+    points: np.ndarray | torch.Tensor,
+    domain_bounds: np.ndarray | torch.Tensor | None,
+) -> np.ndarray | torch.Tensor:
+    """Map latent points to [0,1] by ``domain_bounds`` so σ is a *fraction of range*.
+
+    Shared by ``density_at`` (visualisation) and the acquisition Δ∫E path so both
+    read σ in the same coordinate frame — otherwise the optimiser sees a different
+    effective kernel width than the plots. Accepts numpy or torch and returns the
+    same type; broadcasts ``domain_bounds`` (D, 2) over the trailing dim. No-op
+    when ``domain_bounds`` is None (raw-frame fallback).
+    """
+    if domain_bounds is None:
+        return points
+    lo = domain_bounds[:, 0]
+    span = domain_bounds[:, 1] - domain_bounds[:, 0]
+    if isinstance(points, torch.Tensor):
+        lo = torch.as_tensor(lo, dtype=points.dtype, device=points.device)
+        span = torch.as_tensor(span, dtype=points.dtype, device=points.device)
+        span = torch.where(span > 1e-10, span, torch.ones_like(span))
+        return (points - lo) / span
+    span = np.where(span > 1e-10, span, 1.0)
+    return (points - np.asarray(lo)) / span
 
 
 @dataclass
@@ -846,16 +875,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         weighted_d = 0.0
         for kde in self._model_kdes.values():
             z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
-            z_active = z[kde.active_mask].reshape(1, -1)
-            centers = kde.latent_points
-            # Normalize to [0,1] so σ has consistent meaning across coordinate systems
-            if kde.domain_bounds is not None:
-                lo = kde.domain_bounds[:, 0]
-                hi = kde.domain_bounds[:, 1]
-                span = hi - lo
-                span = np.where(span > 1e-10, span, 1.0)
-                z_active = (z_active - lo) / span
-                centers = (centers - lo) / span
+            # Normalize to [0,1] so σ means "fraction of range" — shared with the
+            # acquisition Δ∫E path via _to_unit_frame (one σ-frame, see its docstring).
+            z_active = _to_unit_frame(z[kde.active_mask].reshape(1, -1), kde.domain_bounds)
+            centers = _to_unit_frame(kde.latent_points, kde.domain_bounds)
             d2 = np.sum((z_active - centers) ** 2, axis=-1)
             density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
             weighted_d += kde.weight * density
@@ -904,15 +927,21 @@ class PredictionSystem(BaseOrchestrationSystem):
             ).to(dtype=dtype)  # (S*L, n_active)
             new_centers_SL = new_centers_flat.reshape(S, L, -1)
 
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma, kde.domain_bounds)
+            # σ-frame: normalise latent → [0,1] by domain_bounds so σ means
+            # "fraction of range", matching density_at. The optimiser and the
+            # plots then share one effective kernel width. Centers are now in the
+            # unit cube, so the integration domain is [0,1] (domain_bounds=None).
+            new_centers_SL = _to_unit_frame(new_centers_SL, kde.domain_bounds)
+            old_centers = _to_unit_frame(kde.latent_points, kde.domain_bounds)
+
+            index_old = self._kernel_index(old_centers, kde.point_weights, kde.sigma)
 
             # Compute E_old via the same ANOVA torch path
             if index_old.is_empty:
                 E_old = 0.0
             else:
                 empty_index = self._kernel_index(
-                    np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
-                    kde.domain_bounds,
+                    np.empty((0, old_centers.shape[1])), np.empty(0), kde.sigma,
                 )
                 old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)
                 old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)
