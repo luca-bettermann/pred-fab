@@ -391,7 +391,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         param_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         n_optimization_rounds: int = 10,
     ) -> List["ExperimentSpec"]:
-        """Generate n greedy-maximin baseline proposals. First proposal is random (flat objective)."""
+        """Generate n greedy-maximin baseline proposals. First proposal is a space-filling Sobol point (flat objective)."""
         self.logger.info(
             f"Generating {n} baseline experiments using greedy maximin spacing..."
         )
@@ -468,7 +468,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> ExperimentSpec:
         """Run a single calibration pass and return an ExperimentSpec.
 
-        Offline (global bounds + random restarts) when current_params/target_indices are omitted;
+        Offline (global bounds, dense Sobol search) when current_params/target_indices are omitted;
         online (trust-region) when both are provided.
         """
         self._active_datamodule = datamodule
