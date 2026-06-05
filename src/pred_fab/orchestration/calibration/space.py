@@ -236,15 +236,29 @@ class SolutionSpace:
                 merged[code] = self._cat_assignments[i][d_cat]
 
             for c_idx, col in enumerate(dm_cols):
-                if col in merged and col not in opt_codes:
+                if col not in merged or col in opt_codes:
+                    continue
+                # Categoricals carry no normaliser stats, so _decode_frames passes
+                # the column through unchanged — place the raw cat-index directly
+                # (the label's position in the datamodule's sorted category list),
+                # which perf reads as cats[round(raw)] and evidence feeds to encode.
+                # Without this, float(label) raises → column stays 0.5 → every
+                # stratum decodes to cats[0] (categorical inert in the objective).
+                if col in self._datamodule.categorical_mappings:
+                    cats = self._datamodule.categorical_mappings[col]
                     try:
-                        lo, hi = self._bounds_manager.get_hierarchical_bounds_for_code(col)
-                        span = hi - lo
-                        fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
-                    except (ValueError, KeyError):
+                        fill[i, c_idx] = float(cats.index(merged[col]))
+                    except ValueError:
                         pass
-        # _decode_frames converts all columns after decode(); prior_fill
-        # must stay in [0,1] bounds space so the conversion applies uniformly.
+                    continue
+                # Numeric frozen column: normalise to [0,1] so _decode_frames
+                # (norm·span + lo) recovers the physical value uniformly.
+                try:
+                    lo, hi = self._bounds_manager.get_hierarchical_bounds_for_code(col)
+                    span = hi - lo
+                    fill[i, c_idx] = (float(merged[col]) - lo) / span if span > 0 else 0.5
+                except (ValueError, KeyError):
+                    pass
         return fill
 
     @property

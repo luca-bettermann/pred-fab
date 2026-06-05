@@ -5,8 +5,10 @@ _compute_system_performance mismatched lengths,
 and configure_trajectory_parameter / ParameterTrajectory / ExperimentSpec behavior.
 """
 import pytest
+import torch
 
 from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterTrajectory
+from pred_fab.orchestration.calibration.space import SolutionSpace
 from tests.utils.builders import (
     build_calibration_system,
     build_workflow_stack,
@@ -323,6 +325,53 @@ def test_discovery_unfixed_categorical_covers_multiple_categories(tmp_path):
     assert categories_seen == {"A", "B", "C"}, (
         f"Expected all 3 categories across 9 LHS proposals, got: {categories_seen}"
     )
+
+
+def test_categorical_strata_reach_objective_with_own_category(tmp_path):
+    """Each stratum must be scored under its *own* category in the objective frame.
+
+    Regression: ``_build_prior_fill`` fell through to 0.5 for categoricals
+    (``float("A")`` raises → caught), so the raw/z-score the objective sees had
+    every stratum at ``cats[round(0.5)] = cats[0]``. ``decode_to_specs`` re-injects
+    the assigned category, so only the *objective* path (``decode``) exposed the
+    bug. Categoricals carry no normaliser stats, so ``_decode_frames`` passes the
+    column through unchanged — the fix places the raw cat-index there directly.
+    """
+    _agent, dataset, _codes = build_workflow_stack(tmp_path)
+    cal = build_calibration_system(tmp_path, dataset)
+    cal.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+
+    n = 3  # one stratum per category of param_3 = [A, B, C]
+    variables, cat_codes, cat_assignments = cal._compose_variables(n)
+    assert cat_codes == ["param_3"]
+    assigned = [a[0] for a in cat_assignments]
+    assert sorted(assigned) == ["A", "B", "C"]
+
+    dm = cal._build_schema_datamodule()
+    space = SolutionSpace(
+        variables=variables,
+        n_experiments=n,
+        bounds_manager=cal.bounds,
+        datamodule=dm,
+        fixed_params=dict(cal.fixed_params),
+        cat_codes=cat_codes,
+        cat_assignments=cat_assignments,
+        schema_sanitize=lambda d: cal.schema.parameters.sanitize_values(d, ignore_unknown=True),
+        dimension_derivations=cal.dimension_derivations,
+    )
+
+    cat_col = dm.input_columns.index("param_3")
+    cats = dm.categorical_mappings["param_3"]  # sorted -> ["A", "B", "C"]
+
+    # Inspect the objective frame (raw), NOT decode_to_specs — the latter
+    # re-injects cat_assignments and would pass even with the bug.
+    raw, _zscore, _w = space.decode(torch.zeros(1, space.total_vars, dtype=torch.float64))
+    assert raw.shape[1] == n  # no trajectory -> one point per experiment
+    raw0 = raw[0]
+
+    decoded = [cats[int(round(float(raw0[i, cat_col].item())))] for i in range(n)]
+    assert decoded == assigned                    # each stratum scored as its own category
+    assert sorted(decoded) == ["A", "B", "C"]     # all three represented (bug -> all cats[0])
 
 
 # ===== DISCOVERY: Sobol space-filling =====
