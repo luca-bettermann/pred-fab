@@ -1,20 +1,22 @@
 """Decision-vector layout, variable types, and decode for N-experiment optimisation.
 
-All bound enforcement uses ``sigmoid(K · z)`` with a single sharpness
+All bound enforcement uses ``sigmoid(K · u)`` with a single sharpness
 constant K.  Steeper sigmoid → the full bounded range is reachable with
-modest z-values, and the optimizer has strong gradients throughout.
+modest u-values, and the optimizer has strong gradients throughout.
 
-``z`` is the *unconstrained* optimiser variable (logit space) — not the [0,1]
-decision vector (``sigmoid(K·z)``) nor the z-score model input. Full frame chain
+``u`` is the *unconstrained* optimiser variable (logit space) — not the [0,1]
+decision vector (``sigmoid(K·u)``) nor the z-score model input. Full frame chain
 (u → [0,1] → z-score / physical): see ``ORCHESTRATION_CONTEXT.md``.
+(The code historically called this unconstrained frame ``z``; the ``z_bounds``
+property and ``Z_RANGE`` constant keep that name.)
 
 Variable types own their decode:
-  - StaticVariable: sigmoid(Kz) → normalised value
-  - TrajectoryVariable: sigmoid(K · (z_mid + offset · slope)) → per-layer values
-    where slope = sigmoid(Kz) · 2·sm - sm  (bounded by its own sigmoid)
+  - StaticVariable: sigmoid(Ku) → normalised value
+  - TrajectoryVariable: sigmoid(K · (u_mid + offset · slope)) → per-layer values
+    where slope = sigmoid(Ku) · 2·sm - sm  (bounded by its own sigmoid)
 
-SolutionSpace maps Variables to a flat z-space decision vector, provides
-z-bounds for Sobol sampling, and builds ExperimentSpecs from optimised z-vectors.
+SolutionSpace maps Variables to a flat u-space decision vector, provides
+z-bounds for Sobol sampling, and builds ExperimentSpecs from optimised u-vectors.
 """
 from __future__ import annotations
 
@@ -33,8 +35,8 @@ SIGMOID_K = 3.0
 Z_RANGE = 4.6 / SIGMOID_K
 
 
-def _sigmoid_k(z: torch.Tensor) -> torch.Tensor:
-    return torch.sigmoid(SIGMOID_K * z)
+def _sigmoid_k(u: torch.Tensor) -> torch.Tensor:
+    return torch.sigmoid(SIGMOID_K * u)
 
 # ---------------------------------------------------------------------------
 # Variable types
@@ -63,8 +65,8 @@ class Variable:
     def z_bounds(self) -> list[tuple[float, float]]:
         return [(-Z_RANGE, Z_RANGE)]
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return _sigmoid_k(z)
+    def decode(self, u: torch.Tensor) -> torch.Tensor:
+        return _sigmoid_k(u)
 
     def to_real(self, norm: float) -> float:
         return float(norm * self.span + self.lo)
@@ -85,13 +87,13 @@ class StaticVariable(Variable):
             return [(0.0, float(self.hi - self.lo))]
         return [(-Z_RANGE, Z_RANGE)]
 
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
+    def decode(self, u: torch.Tensor) -> torch.Tensor:
         if self.is_integer:
             # STE round in the [0,range] optimiser frame, then ÷range so the
             # norm frame is uniformly [0,1] (matches the continuous sigmoid).
-            rounded = z + (z.round() - z).detach()
-            return rounded / self.span if self.span > 0 else torch.zeros_like(z)
-        return _sigmoid_k(z)
+            rounded = u + (u.round() - u).detach()
+            return rounded / self.span if self.span > 0 else torch.zeros_like(u)
+        return _sigmoid_k(u)
 
     def to_real(self, norm: float) -> float | int:
         if self.is_integer:
@@ -119,22 +121,22 @@ class TrajectoryVariable(Variable):
 
     def decode_trajectory(
         self,
-        z_mid: torch.Tensor,
-        z_slope_raw: torch.Tensor,
+        u_mid: torch.Tensor,
+        u_slope_raw: torch.Tensor,
         L: int,
     ) -> torch.Tensor:
         """Decode midpoint + slope into per-layer normalised values.
 
-        slope = sigmoid(K · z_slope_raw) · 2·slope_max - slope_max
-        value(k) = sigmoid(K · (z_mid + offset · slope))
+        slope = sigmoid(K · u_slope_raw) · 2·slope_max - slope_max
+        value(k) = sigmoid(K · (u_mid + offset · slope))
         """
-        slope = _sigmoid_k(z_slope_raw) * 2.0 * self.slope_max - self.slope_max
+        slope = _sigmoid_k(u_slope_raw) * 2.0 * self.slope_max - self.slope_max
         mid_idx = L // 2
-        offsets = torch.arange(L, dtype=z_mid.dtype, device=z_mid.device) - mid_idx
-        z_all = z_mid.unsqueeze(-2) + offsets.reshape(
-            *([1] * (z_mid.ndim - 1)), L, 1,
+        offsets = torch.arange(L, dtype=u_mid.dtype, device=u_mid.device) - mid_idx
+        u_all = u_mid.unsqueeze(-2) + offsets.reshape(
+            *([1] * (u_mid.ndim - 1)), L, 1,
         ) * slope.unsqueeze(-2)
-        return _sigmoid_k(z_all)
+        return _sigmoid_k(u_all)
 
     def to_real(self, norm: float) -> float:
         return float(norm * self.span + self.lo)
@@ -145,9 +147,9 @@ class TrajectoryVariable(Variable):
 # ---------------------------------------------------------------------------
 
 class SolutionSpace:
-    """Maps Variable objects to a flat z-space decision vector for the optimizer.
+    """Maps Variable objects to a flat u-space decision vector for the optimizer.
 
-    The engine operates in z-space (no sigmoid). SolutionSpace provides z-bounds
+    The engine operates in u-space (no sigmoid). SolutionSpace provides z-bounds
     for Sobol sampling and applies per-variable decode (sigmoid) in its decode()
     method — called by the objective function during optimisation.
     """
@@ -253,7 +255,7 @@ class SolutionSpace:
     def total_vars(self) -> int:
         return self._n_experiments * self._D_per_exp
 
-    def _derive_L_per_exp(self, static_z: torch.Tensor) -> list[int]:
+    def _derive_L_per_exp(self, static_u: torch.Tensor) -> list[int]:
         """Layers per experiment, from the primary trajectory dimension's derivation."""
         deriv = self._dimension_derivations.get(self._primary_dim_code)
         if self._D_traj == 0 or deriv is None:
@@ -262,36 +264,36 @@ class SolutionSpace:
         for i in range(self._n_experiments):
             p: dict[str, Any] = {}
             for si, sv in enumerate(self._statics):
-                z_val = static_z[i, si].detach()
-                norm = float(sv.decode(z_val).item())
+                u_val = static_u[i, si].detach()
+                norm = float(sv.decode(u_val).item())
                 p[sv.code] = sv.to_real(norm)
             Ls.append(max(1, int(deriv(p))))
         return Ls
 
-    def decode(self, z_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """z-space decision vector -> (raw_points, zscore_points, weights).
+    def decode(self, u_flat: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """u-space decision vector -> (raw_points, zscore_points, weights).
 
         Per-variable sigmoid/STE decode lands in [0,1] norm, then _decode_frames
         produces the physical-frame (raw, for perf) and z-score (for evidence)
         tensors. Single definition — called by the acquisition objective.
         """
-        S = int(z_flat.shape[0])
-        z = z_flat.reshape(S, self._n_experiments, self._D_per_exp)
+        S = int(u_flat.shape[0])
+        u = u_flat.reshape(S, self._n_experiments, self._D_per_exp)
 
-        static_z = z[:, :, : self._D_static]
-        mid_z = z[:, :, self._D_static : self._D_static + self._D_traj]
-        slope_z = z[:, :, self._D_static + self._D_traj :]
+        static_u = u[:, :, : self._D_static]
+        mid_u = u[:, :, self._D_static : self._D_static + self._D_traj]
+        slope_u = u[:, :, self._D_static + self._D_traj :]
 
         # Decode static variables via their own decode method
-        static_norm = torch.empty_like(static_z)
+        static_norm = torch.empty_like(static_u)
         for si, sv in enumerate(self._statics):
-            static_norm[:, :, si] = sv.decode(static_z[:, :, si])
+            static_norm[:, :, si] = sv.decode(static_u[:, :, si])
 
         # Derive L per experiment (uses first candidate in batch for consistency)
-        L_per_exp = self._derive_L_per_exp(static_z[0])
+        L_per_exp = self._derive_L_per_exp(static_u[0])
 
         # Build base rows from prior fill
-        base = self._prior_fill.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=z_flat.dtype)
+        base = self._prior_fill.unsqueeze(0).expand(S, -1, -1).clone().to(dtype=u_flat.dtype)
 
         # Scatter static values (already decoded to normalised)
         for si, dm_idx in enumerate(self._static_dm_idx):
@@ -308,10 +310,10 @@ class SolutionSpace:
             expanded = base[:, i, :].unsqueeze(1).expand(S, L_i, self._n_dm_cols).clone()
 
             if self._D_traj > 0:
-                traj_layers = torch.empty(S, L_i, self._D_traj, dtype=z_flat.dtype)
+                traj_layers = torch.empty(S, L_i, self._D_traj, dtype=u_flat.dtype)
                 for ti, tv in enumerate(self._trajectories):
                     traj_layers[:, :, ti] = tv.decode_trajectory(
-                        mid_z[:, i, ti : ti + 1], slope_z[:, i, ti : ti + 1], L_i,
+                        mid_u[:, i, ti : ti + 1], slope_u[:, i, ti : ti + 1], L_i,
                     ).squeeze(-1)
                 for ti, dm_idx in enumerate(self._traj_dm_idx):
                     if dm_idx is not None:
@@ -322,7 +324,7 @@ class SolutionSpace:
 
         norm_points = torch.cat(layer_rows, dim=1)  # (S, total_points, D_dm) in [0,1]
         raw, zscore = self._decode_frames(norm_points)
-        w = torch.tensor(weights, dtype=z_flat.dtype)
+        w = torch.tensor(weights, dtype=u_flat.dtype)
         w = w.unsqueeze(0).expand(S, -1)  # (S, total_points)
         return raw, zscore, w
 
@@ -355,14 +357,14 @@ class SolutionSpace:
                 raw[..., c_idx] = stats.reverse(torch.zeros_like(norm_points[..., c_idx]))
         return raw, zscore
 
-    def decode_to_specs(self, best_z: np.ndarray) -> list[ExperimentSpec]:
-        """Convert optimised z-vector to ExperimentSpec instances."""
-        z_t = torch.tensor(best_z, dtype=torch.float64)
-        z_per_exp = z_t.reshape(self._n_experiments, self._D_per_exp)
+    def decode_to_specs(self, best_u: np.ndarray) -> list[ExperimentSpec]:
+        """Convert optimised u-vector to ExperimentSpec instances."""
+        u_t = torch.tensor(best_u, dtype=torch.float64)
+        u_per_exp = u_t.reshape(self._n_experiments, self._D_per_exp)
 
-        # Decode static z-values for L derivation
-        static_z = z_per_exp[:, : self._D_static]
-        L_per_exp = self._derive_L_per_exp(static_z)
+        # Decode static u-values for L derivation
+        static_u = u_per_exp[:, : self._D_static]
+        L_per_exp = self._derive_L_per_exp(static_u)
 
         specs: list[ExperimentSpec] = []
         for i in range(self._n_experiments):
@@ -373,21 +375,21 @@ class SolutionSpace:
             for d_cat, code in enumerate(self._cat_codes):
                 bp[code] = self._cat_assignments[i][d_cat]
 
-            # Static params: decode z → normalised → real
+            # Static params: decode u → normalised → real
             for si, sv in enumerate(self._statics):
-                z_val = best_z[off + si]
-                norm = float(sv.decode(torch.tensor(z_val, dtype=torch.float64)).item())
+                u_val = best_u[off + si]
+                norm = float(sv.decode(torch.tensor(u_val, dtype=torch.float64)).item())
                 bp[sv.code] = sv.to_real(norm)
 
-            # Trajectory params: decode via sigmoid(z_mid + offset * z_slope)
+            # Trajectory params: decode via sigmoid(u_mid + offset * u_slope)
             traj_vals: np.ndarray | None = None
             if self._D_traj > 0:
                 mid_t = torch.tensor(
-                    best_z[off + self._D_static : off + self._D_static + self._D_traj],
+                    best_u[off + self._D_static : off + self._D_static + self._D_traj],
                     dtype=torch.float64,
                 ).unsqueeze(0)
                 slp_t = torch.tensor(
-                    best_z[off + self._D_static + self._D_traj : off + self._D_per_exp],
+                    best_u[off + self._D_static + self._D_traj : off + self._D_per_exp],
                     dtype=torch.float64,
                 ).unsqueeze(0)
                 traj_norm = torch.empty(1, L_i, self._D_traj, dtype=torch.float64)
@@ -423,24 +425,24 @@ class SolutionSpace:
         return specs
 
     def get_trajectory_plot_data(
-        self, best_z: np.ndarray,
+        self, best_u: np.ndarray,
     ) -> tuple[list[np.ndarray], list[tuple[str, float, float]], list[int]]:
         """Extract trajectory norms, param info, and L per experiment for plotting."""
-        z_per_exp = torch.tensor(best_z, dtype=torch.float64).reshape(
+        u_per_exp = torch.tensor(best_u, dtype=torch.float64).reshape(
             self._n_experiments, self._D_per_exp,
         )
-        L_per_exp = self._derive_L_per_exp(z_per_exp[:, : self._D_static])
+        L_per_exp = self._derive_L_per_exp(u_per_exp[:, : self._D_static])
 
         traj_norms: list[np.ndarray] = []
         for i in range(self._n_experiments):
             off = i * self._D_per_exp
             L_i = L_per_exp[i]
             mid_t = torch.tensor(
-                best_z[off + self._D_static : off + self._D_static + self._D_traj],
+                best_u[off + self._D_static : off + self._D_static + self._D_traj],
                 dtype=torch.float64,
             ).unsqueeze(0)
             slp_t = torch.tensor(
-                best_z[off + self._D_static + self._D_traj : off + self._D_per_exp],
+                best_u[off + self._D_static + self._D_traj : off + self._D_per_exp],
                 dtype=torch.float64,
             ).unsqueeze(0)
             exp_norms = torch.empty(L_i, self._D_traj, dtype=torch.float64)

@@ -21,12 +21,15 @@ class OptimizationEngine:
     """Sobol → top-N → independent LBFGS → pick best.
 
     Two modes:
-      - ``raw_z=False`` (default): sigmoid bound reparameterisation inside the
-        engine. Sobol draws in [lo, hi], LBFGS operates in logit z-space,
+      - ``raw_u=False`` (default): sigmoid bound reparameterisation inside the
+        engine. Sobol draws in [lo, hi], LBFGS operates in logit u-space,
         objective receives bounded x.
-      - ``raw_z=True``: engine operates directly in z-space. Sobol draws
-        in the provided bounds (z-bounds), LBFGS operates on raw z,
-        objective receives z and handles its own decode.
+      - ``raw_u=True``: engine operates directly in u-space. Sobol draws
+        in the provided bounds (u-bounds), LBFGS operates on raw u,
+        objective receives u and handles its own decode.
+
+    (``u`` is the unconstrained optimiser variable; the code historically
+    called this frame ``z``.)
     """
 
     def __init__(self, logger: PfabLogger, random_seed: int | None = None):
@@ -44,7 +47,7 @@ class OptimizationEngine:
         objective: Callable[[torch.Tensor], torch.Tensor],
         bounds: list[tuple[float, float]],
         *,
-        raw_z: bool = False,
+        raw_u: bool = False,
         d_param: int | None = None,
         n_starts: int | None = None,
         n_sobol: int | None = None,
@@ -58,8 +61,8 @@ class OptimizationEngine:
         ``objective`` takes ``(S, D)`` and returns ``(S,)`` — one scalar per
         candidate (lower is better).
 
-        When ``raw_z=True``, bounds are z-space ranges for Sobol sampling,
-        and the objective receives raw z-values (no sigmoid in the engine).
+        When ``raw_u=True``, bounds are u-space ranges for Sobol sampling,
+        and the objective receives raw u-values (no sigmoid in the engine).
         """
         n_starts = n_starts if n_starts is not None else self.n_starts
         n_sobol_base = n_sobol if n_sobol is not None else self.n_sobol
@@ -83,24 +86,24 @@ class OptimizationEngine:
 
         nfev = [0]
 
-        if raw_z:
-            def _eval(z: torch.Tensor) -> torch.Tensor:
-                vals = objective(z)
-                nfev[0] += int(z.shape[0])
+        if raw_u:
+            def _eval(u: torch.Tensor) -> torch.Tensor:
+                vals = objective(u)
+                nfev[0] += int(u.shape[0])
                 return vals
         else:
-            def _decode(z: torch.Tensor) -> torch.Tensor:
-                return torch.sigmoid(z) * span_t + lo_t
+            def _decode(u: torch.Tensor) -> torch.Tensor:
+                return torch.sigmoid(u) * span_t + lo_t
 
             def _encode(x: torch.Tensor) -> torch.Tensor:
-                u = (x - lo_t) / span_t
-                u = u.clamp(1e-4, 1.0 - 1e-4)
-                return torch.log(u / (1.0 - u))
+                t = (x - lo_t) / span_t
+                t = t.clamp(1e-4, 1.0 - 1e-4)
+                return torch.log(t / (1.0 - t))
 
-            def _eval(z: torch.Tensor) -> torch.Tensor:
-                x = _decode(z)
+            def _eval(u: torch.Tensor) -> torch.Tensor:
+                x = _decode(u)
                 vals = objective(x)
-                nfev[0] += int(z.shape[0])
+                nfev[0] += int(u.shape[0])
                 return vals
 
         # --- Phase 1: Sobol global ---
@@ -114,10 +117,10 @@ class OptimizationEngine:
         # --- Phase 2: Top-N selection ---
         top_idx = torch.argsort(sobol_vals)[:n_starts]
         x_starts = sobol_x[top_idx]
-        if raw_z:
-            z_starts = x_starts
+        if raw_u:
+            u_starts = x_starts
         else:
-            z_starts = _encode(x_starts)  # type: ignore[possibly-undefined]
+            u_starts = _encode(x_starts)  # type: ignore[possibly-undefined]
 
         # --- Phase 3: Independent LBFGS per start ---
         per_start_history: list[list[float]] = []
@@ -126,19 +129,19 @@ class OptimizationEngine:
             info["V"] = D
         bar = ProgressBar(label, info=info) if show_progress else None
 
-        best_z: torch.Tensor | None = None
+        best_u: torch.Tensor | None = None
         best_val = float("inf")
 
         with profiler.section("engine.lbfgs"):
             for s in range(n_starts):
                 start_history: list[float] = []
                 per_start_history.append(start_history)
-                z_s = z_starts[s].clone().detach().unsqueeze(0).requires_grad_(True)
+                u_s = u_starts[s].clone().detach().unsqueeze(0).requires_grad_(True)
                 start_best = [float("inf")]
 
-                def _closure(z_ref: torch.Tensor = z_s, _sh: list[float] = start_history, _s: int = s) -> torch.Tensor:
+                def _closure(u_ref: torch.Tensor = u_s, _sh: list[float] = start_history, _s: int = s) -> torch.Tensor:
                     optimizer.zero_grad()  # type: ignore[has-type]
-                    vals = _eval(z_ref)
+                    vals = _eval(u_ref)
                     loss = vals.sum()
                     if loss.requires_grad:
                         loss.backward()
@@ -156,29 +159,29 @@ class OptimizationEngine:
                     return loss
 
                 optimizer = torch.optim.LBFGS(
-                    [z_s], lr=lr, max_iter=100,
+                    [u_s], lr=lr, max_iter=100,
                     line_search_fn="strong_wolfe",
                 )
                 optimizer.step(_closure)
 
                 with torch.no_grad():
-                    final_val = float(_eval(z_s).item())
+                    final_val = float(_eval(u_s).item())
                     nfev[0] -= 1  # _eval already counted; undo double-count
 
                 if final_val < best_val:
                     best_val = final_val
-                    best_z = z_s.detach().clone()
+                    best_u = u_s.detach().clone()
 
         if bar:
             bar.finish()
 
         # --- Decode best ---
-        if best_z is not None:
-            if raw_z:
-                best_x = best_z.squeeze(0).cpu().numpy()
+        if best_u is not None:
+            if raw_u:
+                best_x = best_u.squeeze(0).cpu().numpy()
             else:
                 with torch.no_grad():
-                    best_x = _decode(best_z).squeeze(0).cpu().numpy()  # type: ignore[possibly-undefined]
+                    best_x = _decode(best_u).squeeze(0).cpu().numpy()  # type: ignore[possibly-undefined]
         else:
             best_x = None
 

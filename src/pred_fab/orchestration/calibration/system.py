@@ -869,7 +869,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         opt = self.engine.optimize(
             objective, space.bounds,
-            raw_z=True,
+            raw_u=True,
             d_param=space._D_param,
             label=label,
             show_progress=console,
