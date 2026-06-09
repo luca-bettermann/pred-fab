@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from pred_fab.core import Dataset, DataModule
+from pred_fab.interfaces import IExternalData
 from pred_fab.utils import SplitType
 from tests.utils.builders import (
     build_mixed_feature_schema,
@@ -220,3 +221,92 @@ def test_select_all_and_none(tmp_path):
     dataset = _build_varied_dataset(tmp_path)
     assert dataset.select(lambda e: True) == ["e1", "e2", "e3", "e4", "e5"]
     assert dataset.select(lambda e: False) == []
+
+
+# ===== generative provenance round-trip (config_snapshot / design) =====
+
+class _RecordingExternal(IExternalData):
+    """Minimal IExternalData that records pushed provenance and serves it on pull."""
+
+    def __init__(self) -> None:
+        super().__init__(client=object())
+        self.pushed: dict[str, dict] = {}
+
+    def pull_parameters(self, exp_codes):
+        return list(exp_codes), {}
+
+    def push_provenance(self, exp_codes, provenance, recompute=False):
+        self.pushed.update(provenance)
+        return True
+
+    def pull_provenance(self, exp_codes):
+        found = {c: self.pushed[c] for c in exp_codes if c in self.pushed}
+        missing = [c for c in exp_codes if c not in self.pushed]
+        return missing, found
+
+
+def test_design_and_provenance_properties_default_empty(tmp_path):
+    dataset = build_dataset_with_single_experiment(tmp_path)
+    exp = dataset.get_all_experiments()[0]
+    assert exp.design is None
+    assert exp.provenance == {}
+
+
+def test_provenance_round_trips_through_local_save_load(tmp_path):
+    """config_snapshot (design + settings) persists via save and reloads via load."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds_a = Dataset(schema=schema, debug_flag=True)
+    ds_a.create_experiment(
+        "exp_sobol_001",
+        parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+        config_snapshot={"design": "sobol", "seed": 7, "kappa": None},
+    )
+    ds_a.save_experiment("exp_sobol_001", verbose=False)
+
+    ds_b = Dataset(schema=schema, debug_flag=True)
+    ds_b.load_experiment("exp_sobol_001", verbose=False)
+    exp = ds_b.get_experiment("exp_sobol_001")
+    assert exp.design == "sobol"
+    assert exp.provenance == {"design": "sobol", "seed": 7, "kappa": None}
+
+
+def test_select_by_design_on_reloaded_experiments(tmp_path):
+    """Provenance is queryable via select() after a save/reload — local mirrors NocoDB."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds_a = Dataset(schema=schema, debug_flag=True)
+    for code, design in [("e_s", "sobol"), ("e_d", "discovery"), ("e_x", "exploration")]:
+        ds_a.create_experiment(
+            code, parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+            config_snapshot={"design": design},
+        )
+    ds_a.save_experiments(["e_s", "e_d", "e_x"], verbose=False)
+
+    ds_b = Dataset(schema=schema, debug_flag=True)
+    ds_b.load_experiments(["e_s", "e_d", "e_x"], verbose=False)
+    assert ds_b.select(lambda e: e.design == "sobol") == ["e_s"]
+    assert sorted(ds_b.select(lambda e: e.design in {"discovery", "exploration"})) == ["e_d", "e_x"]
+
+
+def test_save_pushes_provenance_to_external(tmp_path):
+    schema = build_mixed_feature_schema(tmp_path)
+    ext = _RecordingExternal()
+    ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
+    ds.create_experiment(
+        "e1", parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+        config_snapshot={"design": "sobol", "seed": 1},
+    )
+    ds.save_experiment("e1", verbose=False)
+    assert ext.pushed["e1"] == {"design": "sobol", "seed": 1}
+
+
+def test_load_provenance_falls_back_to_external(tmp_path):
+    """When no local config.json exists, provenance is pulled from the external source."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ext = _RecordingExternal()
+    ext.pushed["e1"] = {"design": "exploration", "kappa": 0.4}
+    ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
+    ds.create_experiment("e1", parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3})  # no snapshot
+    assert ds.get_experiment("e1").config_snapshot is None
+
+    ds._load_provenance(["e1"])
+    assert ds.get_experiment("e1").design == "exploration"

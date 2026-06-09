@@ -44,6 +44,11 @@ class IExternalData(ABC):
         """Fetch parameter update events for given codes; returns (missing_codes, code→events dict). Default: all missing."""
         return list(exp_codes), {}
 
+    def pull_provenance(self, exp_codes: list[str]) -> tuple[list[str], dict[str, dict[str, Any]]]:
+        """Fetch generative provenance (the config snapshot, incl. ``design``) for given
+        codes; returns (missing_codes, code→snapshot dict). Default: all missing."""
+        return list(exp_codes), {}
+
     def push_parameters(self, exp_codes: list[str], parameters: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push parameters to external source; returns True on success. Default: no-op (False)."""
         return False
@@ -54,6 +59,11 @@ class IExternalData(ABC):
 
     def push_performance(self, exp_codes: list[str], performance: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push performance metrics to external source; returns True on success. Default: no-op (False)."""
+        return False
+
+    def push_provenance(self, exp_codes: list[str], provenance: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
+        """Push generative provenance (config snapshots, incl. the queryable ``design``)
+        to external source; returns True on success. Default: no-op (False)."""
         return False
 
     def push_features(self, exp_codes: list[str], features: dict[str, np.ndarray], recompute: bool = False, feature_name: str = "default", **kwargs) -> bool:

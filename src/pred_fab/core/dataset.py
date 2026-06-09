@@ -234,6 +234,19 @@ class ExperimentData:
         self.parameter_updates: list[ParameterUpdateEvent] = []
         self.config_snapshot: dict[str, Any] | None = None
 
+    @property
+    def design(self) -> str | None:
+        """The design that generated this experiment — the queryable provenance axis
+        (``sobol`` / ``discovery`` / ``exploration`` / ``inference`` / ``adaptation``).
+        Read from ``config_snapshot``; see [[First-class dataset concept in pred-fab]]."""
+        return (self.config_snapshot or {}).get("design")
+
+    @property
+    def provenance(self) -> dict[str, Any]:
+        """Generative provenance — the settings that produced this experiment
+        (alias for ``config_snapshot``: design, kappa, seed, bounds, ...)."""
+        return self.config_snapshot or {}
+
     # === Helper Methods for Validation ===
 
     def is_valid(self, schema: 'DatasetSchema') -> bool:
@@ -921,6 +934,11 @@ class Dataset:
             verbose=verbose
         )
 
+        # 2d. Load generative provenance (config snapshot). Local config.json first,
+        #     then external if absent — so reloaded experiments carry their `design`
+        #     and are queryable via Dataset.select (mirrors the NocoDB round-trip).
+        self._load_provenance(exp_codes, verbose=verbose)
+
         # Filter codes that were actually found and validate (parameters are mandatory)
         for code in exp_codes:
             exp_data = self.get_experiment(code)
@@ -956,7 +974,26 @@ class Dataset:
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
         self.logger.console_new_line()
         return missing_params
-    
+
+    def _load_provenance(self, exp_codes: list[str], verbose: bool = False) -> None:
+        """Populate ``config_snapshot`` hierarchically: local ``config.json`` first, then
+        the external source's ``pull_provenance`` for any still missing — so a reloaded
+        experiment carries its ``design`` and is queryable via :meth:`select`. Missing
+        snapshots are fine (experiments created before provenance, or non-generated)."""
+        missing: list[str] = []
+        for code in exp_codes:
+            path = self.local_data.get_experiment_file_path(code, "config.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    self.get_experiment(code).config_snapshot = json.load(f)
+            else:
+                missing.append(code)
+        if missing and self.external_data is not None:
+            _found, provenance = self.external_data.pull_provenance(missing)
+            for code, snap in provenance.items():
+                if snap and self.has_experiment(code):
+                    self.get_experiment(code).config_snapshot = snap
+
     def save_all(self, recompute_flag: bool = False, verbose_flag: bool = False) -> None:
         """Save all experiments currently in memory."""
         exp_codes = list(self._experiments.keys())
@@ -1015,14 +1052,19 @@ class Dataset:
             verbose=verbose
         )
 
-        # 2d. Save config snapshot (proposal settings at time of creation).
+        # 2d. Save generative provenance (config snapshot): local config.json, then push
+        #     externally so local and external storage mirror each other.
+        provenance: dict[str, dict[str, Any]] = {}
         for code in codes_to_save:
             exp = self.get_experiment(code)
             if exp.config_snapshot:
+                provenance[code] = exp.config_snapshot
                 path = self.local_data.get_experiment_file_path(code, "config.json")
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f:
                     json.dump(exp.config_snapshot, f, indent=2)
+        if provenance and self.external_data is not None:
+            self.external_data.push_provenance(list(provenance.keys()), provenance, recompute=recompute)
 
         # 3. Save Performance
         self._hierarchical_save(
