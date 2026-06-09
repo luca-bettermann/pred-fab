@@ -17,6 +17,21 @@ from .engine import OptimizationEngine
 from .bounds import BoundsManager
 from .space import SolutionSpace, StaticVariable, TrajectoryVariable, Variable
 
+
+def _design_from_source_step(source_step: Any | None) -> str | None:
+    """Map a ``SourceStep`` (or its string value) to its design label.
+
+    The design is the queryable provenance axis — ``discovery`` / ``exploration`` /
+    ``inference`` / ``adaptation`` / ``sobol`` — derived from the ``SourceStep`` that
+    generated the proposal (``'discovery_step'`` → ``'discovery'``). See the KB note
+    *First-class dataset concept in pred-fab*.
+    """
+    if source_step is None:
+        return None
+    value = getattr(source_step, "value", source_step)
+    return str(value).removesuffix("_step")
+
+
 @dataclass
 class EvidenceBackend:
     """Δ∫E callbacks the acquisition objective dispatches to.
@@ -199,8 +214,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
-    def get_config_snapshot(self, kappa: float, sigma: float | None = None) -> dict[str, Any]:
-        """Serializable snapshot of user-facing settings that affect the proposal."""
+    def get_config_snapshot(
+        self,
+        kappa: float | None,
+        sigma: float | None = None,
+        source_step: Any | None = None,
+    ) -> dict[str, Any]:
+        """Serializable snapshot of the settings that generated a proposal — its provenance.
+
+        Records the *design* (the queryable axis, derived from ``source_step``) and the
+        generative settings — ``kappa`` (``None`` for data-independent designs like Sobol),
+        ``seed``, bounds, trust regions, fixed params, trajectory configs, optimizer knobs —
+        so an experiment's origin is reproducible given the same known data. See the KB note
+        *First-class dataset concept in pred-fab*.
+        """
         param_bounds = {}
         for code in self.data_objects.keys():
             try:
@@ -209,7 +236,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             except (ValueError, KeyError):
                 pass
         snapshot: dict[str, Any] = {
+            "design": _design_from_source_step(source_step),
             "kappa": kappa,
+            "seed": self._random_seed,
             "performance_weights": dict(self.performance_weights),
             "param_bounds": param_bounds,
             "trust_regions": {k: v for k, v in self.trust_regions.items()},
@@ -837,6 +866,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
             proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.SOBOL)
             specs.append(ExperimentSpec(initial_params=proposal, trajectories={}))
 
+        # Stamp generative provenance (design='sobol', seed, bounds, ...); κ is N/A.
+        snapshot = self.get_config_snapshot(None, source_step=SourceStep.SOBOL)
+        for spec in specs:
+            spec.config_snapshot = snapshot
+
         self.logger.info(
             f"Sobol test design: {n} experiments "
             f"({len(statics)} static, {len(cat_codes)} categorical)."
@@ -933,7 +967,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
 
-        config = self.get_config_snapshot(kappa)
+        config = self.get_config_snapshot(kappa, source_step=source_step)
         for spec in specs:
             spec.config_snapshot = config
 
