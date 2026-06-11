@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..core import DataModule, Dataset, DatasetSchema
+from ..core import DataModule, Dataset, DatasetSchema, Fit
 from ..utils import LocalData, PfabLogger
 from .prediction import PredictionSystem
 
@@ -232,6 +232,38 @@ class CrossValidator:
             f"Cross-validation ({mode}): {len(held)} held-out experiments across {len(folds)} folds."
         )
         return CVResult(held_out=held, mode=mode, n_folds=len(folds))
+
+    def evaluate_fit(
+        self,
+        base_datamodule: DataModule,
+        fit: Fit,
+        probe_codes: list[str],
+        *,
+        verbose: bool = False,
+    ) -> dict[str, dict[str, float]]:
+        """Train a fresh model on ``fit``'s experiment codes and validate it on ``probe_codes``.
+
+        The **stage-k evaluation**: ``Fit.of(run, window=k)`` is the model the run had after
+        ``k`` steps; ``probe_codes`` is the held-out set it's scored against. Per-feature
+        ``{r2, mae, ...}`` via the same fresh-system + validate path as :meth:`run`; the
+        deployed model is untouched. The fit's codes and the probe must be loaded experiments.
+        """
+        train_codes = fit.experiment_codes()
+        if not train_codes:
+            raise ValueError("evaluate_fit: the fit resolves to no experiments.")
+        if not probe_codes:
+            raise ValueError("evaluate_fit: probe_codes is empty.")
+        dm = base_datamodule.copy()
+        dm.set_split_codes(train_codes, [], list(probe_codes))
+        system = self._fresh_system()
+        prev_console = self.logger._console_output_enabled
+        if not verbose:
+            self.logger.set_console_output(False)
+        try:
+            system.train(dm)
+            return system.validate(use_test=True, eval_system=self.eval_system)
+        finally:
+            self.logger.set_console_output(prev_console)
 
 
 # ======================================================================

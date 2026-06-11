@@ -36,12 +36,14 @@ from .dataset import (
 )
 from .datamodule import DataModule
 from .experiment_set import Strategy, ExperimentSet, FitPart, Fit
+from .provenance import Provenance
 
 __all__ = [
     'Strategy',
     'ExperimentSet',
     'FitPart',
     'Fit',
+    'Provenance',
     'DataObject',
     'DataReal',
     'DataInt',
