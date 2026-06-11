@@ -35,8 +35,13 @@ from .dataset import (
     trajectory_to_events,
 )
 from .datamodule import DataModule
+from .experiment_set import Strategy, ExperimentSet, FitPart, Fit
 
 __all__ = [
+    'Strategy',
+    'ExperimentSet',
+    'FitPart',
+    'Fit',
     'DataObject',
     'DataReal',
     'DataInt',
