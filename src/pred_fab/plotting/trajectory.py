@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 from ._style import (
     AxisSpec, FONT, save_fig, apply_style, clean_spines,
-    STEEL_500, ZINC_300,
+    STEEL_500, ZINC_300, ZINC_400,
 )
 
 
@@ -23,7 +23,7 @@ def plot_trajectory_comparison(
 
     n_fixed = len(fixed_scores)
     n_traj = len(traj_scores)
-    ax1.bar(range(1, n_fixed + 1), fixed_scores, color="#DD8452",
+    ax1.bar(range(1, n_fixed + 1), fixed_scores, color=ZINC_400,
             label="Fixed params", alpha=0.8)
     ax1.bar(range(n_fixed + 1, n_fixed + n_traj + 1), traj_scores,
             color=STEEL_500, label="Trajectory", alpha=0.8)

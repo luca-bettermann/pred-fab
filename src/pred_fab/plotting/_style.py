@@ -5,6 +5,7 @@ Single source of truth for visual identity across pred-fab and all consumers.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -13,7 +14,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from cycler import cycler
 import numpy as np
+import matplotlib.patheffects as _pe
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from matplotlib.patches import Circle
@@ -85,13 +88,25 @@ _truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.80)
 _truncate_cmap("Greys", "Greys_soft", lo=0.0, hi=0.80)
 _truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.20, hi=0.80)
 _truncate_cmap("magma", "magma_soft", lo=0.10, hi=1.0)
+_truncate_cmap("Reds", "Reds_soft", lo=0.0, hi=0.80)
 SURFACES: dict[str, SemanticSurface] = {
     "density":       SemanticSurface("Greys_soft", bounded=False),
     "evidence":      SemanticSurface("Blues_soft",   bounded=True),
     "evidence_gain": SemanticSurface("YlGn_soft",   bounded=True),
     "performance":   SemanticSurface("RdYlGn_soft", bounded=True),
     "acquisition":   SemanticSurface("magma_soft",   bounded=True),
+    "error":         SemanticSurface("Reds_soft",    bounded=False),
 }
+
+# Progression ramps: palette-conform ordered series (step/layer/rank indices)
+# for markers and lines — distinct from SURFACES, which color fields.
+_PROGRESSIONS = {
+    "steel_progression":   [STEEL_100, STEEL_300, STEEL_500, STEEL_700, STEEL_900],
+    "emerald_progression": [EMERALD_100, EMERALD_300, EMERALD_500, EMERALD_700, EMERALD_900],
+    "zinc_progression":    [ZINC_200, ZINC_400, ZINC_500, ZINC_600, ZINC_700],
+}
+for _name, _stops in _PROGRESSIONS.items():
+    mpl.colormaps.register(_LSC.from_list(_name, _stops, N=256))
 
 # Markers: semantic point types.
 @dataclass(frozen=True)
@@ -130,23 +145,77 @@ LINES: dict[str, LineStyle] = {
 
 # Fill alphas for consistent transparency.
 PUBLICATION_DPI: int = 300
+DEV_DPI: int = 150
+
+# Publication layout targets (inches) — figures drop into a paper as-is.
+COLUMN_WIDTH_IN: float = 3.5
+PAGE_WIDTH_IN: float = 7.2
 
 FILL_ALPHA: dict[str, float] = {
     "contour":    0.5,
     "area":       0.15,
     "background": 0.18,
+    "evidence_fade": 0.65,
 }
+
+# Evidence threshold marking the trust boundary: E = 0.5 ⟺ density D = 1,
+# the same convention diagnose_error_coverage documents.
+TRUST_THRESHOLD: float = 0.5
 
 SYSTEM_SCORE_LABEL = "$S$"
 
-# Font sizes.
-FONT: dict[str, int] = {
+# Font sizes — dev scale by default; publication swaps in the visual-identity
+# typography table. FONT is mutated in place so `from _style import FONT`
+# consumers follow the active mode.
+_FONT_DEV: dict[str, int] = {
     "title":      14,
     "axis_label": 12,
     "tick":       11,
     "annotation": 10,
     "legend":     10,
 }
+_FONT_PUB: dict[str, int] = {
+    "title":      12,
+    "axis_label": 10,
+    "tick":       9,
+    "annotation": 8,
+    "legend":     8,
+}
+FONT: dict[str, int] = dict(_FONT_DEV)
+
+_PUBLICATION: bool = False
+
+
+def set_publication_mode(on: bool = True) -> None:
+    """Toggle publication output: typography-table font sizes, column-width
+    figure scaling, and dual PNG+PDF saves. Set before building figures."""
+    global _PUBLICATION
+    _PUBLICATION = on
+    FONT.update(_FONT_PUB if on else _FONT_DEV)
+
+
+def is_publication_mode() -> bool:
+    return _PUBLICATION
+
+
+def fig_size(
+    n_panels: int,
+    *,
+    panel_w: float = 4.6,
+    panel_h: float = 4.5,
+    extra_w: float = 1.0,
+) -> tuple[float, float]:
+    """Figure size for a 1×N panel row (+ colorbar gutter).
+
+    Dev mode: natural per-panel size. Publication mode: scaled to single-
+    column width (one panel) or page width (rows), aspect preserved."""
+    w = panel_w * n_panels + extra_w
+    h = panel_h
+    if _PUBLICATION:
+        target = COLUMN_WIDTH_IN if n_panels == 1 else PAGE_WIDTH_IN
+        scale = target / w
+        w, h = target, h * scale
+    return w, h
 
 
 def cmap(name: str) -> Colormap:
@@ -171,25 +240,27 @@ def surface(name: str) -> SemanticSurface:
 
 def apply_style() -> None:
     """Set matplotlib rcParams to the PFAB visual-identity defaults."""
+    mpl.rcParams["axes.prop_cycle"] = cycler(
+        color=[STEEL_500, EMERALD_500, ZINC_400, ZINC_600])
     mpl.rcParams.update({
         "font.family": "sans-serif",
-        "font.size": 11,
-        "axes.titlesize": 14,
+        "font.size": FONT["tick"],
+        "axes.titlesize": FONT["title"],
         "axes.titlecolor": ZINC_700,
-        "axes.labelsize": 12,
+        "axes.labelsize": FONT["axis_label"],
         "axes.labelcolor": ZINC_600,
         "axes.edgecolor": ZINC_300,
         "axes.linewidth": 0.8,
         "xtick.color": ZINC_500,
         "ytick.color": ZINC_500,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "xtick.labelsize": FONT["tick"],
+        "ytick.labelsize": FONT["tick"],
         "xtick.major.size": 3,
         "ytick.major.size": 3,
         "xtick.major.width": 0.6,
         "ytick.major.width": 0.6,
         "legend.frameon": False,
-        "legend.fontsize": 10,
+        "legend.fontsize": FONT["legend"],
         "figure.facecolor": "white",
         "axes.facecolor": "white",
         "savefig.facecolor": "white",
@@ -365,11 +436,58 @@ def style_colorbar(cbar) -> None:
         cbar.outline.set_linewidth(0.6)  # type: ignore[attr-defined]
 
 
+def row_colorbar(fig, axes, im, *, label: str | None = None):
+    """One shared colorbar for a row of same-scale panels.
+
+    Visually asserts the panels are comparable and frees the width N
+    per-panel colorbars would eat. Use with ``layout="constrained"``.
+    """
+    cbar = fig.colorbar(im, ax=list(axes), shrink=0.85, pad=0.015,
+                        label=label or "")
+    style_colorbar(cbar)
+    return cbar
+
+
 def _resolve_cmap(name: str):
     """Resolve a colormap by semantic registry name first, then fall back to mpl."""
     if name in SURFACES:
         return cmap(name)
     return plt.get_cmap(name)
+
+
+def add_evidence_fade(
+    ax,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    evidence_grid: np.ndarray,
+    *,
+    trust_threshold: float = TRUST_THRESHOLD,
+    trust_contour: bool = True,
+) -> None:
+    """Fade low-evidence regions toward the paper and mark the trust boundary.
+
+    Overlays white with alpha proportional to (1 − E), capped at
+    ``FILL_ALPHA["evidence_fade"]`` so no region fully vanishes — saturated
+    regions stay untouched, extrapolation reads as washed out. When the
+    evidence field crosses ``trust_threshold``, a dashed inline-labeled
+    contour separates interpolation from extrapolation.
+    """
+    e = np.clip(np.asarray(evidence_grid, dtype=float), 0.0, 1.0)
+    rgba = np.ones((*e.shape, 4))
+    rgba[..., 3] = (1.0 - e) * FILL_ALPHA["evidence_fade"]
+    ax.imshow(
+        rgba,
+        extent=(float(x_values[0]), float(x_values[-1]),
+                float(y_values[0]), float(y_values[-1])),
+        origin="lower", aspect="auto", interpolation="bilinear",
+        zorder=3,
+    )
+    if trust_contour and float(e.min()) < trust_threshold < float(e.max()):
+        cs = ax.contour(x_values, y_values, e, levels=[trust_threshold],
+                        colors=[ZINC_600], linestyles="--", linewidths=0.9,
+                        alpha=0.9, zorder=4)
+        ax.clabel(cs, fmt={trust_threshold: f"E = {trust_threshold:g}"},
+                  fontsize=FONT["annotation"] - 1, inline=True)
 
 
 def subplot_topology(
@@ -384,8 +502,13 @@ def subplot_topology(
     label: str | None = None,
     levels: int = 20,
     contour_overlay: bool = True,
+    contour_labels: bool = True,
     vmin: float | None = None,
     vmax: float | None = None,
+    fit_to_data: bool = False,
+    evidence_grid: np.ndarray | None = None,
+    trust_threshold: float = TRUST_THRESHOLD,
+    trust_contour: bool = True,
     points: list[dict[str, Any]] | None = None,
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
@@ -396,24 +519,55 @@ def subplot_topology(
     show_colorbar: bool = True,
     cbar_label: str | None = None,
     cbar_lim: float | None = None,
+    cbar_mark: tuple[float, str] | None = None,
 ):
     """Render a topology panel: contourf + optional white contours + scatter + colorbar.
 
     Returns the QuadContourSet so callers can attach further markers or replace
     the colorbar. ``cmap_name`` accepts a semantic key from the registry
-    (density, evidence, evidence_gain, performance, mixed) or any raw
+    (density, evidence, evidence_gain, performance, acquisition) or any raw
     matplotlib colormap name.
+
+    Bounded semantic surfaces (``SemanticSurface.bounded``) render on their
+    fixed [vmin, vmax] scale by default so identical values look identical
+    across figures; pass ``fit_to_data=True`` to fit the color range to the
+    grid instead (e.g. for small-magnitude gain fields). Explicit
+    ``vmin``/``vmax`` always win.
+
+    ``evidence_grid`` enables evidence-aware rendering: low-evidence regions
+    fade toward the paper and the E = ``trust_threshold`` boundary is drawn
+    as a dashed contour (see ``add_evidence_fade``). Use on model-derived
+    surfaces only — truth panels and decision surfaces stay unfaded.
 
     ``cbar_lim`` truncates the colorbar to [0, cbar_lim] while keeping the
     color mapping at [vmin, vmax] — so colors stay comparable across plots
     but the colorbar shows the actual data peak.
     """
     cm = _resolve_cmap(cmap_name)
-    im = ax.contourf(x_values, y_values, grid, levels=levels, cmap=cm,
-                     vmin=vmin, vmax=vmax)
+    surf = SURFACES.get(cmap_name)
+    fill_levels: int | np.ndarray = levels
+    extend = "neither"
+    if surf is not None and surf.bounded and not fit_to_data:
+        vmin = surf.vmin if vmin is None else vmin
+        vmax = surf.vmax if vmax is None else vmax
+        # Fixed level edges, not just a fixed norm — fill bands match across figures.
+        fill_levels = np.linspace(vmin, vmax, levels + 1)
+        extend = "both"
+    im = ax.contourf(x_values, y_values, grid, levels=fill_levels, cmap=cm,
+                     vmin=vmin, vmax=vmax, extend=extend)
     if contour_overlay:
-        ax.contour(x_values, y_values, grid, levels=max(levels // 2, 4),
-                   colors="white", linewidths=0.3, alpha=0.5)
+        cs = ax.contour(x_values, y_values, grid, levels=max(levels // 4, 4),
+                        colors="white", linewidths=0.4, alpha=0.7)
+        if contour_labels:
+            texts = ax.clabel(cs, fontsize=FONT["annotation"] - 1, fmt="%.2f",
+                              colors=ZINC_600, inline=True, inline_spacing=2)
+            for t in texts:
+                t.set_path_effects([_pe.withStroke(
+                    linewidth=1.8, foreground="white", alpha=0.9)])
+    if evidence_grid is not None:
+        add_evidence_fade(ax, x_values, y_values, evidence_grid,
+                          trust_threshold=trust_threshold,
+                          trust_contour=trust_contour)
 
     if points:
         _plot_trajectory_ranges(ax, points, x_axis, y_axis, trajectories, codes,
@@ -432,6 +586,13 @@ def subplot_topology(
         style_colorbar(cbar)
         if cbar_lim is not None:
             cbar.ax.set_ylim(0, cbar_lim)
+        if cbar_mark is not None:
+            mark_val, mark_label = cbar_mark
+            cbar.ax.axhline(mark_val, color=ZINC_700, lw=1.0)
+            cbar.ax.text(1.5, mark_val, f" {mark_label}",
+                         transform=cbar.ax.get_yaxis_transform(),
+                         fontsize=FONT["annotation"] - 1, color=ZINC_600,
+                         va="center")
 
     return im
 
@@ -562,20 +723,149 @@ def draw_datapoints(
                    linewidth=0.8, zorder=zorder, alpha=alpha)
 
 
-def save_fig(path: str, dpi: int | None = None) -> None:
+def marginal_layout(
+    figsize: tuple[float, float],
+) -> tuple[Any, Any, Any, Any]:
+    """Main topology axes with top/right marginal-slice axes (BO-style).
+
+    Returns ``(fig, ax_main, ax_top, ax_right)``; marginal axes share the
+    main panel's x/y respectively.
+    """
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(2, 2, width_ratios=(4.0, 1.15),
+                          height_ratios=(1.15, 4.0),
+                          hspace=0.07, wspace=0.07)
+    ax_main = fig.add_subplot(gs[1, 0])
+    ax_top = fig.add_subplot(gs[0, 0], sharex=ax_main)
+    ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
+    return fig, ax_main, ax_top, ax_right
+
+
+def draw_marginal_slices(
+    ax_main,
+    ax_top,
+    ax_right,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    grid: np.ndarray,
+    x_at: float,
+    y_at: float,
+    *,
+    vmin: float | None = 0.0,
+    vmax: float | None = 1.0,
+    color: str = STEEL_500,
+) -> None:
+    """1D slices of ``grid`` through (x_at, y_at) on the marginal axes.
+
+    The marginal value axes carry the numeric scale, so the main panel
+    needs no colorbar; dashed crosshairs on the main panel mark the slice
+    location.
+    """
+    ix = int(np.abs(np.asarray(x_values) - x_at).argmin())
+    iy = int(np.abs(np.asarray(y_values) - y_at).argmin())
+
+    crosshair = LINES["boundary"]
+    ax_main.axvline(x_at, color=crosshair.color, lw=crosshair.linewidth,
+                    ls=crosshair.linestyle, alpha=crosshair.alpha, zorder=6)
+    ax_main.axhline(y_at, color=crosshair.color, lw=crosshair.linewidth,
+                    ls=crosshair.linestyle, alpha=crosshair.alpha, zorder=6)
+
+    ax_top.plot(x_values, grid[iy, :], color=color, lw=1.6)
+    ax_top.fill_between(x_values, grid[iy, :], alpha=FILL_ALPHA["area"],
+                        color=color)
+    ax_top.axvline(x_at, color=crosshair.color, lw=crosshair.linewidth,
+                   ls=crosshair.linestyle, alpha=crosshair.alpha)
+    if vmin is not None and vmax is not None:
+        ax_top.set_ylim(vmin, vmax)
+    plt.setp(ax_top.get_xticklabels(), visible=False)
+    ax_top.tick_params(labelsize=FONT["tick"] - 1)
+    clean_spines(ax_top)
+
+    ax_right.plot(grid[:, ix], y_values, color=color, lw=1.6)
+    ax_right.fill_betweenx(y_values, grid[:, ix], alpha=FILL_ALPHA["area"],
+                           color=color)
+    ax_right.axhline(y_at, color=crosshair.color, lw=crosshair.linewidth,
+                     ls=crosshair.linestyle, alpha=crosshair.alpha)
+    if vmin is not None and vmax is not None:
+        ax_right.set_xlim(vmin, vmax)
+    plt.setp(ax_right.get_yticklabels(), visible=False)
+    ax_right.tick_params(labelsize=FONT["tick"] - 1)
+    clean_spines(ax_right)
+
+
+def annotate_point(
+    ax,
+    x: float,
+    y: float,
+    text: str,
+    *,
+    color: str = ZINC_700,
+    fontsize: float | None = None,
+    offset: tuple[float, float] = (8, 6),
+) -> None:
+    """Direct label next to a marker — white halo keeps it legible on any field.
+
+    Flips to the other side of the marker when the point sits near the top or
+    right edge, so labels never clip out of the axes.
+    """
+    dx, dy = offset
+    x0, x1 = ax.get_xlim()
+    if x1 != x0 and (x - x0) / (x1 - x0) > 0.72:
+        dx = -abs(dx)
+    y0, y1 = ax.get_ylim()
+    if y1 != y0 and (y - y0) / (y1 - y0) > 0.85:
+        dy = -abs(dy)
+    ha = "left" if dx >= 0 else "right"
+    va = "bottom" if dy >= 0 else "top"
+    ax.annotate(text, (x, y), xytext=(dx, dy), textcoords="offset points",
+                ha=ha, va=va,
+                fontsize=fontsize or FONT["annotation"], color=color, zorder=10,
+                path_effects=[_pe.withStroke(linewidth=2.2, foreground="white",
+                                             alpha=0.85)])
+
+
+def save_fig(
+    path: str,
+    dpi: int | None = None,
+    *,
+    publication: bool | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Save current figure and close.
+
+    Dev default: 150-dpi PNG. Publication (explicit arg, else
+    ``set_publication_mode``): dual output — a vector PDF next to a
+    300-dpi PNG. ``metadata`` (e.g. provenance: round, kappa, seed,
+    commit) embeds into PNG text chunks and the PDF Subject field —
+    invisible on the figure, so every artifact stays traceable to the
+    run that made it.
 
     If the active figure carries a PFAB subtitle (set by
     `figure_subtitle`), reserves the top band so subplot titles do not
     collide with it.
     """
+    pub = _PUBLICATION if publication is None else publication
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fig = plt.gcf()
-    if getattr(fig, "_pfab_has_subtitle", False):
+    if fig.get_layout_engine() is not None:
+        pass  # constrained layout manages spacing (incl. shared colorbars)
+    elif getattr(fig, "_pfab_has_subtitle", False):
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     else:
         plt.tight_layout()
-    plt.savefig(path, dpi=dpi or PUBLICATION_DPI, bbox_inches="tight")
+
+    meta = {str(k): str(v) for k, v in (metadata or {}).items()}
+    png_dpi = dpi or (PUBLICATION_DPI if pub else DEV_DPI)
+    plt.savefig(path, dpi=png_dpi, bbox_inches="tight",
+                metadata=meta or None)
+    if pub:
+        root, ext = os.path.splitext(path)
+        if ext.lower() != ".pdf":
+            pdf_meta: dict[str, str] = {"Creator": "pred-fab"}
+            if meta:
+                pdf_meta["Subject"] = json.dumps(meta)
+            plt.savefig(root + ".pdf", bbox_inches="tight",
+                        metadata=pdf_meta)
     plt.close()
 
 
@@ -594,10 +884,13 @@ def _add_fixed_subtitle(
     fig: plt.Figure,  # type: ignore[name-defined]
     fixed_params: dict[str, Any] | None,
 ) -> None:
+    """Render fixed params as a compact footer — metadata, kept off the data."""
     if not fixed_params:
         return
     parts = [f"{k} = {v}" for k, v in fixed_params.items()]
-    figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=FONT["annotation"])
+    fig.text(0.99, 0.005, "fixed: " + ", ".join(parts),
+             ha="right", va="bottom",
+             fontsize=FONT["annotation"] - 1, color=ZINC_400)
 
 
 def _plot_trajectory_ranges(
@@ -612,7 +905,7 @@ def _plot_trajectory_ranges(
     alpha: float = 0.5,
     linewidth: float = 1.2,
     cap_size: float = 3.0,
-    step_dot_cmap: str = "Blues",
+    step_dot_cmap: str = "steel_progression",
     step_dot_size: float = 14,
 ) -> None:
     """Draw T-ended range lines + per-step dots for trajectory parameters."""
@@ -658,10 +951,8 @@ def _plot_trajectory_ranges(
         n = len(steps)
         for k, (xv, yv) in enumerate(zip(x_vals, y_vals)):
             t = k / max(n - 1, 1)
-            # Stay above the band where Blues is too pale to be visible
-            # against light backgrounds; map step index into [0.35, 0.95].
             ax.scatter([xv], [yv], s=step_dot_size,
-                       color=cmap(0.35 + 0.6 * t),
+                       color=cmap(0.15 + 0.85 * t),
                        edgecolors="white", linewidths=0.4,
                        zorder=3)
 
