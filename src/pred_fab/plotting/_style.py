@@ -401,7 +401,7 @@ def subplot_topology(
 
     Returns the QuadContourSet so callers can attach further markers or replace
     the colorbar. ``cmap_name`` accepts a semantic key from the registry
-    (density, evidence, evidence_gain, performance, mixed) or any raw
+    (density, evidence, evidence_gain, performance, acquisition) or any raw
     matplotlib colormap name.
 
     ``cbar_lim`` truncates the colorbar to [0, cbar_lim] while keeping the

@@ -36,7 +36,7 @@ def plot_acquisition(
     panels = [
         (axes[0], perf_grid, "Performance", "performance"),
         (axes[1], unc_grid, "Evidence", "evidence"),
-        (axes[2], combined_grid, "Combined", "mixed"),
+        (axes[2], combined_grid, "Combined", "acquisition"),
     ]
     for ax, grid, label, cmap_name in panels:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
