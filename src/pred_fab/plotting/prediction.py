@@ -21,11 +21,14 @@ def plot_topology_comparison(
     *,
     fixed_params: dict[str, Any] | None = None,
     fit_to_data: bool = False,
+    evidence_grids: dict[str, np.ndarray] | None = None,
 ) -> None:
     """Side-by-side contour plots for comparing topologies on shared color scale.
 
     Shared scale is the bounded [0,1] default, or — with ``fit_to_data`` —
-    bounds computed across *all* grids.
+    bounds computed across *all* grids. ``evidence_grids`` (keyed like
+    ``grids``) fades the matching panels where evidence is low — pass it for
+    model-derived panels only.
     """
     apply_style()
     n = len(grids)
@@ -42,7 +45,8 @@ def plot_topology_comparison(
     for ax, (label, data) in zip(axes, grids.items()):
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, data,
                          cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data)
+                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
+                         evidence_grid=(evidence_grids or {}).get(label))
 
     save_fig(save_path)
 

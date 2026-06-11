@@ -83,11 +83,14 @@ def plot_parameter_space(
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
     fit_to_data: bool = False,
+    evidence_grid: np.ndarray | None = None,
 ) -> None:
     """1x2: ground truth topology + initial model topology.
 
     Panels share one color scale: the bounded [0,1] default, or — with
-    ``fit_to_data`` — bounds computed across *both* grids.
+    ``fit_to_data`` — bounds computed across *both* grids. ``evidence_grid``
+    fades the model panel where evidence is low; the truth panel is never
+    faded (it makes no epistemic claim).
     """
     apply_style()
     vmin = vmax = None
@@ -98,13 +101,14 @@ def plot_parameter_space(
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
 
-    for ax, grid, label in [
-        (ax1, true_grid, "Ground Truth"),
-        (ax2, pred_grid, "Initial Model"),
+    for ax, grid, label, ev in [
+        (ax1, true_grid, "Ground Truth", None),
+        (ax2, pred_grid, "Initial Model", evidence_grid),
     ]:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name="performance", label=label,
                          vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
+                         evidence_grid=ev,
                          points=points, trajectories=trajectories, codes=codes,
                          point_size=20, point_edge="black")
 

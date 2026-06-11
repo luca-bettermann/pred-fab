@@ -27,26 +27,33 @@ def plot_acquisition(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    evidence_grid: np.ndarray | None = None,
 ) -> None:
     """3-panel: performance | evidence gain | combined acquisition.
 
     ``gain_grid`` is the evidence-*gain* field from
     ``compute_acquisition_grids`` — small magnitudes, so it renders
     fit-to-data (anchored at 0) rather than on the [0,1] scale.
+
+    ``evidence_grid`` (the per-point E field from ``compute_evidence_grids``)
+    fades the model-derived performance panel where evidence is low. The gain
+    and combined panels stay unfaded — gain already encodes coverage, and the
+    acquisition surface is a decision surface, not a model claim.
     """
     apply_style()
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     _add_fixed_subtitle(fig, fixed_params)
 
     panels = [
-        (axes[0], perf_grid, "Performance", "performance", False),
-        (axes[1], gain_grid, "Evidence Gain", "evidence_gain", True),
-        (axes[2], combined_grid, "Combined", "acquisition", False),
+        (axes[0], perf_grid, "Performance", "performance", False, evidence_grid),
+        (axes[1], gain_grid, "Evidence Gain", "evidence_gain", True, None),
+        (axes[2], combined_grid, "Combined", "acquisition", False, None),
     ]
-    for ax, grid, label, cmap_name, fit in panels:
+    for ax, grid, label, cmap_name, fit, ev in panels:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name=cmap_name, label=label,
                          vmin=0.0 if fit else None, fit_to_data=fit,
+                         evidence_grid=ev,
                          points=points, trajectories=trajectories, codes=codes,
                          point_size=18)
 

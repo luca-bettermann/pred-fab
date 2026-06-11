@@ -135,7 +135,12 @@ FILL_ALPHA: dict[str, float] = {
     "contour":    0.5,
     "area":       0.15,
     "background": 0.18,
+    "evidence_fade": 0.65,
 }
+
+# Evidence threshold marking the trust boundary: E = 0.5 ⟺ density D = 1,
+# the same convention diagnose_error_coverage documents.
+TRUST_THRESHOLD: float = 0.5
 
 SYSTEM_SCORE_LABEL = "$S$"
 
@@ -372,6 +377,41 @@ def _resolve_cmap(name: str):
     return plt.get_cmap(name)
 
 
+def add_evidence_fade(
+    ax,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    evidence_grid: np.ndarray,
+    *,
+    trust_threshold: float = TRUST_THRESHOLD,
+    trust_contour: bool = True,
+) -> None:
+    """Fade low-evidence regions toward the paper and mark the trust boundary.
+
+    Overlays white with alpha proportional to (1 − E), capped at
+    ``FILL_ALPHA["evidence_fade"]`` so no region fully vanishes — saturated
+    regions stay untouched, extrapolation reads as washed out. When the
+    evidence field crosses ``trust_threshold``, a dashed inline-labeled
+    contour separates interpolation from extrapolation.
+    """
+    e = np.clip(np.asarray(evidence_grid, dtype=float), 0.0, 1.0)
+    rgba = np.ones((*e.shape, 4))
+    rgba[..., 3] = (1.0 - e) * FILL_ALPHA["evidence_fade"]
+    ax.imshow(
+        rgba,
+        extent=(float(x_values[0]), float(x_values[-1]),
+                float(y_values[0]), float(y_values[-1])),
+        origin="lower", aspect="auto", interpolation="bilinear",
+        zorder=3,
+    )
+    if trust_contour and float(e.min()) < trust_threshold < float(e.max()):
+        cs = ax.contour(x_values, y_values, e, levels=[trust_threshold],
+                        colors=[ZINC_600], linestyles="--", linewidths=0.9,
+                        alpha=0.9, zorder=4)
+        ax.clabel(cs, fmt={trust_threshold: f"E = {trust_threshold:g}"},
+                  fontsize=FONT["annotation"] - 1, inline=True)
+
+
 def subplot_topology(
     ax,
     x_axis: "AxisSpec",
@@ -387,6 +427,9 @@ def subplot_topology(
     vmin: float | None = None,
     vmax: float | None = None,
     fit_to_data: bool = False,
+    evidence_grid: np.ndarray | None = None,
+    trust_threshold: float = TRUST_THRESHOLD,
+    trust_contour: bool = True,
     points: list[dict[str, Any]] | None = None,
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
@@ -411,6 +454,11 @@ def subplot_topology(
     grid instead (e.g. for small-magnitude gain fields). Explicit
     ``vmin``/``vmax`` always win.
 
+    ``evidence_grid`` enables evidence-aware rendering: low-evidence regions
+    fade toward the paper and the E = ``trust_threshold`` boundary is drawn
+    as a dashed contour (see ``add_evidence_fade``). Use on model-derived
+    surfaces only — truth panels and decision surfaces stay unfaded.
+
     ``cbar_lim`` truncates the colorbar to [0, cbar_lim] while keeping the
     color mapping at [vmin, vmax] — so colors stay comparable across plots
     but the colorbar shows the actual data peak.
@@ -430,6 +478,10 @@ def subplot_topology(
     if contour_overlay:
         ax.contour(x_values, y_values, grid, levels=max(levels // 2, 4),
                    colors="white", linewidths=0.3, alpha=0.5)
+    if evidence_grid is not None:
+        add_evidence_fade(ax, x_values, y_values, evidence_grid,
+                          trust_threshold=trust_threshold,
+                          trust_contour=trust_contour)
 
     if points:
         _plot_trajectory_ranges(ax, points, x_axis, y_axis, trajectories, codes,

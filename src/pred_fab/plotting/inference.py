@@ -28,14 +28,20 @@ def plot_inference_result(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    evidence_grid: np.ndarray | None = None,
 ) -> None:
-    """Single-shot inference result on the predicted performance topology."""
+    """Single-shot inference result on the predicted performance topology.
+
+    ``evidence_grid`` fades the prediction where evidence is low — the
+    proposal should visibly sit in trusted territory.
+    """
     apply_style()
     fig, ax = plt.subplots(1, 1, figsize=(7, 5.5))
     _add_fixed_subtitle(fig, fixed_params)
 
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, pred_grid,
                      cmap_name="performance",
+                     evidence_grid=evidence_grid,
                      points=points, trajectories=trajectories, codes=codes,
                      point_size=15, point_alpha=0.6,
                      cbar_label="Predicted Combined Score")
