@@ -11,7 +11,7 @@ from matplotlib.colors import Normalize
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
-    AxisSpec, FONT, save_fig, _extract_xy, _add_fixed_subtitle,
+    AxisSpec, FONT, fig_size, save_fig, _extract_xy, _add_fixed_subtitle,
     apply_style, row_colorbar, subplot_topology,
     STEEL_500, ZINC_400, ZINC_600, ZINC_900,
 )
@@ -91,7 +91,7 @@ def plot_parameter_space(
         all_vals = np.concatenate([true_grid.ravel(), pred_grid.ravel()])
         vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5),
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=fig_size(2, panel_w=5.0, panel_h=4.5),
                                    layout="constrained")
     _add_fixed_subtitle(fig, fixed_params)
 

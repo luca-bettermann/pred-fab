@@ -8,7 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, _add_fixed_subtitle, apply_style, row_colorbar,
+    AxisSpec, _add_fixed_subtitle, apply_style, fig_size, row_colorbar,
     save_fig, subplot_topology,
 )
 
@@ -53,7 +53,7 @@ def plot_topology_evolution(
         panels.append((labels[i], g, ev, pts))
 
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.6 * n + 1.2, 3.8),
+    fig, axes = plt.subplots(1, n, figsize=fig_size(n, panel_w=3.6, panel_h=3.8, extra_w=1.2),
                              layout="constrained", squeeze=False)
     axes = axes[0]
     _add_fixed_subtitle(fig, fixed_params)

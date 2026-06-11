@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _add_fixed_subtitle, annotate_point,
+    AxisSpec, fig_size, save_fig, _add_fixed_subtitle, annotate_point,
     apply_style, subplot_topology,
     ACCENT_YELLOW, ZINC_900,
 )
@@ -36,7 +36,7 @@ def plot_inference_result(
     proposal should visibly sit in trusted territory.
     """
     apply_style()
-    fig, ax = plt.subplots(1, 1, figsize=(7, 5.5))
+    fig, ax = plt.subplots(1, 1, figsize=fig_size(1, panel_w=6.0, panel_h=5.5))
     _add_fixed_subtitle(fig, fixed_params)
 
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, pred_grid,

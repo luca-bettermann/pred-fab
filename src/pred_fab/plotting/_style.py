@@ -5,6 +5,7 @@ Single source of truth for visual identity across pred-fab and all consumers.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -144,6 +145,11 @@ LINES: dict[str, LineStyle] = {
 
 # Fill alphas for consistent transparency.
 PUBLICATION_DPI: int = 300
+DEV_DPI: int = 150
+
+# Publication layout targets (inches) — figures drop into a paper as-is.
+COLUMN_WIDTH_IN: float = 3.5
+PAGE_WIDTH_IN: float = 7.2
 
 FILL_ALPHA: dict[str, float] = {
     "contour":    0.5,
@@ -158,14 +164,58 @@ TRUST_THRESHOLD: float = 0.5
 
 SYSTEM_SCORE_LABEL = "$S$"
 
-# Font sizes.
-FONT: dict[str, int] = {
+# Font sizes — dev scale by default; publication swaps in the visual-identity
+# typography table. FONT is mutated in place so `from _style import FONT`
+# consumers follow the active mode.
+_FONT_DEV: dict[str, int] = {
     "title":      14,
     "axis_label": 12,
     "tick":       11,
     "annotation": 10,
     "legend":     10,
 }
+_FONT_PUB: dict[str, int] = {
+    "title":      12,
+    "axis_label": 10,
+    "tick":       9,
+    "annotation": 8,
+    "legend":     8,
+}
+FONT: dict[str, int] = dict(_FONT_DEV)
+
+_PUBLICATION: bool = False
+
+
+def set_publication_mode(on: bool = True) -> None:
+    """Toggle publication output: typography-table font sizes, column-width
+    figure scaling, and dual PNG+PDF saves. Set before building figures."""
+    global _PUBLICATION
+    _PUBLICATION = on
+    FONT.update(_FONT_PUB if on else _FONT_DEV)
+
+
+def is_publication_mode() -> bool:
+    return _PUBLICATION
+
+
+def fig_size(
+    n_panels: int,
+    *,
+    panel_w: float = 4.6,
+    panel_h: float = 4.5,
+    extra_w: float = 1.0,
+) -> tuple[float, float]:
+    """Figure size for a 1×N panel row (+ colorbar gutter).
+
+    Dev mode: natural per-panel size. Publication mode: scaled to single-
+    column width (one panel) or page width (rows), aspect preserved."""
+    w = panel_w * n_panels + extra_w
+    h = panel_h
+    if _PUBLICATION:
+        target = COLUMN_WIDTH_IN if n_panels == 1 else PAGE_WIDTH_IN
+        scale = target / w
+        w, h = target, h * scale
+    return w, h
 
 
 def cmap(name: str) -> Colormap:
@@ -194,23 +244,23 @@ def apply_style() -> None:
         color=[STEEL_500, EMERALD_500, ZINC_400, ZINC_600])
     mpl.rcParams.update({
         "font.family": "sans-serif",
-        "font.size": 11,
-        "axes.titlesize": 14,
+        "font.size": FONT["tick"],
+        "axes.titlesize": FONT["title"],
         "axes.titlecolor": ZINC_700,
-        "axes.labelsize": 12,
+        "axes.labelsize": FONT["axis_label"],
         "axes.labelcolor": ZINC_600,
         "axes.edgecolor": ZINC_300,
         "axes.linewidth": 0.8,
         "xtick.color": ZINC_500,
         "ytick.color": ZINC_500,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "xtick.labelsize": FONT["tick"],
+        "ytick.labelsize": FONT["tick"],
         "xtick.major.size": 3,
         "ytick.major.size": 3,
         "xtick.major.width": 0.6,
         "ytick.major.width": 0.6,
         "legend.frameon": False,
-        "legend.fontsize": 10,
+        "legend.fontsize": FONT["legend"],
         "figure.facecolor": "white",
         "axes.facecolor": "white",
         "savefig.facecolor": "white",
@@ -703,13 +753,27 @@ def annotate_point(
                                              alpha=0.85)])
 
 
-def save_fig(path: str, dpi: int | None = None) -> None:
+def save_fig(
+    path: str,
+    dpi: int | None = None,
+    *,
+    publication: bool | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Save current figure and close.
+
+    Dev default: 150-dpi PNG. Publication (explicit arg, else
+    ``set_publication_mode``): dual output — a vector PDF next to a
+    300-dpi PNG. ``metadata`` (e.g. provenance: round, kappa, seed,
+    commit) embeds into PNG text chunks and the PDF Subject field —
+    invisible on the figure, so every artifact stays traceable to the
+    run that made it.
 
     If the active figure carries a PFAB subtitle (set by
     `figure_subtitle`), reserves the top band so subplot titles do not
     collide with it.
     """
+    pub = _PUBLICATION if publication is None else publication
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fig = plt.gcf()
     if fig.get_layout_engine() is not None:
@@ -718,7 +782,19 @@ def save_fig(path: str, dpi: int | None = None) -> None:
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     else:
         plt.tight_layout()
-    plt.savefig(path, dpi=dpi or PUBLICATION_DPI, bbox_inches="tight")
+
+    meta = {str(k): str(v) for k, v in (metadata or {}).items()}
+    png_dpi = dpi or (PUBLICATION_DPI if pub else DEV_DPI)
+    plt.savefig(path, dpi=png_dpi, bbox_inches="tight",
+                metadata=meta or None)
+    if pub:
+        root, ext = os.path.splitext(path)
+        if ext.lower() != ".pdf":
+            pdf_meta: dict[str, str] = {"Creator": "pred-fab"}
+            if meta:
+                pdf_meta["Subject"] = json.dumps(meta)
+            plt.savefig(root + ".pdf", bbox_inches="tight",
+                        metadata=pdf_meta)
     plt.close()
 
 

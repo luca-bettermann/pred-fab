@@ -182,5 +182,4 @@ def plot_multi_angle(
             param_transform=param_transform,
         )
 
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    save_fig(path)

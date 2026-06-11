@@ -9,7 +9,13 @@ from ._style import (
     AxisSpec,
     SemanticSurface,
     PUBLICATION_DPI,
+    DEV_DPI,
+    COLUMN_WIDTH_IN,
+    PAGE_WIDTH_IN,
     TRUST_THRESHOLD,
+    fig_size,
+    is_publication_mode,
+    set_publication_mode,
     save_fig,
     cmap,
     surface,
@@ -39,7 +45,7 @@ from ._style import (
 )
 
 from .discovery import plot_parameter_space, plot_parameter_space_per_cell, plot_mean_error_topology, plot_parameter_space_3d, plot_dimensional_trajectories
-from .prediction import plot_topology_comparison, plot_importance_weights
+from .prediction import plot_topology_comparison, plot_importance_weights, overlay_diagnosed_points
 from .evolution import plot_topology_evolution
 from .exploration import plot_acquisition
 from .inference import plot_inference_result
@@ -82,7 +88,11 @@ __all__ = [
     "plot_acquisition",
     "add_evidence_fade",
     "annotate_point",
+    "overlay_diagnosed_points",
     "row_colorbar",
+    "fig_size",
+    "set_publication_mode",
+    "is_publication_mode",
     "TRUST_THRESHOLD",
     "plot_inference_result",
     "plot_trajectory_comparison",

@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, save_fig, _add_fixed_subtitle, annotate_point,
+    AxisSpec, fig_size, save_fig, _add_fixed_subtitle, annotate_point,
     apply_style, subplot_topology,
     ACCENT_YELLOW,
 )
@@ -41,7 +41,7 @@ def plot_acquisition(
     acquisition surface is a decision surface, not a model claim.
     """
     apply_style()
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig, axes = plt.subplots(1, 3, figsize=fig_size(3, panel_w=5.0, panel_h=5.0))
     _add_fixed_subtitle(fig, fixed_params)
 
     panels = [

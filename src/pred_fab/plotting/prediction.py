@@ -6,9 +6,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, FONT, save_fig, _add_fixed_subtitle, subplot_topology,
-    apply_style, clean_spines, row_colorbar, ACCENT_RED, EMERALD_500,
-    STEEL_300, STEEL_500, ZINC_300, ZINC_400, ZINC_700,
+    AxisSpec, FONT, fig_size, save_fig, _add_fixed_subtitle,
+    subplot_topology, apply_style, clean_spines, row_colorbar,
+    ACCENT_RED, EMERALD_500,
+    STEEL_300, STEEL_500, ZINC_300, ZINC_400, ZINC_600, ZINC_700,
 )
 
 
@@ -33,7 +34,7 @@ def plot_topology_comparison(
     """
     apply_style()
     n = len(grids)
-    fig, axes = plt.subplots(1, n, figsize=(4.6 * n + 1.0, 5),
+    fig, axes = plt.subplots(1, n, figsize=fig_size(n, panel_w=4.6, panel_h=5.0),
                              layout="constrained", squeeze=False)
     axes = axes[0]
     _add_fixed_subtitle(fig, fixed_params)
@@ -53,6 +54,41 @@ def plot_topology_comparison(
 
     row_colorbar(fig, axes, im)
     save_fig(save_path)
+
+
+def overlay_diagnosed_points(
+    ax,
+    diagnostic: Any,
+    x_axis: AxisSpec,
+    y_axis: AxisSpec,
+    *,
+    point_size: float = 32,
+) -> None:
+    """Overlay CV error-vs-coverage diagnosed points, quadrant-coded.
+
+    ``diagnostic`` is an ``ErrorCoverageDiagnostic`` (or any iterable of
+    ``DiagnosedPoint``-likes with ``params``/``label``). Color carries the
+    quadrant: red = model problem, hollow = under-explored,
+    emerald = trustworthy, zinc = sparse-but-ok. Opt-in — meant for
+    prediction topologies, where it shows where the model was *checked*.
+    """
+    # Lazy import: the label constants' SSOT lives with the CV instrument,
+    # but plotting must not pull orchestration (and torch) in at import time.
+    from ..orchestration.cross_validation import (
+        MODEL_PROBLEM, SPARSE_OK, TRUSTWORTHY, UNDER_EXPLORED,
+    )
+    styles: dict[str, tuple[str, str]] = {
+        MODEL_PROBLEM:  (ACCENT_RED, "white"),
+        UNDER_EXPLORED: ("white", ZINC_600),
+        TRUSTWORTHY:    (EMERALD_500, "white"),
+        SPARSE_OK:      (ZINC_400, "white"),
+    }
+    points = getattr(diagnostic, "points", diagnostic)
+    for p in points:
+        face, edge = styles.get(p.label, (ZINC_400, "white"))
+        ax.scatter([float(p.params[x_axis.key])], [float(p.params[y_axis.key])],
+                   c=face, edgecolors=edge, linewidths=0.7, s=point_size,
+                   zorder=7)
 
 
 def plot_importance_weights(
