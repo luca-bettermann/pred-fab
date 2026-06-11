@@ -18,7 +18,7 @@ def plot_sensitivity_matrix(
     outputs: list[str],
     S_T_conf: np.ndarray | None = None,
     title: str = "Sobol Total-Order Sensitivity",
-    cmap: str = "YlOrRd",
+    cmap: str = "steel_progression",
     dpi: int = 200,
 ) -> None:
     """Render Sobol S_T matrix as an annotated heatmap.

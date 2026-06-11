@@ -19,6 +19,7 @@ from ._style import (
     subplot_topology,
     save_fig,
     STEEL_500,
+    STEEL_700,
     ZINC_400,
 )
 
@@ -100,14 +101,14 @@ def _overlay_points(
                 layer_frac[j] = k / (len(mask) - 1)
             ex = [px[j] for j in mask]
             ey = [py[j] for j in mask]
-            ax.plot(ex, ey, color="#E8913A", linewidth=0.6, alpha=0.4, zorder=1)
+            ax.plot(ex, ey, color=STEEL_500, linewidth=0.6, alpha=0.4, zorder=1)
         if mask:
             ax.annotate(f"{eid+1}", (px[mask[0]], py[mask[0]]), fontsize=FONT["annotation"],
                        ha="center", va="bottom", xytext=(0, 5),
-                       textcoords="offset points", color="#B06A1E")
+                       textcoords="offset points", color=STEEL_700)
 
-    cm = plt.get_cmap("Oranges")
-    colors = [cm(0.3 + 0.55 * layer_frac[j]) for j in range(len(points))]
+    cm = plt.get_cmap("steel_progression")
+    colors = [cm(0.15 + 0.85 * layer_frac[j]) for j in range(len(points))]
     ax.scatter(px, py, s=60, c=colors, edgecolors="white",
                linewidth=0.8, zorder=5)
 

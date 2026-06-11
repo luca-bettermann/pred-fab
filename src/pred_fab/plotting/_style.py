@@ -13,7 +13,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from cycler import cycler
 import numpy as np
+import matplotlib.patheffects as _pe
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from matplotlib.patches import Circle
@@ -85,13 +87,25 @@ _truncate_cmap("YlGn", "YlGn_soft", lo=0.0, hi=0.80)
 _truncate_cmap("Greys", "Greys_soft", lo=0.0, hi=0.80)
 _truncate_cmap("RdYlGn", "RdYlGn_soft", lo=0.20, hi=0.80)
 _truncate_cmap("magma", "magma_soft", lo=0.10, hi=1.0)
+_truncate_cmap("Reds", "Reds_soft", lo=0.0, hi=0.80)
 SURFACES: dict[str, SemanticSurface] = {
     "density":       SemanticSurface("Greys_soft", bounded=False),
     "evidence":      SemanticSurface("Blues_soft",   bounded=True),
     "evidence_gain": SemanticSurface("YlGn_soft",   bounded=True),
     "performance":   SemanticSurface("RdYlGn_soft", bounded=True),
     "acquisition":   SemanticSurface("magma_soft",   bounded=True),
+    "error":         SemanticSurface("Reds_soft",    bounded=False),
 }
+
+# Progression ramps: palette-conform ordered series (step/layer/rank indices)
+# for markers and lines — distinct from SURFACES, which color fields.
+_PROGRESSIONS = {
+    "steel_progression":   [STEEL_100, STEEL_300, STEEL_500, STEEL_700, STEEL_900],
+    "emerald_progression": [EMERALD_100, EMERALD_300, EMERALD_500, EMERALD_700, EMERALD_900],
+    "zinc_progression":    [ZINC_200, ZINC_400, ZINC_500, ZINC_600, ZINC_700],
+}
+for _name, _stops in _PROGRESSIONS.items():
+    mpl.colormaps.register(_LSC.from_list(_name, _stops, N=256))
 
 # Markers: semantic point types.
 @dataclass(frozen=True)
@@ -176,6 +190,8 @@ def surface(name: str) -> SemanticSurface:
 
 def apply_style() -> None:
     """Set matplotlib rcParams to the PFAB visual-identity defaults."""
+    mpl.rcParams["axes.prop_cycle"] = cycler(
+        color=[STEEL_500, EMERALD_500, ZINC_400, ZINC_600])
     mpl.rcParams.update({
         "font.family": "sans-serif",
         "font.size": 11,
@@ -424,6 +440,7 @@ def subplot_topology(
     label: str | None = None,
     levels: int = 20,
     contour_overlay: bool = True,
+    contour_labels: bool = True,
     vmin: float | None = None,
     vmax: float | None = None,
     fit_to_data: bool = False,
@@ -440,6 +457,7 @@ def subplot_topology(
     show_colorbar: bool = True,
     cbar_label: str | None = None,
     cbar_lim: float | None = None,
+    cbar_mark: tuple[float, str] | None = None,
 ):
     """Render a topology panel: contourf + optional white contours + scatter + colorbar.
 
@@ -476,8 +494,14 @@ def subplot_topology(
     im = ax.contourf(x_values, y_values, grid, levels=fill_levels, cmap=cm,
                      vmin=vmin, vmax=vmax, extend=extend)
     if contour_overlay:
-        ax.contour(x_values, y_values, grid, levels=max(levels // 2, 4),
-                   colors="white", linewidths=0.3, alpha=0.5)
+        cs = ax.contour(x_values, y_values, grid, levels=max(levels // 4, 4),
+                        colors="white", linewidths=0.4, alpha=0.7)
+        if contour_labels:
+            texts = ax.clabel(cs, fontsize=FONT["annotation"] - 1, fmt="%.2f",
+                              colors=ZINC_600, inline=True, inline_spacing=2)
+            for t in texts:
+                t.set_path_effects([_pe.withStroke(
+                    linewidth=1.8, foreground="white", alpha=0.9)])
     if evidence_grid is not None:
         add_evidence_fade(ax, x_values, y_values, evidence_grid,
                           trust_threshold=trust_threshold,
@@ -500,6 +524,13 @@ def subplot_topology(
         style_colorbar(cbar)
         if cbar_lim is not None:
             cbar.ax.set_ylim(0, cbar_lim)
+        if cbar_mark is not None:
+            mark_val, mark_label = cbar_mark
+            cbar.ax.axhline(mark_val, color=ZINC_700, lw=1.0)
+            cbar.ax.text(1.5, mark_val, f" {mark_label}",
+                         transform=cbar.ax.get_yaxis_transform(),
+                         fontsize=FONT["annotation"] - 1, color=ZINC_600,
+                         va="center")
 
     return im
 
@@ -630,6 +661,36 @@ def draw_datapoints(
                    linewidth=0.8, zorder=zorder, alpha=alpha)
 
 
+def annotate_point(
+    ax,
+    x: float,
+    y: float,
+    text: str,
+    *,
+    color: str = ZINC_700,
+    fontsize: float | None = None,
+    offset: tuple[float, float] = (8, 6),
+) -> None:
+    """Direct label next to a marker — white halo keeps it legible on any field.
+
+    Flips to the other side of the marker when the point sits near the top or
+    right edge, so labels never clip out of the axes.
+    """
+    dx, dy = offset
+    ha, va = "left", "bottom"
+    x0, x1 = ax.get_xlim()
+    if x1 != x0 and (x - x0) / (x1 - x0) > 0.72:
+        dx, ha = -abs(dx), "right"
+    y0, y1 = ax.get_ylim()
+    if y1 != y0 and (y - y0) / (y1 - y0) > 0.85:
+        dy, va = -abs(dy), "top"
+    ax.annotate(text, (x, y), xytext=(dx, dy), textcoords="offset points",
+                ha=ha, va=va,
+                fontsize=fontsize or FONT["annotation"], color=color, zorder=10,
+                path_effects=[_pe.withStroke(linewidth=2.2, foreground="white",
+                                             alpha=0.85)])
+
+
 def save_fig(path: str, dpi: int | None = None) -> None:
     """Save current figure and close.
 
@@ -662,10 +723,13 @@ def _add_fixed_subtitle(
     fig: plt.Figure,  # type: ignore[name-defined]
     fixed_params: dict[str, Any] | None,
 ) -> None:
+    """Render fixed params as a compact footer — metadata, kept off the data."""
     if not fixed_params:
         return
     parts = [f"{k} = {v}" for k, v in fixed_params.items()]
-    figure_subtitle(fig, "fixed: " + ", ".join(parts), fontsize=FONT["annotation"])
+    fig.text(0.99, 0.005, "fixed: " + ", ".join(parts),
+             ha="right", va="bottom",
+             fontsize=FONT["annotation"] - 1, color=ZINC_400)
 
 
 def _plot_trajectory_ranges(
@@ -680,7 +744,7 @@ def _plot_trajectory_ranges(
     alpha: float = 0.5,
     linewidth: float = 1.2,
     cap_size: float = 3.0,
-    step_dot_cmap: str = "Blues",
+    step_dot_cmap: str = "steel_progression",
     step_dot_size: float = 14,
 ) -> None:
     """Draw T-ended range lines + per-step dots for trajectory parameters."""
@@ -726,10 +790,8 @@ def _plot_trajectory_ranges(
         n = len(steps)
         for k, (xv, yv) in enumerate(zip(x_vals, y_vals)):
             t = k / max(n - 1, 1)
-            # Stay above the band where Blues is too pale to be visible
-            # against light backgrounds; map step index into [0.35, 0.95].
             ax.scatter([xv], [yv], s=step_dot_size,
-                       color=cmap(0.35 + 0.6 * t),
+                       color=cmap(0.15 + 0.85 * t),
                        edgecolors="white", linewidths=0.4,
                        zorder=3)
 

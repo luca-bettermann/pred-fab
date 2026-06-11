@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, FONT, save_fig, _add_fixed_subtitle,
+    AxisSpec, save_fig, _add_fixed_subtitle, annotate_point,
     apply_style, subplot_topology,
     ACCENT_YELLOW,
 )
@@ -58,9 +58,12 @@ def plot_acquisition(
                          point_size=18)
 
     if proposed is not None:
-        axes[2].plot(proposed[x_axis.key], proposed[y_axis.key],
-                     "x", color=ACCENT_YELLOW, ms=10,
-                     markeredgewidth=2, zorder=8, label="Proposed")
-        axes[2].legend(fontsize=FONT["legend"], loc="upper left", framealpha=0.8)
+        px, py = float(proposed[x_axis.key]), float(proposed[y_axis.key])
+        axes[2].plot(px, py, "x", color=ACCENT_YELLOW, ms=10,
+                     markeredgewidth=2, zorder=8)
+        ix = int(np.abs(np.asarray(x_values) - px).argmin())
+        iy = int(np.abs(np.asarray(y_values) - py).argmin())
+        annotate_point(axes[2], px, py,
+                       f"proposed · {float(combined_grid[iy, ix]):.2f}")
 
     save_fig(save_path)

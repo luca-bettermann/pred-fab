@@ -6,9 +6,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from ._style import (
-    AxisSpec, FONT, save_fig, _add_fixed_subtitle,
+    AxisSpec, save_fig, _add_fixed_subtitle, annotate_point,
     apply_style, subplot_topology,
-    ACCENT_YELLOW,
+    ACCENT_YELLOW, ZINC_900,
 )
 
 
@@ -47,14 +47,16 @@ def plot_inference_result(
                      cbar_label="Predicted Combined Score")
 
     if optimum is not None:
-        label = f"Optimum ({optimum_score:.3f})" if optimum_score is not None else "Optimum"
-        ax.plot(optimum[x_axis.key], optimum[y_axis.key], "*", color="white", ms=16,
-                markeredgecolor="black", markeredgewidth=1, zorder=8, label=label)
+        ox, oy = float(optimum[x_axis.key]), float(optimum[y_axis.key])
+        ax.plot(ox, oy, "*", color="white", ms=16,
+                markeredgecolor=ZINC_900, markeredgewidth=1, zorder=8)
+        text = (f"optimum · {optimum_score:.3f}" if optimum_score is not None
+                else "optimum")
+        annotate_point(ax, ox, oy, text)
 
-    prop_label = f"Proposed ({proposed_score:.3f})"
-    ax.plot(proposed[x_axis.key], proposed[y_axis.key], "x", color=ACCENT_YELLOW,
-            ms=14, markeredgewidth=2.5, zorder=9, label=prop_label)
-
-    ax.legend(fontsize=FONT["legend"], loc="upper left")
+    px, py = float(proposed[x_axis.key]), float(proposed[y_axis.key])
+    ax.plot(px, py, "x", color=ACCENT_YELLOW,
+            ms=14, markeredgewidth=2.5, zorder=9)
+    annotate_point(ax, px, py, f"proposed · {proposed_score:.3f}")
 
     save_fig(save_path)

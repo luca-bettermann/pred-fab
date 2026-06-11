@@ -7,25 +7,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import Normalize
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, FONT, save_fig, _extract_xy, _add_fixed_subtitle,
     apply_style, subplot_topology,
-    STEEL_500, ZINC_400, ZINC_600,
+    STEEL_500, ZINC_400, ZINC_600, ZINC_900,
 )
 
-# Colormaps
-_STEEL_CMAP = LinearSegmentedColormap.from_list(
-    "steel", ["#D6E4F0", "#8BB0CC", "#4A7FA5", "#2D5F85", "#1A3A5C"]
-)
-_EMERALD_CMAP = LinearSegmentedColormap.from_list(
-    "emerald", ["#D1FAE5", "#6EE7B7", "#10B981", "#047857", "#064E3B"]
-)
-_ZINC_CMAP = LinearSegmentedColormap.from_list(
-    "zinc", ["#E4E4E7", "#A1A1AA", "#71717A", "#52525B", "#3F3F46"]
-)
+_STEEL_CMAP = matplotlib.colormaps["steel_progression"]
+_EMERALD_CMAP = matplotlib.colormaps["emerald_progression"]
+_ZINC_CMAP = matplotlib.colormaps["zinc_progression"]
 
 
 # ── Shared 3D helpers ──
@@ -110,7 +103,7 @@ def plot_parameter_space(
                          vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
                          evidence_grid=ev,
                          points=points, trajectories=trajectories, codes=codes,
-                         point_size=20, point_edge="black")
+                         point_size=20, point_edge=ZINC_900)
 
     save_fig(save_path)
 
@@ -151,7 +144,7 @@ def plot_parameter_space_per_cell(
     panels = [
         (true_grid, f"Ground Truth{cell_suffix}", "performance", val_vmin, val_vmax),
         (pred_grid, f"Model Prediction{cell_suffix}", "performance", val_vmin, val_vmax),
-        (diff_grid, f"|Truth − Pred|{cell_suffix}", "Reds", 0.0, max(diff_vmax, 1e-9)),
+        (diff_grid, f"|Truth − Pred|{cell_suffix}", "error", 0.0, max(diff_vmax, 1e-9)),
     ]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
@@ -162,7 +155,7 @@ def plot_parameter_space_per_cell(
                          cmap_name=cmap, label=label,
                          vmin=vmin, vmax=vmax,
                          points=points, trajectories=trajectories, codes=codes,
-                         point_size=20, point_edge="black")
+                         point_size=20, point_edge=ZINC_900)
 
     save_fig(save_path)
 
@@ -192,10 +185,10 @@ def plot_mean_error_topology(
     fig, ax = plt.subplots(1, 1, figsize=(7, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, mean_diff_grid,
-                     cmap_name="Reds", label=label,
+                     cmap_name="error", label=label,
                      vmin=0.0, vmax=max(vmax, 1e-9),
                      points=points, trajectories=trajectories, codes=codes,
-                     point_size=20, point_edge="black")
+                     point_size=20, point_edge=ZINC_900)
 
     save_fig(save_path)
 
@@ -246,7 +239,7 @@ def plot_parameter_space_3d(
             s=50, edgecolors="white", linewidth=0.6, zorder=5, depthshade=False,
         )
         for i, (x, y, z) in enumerate(zip(px, py, pz)):
-            ax.text(x, y, z, f" {i+1}", fontsize=6, color="#666", zorder=6)
+            ax.text(x, y, z, f" {i+1}", fontsize=6, color=ZINC_600, zorder=6)
         cb = fig.colorbar(sc, ax=ax, shrink=0.6, pad=0.1)
         cb.set_label(z_axis.display_label, fontsize=FONT["axis_label"])
 
