@@ -386,6 +386,7 @@ def subplot_topology(
     contour_overlay: bool = True,
     vmin: float | None = None,
     vmax: float | None = None,
+    fit_to_data: bool = False,
     points: list[dict[str, Any]] | None = None,
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
@@ -404,13 +405,28 @@ def subplot_topology(
     (density, evidence, evidence_gain, performance, acquisition) or any raw
     matplotlib colormap name.
 
+    Bounded semantic surfaces (``SemanticSurface.bounded``) render on their
+    fixed [vmin, vmax] scale by default so identical values look identical
+    across figures; pass ``fit_to_data=True`` to fit the color range to the
+    grid instead (e.g. for small-magnitude gain fields). Explicit
+    ``vmin``/``vmax`` always win.
+
     ``cbar_lim`` truncates the colorbar to [0, cbar_lim] while keeping the
     color mapping at [vmin, vmax] — so colors stay comparable across plots
     but the colorbar shows the actual data peak.
     """
     cm = _resolve_cmap(cmap_name)
-    im = ax.contourf(x_values, y_values, grid, levels=levels, cmap=cm,
-                     vmin=vmin, vmax=vmax)
+    surf = SURFACES.get(cmap_name)
+    fill_levels: int | np.ndarray = levels
+    extend = "neither"
+    if surf is not None and surf.bounded and not fit_to_data:
+        vmin = surf.vmin if vmin is None else vmin
+        vmax = surf.vmax if vmax is None else vmax
+        # Fixed level edges, not just a fixed norm — fill bands match across figures.
+        fill_levels = np.linspace(vmin, vmax, levels + 1)
+        extend = "both"
+    im = ax.contourf(x_values, y_values, grid, levels=fill_levels, cmap=cm,
+                     vmin=vmin, vmax=vmax, extend=extend)
     if contour_overlay:
         ax.contour(x_values, y_values, grid, levels=max(levels // 2, 4),
                    colors="white", linewidths=0.3, alpha=0.5)

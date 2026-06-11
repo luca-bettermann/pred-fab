@@ -20,8 +20,13 @@ def plot_topology_comparison(
     grids: dict[str, np.ndarray],
     *,
     fixed_params: dict[str, Any] | None = None,
+    fit_to_data: bool = False,
 ) -> None:
-    """Side-by-side contour plots for comparing topologies on shared color scale."""
+    """Side-by-side contour plots for comparing topologies on shared color scale.
+
+    Shared scale is the bounded [0,1] default, or — with ``fit_to_data`` —
+    bounds computed across *all* grids.
+    """
     apply_style()
     n = len(grids)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
@@ -29,13 +34,15 @@ def plot_topology_comparison(
         axes = [axes]
     _add_fixed_subtitle(fig, fixed_params)
 
-    all_vals = np.concatenate([g.ravel() for g in grids.values()])
-    vmin, vmax = float(all_vals.min()), float(all_vals.max())
+    vmin = vmax = None
+    if fit_to_data:
+        all_vals = np.concatenate([g.ravel() for g in grids.values()])
+        vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
     for ax, (label, data) in zip(axes, grids.items()):
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, data,
                          cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax)
+                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data)
 
     save_fig(save_path)
 

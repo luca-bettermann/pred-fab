@@ -19,7 +19,7 @@ def plot_acquisition(
     x_values: np.ndarray,
     y_values: np.ndarray,
     perf_grid: np.ndarray,
-    unc_grid: np.ndarray,
+    gain_grid: np.ndarray,
     combined_grid: np.ndarray,
     *,
     points: list[dict[str, Any]] | None = None,
@@ -28,19 +28,25 @@ def plot_acquisition(
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
 ) -> None:
-    """3-panel: performance | evidence | combined acquisition."""
+    """3-panel: performance | evidence gain | combined acquisition.
+
+    ``gain_grid`` is the evidence-*gain* field from
+    ``compute_acquisition_grids`` — small magnitudes, so it renders
+    fit-to-data (anchored at 0) rather than on the [0,1] scale.
+    """
     apply_style()
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     _add_fixed_subtitle(fig, fixed_params)
 
     panels = [
-        (axes[0], perf_grid, "Performance", "performance"),
-        (axes[1], unc_grid, "Evidence", "evidence"),
-        (axes[2], combined_grid, "Combined", "acquisition"),
+        (axes[0], perf_grid, "Performance", "performance", False),
+        (axes[1], gain_grid, "Evidence Gain", "evidence_gain", True),
+        (axes[2], combined_grid, "Combined", "acquisition", False),
     ]
-    for ax, grid, label, cmap_name in panels:
+    for ax, grid, label, cmap_name, fit in panels:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name=cmap_name, label=label,
+                         vmin=0.0 if fit else None, fit_to_data=fit,
                          points=points, trajectories=trajectories, codes=codes,
                          point_size=18)
 

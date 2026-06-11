@@ -82,10 +82,18 @@ def plot_parameter_space(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    fit_to_data: bool = False,
 ) -> None:
-    """1x2: ground truth topology + initial model topology."""
+    """1x2: ground truth topology + initial model topology.
+
+    Panels share one color scale: the bounded [0,1] default, or — with
+    ``fit_to_data`` — bounds computed across *both* grids.
+    """
     apply_style()
-    vmin, vmax = float(true_grid.min()), float(true_grid.max())
+    vmin = vmax = None
+    if fit_to_data:
+        all_vals = np.concatenate([true_grid.ravel(), pred_grid.ravel()])
+        vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
@@ -96,7 +104,7 @@ def plot_parameter_space(
     ]:
         subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
                          cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax,
+                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
                          points=points, trajectories=trajectories, codes=codes,
                          point_size=20, point_edge="black")
 
@@ -117,6 +125,7 @@ def plot_parameter_space_per_cell(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    fit_to_data: bool = False,
 ) -> None:
     """1x3: ground truth, model prediction, and absolute difference at one cell.
 
@@ -127,8 +136,11 @@ def plot_parameter_space_per_cell(
     apply_style()
     diff_grid = np.abs(true_grid - pred_grid)
 
-    val_vmin = float(min(true_grid.min(), pred_grid.min()))
-    val_vmax = float(max(true_grid.max(), pred_grid.max()))
+    if fit_to_data:
+        val_vmin = float(min(true_grid.min(), pred_grid.min()))
+        val_vmax = float(max(true_grid.max(), pred_grid.max()))
+    else:
+        val_vmin = val_vmax = None
     diff_vmax = float(diff_grid.max()) if diff_grid.size > 0 else 1.0
 
     cell_suffix = f"  ·  {cell_label}" if cell_label else ""

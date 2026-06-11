@@ -53,6 +53,62 @@ def test_radar_legend_uses_passed_labels():
     plt.close(fig)
 
 
+def test_bounded_surface_defaults_to_unit_scale(axes_2d, grids):
+    """Bounded semantics render on [0,1] regardless of the data range."""
+    from pred_fab.plotting._style import subplot_topology
+    x, y = axes_2d
+    xs, ys, perf, _, _ = grids
+    fig, ax = plt.subplots()
+    im = subplot_topology(ax, x, y, xs, ys, perf * 0.5 + 0.2,
+                          cmap_name="performance", show_colorbar=False)
+    assert im.norm.vmin == 0.0
+    assert im.norm.vmax == 1.0
+    plt.close(fig)
+
+
+def test_fit_to_data_overrides_bounded_default(axes_2d, grids):
+    from pred_fab.plotting._style import subplot_topology
+    x, y = axes_2d
+    xs, ys, perf, _, _ = grids
+    data = perf * 0.5 + 0.2  # range [0.2, 0.7]
+    fig, ax = plt.subplots()
+    im = subplot_topology(ax, x, y, xs, ys, data,
+                          cmap_name="performance", fit_to_data=True,
+                          show_colorbar=False)
+    assert im.norm.vmax < 1.0
+    plt.close(fig)
+
+
+def test_explicit_bounds_always_win(axes_2d, grids):
+    from pred_fab.plotting._style import subplot_topology
+    x, y = axes_2d
+    xs, ys, perf, _, _ = grids
+    fig, ax = plt.subplots()
+    im = subplot_topology(ax, x, y, xs, ys, perf,
+                          cmap_name="performance", vmin=0.25, vmax=0.75,
+                          show_colorbar=False)
+    assert im.norm.vmin == 0.25
+    assert im.norm.vmax == 0.75
+    plt.close(fig)
+
+
+def test_comparison_figures_render_shared_scale(tmp_path, axes_2d, grids):
+    from pred_fab.plotting.discovery import plot_parameter_space
+    from pred_fab.plotting.prediction import plot_topology_comparison
+    x, y = axes_2d
+    xs, ys, perf, _, _ = grids
+    pts = [{"water_ratio": 0.35, "print_speed": 30.0}]
+    plot_parameter_space(str(tmp_path / "ps.png"), x, y, xs, ys, pts,
+                         perf, perf * 0.8)
+    plot_parameter_space(str(tmp_path / "ps_fit.png"), x, y, xs, ys, pts,
+                         perf, perf * 0.8, fit_to_data=True)
+    plot_topology_comparison(str(tmp_path / "tc.png"), x, y, xs, ys,
+                             {"truth": perf, "model": perf * 0.8})
+    assert (tmp_path / "ps.png").exists()
+    assert (tmp_path / "ps_fit.png").exists()
+    assert (tmp_path / "tc.png").exists()
+
+
 def test_radar_legend_defaults_without_labels():
     fig, ax = plt.subplots(subplot_kw=dict(projection="polar"))
     radar_chart(ax, ["a", "b", "c"], values=[0.5, 0.6, 0.7])
