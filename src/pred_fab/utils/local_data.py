@@ -195,7 +195,27 @@ class LocalData:
             return True
         return False
 
-    def save_parameters(self, exp_codes: list[str], data: dict[str, dict[str, Any]], 
+    def save_experiment_sets(self, sets: list[dict[str, Any]]) -> bool:
+        """Save serialized ExperimentSet definitions to ``experiment_sets.json`` (schema root)."""
+        if not self.schema_folder:
+            raise ValueError("Schema folder not configured")
+        os.makedirs(self.schema_folder, exist_ok=True)
+        path = os.path.join(self.schema_folder, "experiment_sets." + FileFormat.JSON.value)
+        with open(path, 'w') as f:
+            json.dump(sets, f, indent=2)
+        return True
+
+    def load_experiment_sets(self) -> list[dict[str, Any]]:
+        """Load serialized ExperimentSet definitions; ``[]`` if none saved yet."""
+        if not self.schema_folder:
+            raise ValueError("Schema folder not configured")
+        path = os.path.join(self.schema_folder, "experiment_sets." + FileFormat.JSON.value)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return json.load(f)
+
+    def save_parameters(self, exp_codes: list[str], data: dict[str, dict[str, Any]],
                         recompute: bool, **kwargs) -> bool:
         """Save experiment parameters to local files."""
         return self._save_files_generic(

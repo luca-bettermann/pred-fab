@@ -10,6 +10,7 @@ from typing import Callable, Any, Literal
 import functools
 
 from .schema import DatasetSchema, assert_blocks_compatible
+from .experiment_set import ExperimentSet
 
 
 @dataclass(frozen=True)
@@ -525,7 +526,9 @@ class Dataset:
         
         # Master storage using ExperimentData
         self._experiments: dict[str, ExperimentData] = {}  # exp_code → ExperimentData
-        
+        # Named ExperimentSet groups (discovery / exploration runs, probes, ...)
+        self._experiment_sets: dict[str, ExperimentSet] = {}  # set code → ExperimentSet
+
         # Feature column names
         # self.feature_columns: dict[str, list[str]] | None = None
 
@@ -668,6 +671,34 @@ class Dataset:
         :meth:`get_experiment` for the data behind a code.
         """
         return [code for code, exp in self._experiments.items() if predicate(exp)]
+
+    # === ExperimentSet registry (named groups) ===
+
+    def add_experiment_set(self, eset: ExperimentSet) -> None:
+        """Register a named ExperimentSet (overwrites one with the same code)."""
+        self._experiment_sets[eset.code] = eset
+
+    def get_experiment_set(self, code: str) -> ExperimentSet:
+        if code not in self._experiment_sets:
+            raise KeyError(f"ExperimentSet {code!r} not found")
+        return self._experiment_sets[code]
+
+    def list_experiment_sets(self) -> list[ExperimentSet]:
+        return list(self._experiment_sets.values())
+
+    def save_experiment_sets(self) -> None:
+        """Persist all registered ExperimentSets to local storage (``experiment_sets.json``)."""
+        self.local_data.save_experiment_sets([e.to_dict() for e in self._experiment_sets.values()])
+
+    def load_experiment_sets(self) -> None:
+        """Load ExperimentSets from local storage, resolving ``parent`` links by code."""
+        raw = self.local_data.load_experiment_sets()
+        by_code = {d["code"]: ExperimentSet.from_dict(d) for d in raw}
+        for d in raw:  # second pass: wire parents now that all sets exist
+            parent_code = d.get("parent")
+            if parent_code is not None and parent_code in by_code:
+                by_code[d["code"]].parent = by_code[parent_code]
+        self._experiment_sets = by_code
 
     def list_dataset_codes(self) -> list[str]:
         """Return distinct ``dataset_code`` values across loaded experiments, preserving insertion order."""

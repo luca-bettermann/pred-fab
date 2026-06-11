@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from pred_fab.core import Dataset, DataModule
+from pred_fab.core import Dataset, DataModule, ExperimentSet, Strategy
 from pred_fab.interfaces import IExternalData
 from pred_fab.utils import SplitType
 from tests.utils.builders import (
@@ -297,6 +297,25 @@ def test_save_pushes_provenance_to_external(tmp_path):
     )
     ds.save_experiment("e1", verbose=False)
     assert ext.pushed["e1"] == {"design": "sobol", "seed": 1}
+
+
+def test_experiment_set_registry_round_trips_locally(tmp_path):
+    """ExperimentSets save to / load from local storage, resolving parent links by code."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds = Dataset(schema=schema, debug_flag=True)
+    disc = ExperimentSet("D1", Strategy.DISCOVERY, members=["e_d1", "e_d2"])
+    expl = ExperimentSet("E1", Strategy.EXPLORATION, members=["e_e1", "e_e2"], parent=disc)
+    ds.add_experiment_set(disc)
+    ds.add_experiment_set(expl)
+    ds.save_experiment_sets()
+
+    ds2 = Dataset(schema=schema, debug_flag=True)
+    ds2.load_experiment_sets()
+    assert {e.code for e in ds2.list_experiment_sets()} == {"D1", "E1"}
+    loaded = ds2.get_experiment_set("E1")
+    assert loaded.strategy is Strategy.EXPLORATION
+    assert loaded.members == ["e_e1", "e_e2"] and loaded.ordered is True
+    assert loaded.parent is ds2.get_experiment_set("D1")     # link resolved on load
 
 
 def test_load_provenance_falls_back_to_external(tmp_path):

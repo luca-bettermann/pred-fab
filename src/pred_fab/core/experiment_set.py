@@ -87,6 +87,24 @@ class ExperimentSet:
     def __iter__(self):
         return iter(self.members)
 
+    def to_dict(self) -> dict:
+        """Serialize (``parent`` as its code — the registry resolves the link on load)."""
+        return {
+            "code": self.code,
+            "strategy": self.strategy.value,
+            "members": list(self.members),
+            "ordered": bool(self.ordered),
+            "parent": self.parent.code if self.parent is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict, parent: ExperimentSet | None = None) -> ExperimentSet:
+        """Deserialize one set; ``parent`` is the resolved set named by ``d['parent']``."""
+        return cls(
+            code=d["code"], strategy=Strategy(d["strategy"]),
+            members=list(d.get("members", [])), ordered=d.get("ordered"), parent=parent,
+        )
+
 
 @dataclass
 class FitPart:

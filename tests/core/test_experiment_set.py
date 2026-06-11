@@ -91,3 +91,18 @@ def test_fit_at_on_batch_raises():
     disc = ExperimentSet("D1", Strategy.DISCOVERY, members=["d1"])
     with pytest.raises(ValueError, match="requires an ordered set"):
         disc.fit_at(0)
+
+
+# ===== serialization =====
+
+def test_to_dict_from_dict_round_trip():
+    disc = ExperimentSet("D1", Strategy.DISCOVERY, members=["d1", "d2"])
+    expl = ExperimentSet("E1", Strategy.EXPLORATION, members=["e1", "e2"], parent=disc)
+    d = expl.to_dict()
+    assert d == {
+        "code": "E1", "strategy": "exploration",
+        "members": ["e1", "e2"], "ordered": True, "parent": "D1",
+    }
+    back = ExperimentSet.from_dict(d, parent=disc)
+    assert back.code == "E1" and back.strategy is Strategy.EXPLORATION
+    assert back.members == ["e1", "e2"] and back.ordered is True and back.parent is disc
