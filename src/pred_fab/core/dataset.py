@@ -687,12 +687,19 @@ class Dataset:
         return list(self._experiment_sets.values())
 
     def save_experiment_sets(self) -> None:
-        """Persist all registered ExperimentSets to local storage (``experiment_sets.json``)."""
-        self.local_data.save_experiment_sets([e.to_dict() for e in self._experiment_sets.values()])
+        """Persist all registered ExperimentSets locally (``experiment_sets.json``) and push
+        them externally, so local and external storage mirror each other."""
+        serialized = [e.to_dict() for e in self._experiment_sets.values()]
+        self.local_data.save_experiment_sets(serialized)
+        if serialized and self.external_data is not None:
+            self.external_data.push_experiment_sets(serialized)
 
     def load_experiment_sets(self) -> None:
-        """Load ExperimentSets from local storage, resolving ``parent`` links by code."""
+        """Load ExperimentSets — local ``experiment_sets.json`` first, then the external source
+        if none are stored locally — resolving ``parent`` links by code."""
         raw = self.local_data.load_experiment_sets()
+        if not raw and self.external_data is not None:
+            raw = self.external_data.pull_experiment_sets()
         by_code = {d["code"]: ExperimentSet.from_dict(d) for d in raw}
         for d in raw:  # second pass: wire parents now that all sets exist
             parent_code = d.get("parent")

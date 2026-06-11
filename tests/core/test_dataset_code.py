@@ -231,6 +231,7 @@ class _RecordingExternal(IExternalData):
     def __init__(self) -> None:
         super().__init__(client=object())
         self.pushed: dict[str, dict] = {}
+        self.sets: list[dict] = []
 
     def pull_parameters(self, exp_codes):
         return list(exp_codes), {}
@@ -243,6 +244,13 @@ class _RecordingExternal(IExternalData):
         found = {c: self.pushed[c] for c in exp_codes if c in self.pushed}
         missing = [c for c in exp_codes if c not in self.pushed]
         return missing, found
+
+    def push_experiment_sets(self, sets, recompute=False):
+        self.sets = list(sets)
+        return True
+
+    def pull_experiment_sets(self):
+        return list(self.sets)
 
 
 def test_design_and_provenance_properties_default_empty(tmp_path):
@@ -316,6 +324,29 @@ def test_experiment_set_registry_round_trips_locally(tmp_path):
     assert loaded.strategy is Strategy.EXPLORATION
     assert loaded.members == ["e_e1", "e_e2"] and loaded.ordered is True
     assert loaded.parent is ds2.get_experiment_set("D1")     # link resolved on load
+
+
+def test_experiment_sets_push_to_external_on_save(tmp_path):
+    schema = build_mixed_feature_schema(tmp_path)
+    ext = _RecordingExternal()
+    ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
+    ds.add_experiment_set(ExperimentSet("D1", Strategy.DISCOVERY, members=["a", "b"]))
+    ds.save_experiment_sets()
+    assert {s["code"] for s in ext.sets} == {"D1"}     # pushed externally alongside local
+
+
+def test_experiment_sets_load_falls_back_to_external(tmp_path):
+    """No local experiment_sets.json → load pulls definitions from the external source."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ext = _RecordingExternal()
+    ext.sets = [
+        {"code": "E1", "strategy": "exploration", "members": ["e1"], "ordered": True, "parent": "D1"},
+        {"code": "D1", "strategy": "discovery", "members": ["d1"], "ordered": False, "parent": None},
+    ]
+    ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
+    ds.load_experiment_sets()
+    assert {e.code for e in ds.list_experiment_sets()} == {"D1", "E1"}
+    assert ds.get_experiment_set("E1").parent is ds.get_experiment_set("D1")   # pulled + resolved
 
 
 def test_load_provenance_falls_back_to_external(tmp_path):

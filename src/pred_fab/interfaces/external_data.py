@@ -49,6 +49,10 @@ class IExternalData(ABC):
         codes; returns (missing_codes, code→snapshot dict). Default: all missing."""
         return list(exp_codes), {}
 
+    def pull_experiment_sets(self) -> list[dict[str, Any]]:
+        """Fetch all serialized ExperimentSet definitions (named groups). Default: none."""
+        return []
+
     def push_parameters(self, exp_codes: list[str], parameters: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push parameters to external source; returns True on success. Default: no-op (False)."""
         return False
@@ -64,6 +68,11 @@ class IExternalData(ABC):
     def push_provenance(self, exp_codes: list[str], provenance: dict[str, dict[str, Any]], recompute: bool = False) -> bool:
         """Push generative provenance (config snapshots, incl. the queryable ``design``)
         to external source; returns True on success. Default: no-op (False)."""
+        return False
+
+    def push_experiment_sets(self, sets: list[dict[str, Any]], recompute: bool = False) -> bool:
+        """Push serialized ExperimentSet definitions (named groups) to external source;
+        returns True on success. Default: no-op (False)."""
         return False
 
     def push_features(self, exp_codes: list[str], features: dict[str, np.ndarray], recompute: bool = False, feature_name: str = "default", **kwargs) -> bool:
