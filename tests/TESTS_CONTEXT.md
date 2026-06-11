@@ -1,7 +1,7 @@
 # Tests — Context
 
 ## Status
-485 passing, 2 skipped (expected).
+663 passing, 2 xfailed (expected).
 
 ## Structure
 
@@ -11,6 +11,7 @@
 | `tests/interfaces/` | Interface contract compliance for feature/evaluation/prediction models |
 | `tests/orchestration/` | System contracts: CalibrationSystem, PfabAgent step methods, joint trajectory |
 | `tests/integration/` | End-to-end workflow: initialize → load → train → calibrate |
+| `tests/plotting/` | Figure rendering: bounded scales, evidence fade, evolution strips, publication mode |
 | `tests/utils/` | Shared mock builders and test fixtures |
 
 ## Test Conventions
