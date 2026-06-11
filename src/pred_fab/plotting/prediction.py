@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 from ._style import (
     AxisSpec, FONT, save_fig, _add_fixed_subtitle, subplot_topology,
-    apply_style, clean_spines, ACCENT_RED, EMERALD_500,
+    apply_style, clean_spines, row_colorbar, ACCENT_RED, EMERALD_500,
     STEEL_300, STEEL_500, ZINC_300, ZINC_400, ZINC_700,
 )
 
@@ -33,9 +33,9 @@ def plot_topology_comparison(
     """
     apply_style()
     n = len(grids)
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
-    if n == 1:
-        axes = [axes]
+    fig, axes = plt.subplots(1, n, figsize=(4.6 * n + 1.0, 5),
+                             layout="constrained", squeeze=False)
+    axes = axes[0]
     _add_fixed_subtitle(fig, fixed_params)
 
     vmin = vmax = None
@@ -43,12 +43,15 @@ def plot_topology_comparison(
         all_vals = np.concatenate([g.ravel() for g in grids.values()])
         vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
+    im = None
     for ax, (label, data) in zip(axes, grids.items()):
-        subplot_topology(ax, x_axis, y_axis, x_values, y_values, data,
-                         cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
-                         evidence_grid=(evidence_grids or {}).get(label))
+        im = subplot_topology(ax, x_axis, y_axis, x_values, y_values, data,
+                              cmap_name="performance", label=label,
+                              vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
+                              evidence_grid=(evidence_grids or {}).get(label),
+                              show_colorbar=False)
 
+    row_colorbar(fig, axes, im)
     save_fig(save_path)
 
 

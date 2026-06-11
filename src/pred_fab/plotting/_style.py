@@ -386,6 +386,18 @@ def style_colorbar(cbar) -> None:
         cbar.outline.set_linewidth(0.6)  # type: ignore[attr-defined]
 
 
+def row_colorbar(fig, axes, im, *, label: str | None = None):
+    """One shared colorbar for a row of same-scale panels.
+
+    Visually asserts the panels are comparable and frees the width N
+    per-panel colorbars would eat. Use with ``layout="constrained"``.
+    """
+    cbar = fig.colorbar(im, ax=list(axes), shrink=0.85, pad=0.015,
+                        label=label or "")
+    style_colorbar(cbar)
+    return cbar
+
+
 def _resolve_cmap(name: str):
     """Resolve a colormap by semantic registry name first, then fall back to mpl."""
     if name in SURFACES:
@@ -700,7 +712,9 @@ def save_fig(path: str, dpi: int | None = None) -> None:
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fig = plt.gcf()
-    if getattr(fig, "_pfab_has_subtitle", False):
+    if fig.get_layout_engine() is not None:
+        pass  # constrained layout manages spacing (incl. shared colorbars)
+    elif getattr(fig, "_pfab_has_subtitle", False):
         plt.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     else:
         plt.tight_layout()

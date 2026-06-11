@@ -12,7 +12,7 @@ from matplotlib.ticker import MaxNLocator
 
 from ._style import (
     AxisSpec, FONT, save_fig, _extract_xy, _add_fixed_subtitle,
-    apply_style, subplot_topology,
+    apply_style, row_colorbar, subplot_topology,
     STEEL_500, ZINC_400, ZINC_600, ZINC_900,
 )
 
@@ -91,20 +91,24 @@ def plot_parameter_space(
         all_vals = np.concatenate([true_grid.ravel(), pred_grid.ravel()])
         vmin, vmax = float(all_vals.min()), float(all_vals.max())
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5),
+                                   layout="constrained")
     _add_fixed_subtitle(fig, fixed_params)
 
+    im = None
     for ax, grid, label, ev in [
         (ax1, true_grid, "Ground Truth", None),
         (ax2, pred_grid, "Initial Model", evidence_grid),
     ]:
-        subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
-                         cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
-                         evidence_grid=ev,
-                         points=points, trajectories=trajectories, codes=codes,
-                         point_size=20, point_edge=ZINC_900)
+        im = subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
+                              cmap_name="performance", label=label,
+                              vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
+                              evidence_grid=ev,
+                              points=points, trajectories=trajectories,
+                              codes=codes, show_colorbar=False,
+                              point_size=20, point_edge=ZINC_900)
 
+    row_colorbar(fig, (ax1, ax2), im)
     save_fig(save_path)
 
 

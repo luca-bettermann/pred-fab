@@ -9,6 +9,7 @@ from ._style import (
     AxisSpec,
     SemanticSurface,
     PUBLICATION_DPI,
+    TRUST_THRESHOLD,
     save_fig,
     cmap,
     surface,
@@ -17,9 +18,12 @@ from ._style import (
     LINES,
     FILL_ALPHA,
     FONT,
+    add_evidence_fade,
+    annotate_point,
     apply_style,
     clean_spines,
     clean_3d_panes,
+    row_colorbar,
     subplot_label,
     subplot_topology,
     add_kernel_radii_2d,
@@ -36,6 +40,7 @@ from ._style import (
 
 from .discovery import plot_parameter_space, plot_parameter_space_per_cell, plot_mean_error_topology, plot_parameter_space_3d, plot_dimensional_trajectories
 from .prediction import plot_topology_comparison, plot_importance_weights
+from .evolution import plot_topology_evolution
 from .exploration import plot_acquisition
 from .inference import plot_inference_result
 from .trajectory import plot_trajectory_comparison
@@ -72,8 +77,13 @@ __all__ = [
     "plot_parameter_space_3d",
     "plot_dimensional_trajectories",
     "plot_topology_comparison",
+    "plot_topology_evolution",
     "plot_importance_weights",
     "plot_acquisition",
+    "add_evidence_fade",
+    "annotate_point",
+    "row_colorbar",
+    "TRUST_THRESHOLD",
     "plot_inference_result",
     "plot_trajectory_comparison",
     "plot_metric_topology",
