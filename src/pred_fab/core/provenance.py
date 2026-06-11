@@ -19,12 +19,16 @@ _STRATEGY_VALUES = {s.value for s in Strategy}
 
 @dataclass
 class Provenance:
-    """Typed view over a ``config_snapshot`` — round-trips losslessly via to/from_dict."""
+    """Typed view over a ``config_snapshot`` — round-trips losslessly via to/from_dict.
+
+    No schema version: under one-schema-per-stack (singleton, SSOT in code, snapshot in the
+    DB config record) the schema is constant within a study, so per-experiment versioning is
+    redundant — see the KB note *ExperimentSet data model refactor* → studies & schema.
+    """
     strategy: Strategy | None = None
     seed: int | None = None
     settings: dict[str, Any] = field(default_factory=dict)   # generative knobs
     origin: tuple[str, int | None] | None = None             # (origin set code, position)
-    schema_version: str | None = None
 
     @classmethod
     def from_dict(cls, snapshot: dict[str, Any] | None) -> "Provenance":
@@ -33,15 +37,11 @@ class Provenance:
         design = d.pop("design", None)
         seed = d.pop("seed", None)
         origin = d.pop("origin", None)
-        schema_version = d.pop("schema_version", None)
         strategy = Strategy(design) if design in _STRATEGY_VALUES else None
         origin_t: tuple[str, int | None] | None = None
         if isinstance(origin, (list, tuple)) and len(origin) == 2:
             origin_t = (str(origin[0]), origin[1])
-        return cls(
-            strategy=strategy, seed=seed, settings=d,
-            origin=origin_t, schema_version=schema_version,
-        )
+        return cls(strategy=strategy, seed=seed, settings=d, origin=origin_t)
 
     def to_dict(self) -> dict[str, Any]:
         """Reconstruct the flat ``config_snapshot`` dict (settings + the typed top-level keys)."""
@@ -52,8 +52,6 @@ class Provenance:
             out["seed"] = self.seed
         if self.origin is not None:
             out["origin"] = list(self.origin)
-        if self.schema_version is not None:
-            out["schema_version"] = self.schema_version
         return out
 
     def fit(self, origin_set: ExperimentSet) -> Fit:

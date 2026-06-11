@@ -15,11 +15,10 @@ def test_from_dict_parses_design_seed_and_settings():
 def test_round_trips_losslessly():
     snap = {
         "design": "sobol", "seed": 1, "kappa": None,
-        "param_bounds": {"p": [0, 1]}, "origin": ["E1", 3], "schema_version": "v2",
+        "param_bounds": {"p": [0, 1]}, "origin": ["E1", 3],
     }
     p = Provenance.from_dict(snap)
     assert p.origin == ("E1", 3)
-    assert p.schema_version == "v2"
     out = p.to_dict()
     assert out["design"] == "sobol" and out["seed"] == 1
     assert out["origin"] == ["E1", 3] and out["kappa"] is None
