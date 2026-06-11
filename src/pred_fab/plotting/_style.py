@@ -723,6 +723,76 @@ def draw_datapoints(
                    linewidth=0.8, zorder=zorder, alpha=alpha)
 
 
+def marginal_layout(
+    figsize: tuple[float, float],
+) -> tuple[Any, Any, Any, Any]:
+    """Main topology axes with top/right marginal-slice axes (BO-style).
+
+    Returns ``(fig, ax_main, ax_top, ax_right)``; marginal axes share the
+    main panel's x/y respectively.
+    """
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(2, 2, width_ratios=(4.0, 1.15),
+                          height_ratios=(1.15, 4.0),
+                          hspace=0.07, wspace=0.07)
+    ax_main = fig.add_subplot(gs[1, 0])
+    ax_top = fig.add_subplot(gs[0, 0], sharex=ax_main)
+    ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
+    return fig, ax_main, ax_top, ax_right
+
+
+def draw_marginal_slices(
+    ax_main,
+    ax_top,
+    ax_right,
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    grid: np.ndarray,
+    x_at: float,
+    y_at: float,
+    *,
+    vmin: float | None = 0.0,
+    vmax: float | None = 1.0,
+    color: str = STEEL_500,
+) -> None:
+    """1D slices of ``grid`` through (x_at, y_at) on the marginal axes.
+
+    The marginal value axes carry the numeric scale, so the main panel
+    needs no colorbar; dashed crosshairs on the main panel mark the slice
+    location.
+    """
+    ix = int(np.abs(np.asarray(x_values) - x_at).argmin())
+    iy = int(np.abs(np.asarray(y_values) - y_at).argmin())
+
+    crosshair = LINES["boundary"]
+    ax_main.axvline(x_at, color=crosshair.color, lw=crosshair.linewidth,
+                    ls=crosshair.linestyle, alpha=crosshair.alpha, zorder=6)
+    ax_main.axhline(y_at, color=crosshair.color, lw=crosshair.linewidth,
+                    ls=crosshair.linestyle, alpha=crosshair.alpha, zorder=6)
+
+    ax_top.plot(x_values, grid[iy, :], color=color, lw=1.6)
+    ax_top.fill_between(x_values, grid[iy, :], alpha=FILL_ALPHA["area"],
+                        color=color)
+    ax_top.axvline(x_at, color=crosshair.color, lw=crosshair.linewidth,
+                   ls=crosshair.linestyle, alpha=crosshair.alpha)
+    if vmin is not None and vmax is not None:
+        ax_top.set_ylim(vmin, vmax)
+    plt.setp(ax_top.get_xticklabels(), visible=False)
+    ax_top.tick_params(labelsize=FONT["tick"] - 1)
+    clean_spines(ax_top)
+
+    ax_right.plot(grid[:, ix], y_values, color=color, lw=1.6)
+    ax_right.fill_betweenx(y_values, grid[:, ix], alpha=FILL_ALPHA["area"],
+                           color=color)
+    ax_right.axhline(y_at, color=crosshair.color, lw=crosshair.linewidth,
+                     ls=crosshair.linestyle, alpha=crosshair.alpha)
+    if vmin is not None and vmax is not None:
+        ax_right.set_xlim(vmin, vmax)
+    plt.setp(ax_right.get_yticklabels(), visible=False)
+    ax_right.tick_params(labelsize=FONT["tick"] - 1)
+    clean_spines(ax_right)
+
+
 def annotate_point(
     ax,
     x: float,
@@ -739,13 +809,14 @@ def annotate_point(
     right edge, so labels never clip out of the axes.
     """
     dx, dy = offset
-    ha, va = "left", "bottom"
     x0, x1 = ax.get_xlim()
     if x1 != x0 and (x - x0) / (x1 - x0) > 0.72:
-        dx, ha = -abs(dx), "right"
+        dx = -abs(dx)
     y0, y1 = ax.get_ylim()
     if y1 != y0 and (y - y0) / (y1 - y0) > 0.85:
-        dy, va = -abs(dy), "top"
+        dy = -abs(dy)
+    ha = "left" if dx >= 0 else "right"
+    va = "bottom" if dy >= 0 else "top"
     ax.annotate(text, (x, y), xytext=(dx, dy), textcoords="offset points",
                 ha=ha, va=va,
                 fontsize=fontsize or FONT["annotation"], color=color, zorder=10,

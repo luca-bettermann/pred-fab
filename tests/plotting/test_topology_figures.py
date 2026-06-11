@@ -115,3 +115,27 @@ def test_radar_legend_defaults_without_labels():
     texts = [t.get_text() for t in ax.get_legend().get_texts()]
     assert texts[0] == "mean"
     plt.close(fig)
+
+
+def test_inference_with_marginals(tmp_path, axes_2d, grids):
+    from pred_fab.plotting.inference import plot_inference_result
+    x, y = axes_2d
+    xs, ys, perf, _, _ = grids
+    path = tmp_path / "inf_marg.png"
+    plot_inference_result(str(path), x, y, xs, ys, perf,
+                          {"water_ratio": 0.42, "print_speed": 40.0}, 0.81,
+                          optimum={"water_ratio": 0.44, "print_speed": 38.0},
+                          optimum_score=0.85, marginals=True)
+    assert path.exists()
+
+
+def test_marginal_slices_match_grid_rows():
+    from pred_fab.plotting._style import draw_marginal_slices, marginal_layout
+    xs = np.linspace(0, 1, 10)
+    ys = np.linspace(0, 1, 10)
+    grid = np.outer(np.linspace(0, 1, 10), np.linspace(0.5, 1, 10))
+    fig, ax, ax_top, ax_right = marginal_layout((7, 6.6))
+    draw_marginal_slices(ax, ax_top, ax_right, xs, ys, grid, 0.5, 0.5)
+    iy = int(np.abs(ys - 0.5).argmin())
+    np.testing.assert_allclose(ax_top.lines[0].get_ydata(), grid[iy, :])
+    plt.close(fig)
