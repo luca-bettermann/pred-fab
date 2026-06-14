@@ -370,6 +370,20 @@ class DataModule:
                 out[code] = y_dict[code]
         return out
 
+    def _y_export_columns(self) -> list[str]:
+        """Output columns plus any context-feature codes.
+
+        Context features are inputs, never outputs, so an export restricted to
+        ``output_columns`` filters them out of ``exported.y`` — and the X side
+        only carries parameter values, so the context column there is 0.0-fill.
+        Including the context codes here lets ``_inject_context_features_tensor``
+        recover the observed values. Safe because the y-normalisation fit and
+        the y-tensor build both iterate ``output_columns`` explicitly, so the
+        extra keys never enter y stats or the y tensor.
+        """
+        extra = [c for c in self._context_feature_codes if c not in self.output_columns]
+        return self.output_columns + extra
+
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
         if not self._initialized:
@@ -386,7 +400,7 @@ class DataModule:
         exported = self.dataset.export_to_tensor_dict(
             codes,
             x_columns=self.input_columns,
-            y_columns=self.output_columns,
+            y_columns=self._y_export_columns(),
             categorical_mappings=self.categorical_mappings,
             max_depth=self._max_depth,
         )
@@ -461,7 +475,7 @@ class DataModule:
         exported = self.dataset.export_to_tensor_dict(
             codes,
             x_columns=self.input_columns,
-            y_columns=self.output_columns,
+            y_columns=self._y_export_columns(),
             categorical_mappings=self.categorical_mappings,
             max_depth=self._max_depth,
         )
