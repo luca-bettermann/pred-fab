@@ -57,3 +57,17 @@ def test_integer_decode_is_differentiable():
     z = torch.tensor(2.3, requires_grad=True)
     v.decode(z).backward()
     assert z.grad is not None and bool(torch.isfinite(z.grad).all())
+
+
+def test_integer_decode_clamps_out_of_range_u():
+    """LBFGS is unconstrained, so decode must clamp u outside [0, range] to a
+    valid integer — the objective is never evaluated outside [lo, hi]."""
+    v = _int_var(1, 4)  # span = 3
+    for u in (-5.0, -0.4, 3.4, 9.0):
+        norm = float(v.decode(torch.tensor(u)).item())
+        assert -1e-9 <= norm <= 1.0 + 1e-9, f"norm {norm} out of [0,1] for u={u}"
+        raw = norm * v.span + v.lo
+        assert v.lo <= raw <= v.hi, f"raw {raw} out of [{v.lo},{v.hi}] for u={u}"
+    # boundary maps exactly
+    assert float(v.decode(torch.tensor(-2.0)).item()) == 0.0
+    assert float(v.decode(torch.tensor(5.0)).item()) == 1.0
