@@ -108,6 +108,9 @@ class MLPModel(IPredictionModel):
         column with ``d = _embedding_dim(C)`` (FastAI tabular heuristic).
         """
         self._cat_cardinalities = dict(col_to_cardinality)
+        # Seed before init: embeddings are built here (before train()'s seed),
+        # so without this the categorical model's init is non-reproducible.
+        torch.manual_seed(self.SEED)
         # ModuleDict keys must be strings.
         self._cat_embeddings = nn.ModuleDict({
             str(col_idx): nn.Embedding(C, _embedding_dim(C))
@@ -240,27 +243,29 @@ class MLPModel(IPredictionModel):
                 optimizer.step()
                 epoch_loss = float(loss.detach())
 
+            # Validation loss in eval() mode — train() leaves Dropout active,
+            # which would corrupt the reported val loss. Computed once and
+            # shared by both reporting hooks.
+            val_loss = None
+            if val_batches and (epoch_logger is not None or progress_callback is not None):
+                net.eval()
+                self._cat_embeddings.eval()
+                with torch.no_grad():
+                    X_val = torch.cat([b[0] for b in val_batches], dim=0)
+                    y_val = torch.cat([b[1] for b in val_batches], dim=0)
+                    if y_val.ndim == 1:
+                        y_val = y_val.reshape(-1, 1)
+                    val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
+                net.train()
+                self._cat_embeddings.train()
+
             if epoch_logger is not None:
                 metrics = {"loss/total": epoch_loss}
-                if val_batches:
-                    with torch.no_grad():
-                        X_val = torch.cat([b[0] for b in val_batches], dim=0)
-                        y_val = torch.cat([b[1] for b in val_batches], dim=0)
-                        if y_val.ndim == 1:
-                            y_val = y_val.reshape(-1, 1)
-                        val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
-                        metrics["loss/val"] = val_loss
+                if val_loss is not None:
+                    metrics["loss/val"] = val_loss
                 epoch_logger.log_epoch(epoch, metrics)
 
             if progress_callback is not None:
-                val_loss = None
-                if val_batches:
-                    with torch.no_grad():
-                        X_v = torch.cat([b[0] for b in val_batches], dim=0)
-                        y_v = torch.cat([b[1] for b in val_batches], dim=0)
-                        if y_v.ndim == 1:
-                            y_v = y_v.reshape(-1, 1)
-                        val_loss = float(loss_fn(net(self._embed_cats(X_v)), y_v))
                 progress_callback(epoch, self.EPOCHS, epoch_loss, val_loss)
 
         net.eval()
