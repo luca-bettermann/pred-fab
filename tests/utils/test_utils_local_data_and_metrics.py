@@ -83,3 +83,40 @@ def test_metrics_empty_arrays_return_zeros():
 
 
 # R²_inf tests moved to tests/utils/test_r2_inf.py
+
+
+def test_combined_score_renormalises_over_present_keys():
+    from pred_fab.utils import combined_score
+    weights = {"a": 1.0, "b": 1.0, "c": 2.0}
+    # full set: (1*0.5 + 1*0.5 + 2*1.0) / 4 = 0.75
+    assert combined_score({"a": 0.5, "b": 0.5, "c": 1.0}, weights) == pytest.approx(0.75)
+    # 'c' missing: must renormalise over a,b only -> (0.5+0.5)/2 = 0.5, NOT /4 = 0.25
+    assert combined_score({"a": 0.5, "b": 0.5}, weights) == pytest.approx(0.5)
+    # 'c' present but None: same as missing
+    assert combined_score({"a": 0.5, "b": 0.5, "c": None}, weights) == pytest.approx(0.5)
+
+
+def test_combined_score_ignores_unweighted_keys():
+    from pred_fab.utils import combined_score
+    weights = {"a": 1.0}
+    # 'b' has no weight: contributes nothing to numerator or denominator
+    assert combined_score({"a": 0.8, "b": 0.2}, weights) == pytest.approx(0.8)
+
+
+def test_combined_score_preserves_gradient_with_tensors():
+    import torch
+    from pred_fab.utils import combined_score
+    a = torch.tensor(0.4, requires_grad=True)
+    b = torch.tensor(0.6, requires_grad=True)
+    out = combined_score({"a": a, "b": b}, {"a": 1.0, "b": 3.0})
+    out.backward()
+    assert a.grad is not None and b.grad is not None
+    # weight-normalised gradients: dout/da = 1/4, dout/db = 3/4
+    assert float(a.grad) == pytest.approx(0.25)
+    assert float(b.grad) == pytest.approx(0.75)
+
+
+def test_combined_score_zero_total_weight_returns_zero():
+    from pred_fab.utils import combined_score
+    assert combined_score({"a": 0.5}, {"a": 0.0}) == 0.0
+    assert combined_score({}, {"a": 1.0}) == 0.0
