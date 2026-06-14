@@ -462,47 +462,19 @@ class PfabAgent:
     ) -> ExperimentSpec:
         """Tune on a step slice then return an online calibration proposal.
 
-        batch_size is derived automatically (one batch per dimension step);
-        pass ``batch_size=N`` via ``**kwargs`` to override.
+        Not yet implemented: requires trust-region optimization, which has not
+        been migrated to the unified ``_optimize`` path. Use ``exploration_step``
+        or ``inference_step`` for offline acquisition. Raises immediately with no
+        side effects (it must not tune the prediction model for an unsupported
+        operation).
+
+        TODO: migrate adaptation to ``_optimize`` with trust-region bounds.
         """
-        if self.pred_system is None:
-            raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
-        if self.calibration_system is None:
-            raise RuntimeError("CalibrationSystem not initialized. Call initialize() first.")
-
-        # Retrieve experiment data
-        exp_data, start, end = self._step_config(exp_data, dimension, step_index)
-
-        # Tune prediction system on the requested online slice.
-        temp_datamodule = self.pred_system.tune(
-            exp_data=exp_data,
-            start=start,
-            end=end,
-            **kwargs
-        )
-        self._log_step_completion(exp_data.code, start, end, action="used for tuning")
-
-        # Calibrate around effective current parameters (online = single step).
-        current_params = exp_data.get_effective_parameters_at_step(iterator_code=dimension, step_index=step_index)
-        target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
         raise NotImplementedError(
             "adaptation_step requires trust-region optimization (not yet migrated "
             "to the unified _optimize path). Use exploration_step or inference_step "
             "for offline acquisition."
         )
-        # TODO: migrate adaptation to _optimize with trust-region bounds
-        proposal = ParameterProposal.from_dict(
-            result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
-        )
-        result = ExperimentSpec(initial_params=proposal, trajectories=result.trajectories)
-
-        # Record only if user confirms that proposed changes were applied physically.
-        if record:
-            exp_data.record_parameter_update(proposal, iterator_code=dimension, step_index=step_index)
-            self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
-
-        self.logger.info("Successfully completed adaptation step.")
-        return result
 
     # === ADDITIONAL API CALLS ===
 
