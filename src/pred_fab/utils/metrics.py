@@ -11,17 +11,23 @@ def combined_score(
 ) -> Any:
     """Weighted combined performance score.
 
-    Computes sum(w_i * perf_i) / sum(w_i) over all keys in performance
-    that have a non-None value and a corresponding weight.
+    Computes sum(w_i * perf_i) / sum(w_i) over exactly the keys that have a
+    non-None performance value *and* a corresponding weight. The denominator
+    is summed over the same contributing keys as the numerator, so a missing
+    or NaN performance renormalises over what is present rather than deflating
+    the score by the absent term's weight (callers such as the acquisition
+    objective deliberately drop NaN performances before calling).
     Works with both Python floats and torch Tensors (preserves gradient).
     """
-    total_w = sum(weights.values())
+    contributing = [
+        (weights[k], v)
+        for k, v in performance.items()
+        if v is not None and k in weights
+    ]
+    total_w = sum(w for w, _ in contributing)
     if total_w == 0:
         return 0.0
-    score = sum(
-        weights.get(k, 0.0) * v
-        for k, v in performance.items() if v is not None
-    )
+    score = sum(w * v for w, v in contributing)
     return score / total_w
 
 

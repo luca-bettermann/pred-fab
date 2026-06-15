@@ -88,9 +88,23 @@ class InferenceBundle:
         X_norm_np = self._prepare_input(X)
         X_norm_t = torch.from_numpy(X_norm_np)
 
+        input_columns = self.normalization_state.get('input_columns', [])
+        col_to_idx = {c: i for i, c in enumerate(input_columns)}
+
         predictions: dict[str, Any] = {}
         for model in self.prediction_models:
-            y_pred_dict = model.forward_pass(X_norm_t)
+            # Each model was trained on its own input subset (X[:, input_indices]
+            # in PredictionSystem); forward_pass expects columns ordered by the
+            # model's input_parameters + input_features, not the full matrix.
+            model_cols = list(model.input_parameters) + list(model.input_features)
+            missing = [c for c in model_cols if c not in col_to_idx]
+            if missing:
+                raise ValueError(
+                    f"Model inputs {missing} absent from bundle input_columns; "
+                    f"bundle is inconsistent with the model."
+                )
+            idx = [col_to_idx[c] for c in model_cols]
+            y_pred_dict = model.forward_pass(X_norm_t[:, idx])
             y_pred_norm_np = np.stack(
                 [y_pred_dict[f].detach().cpu().numpy() for f in model.outputs], axis=-1,
             )
@@ -179,7 +193,22 @@ class InferenceBundle:
                     f"Unknown parameter '{param_name}'. "
                     f"Expected parameters: {sorted(schema_params)}"
                 )
-            
+
+        # Categorical values must be in the trained vocabulary — otherwise the
+        # cat-index encode would silently map them to index 0 (wrong predictions
+        # for a deployed model). Fail loudly instead.
+        categorical_mappings = self.normalization_state.get('categorical_mappings', {})
+        for col, categories in categorical_mappings.items():
+            if col not in X.columns:
+                continue
+            vocab = set(categories)
+            unknown = {v for v in X[col].tolist() if v not in vocab}
+            if unknown:
+                raise ValueError(
+                    f"Unknown categorical value(s) {sorted(map(str, unknown))} for "
+                    f"'{col}'. Trained categories: {list(categories)}"
+                )
+
             # TODO: Add range validation using schema constraints
     
     @property

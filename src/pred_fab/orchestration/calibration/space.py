@@ -92,7 +92,12 @@ class StaticVariable(Variable):
         if self.is_integer:
             # STE round in the [0,range] optimiser frame, then ÷range so the
             # norm frame is uniformly [0,1] (matches the continuous sigmoid).
+            # Clamp to [0, range]: LBFGS is unconstrained (engine.py uses
+            # torch.optim.LBFGS with no bounds), and unlike the sigmoid path
+            # the integer linear decode is not self-bounding, so without this
+            # the objective is evaluated at integers outside [lo, hi].
             rounded = u + (u.round() - u).detach()
+            rounded = rounded.clamp(0.0, self.span)
             return rounded / self.span if self.span > 0 else torch.zeros_like(u)
         return _sigmoid_k(u)
 

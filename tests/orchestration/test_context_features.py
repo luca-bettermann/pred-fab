@@ -130,6 +130,89 @@ def test_inject_context_features_no_context_noop(tmp_path):
     assert "temperature" not in result.columns
 
 
+# === Context features reach the live tensor training path (regression) ===
+
+def _build_scalar_context_schema(tmp_path) -> DatasetSchema:
+    """Schema with a scalar output feature and a scalar context feature."""
+    p1 = Parameter.real("param_1", min_val=0.0, max_val=10.0)
+    f_output = Feature("path_deviation")
+    f_context = Feature("temperature", context=True)
+    perf = PerformanceAttribute.score("accuracy")
+    feats = Features([f_output, f_context])
+    feats.get("path_deviation").set_columns(["path_deviation"])
+    feats.get("temperature").set_columns(["temperature"])
+    return DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_scalar_ctx",
+        parameters=Parameters([p1]),
+        features=feats,
+        performance=PerformanceAttributes([perf]),
+        domains=Domains([]),
+    )
+
+
+def test_y_export_columns_includes_context_codes(tmp_path):
+    """_y_export_columns appends context codes so the tensor export carries them."""
+    schema = _build_scalar_context_schema(tmp_path)
+    dm = DataModule(Dataset(schema=schema, debug_flag=True))
+    dm.initialize(
+        input_parameters=["param_1"],
+        input_features=["temperature"],
+        output_columns=["path_deviation"],
+    )
+    cols = dm._y_export_columns()
+    assert "path_deviation" in cols       # the real output
+    assert "temperature" in cols          # context code appended
+    # No context configured -> identical to output_columns
+    dm2 = DataModule(Dataset(schema=schema, debug_flag=True))
+    dm2.initialize(input_parameters=["param_1"], input_features=[],
+                   output_columns=["path_deviation"])
+    assert dm2._y_export_columns() == dm2.output_columns
+
+
+def test_context_feature_reaches_input_tensor_not_zeroed(tmp_path):
+    """Regression: a populated context feature must train as its observed value,
+    not the 0.0 X-fill. The DataFrame-only test above never exercised this
+    tensor path, so the bug (context filtered out of exported.y -> injection
+    never fires -> all-zeros input column) passed unnoticed."""
+    from pred_fab.utils.enum import SplitType
+    schema = _build_scalar_context_schema(tmp_path)
+    dataset = Dataset(schema=schema, debug_flag=True)
+
+    temps = {"exp_001": 22.5, "exp_002": 24.0}
+    for code, temp in temps.items():
+        dataset.create_experiment(code, parameters={"param_1": 2.5})
+        exp = dataset.get_experiment(code)
+        exp.features.set_value(
+            "temperature",
+            exp.features.table_to_tensor("temperature", np.array([[temp]]), exp.parameters),
+        )
+        exp.features.set_value(
+            "path_deviation",
+            exp.features.table_to_tensor("path_deviation", np.array([[0.1]]), exp.parameters),
+        )
+
+    dm = DataModule(dataset)
+    dm.initialize(
+        input_parameters=["param_1"],
+        input_features=["temperature"],
+        output_columns=["path_deviation"],
+    )
+    dm.set_split_codes(train_codes=list(temps), val_codes=[], test_codes=[])
+    dm.fit_normalization(SplitType.TRAIN)
+    batches = dm.get_batches(SplitType.TRAIN)
+
+    assert batches, "expected at least one training batch"
+    X = batches[0][0]
+    idx = dm.input_columns.index("temperature")
+    col = X[:, idx]
+    # The bug yields an all-zeros (constant) column; the two distinct observed
+    # temperatures must survive into the input tensor as distinct, non-constant
+    # values (normalisation is affine, so distinctness is preserved).
+    assert col.abs().sum().item() > 0.0
+    assert col.std().item() > 0.0
+
+
 # === PfabAgent context snapshot ===
 
 def test_agent_update_context_snapshot_updates_dict(tmp_path):

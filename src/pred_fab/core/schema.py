@@ -46,14 +46,16 @@ class DatasetSchema:
             parameters: Parameters,
             features: Features,
             performance: PerformanceAttributes,
-            domains: Domains = Domains()
+            domains: Domains | None = None
             ):
         """Initialize schema from DataBlocks."""
         self.name = name
         self.parameters = parameters
         self.features = features
         self.performance_attrs = performance
-        self.domains = domains
+        # Not a mutable default: a shared Domains() would leak axis state across
+        # all schemas constructed without explicit domains.
+        self.domains = domains if domains is not None else Domains()
 
         # Initialize local data handler and logger
         self.local_data = LocalData(root_folder)
