@@ -9,6 +9,7 @@ reproducibility, sets are grouping. See the KB note *ExperimentSet data model re
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,15 +33,42 @@ class Provenance:
 
     @classmethod
     def from_dict(cls, snapshot: dict[str, Any] | None) -> "Provenance":
-        """Parse a ``config_snapshot`` dict into a typed Provenance."""
+        """Parse a ``config_snapshot`` dict into a typed Provenance.
+
+        Lossless: a ``design`` not in :class:`Strategy` or a malformed ``origin``
+        is preserved verbatim in ``settings`` (and warned about) rather than
+        silently dropped, so ``to_dict(from_dict(x)) == x``.
+        """
         d = dict(snapshot or {})
-        design = d.pop("design", None)
         seed = d.pop("seed", None)
-        origin = d.pop("origin", None)
-        strategy = Strategy(design) if design in _STRATEGY_VALUES else None
+
+        # design → strategy; keep an unrecognised value in settings (lossless).
+        strategy: Strategy | None = None
+        design = d.get("design", None)
+        if design is not None:
+            if design in _STRATEGY_VALUES:
+                strategy = Strategy(design)
+                d.pop("design")
+            else:
+                warnings.warn(
+                    f"Provenance: unknown design {design!r} not in Strategy; "
+                    f"preserved in settings.",
+                    stacklevel=2,
+                )
+
+        # origin → typed tuple; keep a malformed value in settings (lossless).
         origin_t: tuple[str, int | None] | None = None
-        if isinstance(origin, (list, tuple)) and len(origin) == 2:
-            origin_t = (str(origin[0]), origin[1])
+        origin = d.get("origin", None)
+        if origin is not None:
+            if isinstance(origin, (list, tuple)) and len(origin) == 2:
+                origin_t = (str(origin[0]), origin[1])
+                d.pop("origin")
+            else:
+                warnings.warn(
+                    f"Provenance: malformed origin {origin!r}; preserved in settings.",
+                    stacklevel=2,
+                )
+
         return cls(strategy=strategy, seed=seed, settings=d, origin=origin_t)
 
     def to_dict(self) -> dict[str, Any]:

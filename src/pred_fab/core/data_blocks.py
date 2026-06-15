@@ -128,12 +128,13 @@ class DataBlock(ABC):
         return {
             "type": self.__class__.__name__,
             "data_objects": {
-                name: obj.to_dict() 
+                name: obj.to_dict()
                 for name, obj in self.data_objects.items()
             },
-            "values": self.values  # Include current values
+            "values": self.values,  # Include current values
+            "populated_status": self.populated_status,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Any:
         """Reconstruct from dictionary."""
@@ -145,10 +146,12 @@ class DataBlock(ABC):
             data_obj = DataObject.from_dict(obj_data)
             block.add(data_obj)
 
-        # Restore values if present
+        # Restore values with their populated state (a value set as
+        # not-populated must not round-trip as populated).
+        populated = data.get("populated_status", {})
         for name, value in data.get("values", {}).items():
             if name in block.data_objects:
-                block.set_value(name, value)
+                block.set_value(name, value, as_populated=populated.get(name, True))
         return block
     
     @classmethod
