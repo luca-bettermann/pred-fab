@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import matplotlib.pyplot as plt
 
+from ..utils.metrics import importance_weight, IMPORTANCE_FLOOR, IMPORTANCE_STEEPNESS
 from ._style import (
     AxisSpec, FONT, fig_size, save_fig, _add_fixed_subtitle,
     subplot_topology, apply_style, clean_spines, row_colorbar,
@@ -94,24 +95,27 @@ def overlay_diagnosed_points(
 def plot_importance_weights(
     save_path: str,
     experiment_scores: np.ndarray,
-    floor: float = 0.1,
-    steepness: float = 0.8,
+    floor: float = IMPORTANCE_FLOOR,
+    steepness: float = IMPORTANCE_STEEPNESS,
     validation_gaps: dict[str, float] | None = None,
 ) -> None:
     """1x2: sigmoid importance curve with experiment dots + per-feature R²_inf gaps."""
     apply_style()
     scores = np.asarray(experiment_scores)
+
+    # Same weighting as the prediction system (single source) — curve anchored
+    # to the experiment scores via ref_scores.
+    perf_range = np.linspace(0.0, 1.0, 200)
+    weights_curve = importance_weight(
+        perf_range, floor=floor, steepness=steepness, ref_scores=scores)
+    exp_weights = importance_weight(
+        scores, floor=floor, steepness=steepness)
+    midpoint = (1.0 + floor) / 2.0
+    # Display-only stats for the annotations (the weighting itself is computed
+    # by importance_weight above).
     s_mean = float(scores.mean())
     s_std = float(scores.std())
     k = steepness / s_std if s_std > 1e-10 else 0.0
-
-    perf_range = np.linspace(0.0, 1.0, 200)
-    sigmoid_curve = 1.0 / (1.0 + np.exp(-k * (perf_range - s_mean)))
-    weights_curve = floor + (1.0 - floor) * sigmoid_curve
-    midpoint = (1.0 + floor) / 2.0
-
-    exp_sigmoid = 1.0 / (1.0 + np.exp(-k * (scores - s_mean)))
-    exp_weights = floor + (1.0 - floor) * exp_sigmoid
 
     n_panels = 2 if validation_gaps else 1
     fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 4.5))

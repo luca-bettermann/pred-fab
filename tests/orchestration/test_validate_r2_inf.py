@@ -81,3 +81,21 @@ def test_validate_r2_inf_is_finite(trained_stack):
     for key, metrics in results.items():
         assert np.isfinite(metrics["r2"])
         assert np.isfinite(metrics["r2_inf"])
+
+
+def test_expand_per_experiment_handles_skipped_experiment():
+    """The identity-keyed expansion must survive an experiment contributing
+    zero rows — the old np.unique/zip alignment crashed or mis-weighted."""
+    from pred_fab.orchestration.prediction import PredictionSystem
+    per_exp = [0.1, 0.5, 0.9]  # weights for experiments 0, 1, 2
+    # Experiment 1 contributed no rows; rows come from exp 0 (×2) and exp 2 (×3).
+    row_exp_ids = np.array([0, 0, 2, 2, 2])
+    out = PredictionSystem._expand_per_experiment(per_exp, row_exp_ids)
+    np.testing.assert_array_equal(out, [0.1, 0.1, 0.9, 0.9, 0.9])
+
+
+def test_expand_per_experiment_empty_and_out_of_range():
+    from pred_fab.orchestration.prediction import PredictionSystem
+    assert PredictionSystem._expand_per_experiment([0.3], np.array([], dtype=int)).size == 0
+    with pytest.raises(ValueError, match="out of range"):
+        PredictionSystem._expand_per_experiment([0.3, 0.4], np.array([0, 2]))

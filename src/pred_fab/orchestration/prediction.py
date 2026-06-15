@@ -18,7 +18,7 @@ from ..core.data_objects import DataDomainAxis, DataArray
 from ..core.frames import to_unit_frame
 from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler
+from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler, importance_weight
 from ..utils.console import format_metrics_table
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
@@ -1189,8 +1189,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         dm: DataModule,
         split: SplitType,
         eval_system: Any | None = None,
-        floor: float = 0.1,
-        steepness: float = 0.8,
     ) -> dict[str, list[float]]:
         """Build per-experiment importance weights from stored performance scores.
 
@@ -1216,14 +1214,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         perf_importance: dict[str, list[float]] = {}
         for perf_code in perf_codes:
             scores = np.array([p.get(perf_code, 0.0) or 0.0 for p in perf_per_exp])
-            s_mean = float(scores.mean())
-            s_std = float(scores.std())
-            k = steepness / s_std if s_std > 1e-10 else 0.0
-            weights = []
-            for score in scores:
-                sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
-                weights.append(floor + (1.0 - floor) * sigmoid)
-            perf_importance[perf_code] = weights
+            perf_importance[perf_code] = importance_weight(scores).tolist()
 
         if eval_system is None:
             return perf_importance
@@ -1246,20 +1237,26 @@ class PredictionSystem(BaseOrchestrationSystem):
         return result
 
     @staticmethod
-    def _expand_importance(
-        per_exp_weights: list[float],
-        cell_meta: torch.Tensor,
+    def _expand_per_experiment(
+        per_exp_values: list[float] | np.ndarray,
+        row_exp_ids: np.ndarray,
     ) -> np.ndarray:
-        """Expand per-experiment importance to per-row using cell_meta exp_idx."""
-        exp_ids = cell_meta[:, 0].long().cpu().numpy()
-        unique_ids = np.unique(exp_ids)
-        if len(unique_ids) != len(per_exp_weights):
+        """Expand per-experiment values to per-row, keyed by each row's
+        experiment index into ``per_exp_values``.
+
+        Robust to experiments contributing any number of rows (including zero —
+        a skipped experiment simply never appears in ``row_exp_ids``). This is
+        the one identity-keyed expansion both the flat and the sequence
+        validation paths use — positional ``zip``/``np.unique`` alignment
+        silently mis-weighted (or crashed) when an experiment was skipped.
+        """
+        vals = np.asarray(per_exp_values, dtype=np.float64)
+        ids = np.asarray(row_exp_ids)
+        if ids.size and (int(ids.min()) < 0 or int(ids.max()) >= len(vals)):
             raise ValueError(
-                f"Importance has {len(per_exp_weights)} experiments but "
-                f"cell_meta has {len(unique_ids)} unique exp_ids"
+                f"row experiment index out of range for {len(vals)} experiments"
             )
-        id_to_weight = {int(uid): w for uid, w in zip(unique_ids, per_exp_weights)}
-        return np.array([id_to_weight[int(eid)] for eid in exp_ids], dtype=np.float64)
+        return vals[ids.astype(int)]
 
     def _validate_flat(
         self,
@@ -1288,7 +1285,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
             per_exp = importance_dict.get(feat)
             if per_exp is not None:
-                importance_arr = self._expand_importance(per_exp, cell_meta)
+                row_exp_ids = cell_meta[:, 0].long().cpu().numpy()
+                importance_arr = self._expand_per_experiment(per_exp, row_exp_ids)
                 inf = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
@@ -1311,9 +1309,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         per_feat_true: dict[str, list[float]] = {f: [] for f in model.outputs}
         per_feat_pred: dict[str, list[float]] = {f: [] for f in model.outputs}
-        rows_per_exp: list[int] = []
+        # Per-row experiment identity (the experiment's index into `codes`, and
+        # so into per_exp) — built only for experiments that contribute rows, so
+        # a skipped experiment never shifts the weight alignment.
+        row_exp_ids: list[int] = []
 
-        for code in codes:
+        for exp_idx, code in enumerate(codes):
             exp = dm.dataset.get_experiment(code)
             params = exp.get_effective_parameters_for_row(0)
             dim_info = self._get_model_dim_info(model, params)
@@ -1346,8 +1347,9 @@ class PredictionSystem(BaseOrchestrationSystem):
                 n = min(len(y_true_flat), len(y_pred_native))
                 per_feat_true[feat].extend(y_true_flat[:n].tolist())
                 per_feat_pred[feat].extend(y_pred_native[:n].tolist())
-            rows_per_exp.append(n)
+            row_exp_ids.extend([exp_idx] * n)
 
+        row_exp_ids_arr = np.asarray(row_exp_ids, dtype=int)
         results: dict[str, dict[str, float]] = {}
         for feat in model.outputs:
             y_t = np.array(per_feat_true[feat])
@@ -1357,10 +1359,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
             per_exp = importance_dict.get(feat)
             if per_exp is not None:
-                # Expand per-experiment weights to per-row
-                importance_arr = np.concatenate([
-                    np.full(nr, w) for w, nr in zip(per_exp, rows_per_exp)
-                ])
+                importance_arr = self._expand_per_experiment(per_exp, row_exp_ids_arr)
                 if len(importance_arr) != len(y_t):
                     raise ValueError(
                         f"R²_inf importance length mismatch for '{feat}': "

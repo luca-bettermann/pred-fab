@@ -5,6 +5,35 @@ from typing import Any
 import numpy as np
 
 
+# Importance-weighting defaults (R²_inf) — single source for the formula and
+# its constants, shared by the prediction system and its plot.
+IMPORTANCE_FLOOR = 0.1
+IMPORTANCE_STEEPNESS = 0.8
+
+
+def importance_weight(
+    scores: Any,
+    *,
+    floor: float = IMPORTANCE_FLOOR,
+    steepness: float = IMPORTANCE_STEEPNESS,
+    ref_scores: Any = None,
+) -> np.ndarray:
+    """Performance-importance weight ``floor + (1−floor)·sigmoid(k·(s−mean))``,
+    ``k = steepness/std``.
+
+    ``mean``/``std``/``k`` are taken from ``ref_scores`` (default: ``scores``
+    itself), so a plot can evaluate the same curve over an arbitrary range while
+    anchoring the sigmoid to the experiment scores. The single source for the
+    R²_inf importance weights and their plot.
+    """
+    s = np.asarray(scores, dtype=float)
+    ref = s if ref_scores is None else np.asarray(ref_scores, dtype=float)
+    mean = float(ref.mean()) if ref.size else 0.0
+    std = float(ref.std()) if ref.size else 0.0
+    k = steepness / std if std > 1e-10 else 0.0
+    return floor + (1.0 - floor) / (1.0 + np.exp(-k * (s - mean)))
+
+
 def combined_score(
     performance: dict[str, Any],
     weights: dict[str, float],
