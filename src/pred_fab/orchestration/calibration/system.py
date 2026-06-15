@@ -419,60 +419,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         return xs, ys, d_grid, e_grid
 
-    def compute_evidence_marginal_grids(
-        self,
-        x_key: str,
-        y_key: str,
-        x_bounds: tuple[float, float],
-        y_bounds: tuple[float, float],
-        experiment_params: list[dict[str, Any]],
-        sigma: float,
-        weights: list[float] | None = None,
-        resolution: int = 60,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Marginal density + evidence over (x_key, y_key).
-
-        Param-space KDE: projects training points onto the two visible
-        axes in [0,1]-normalized space and sums isotropic Gaussian
-        kernels. Marginalizing over hidden dims is analytic — the 2D
-        marginal of an isotropic Gaussian is itself a Gaussian with the
-        same σ and weights, evaluated on the projected centers.
-
-        Returns (xs, ys, density_grid, evidence_grid).
-        """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
-
-        x_span = x_bounds[1] - x_bounds[0]
-        y_span = y_bounds[1] - y_bounds[0]
-        if x_span < 1e-10 or y_span < 1e-10:
-            return xs, ys, np.zeros((resolution, resolution)), np.zeros((resolution, resolution))
-
-        n = len(experiment_params)
-        if n == 0:
-            return xs, ys, np.zeros((resolution, resolution)), np.zeros((resolution, resolution))
-
-        centers = np.empty((n, 2))
-        for k, p in enumerate(experiment_params):
-            centers[k, 0] = (float(p[x_key]) - x_bounds[0]) / x_span
-            centers[k, 1] = (float(p[y_key]) - y_bounds[0]) / y_span
-
-        w = np.array(weights) if weights is not None else np.ones(n)
-        inv_2s2 = 1.0 / (2.0 * sigma ** 2)
-
-        xs_norm = (xs - x_bounds[0]) / x_span
-        ys_norm = (ys - y_bounds[0]) / y_span
-
-        d_grid = np.zeros((resolution, resolution))
-        for i in range(resolution):
-            dx = xs_norm[i] - centers[:, 0]
-            for j in range(resolution):
-                dy = ys_norm[j] - centers[:, 1]
-                d_grid[j, i] = float(np.sum(w * np.exp(-(dx ** 2 + dy ** 2) * inv_2s2)))
-
-        e_grid = d_grid / (1.0 + d_grid)
-        return xs, ys, d_grid, e_grid
-
     # ==================================================================
     # § Acquisition objectives — κ-blended evidence + performance
     # ==================================================================
