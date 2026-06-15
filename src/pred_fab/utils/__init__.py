@@ -1,6 +1,6 @@
 from .local_data import LocalData
 from .logger import PfabLogger
-from .metrics import Metrics, combined_score
+from .metrics import Metrics, combined_score, importance_weight
 from .console import ConsoleReporter, ProgressBar
 from .profiler import profiler
 from .wandb_logger import WandbLogger
@@ -23,6 +23,7 @@ __all__ = [
     "PfabLogger",
     "Metrics",
     "combined_score",
+    "importance_weight",
     "profiler",
 
     "SystemName",

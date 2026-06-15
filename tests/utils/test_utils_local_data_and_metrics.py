@@ -120,3 +120,26 @@ def test_combined_score_zero_total_weight_returns_zero():
     from pred_fab.utils import combined_score
     assert combined_score({"a": 0.5}, {"a": 0.0}) == 0.0
     assert combined_score({}, {"a": 1.0}) == 0.0
+
+
+def test_importance_weight_matches_sigmoid_and_is_shared():
+    import numpy as np
+    from pred_fab.utils import importance_weight
+    from pred_fab.utils.metrics import IMPORTANCE_FLOOR, IMPORTANCE_STEEPNESS
+    scores = np.array([0.2, 0.5, 0.8])
+    w = importance_weight(scores)
+    # bounded in [floor, 1]; monotonic in score
+    assert np.all(w >= IMPORTANCE_FLOOR - 1e-9) and np.all(w <= 1.0 + 1e-9)
+    assert w[0] < w[1] < w[2]
+    # ref_scores anchors k/mean: evaluating at the mean gives the sigmoid midpoint
+    mid = importance_weight(np.array([scores.mean()]), ref_scores=scores)[0]
+    assert mid == pytest.approx(IMPORTANCE_FLOOR + (1 - IMPORTANCE_FLOOR) * 0.5)
+
+
+def test_importance_weight_zero_std_is_flat():
+    import numpy as np
+    from pred_fab.utils import importance_weight
+    from pred_fab.utils.metrics import IMPORTANCE_FLOOR
+    w = importance_weight(np.array([0.5, 0.5, 0.5]))
+    # k=0 → sigmoid=0.5 everywhere → constant weight
+    assert np.allclose(w, IMPORTANCE_FLOOR + (1 - IMPORTANCE_FLOOR) * 0.5)
