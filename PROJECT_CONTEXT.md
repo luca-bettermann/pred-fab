@@ -1,6 +1,11 @@
 # PFAB — Project Context
 
-## Purpose
+- **Purpose** — schema-agnostic predictive-fabrication calibration framework: an active-learning loop that proposes experiment parameters (see [[PFAB - Predictive Fabrication]]).
+- **Owns** — the data model, prediction/evaluation models, the evidence + acquisition optimiser, and the `PfabAgent` API. Stateless orchestrator parameterised by an injected schema.
+- **Out of scope → who** — persistence/storage (`pred-fab-nocodb`); fabrication execution + hardware (`learning-by-printing`, `rtde-robot-control`); application-specific schemas/data generation (the consuming repo).
+- **Depends on** — nothing internal at the data layer (`core` is the root); optional external-data adapters via the `IExternalData` port. See [[Repo Dependency Graph]].
+
+## Purpose (detail)
 Predictive Fabrication (PFAB) framework: active-learning loop for manufacturing process calibration.
 Combines ML-based prediction, evaluation scoring, and acquisition-driven optimization to propose
 experiment parameters that balance exploration (evidence gain) and exploitation (performance).

@@ -16,8 +16,11 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `OptimizationEngine` | `calibration/engine.py` | Sobol → top-N → independent LBFGS with sigmoid bound reparam |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds + trust regions |
 | `SolutionSpace` | `calibration/space.py` | Decision-vector layout from Variable objects; single `decode()` for all call sites |
-| `Variable` / `StaticVariable` / `TrajectoryVariable` | `calibration/variables.py` | Optimization variable types — contract between step methods and optimizer |
+| `Variable` / `StaticVariable` / `TrajectoryVariable` | `calibration/space.py` | Optimization variable types — contract between step methods and optimizer (defined alongside `SolutionSpace`) |
 | `EvidenceBackend` | `calibration/system.py` | Bundles the Δ∫E callbacks (batched_tensor / joint_batched_tensor) |
+| `BaseSystem` | `base_system.py` | Shared base for the sub-systems (logger, schema handle) |
+| CV instrument | `cross_validation.py` | `CrossValidator`, `CVResult`, `diagnose_error_coverage` (error-vs-coverage diagnostic), `evaluate_fit` |
+| `InferenceBundle` | `inference_bundle.py` | Dependency-free production inference wrapper (load trained models, predict without Dataset/training deps) |
 
 ## Unified acquisition
 
@@ -72,7 +75,7 @@ The sigmoid is the only bound enforcement (no clipping). Physical units appear *
 | `discovery_step(n)` | DISCOVERY | κ=1; joint Δ∫E maximisation; empty-KDE init |
 | `exploration_step(…)` | EXPLORATION | κ ∈ (0, 1); resolves to `configure_exploration(kappa=…)` default if not given |
 | `inference_step(…)` | INFERENCE | κ=0 (hardcoded) |
-| `adaptation_step(…)` | INFERENCE | Online tuning + trust region; optional MPC lookahead |
+| `adaptation_step(…)` | INFERENCE | **Not implemented** — raises `NotImplementedError` pending the trust-region migration to the unified `_optimize` path. Use `exploration_step`/`inference_step` for offline acquisition. |
 
 All return `ExperimentSpec(initial_params, trajectories)`.
 
