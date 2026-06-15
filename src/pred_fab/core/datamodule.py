@@ -7,6 +7,7 @@ import torch
 import copy
 from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
+from .input_pipeline import column_indices
 
 if TYPE_CHECKING:
     # Runtime import is kept local (inside methods) to avoid a circular import;
@@ -683,13 +684,7 @@ class DataModule:
         each schema code maps to exactly ONE column
         index — categoricals are no longer expanded.
         """
-        indices: list[int] = []
-        for code in codes:
-            if code in self.input_columns:
-                indices.append(self.input_columns.index(code))
-            elif not skip_missing:
-                raise ValueError(f"Column '{code}' not found in input_columns.")
-        return indices
+        return column_indices(self.input_columns, codes, skip_missing=skip_missing)
 
     # === SHARED NORMALIZATION HELPERS ===
     
