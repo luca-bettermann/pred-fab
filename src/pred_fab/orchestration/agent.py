@@ -242,10 +242,12 @@ class PfabAgent:
                         if code not in block.data_objects:
                             continue
                         v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
-                        try:
-                            block.set_value(code, v)
-                        except Exception as exc:
-                            self.logger.warning(f"perf_fn_tensor: set_value({code}) failed: {exc}")
+                        # Coerce through the schema authority before set_value
+                        # validates — the decoded value carries the right type
+                        # (categoricals as labels, ints rounded). A failure here
+                        # is a real type/bounds error, not something to swallow.
+                        obj = block.get(code)
+                        block.set_value(code, obj.coerce(v))
                     params_blocks.append(block)
                 return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
 
