@@ -55,7 +55,9 @@ def combined_score(
     ]
     total_w = sum(w for w, _ in contributing)
     if total_w == 0:
-        return 0.0
+        # Typed zero: derive it from a contributing value so a torch input keeps
+        # a grad-bearing zero (graph intact) rather than a bare Python float.
+        return contributing[0][1] * 0.0 if contributing else 0.0
     score = sum(w * v for w, v in contributing)
     return score / total_w
 
@@ -89,7 +91,7 @@ class Metrics:
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
 
-        if len(y_true) != len(y_pred):
+        if y_true.shape != y_pred.shape:
             raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
 
         if len(y_true) == 0:

@@ -51,7 +51,13 @@ def _evaluate_samples(
 
         for k in resolved_outputs:
             val = result.get(k)
-            Y_dict[k].append(float(val) if val is not None else 0.0)
+            if val is None:
+                raise ValueError(
+                    f"Sensitivity sample produced no value for output {k!r}; "
+                    f"indices cannot be computed with missing outputs (a 0.0 "
+                    f"substitute would silently corrupt them)."
+                )
+            Y_dict[k].append(float(val))
 
     out_codes = resolved_outputs or []
     return out_codes, {k: np.array(v) for k, v in Y_dict.items()}
@@ -221,34 +227,30 @@ def filter_top_k(
 
     Ranks by max S_T across the other axis.
     """
-    S_T = result.S_T
-    inputs = list(result.inputs)
-    outputs = list(result.outputs)
-
-    if k_inputs is not None and k_inputs < len(inputs):
-        col_max = S_T.max(axis=0)
+    # Column (input) filter — write back unconditionally; guard the optional
+    # conf/S1 slices individually (the old code only wrote back when S_T_conf
+    # was present, so without it the input filter was silently discarded).
+    if k_inputs is not None and k_inputs < len(result.inputs):
+        col_max = result.S_T.max(axis=0)
         top_cols = np.argsort(col_max)[-k_inputs:][::-1]
-        S_T = S_T[:, top_cols]
-        inputs = [inputs[j] for j in top_cols]
-        if result.S_T_conf is not None:
-            result = replace(
-                result,
-                inputs=inputs,
-                S_T=S_T,
-                S_T_conf=result.S_T_conf[:, top_cols],
-                S1=result.S1[:, top_cols] if result.S1 is not None else None,
-                S1_conf=result.S1_conf[:, top_cols] if result.S1_conf is not None else None,
-            )
-
-    if k_outputs is not None and k_outputs < len(outputs):
-        row_max = S_T.max(axis=1)
-        top_rows = np.argsort(row_max)[-k_outputs:][::-1]
-        return replace(
+        result = replace(
             result,
-            inputs=inputs,
-            outputs=[outputs[i] for i in top_rows],
+            inputs=[result.inputs[j] for j in top_cols],
+            S_T=result.S_T[:, top_cols],
+            S_T_conf=result.S_T_conf[:, top_cols] if result.S_T_conf is not None else None,
+            S1=result.S1[:, top_cols] if result.S1 is not None else None,
+            S1_conf=result.S1_conf[:, top_cols] if result.S1_conf is not None else None,
+        )
+
+    # Row (output) filter — operate on the (possibly column-filtered) result.
+    if k_outputs is not None and k_outputs < len(result.outputs):
+        row_max = result.S_T.max(axis=1)
+        top_rows = np.argsort(row_max)[-k_outputs:][::-1]
+        result = replace(
+            result,
+            outputs=[result.outputs[i] for i in top_rows],
             S_T=result.S_T[top_rows, :],
-            S_T_conf=result.S_T_conf[top_rows, :],
+            S_T_conf=result.S_T_conf[top_rows, :] if result.S_T_conf is not None else None,
             S1=result.S1[top_rows, :] if result.S1 is not None else None,
             S1_conf=result.S1_conf[top_rows, :] if result.S1_conf is not None else None,
         )

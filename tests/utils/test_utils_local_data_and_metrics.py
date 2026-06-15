@@ -143,3 +143,21 @@ def test_importance_weight_zero_std_is_flat():
     w = importance_weight(np.array([0.5, 0.5, 0.5]))
     # k=0 → sigmoid=0.5 everywhere → constant weight
     assert np.allclose(w, IMPORTANCE_FLOOR + (1 - IMPORTANCE_FLOOR) * 0.5)
+
+
+def test_combined_score_zero_weight_preserves_tensor_grad():
+    import torch
+    from pred_fab.utils import combined_score
+    v = torch.tensor(0.7, requires_grad=True)
+    out = combined_score({"a": v}, {"a": 0.0})  # total weight 0
+    assert torch.is_tensor(out) and out.requires_grad  # grad-bearing zero, not bare float
+    assert float(out) == 0.0
+
+
+def test_regression_metrics_rejects_2d_shape_mismatch():
+    import numpy as np
+    from pred_fab.utils import Metrics
+    yt = np.zeros((4, 2))
+    yp = np.zeros((4, 3))  # same len (4), different shape
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        Metrics.calculate_regression_metrics(yt, yp)
