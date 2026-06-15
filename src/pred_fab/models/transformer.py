@@ -153,6 +153,13 @@ class TransformerModel(IPredictionModel):
         n_axes = len(self.sequence_axis_code)
 
         use_alibi = getattr(self, 'USE_ALIBI', True)
+        if n_axes > 1 and use_alibi:
+            raise ValueError(
+                f"{type(self).__name__}: ALiBi gives a single 1-D positional bias, "
+                f"so it carries no per-axis signal for a multi-axis sequence "
+                f"(n_axes={n_axes}). Set USE_ALIBI=False to use learned per-axis "
+                f"positional embeddings, or sequence a single axis."
+            )
         encoder = _TransformerEncoder(
             n_input=n_input,
             d_model=self.D_MODEL,

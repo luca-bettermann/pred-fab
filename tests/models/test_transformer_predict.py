@@ -284,6 +284,9 @@ def test_transformer_encoder_forward_multi_axis_requires_axis_indices():
 class _GridTransformer(_LayerTransformer):
     """Multi-axis transformer over (n_layers, n_segments) — flattened grid."""
 
+    # Multi-axis needs per-axis positional embeddings; ALiBi is single-axis only.
+    USE_ALIBI = False
+
     @property
     def sequence_axis_code(self) -> tuple[str, ...]:
         return ("n_layers", "n_segments")
@@ -547,3 +550,20 @@ def test_forward_pass_raises_for_mixed_depth(tmp_path):
     X_flat = torch.randn(2, 5)
     with pytest.raises(NotImplementedError, match="every output's depth to equal axis_depth"):
         model.forward_pass(X_flat)
+
+
+def test_multi_axis_with_alibi_is_rejected(tmp_path):
+    """A multi-axis sequence with default ALiBi must raise — ALiBi is single-axis
+    only and carries no per-axis positional signal. (B9, audit 2026-06.)"""
+    class _GridAlibi(_LayerTransformer):
+        USE_ALIBI = True  # the unsupported combo
+        @property
+        def sequence_axis_code(self):
+            return ("n_layers", "n_segments")
+
+    model = _GridAlibi(build_test_logger(tmp_path))
+    L = 6
+    X_seq = torch.randn(2, L, 5)
+    with pytest.raises(ValueError, match="ALiBi"):
+        model.train([(X_seq, {"src": torch.randn(2, L)})], [],
+                    seq_axis_sizes=(3, 2), domain_axis_sizes=(8, 8))
