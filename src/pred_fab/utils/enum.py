@@ -49,12 +49,6 @@ class WorkflowDomain(str, Enum):
     OFFLINE = 'offline'
     ONLINE = 'online'
 
-class Mode(str, Enum):
-    """Enumeration of workflow modes."""
-    DISCOVERY = 'discovery'
-    EXPLORATION = 'exploration'
-    INFERENCE = 'inference'
-
 class Loaders(Enum):
     MEMORY = 'memory'
     LOCAL = 'local files'

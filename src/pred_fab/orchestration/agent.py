@@ -37,7 +37,7 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, ConsoleReporter, Mode, SourceStep
+from ..utils import LocalData, PfabLogger, ConsoleReporter, SourceStep
 from ..utils.console import _B, _D, _R
 from .evidence import EstimatorConfig
 
@@ -457,7 +457,6 @@ class PfabAgent:
         dimension: str | None = None,
         step_index: int | None = None,
         exp_data: ExperimentData | None = None,
-        mode: Mode = Mode.INFERENCE,
         kappa: float = 0.0,
         record: bool = False,
         **kwargs

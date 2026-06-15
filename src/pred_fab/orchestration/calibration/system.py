@@ -8,6 +8,7 @@ from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
 from ...core.designs import SobolDesign
+from ...core.experiment_set import strategy_for_source_step
 from ...core.frames import raw_scalar_to_param
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ...utils.console import _B, _D, _R
@@ -19,17 +20,13 @@ from .space import SolutionSpace, StaticVariable, TrajectoryVariable, Variable
 
 
 def _design_from_source_step(source_step: Any | None) -> str | None:
-    """Map a ``SourceStep`` (or its string value) to its design label.
+    """The design label (a :class:`Strategy` value) a ``SourceStep`` denotes.
 
-    The design is the queryable provenance axis — ``discovery`` / ``exploration`` /
-    ``inference`` / ``adaptation`` / ``sobol`` — derived from the ``SourceStep`` that
-    generated the proposal (``'discovery_step'`` → ``'discovery'``). See the KB note
-    *First-class dataset concept in pred-fab*.
+    Delegates to the typed ``strategy_for_source_step`` mapping — Strategy is the
+    SSOT for the design/step taxonomy (no ``removesuffix`` string munge).
     """
-    if source_step is None:
-        return None
-    value = getattr(source_step, "value", source_step)
-    return str(value).removesuffix("_step")
+    strategy = strategy_for_source_step(source_step)
+    return strategy.value if strategy is not None else None
 
 
 @dataclass

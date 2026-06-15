@@ -106,3 +106,15 @@ def test_to_dict_from_dict_round_trip():
     back = ExperimentSet.from_dict(d, parent=disc)
     assert back.code == "E1" and back.strategy is Strategy.EXPLORATION
     assert back.members == ["e1", "e2"] and back.ordered is True and back.parent is disc
+
+
+def test_strategy_for_source_step_typed_mapping():
+    """SourceStep -> Strategy is an explicit typed mapping (no removesuffix munge),
+    accepting an enum or its persisted string value; unknown -> None."""
+    from pred_fab.core.experiment_set import Strategy, strategy_for_source_step
+    from pred_fab.utils.enum import SourceStep
+    assert strategy_for_source_step(SourceStep.DISCOVERY) is Strategy.DISCOVERY
+    assert strategy_for_source_step("inference_step") is Strategy.INFERENCE
+    assert strategy_for_source_step(SourceStep.SOBOL) is Strategy.SOBOL
+    assert strategy_for_source_step(None) is None
+    assert strategy_for_source_step("not_a_step") is None

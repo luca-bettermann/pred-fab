@@ -14,10 +14,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
+
+from ..utils.enum import SourceStep
 
 
 class Strategy(str, Enum):
     """How an ExperimentSet was generated — the design (the queryable provenance axis).
+
+    The single source for the design/step taxonomy: ``SourceStep`` (the persisted
+    agent-step tag) maps onto it via ``strategy_for_source_step`` — an explicit
+    typed mapping, not a ``removesuffix`` string transform.
 
     Ordered strategies (exploration, inference) carry a sequence + window; batch strategies
     (discovery, sobol, grid, adaptation) are always used whole.
@@ -33,6 +40,34 @@ class Strategy(str, Enum):
     def ordered(self) -> bool:
         """Whether sets of this strategy are sequential (carry order + window) by default."""
         return self in (Strategy.EXPLORATION, Strategy.INFERENCE)
+
+
+# Explicit SourceStep → Strategy mapping (Strategy is the SSOT for the taxonomy).
+# SourceStep keeps its own persisted ``*_step`` values; this is the typed bridge
+# that replaces the former ``str(value).removesuffix('_step')`` munge.
+_SOURCE_STEP_TO_STRATEGY: dict[SourceStep, Strategy] = {
+    SourceStep.DISCOVERY: Strategy.DISCOVERY,
+    SourceStep.EXPLORATION: Strategy.EXPLORATION,
+    SourceStep.INFERENCE: Strategy.INFERENCE,
+    SourceStep.ADAPTATION: Strategy.ADAPTATION,
+    SourceStep.SOBOL: Strategy.SOBOL,
+}
+
+
+def strategy_for_source_step(source_step: Any | None) -> Strategy | None:
+    """The :class:`Strategy` a :class:`SourceStep` (or its string value) denotes.
+
+    Accepts a ``SourceStep`` or its persisted string (``'discovery_step'``);
+    returns ``None`` for ``None`` or an unrecognised value.
+    """
+    if source_step is None:
+        return None
+    if not isinstance(source_step, SourceStep):
+        try:
+            source_step = SourceStep(source_step)
+        except ValueError:
+            return None
+    return _SOURCE_STEP_TO_STRATEGY.get(source_step)
 
 
 @dataclass
