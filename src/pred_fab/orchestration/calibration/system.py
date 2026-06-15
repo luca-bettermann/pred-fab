@@ -86,8 +86,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_opt_nfev: int = 0
         self.last_opt_n_starts: int = 0
         self.last_opt_score: float = 0.0
-        self.last_opt_perf: float = 0.0
-        self.last_opt_unc: float = 0.0
         self.last_trajectory: list[dict[str, Any]] | None = None
         self.convergence_history: dict[str, list[list[float]]] = {}  # label → per-start convergence
         # Phase data for validation plots
@@ -962,6 +960,9 @@ class CalibrationSystem(BaseOrchestrationSystem):
             show_progress=console,
         )
         self.convergence_history[label] = opt.convergence_history
+        self.last_opt_nfev = opt.nfev
+        self.last_opt_n_starts = opt.n_starts
+        self.last_opt_score = opt.score
         self.last_discovery_nfev = getattr(self, 'last_discovery_nfev', 0) + opt.nfev
 
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
