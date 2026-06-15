@@ -15,6 +15,7 @@ import copy
 
 from ..interfaces.prediction import IPredictionModel
 from ..core.normalisers import normaliser_from_dict
+from ..core.input_pipeline import categorical_to_index, column_indices
 
 
 class InferenceBundle:
@@ -89,21 +90,14 @@ class InferenceBundle:
         X_norm_t = torch.from_numpy(X_norm_np)
 
         input_columns = self.normalization_state.get('input_columns', [])
-        col_to_idx = {c: i for i, c in enumerate(input_columns)}
 
         predictions: dict[str, Any] = {}
         for model in self.prediction_models:
-            # Each model was trained on its own input subset (X[:, input_indices]
-            # in PredictionSystem); forward_pass expects columns ordered by the
-            # model's input_parameters + input_features, not the full matrix.
+            # Each model was trained on its own input subset (the same
+            # column_indices PredictionSystem slices with); forward_pass expects
+            # columns ordered by the model's input_parameters + input_features.
             model_cols = list(model.input_parameters) + list(model.input_features)
-            missing = [c for c in model_cols if c not in col_to_idx]
-            if missing:
-                raise ValueError(
-                    f"Model inputs {missing} absent from bundle input_columns; "
-                    f"bundle is inconsistent with the model."
-                )
-            idx = [col_to_idx[c] for c in model_cols]
+            idx = column_indices(input_columns, model_cols)
             y_pred_dict = model.forward_pass(X_norm_t[:, idx])
             y_pred_norm_np = np.stack(
                 [y_pred_dict[f].detach().cpu().numpy() for f in model.outputs], axis=-1,
@@ -135,8 +129,9 @@ class InferenceBundle:
         for col, categories in categorical_mappings.items():
             if col not in X.columns:
                 continue
-            cat_to_idx = {c: i for i, c in enumerate(categories)}
-            X[col] = X[col].map(lambda v: cat_to_idx.get(v, 0))
+            X[col] = X[col].map(
+                lambda v, _cats=categories, _c=col: categorical_to_index(v, _cats, code=_c)
+            )
 
         # Ensure columns match and are ordered correctly (missing → 0).
         for col in input_columns:
@@ -194,21 +189,9 @@ class InferenceBundle:
                     f"Expected parameters: {sorted(schema_params)}"
                 )
 
-        # Categorical values must be in the trained vocabulary — otherwise the
-        # cat-index encode would silently map them to index 0 (wrong predictions
-        # for a deployed model). Fail loudly instead.
-        categorical_mappings = self.normalization_state.get('categorical_mappings', {})
-        for col, categories in categorical_mappings.items():
-            if col not in X.columns:
-                continue
-            vocab = set(categories)
-            unknown = {v for v in X[col].tolist() if v not in vocab}
-            if unknown:
-                raise ValueError(
-                    f"Unknown categorical value(s) {sorted(map(str, unknown))} for "
-                    f"'{col}'. Trained categories: {list(categories)}"
-                )
-
+            # Categorical-value validation is enforced at encode time by
+            # input_pipeline.categorical_to_index (raises on unknown), so it
+            # is not duplicated here.
             # TODO: Add range validation using schema constraints
     
     @property

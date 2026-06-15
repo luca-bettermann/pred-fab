@@ -136,17 +136,20 @@ def test_prediction_tune_respects_requested_row_slice(tmp_path):
 
 
 def test_inference_bundle_rejects_unknown_categorical():
-    """A categorical value outside the trained vocabulary must raise, not
-    silently encode to index 0 (wrong predictions for a deployed model)."""
+    """A categorical value outside the trained vocabulary must raise at encode
+    time, not silently encode to index 0 (wrong predictions for a deployed
+    model). Enforced by input_pipeline.categorical_to_index."""
     import pandas as pd
     bundle = InferenceBundle(
         prediction_models=[],
-        normalization_state={"categorical_mappings": {"material": ["A", "B"]}},
+        normalization_state={"categorical_mappings": {"material": ["A", "B"]},
+                             "input_columns": ["material"], "parameter_stats": {},
+                             "feature_stats": {}},
         schema_dict={"parameters": {"data_objects": {"material": {}}}},
     )
-    bundle._validate_inputs(pd.DataFrame({"material": ["A", "B"]}))  # ok
+    bundle.predict(pd.DataFrame({"material": ["A", "B"]}))  # ok
     with pytest.raises(ValueError, match="Unknown categorical value"):
-        bundle._validate_inputs(pd.DataFrame({"material": ["A", "Z"]}))
+        bundle.predict(pd.DataFrame({"material": ["A", "Z"]}))
 
 
 def test_inference_bundle_slices_per_model_input_columns():
