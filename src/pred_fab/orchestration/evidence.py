@@ -15,8 +15,6 @@ naturally because the integrand is masked to the unit cube.
 
 A `KernelIndex` bundles the kernel set (centres, weights, σ, domain bounds)
 that the estimators read; the current estimators sum all kernels densely.
-`cutoff_sigmas` / `truncation_threshold` are carried for a future
-neighbour-truncation path but are not consulted on the dense path.
 """
 from __future__ import annotations
 
@@ -42,9 +40,6 @@ DEFAULT_ANGULAR_GAP_DEG: float = 45.0
 class KernelIndex:
     """Holds a Gaussian kernel set (centres, weights, σ, domain bounds) that
     the estimators sum densely.
-
-    ``cutoff_sigmas`` / ``truncation_threshold`` are reserved for a future
-    neighbour-truncation path and are not used on the current dense path.
     """
 
     def __init__(
@@ -52,8 +47,6 @@ class KernelIndex:
         centers: np.ndarray | torch.Tensor,
         weights: np.ndarray | torch.Tensor,
         sigma: float,
-        cutoff_sigmas: float = 5.0,
-        truncation_threshold: int = 10,
         domain_bounds: np.ndarray | torch.Tensor | None = None,
     ):
         self.centers = torch.as_tensor(
@@ -65,8 +58,6 @@ class KernelIndex:
             dtype=torch.float64,
         )
         self.sigma = float(sigma)
-        self.cutoff_sigmas = float(cutoff_sigmas)
-        self.truncation_threshold = int(truncation_threshold)
         self._n = len(self.centers)
         self._D = int(self.centers.shape[1]) if self.centers.ndim == 2 and self._n else 0
         if domain_bounds is not None:
@@ -81,10 +72,6 @@ class KernelIndex:
     @property
     def is_empty(self) -> bool:
         return self._n == 0
-
-    @property
-    def cutoff(self) -> float:
-        return self.cutoff_sigmas * self.sigma
 
 
 
@@ -689,9 +676,6 @@ class EstimatorConfig:
     seed: int = 0
     # ANOVA marginal/joint balance: None → D/(D+1) default
     marginal_weight: float | None = None
-    # Shared
-    cutoff_sigmas: float = 5.0
-    truncation_threshold: int = 10
 
 
 def make_estimator(config: EstimatorConfig) -> EvidenceEstimator:

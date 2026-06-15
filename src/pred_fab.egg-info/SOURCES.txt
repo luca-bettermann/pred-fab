@@ -13,7 +13,11 @@ src/pred_fab/core/data_blocks.py
 src/pred_fab/core/data_objects.py
 src/pred_fab/core/datamodule.py
 src/pred_fab/core/dataset.py
+src/pred_fab/core/designs.py
+src/pred_fab/core/experiment_set.py
+src/pred_fab/core/frames.py
 src/pred_fab/core/normalisers.py
+src/pred_fab/core/provenance.py
 src/pred_fab/core/schema.py
 src/pred_fab/diagnostics/__init__.py
 src/pred_fab/diagnostics/sensitivity.py
@@ -31,6 +35,7 @@ src/pred_fab/models/transformer.py
 src/pred_fab/orchestration/__init__.py
 src/pred_fab/orchestration/agent.py
 src/pred_fab/orchestration/base_system.py
+src/pred_fab/orchestration/cross_validation.py
 src/pred_fab/orchestration/evaluation.py
 src/pred_fab/orchestration/evidence.py
 src/pred_fab/orchestration/features.py
@@ -46,14 +51,15 @@ src/pred_fab/plotting/_style.py
 src/pred_fab/plotting/convergence.py
 src/pred_fab/plotting/discovery.py
 src/pred_fab/plotting/evidence.py
+src/pred_fab/plotting/evolution.py
 src/pred_fab/plotting/exploration.py
 src/pred_fab/plotting/inference.py
 src/pred_fab/plotting/metrics.py
 src/pred_fab/plotting/parallel.py
 src/pred_fab/plotting/performance.py
 src/pred_fab/plotting/prediction.py
-src/pred_fab/plotting/schedule.py
 src/pred_fab/plotting/sensitivity.py
+src/pred_fab/plotting/trajectory.py
 src/pred_fab/plotting/validation.py
 src/pred_fab/utils/__init__.py
 src/pred_fab/utils/console.py

@@ -643,8 +643,6 @@ class PfabAgent:
         box: float | None = None,
         n_samples: int | None = None,
         seed: int | None = None,
-        cutoff_sigmas: float | None = None,
-        truncation_threshold: int | None = None,
     ) -> None:
         """Configure the evidence estimator and its tuning knobs.
 
@@ -659,7 +657,6 @@ class PfabAgent:
         Per-estimator knobs:
           KernelField — ``radii``, ``angular_gap_deg``
           SobolLocal  — ``box``, ``n_samples``, ``seed``
-        Shared — ``cutoff_sigmas``, ``truncation_threshold``.
         """
         self._assert_initialized()
         self.pred_system.configure_evidence(
@@ -670,8 +667,6 @@ class PfabAgent:
             box=box,
             n_samples=n_samples,
             seed=seed,
-            cutoff_sigmas=cutoff_sigmas,
-            truncation_threshold=truncation_threshold,
         )
 
     def configure_optimizer(

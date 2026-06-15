@@ -731,8 +731,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         box: float | None = None,
         n_samples: int | None = None,
         seed: int | None = None,
-        cutoff_sigmas: float | None = None,
-        truncation_threshold: int | None = None,
     ) -> None:
         """Configure the evidence estimator and its tuning knobs.
 
@@ -758,8 +756,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             box=box if box is not None else cur.box,
             n_samples=n_samples if n_samples is not None else cur.n_samples,
             seed=seed if seed is not None else cur.seed,
-            cutoff_sigmas=cutoff_sigmas if cutoff_sigmas is not None else cur.cutoff_sigmas,
-            truncation_threshold=truncation_threshold if truncation_threshold is not None else cur.truncation_threshold,
         )
         self._estimator_config = new_cfg
         self._estimator = make_estimator(new_cfg)
@@ -805,8 +801,6 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> KernelIndex:
         return KernelIndex(
             centers, weights, sigma,
-            cutoff_sigmas=self._estimator_config.cutoff_sigmas,
-            truncation_threshold=self._estimator_config.truncation_threshold,
             domain_bounds=domain_bounds,
         )
 
