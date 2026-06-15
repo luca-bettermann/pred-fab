@@ -67,6 +67,13 @@ class BoundsManager:
             ):
                 continue
 
+            # Validate categorical/bool membership at configuration time: an
+            # out-of-vocabulary fixed value would otherwise silently fall back
+            # to category index 0 when bounds are built.
+            obj = self.data_objects.get(code)
+            if isinstance(obj, (DataCategorical, DataBool)):
+                obj.validate(value)
+
             self.fixed_params[code] = value
             self.logger.debug(f"Set fixed parameter: {code} -> {value}")
 
