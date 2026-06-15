@@ -437,10 +437,10 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # === EVIDENCE MODEL (integrated objective) ===
     #
-    # ρ_j(z)  = w_j · N(z; z_j, σ²I)      normalized Gaussian density, mass w_j in ℝ^D
-    # D(z)    = Σ_j ρ_j(z)                 raw evidence density, unbounded
-    # E(z)    = D / (1 + D)                actual evidence, [0, 1)
-    # Δ∫E     = ∫_[0,1]^D [E_new − E_old]  info gain from adding a batch
+    # ρ_j(z)  = w_j · exp(−‖z−z_j‖²/2σ²)   peak-1 Gaussian kernel (ρ_j(z_j) = w_j)
+    # D(z)    = Σ_j ρ_j(z)                  raw evidence density, unbounded
+    # E(z)    = D / (1 + D)                 actual evidence, [0, 1)
+    # Δ∫E     = ∫_[0,1]^D [E_new − E_old] dz   info gain from adding a batch
     #
     # Acquisition lives in CalibrationSystem; this module provides the math.
     # No boundary term: leakage is handled by the integration bounds [0,1]^D.

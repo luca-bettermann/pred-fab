@@ -65,6 +65,16 @@ def test_sobol_matches_closed_form_d1(w):
     assert estimated == pytest.approx(_closed_form_d1(w, sigma), rel=1e-4)
 
 
+@pytest.mark.parametrize("w", [0.3, 0.5, 0.8])
+def test_kernel_field_matches_closed_form_d1(w):
+    """KernelField reproduces the same Lebesgue integral (looser tolerance — coarse
+    shell quadrature). Guards against the σ√(2π) measure mismatch that previously
+    made its marginal term ~8x too large (and the estimator ~3.4x overall)."""
+    sigma, center = 0.05, 0.5
+    estimated = _single_kernel_integral(KernelFieldEstimator(), w, sigma, center)
+    assert estimated == pytest.approx(_closed_form_d1(w, sigma), rel=5e-2)
+
+
 def test_sobol_deterministic_for_fixed_seed():
     """Same seed → bit-identical estimate (the scrambled-Sobol determinism knob)."""
     sigma, center, w = 0.05, 0.5, 0.5
@@ -145,10 +155,10 @@ def test_delta_evidence_rewards_unexplored_regions(estimator):
     a candidate far from existing data yields a larger, positive ΔE than one
     sitting on top of the cluster.
 
-    Note: the two estimators do NOT agree on absolute magnitude (KernelField's
-    ANOVA decomposition lands on a different scale than the Sobol Lebesgue
-    integral — see the audit finding in the task note); only sign and ranking
-    are a shared contract, so that is all this asserts.
+    Both estimators compute the same Lebesgue integral, but KernelField's ANOVA
+    decomposition is only an approximation in D>1, so magnitudes still differ by
+    quadrature/approximation error; sign and ranking are the robust shared
+    contract, so that is what this asserts.
     """
     sigma = 0.1
     old_centers = np.array([[0.3, 0.3], [0.32, 0.28], [0.28, 0.31]])

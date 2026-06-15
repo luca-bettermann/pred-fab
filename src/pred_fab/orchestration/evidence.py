@@ -8,10 +8,12 @@ Two deterministic/stochastic variants selectable at runtime:
     SobolLocalEstimator   — scrambled Sobol inside a `[center ± box·σ]^D`
                              cube, volume-weighted.
 
-Both implement the identity
-    I = ∫_{[0,1]^D} D/(1+D) dz = Σⱼ wⱼ · 𝔼_{z~N(zⱼ, σ²I)}[1/(1+D(z))]
-— a sum of per-kernel self-integrals. Kernels outside the unit cube leak
-naturally because the integrand is masked to the unit cube.
+Both compute the Lebesgue integral
+    I = ∫_{[0,1]^D} D/(1+D) dz
+over the unit cube — kernels outside it leak naturally because the integrand
+is masked to the cube. It is evaluated as a sum of per-kernel self-integrals,
+importance-sampled around each centre with the σ·√(2π) per-dimension Jacobian
+that maps the Gaussian proposal back to Lebesgue measure.
 
 A `KernelIndex` bundles the kernel set (centres, weights, σ, domain bounds)
 that the estimators read; the current estimators sum all kernels densely.
@@ -348,9 +350,11 @@ class KernelFieldEstimator(EvidenceEstimator):
         probes_1d = probes_1d.sort().values  # sorted for cleanliness
         P = probes_1d.shape[0]
 
-        # 1D quadrature weights (normalised Gaussian measure)
+        # 1D Lebesgue quadrature weights: importance weights ∝ N(c,σ²) at the
+        # probes, rescaled by the σ√(2π) Jacobian so the sum approximates the
+        # Lebesgue integral ∫·dz rather than the expectation 𝔼_{N(c,σ²)}[·].
         w_raw = torch.exp(-probes_1d ** 2 * inv_2sig2)
-        quad_w = w_raw / w_raw.sum()
+        quad_w = (w_raw / w_raw.sum()) * (sigma * (2.0 * pi) ** 0.5)
 
         # 1D self-density
         self_dens_1d = torch.exp(-probes_1d ** 2 * inv_2sig2)
