@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, final
 import numpy as np
+import pandas as pd
 
 class IExternalData(ABC):
     """Abstract class for accessing and writing experiment metadata to an external source."""
@@ -32,8 +33,12 @@ class IExternalData(ABC):
         # Default implementation returns all as missing
         return missing_exp_codes, performance_dict
 
-    def pull_features(self, exp_codes: list[str], feature_name: str = "default", **kwargs) -> tuple[list[str], dict[str, np.ndarray]]:
-        """Fetch feature arrays for given codes; returns (missing_codes, code→array dict). Default: all missing."""
+    def pull_features(self, exp_codes: list[str], feature_name: str = "default", **kwargs) -> tuple[list[str], dict[str, np.ndarray | pd.DataFrame]]:
+        """Fetch feature arrays for given codes; returns (missing_codes, code→features dict).
+
+        Each value is either an ``np.ndarray`` (the loader column-wraps it into
+        a DataFrame) or a ready ``pd.DataFrame`` (passed through). Default: all missing.
+        """
         missing_exp_codes = exp_codes
         features_dict = {}
 
