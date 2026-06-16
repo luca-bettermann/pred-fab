@@ -59,22 +59,22 @@ def test_datablock_preserves_values_and_populated_status():
 
 
 def test_provenance_roundtrip_normal():
-    snap = {"design": "exploration", "seed": 7, "origin": ["E1", 3],
+    snap = {"source": "exploration_step", "seed": 7, "origin": ["E1", 3],
             "kappa": 0.5, "bounds": {"x": [0, 1]}}
     out = Provenance.from_dict(snap).to_dict()
     assert out == snap
 
 
-def test_provenance_unknown_design_preserved():
-    snap = {"design": "some_future_strategy", "seed": 1}
-    with pytest.warns(UserWarning, match="unknown design"):
+def test_provenance_unknown_source_preserved():
+    snap = {"source": "some_future_source", "seed": 1}
+    with pytest.warns(UserWarning, match="unknown source"):
         prov = Provenance.from_dict(snap)
-    assert prov.strategy is None
+    assert prov.source is None
     assert prov.to_dict() == snap  # lossless — not dropped
 
 
 def test_provenance_malformed_origin_preserved():
-    snap = {"design": "sobol", "origin": "not-a-pair"}
+    snap = {"source": "sobol_step", "origin": "not-a-pair"}
     with pytest.warns(UserWarning, match="malformed origin"):
         prov = Provenance.from_dict(snap)
     assert prov.origin is None

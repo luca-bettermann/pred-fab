@@ -8,7 +8,6 @@ from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
 from ...core.designs import SobolDesign
-from ...core.experiment_set import strategy_for_source_step
 from ...core.frames import raw_scalar_to_param
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
 from ...utils.console import _B, _D, _R
@@ -19,14 +18,11 @@ from .bounds import BoundsManager
 from .space import SolutionSpace, StaticVariable, TrajectoryVariable, Variable
 
 
-def _design_from_source_step(source_step: Any | None) -> str | None:
-    """The design label (a :class:`Strategy` value) a ``SourceStep`` denotes.
-
-    Delegates to the typed ``strategy_for_source_step`` mapping — Strategy is the
-    SSOT for the design/step taxonomy (no ``removesuffix`` string munge).
-    """
-    strategy = strategy_for_source_step(source_step)
-    return strategy.value if strategy is not None else None
+def _source_value(source_step: Any | None) -> str | None:
+    """The persisted ``source`` string for a ``SourceStep`` (or a raw string), else ``None``."""
+    if source_step is None:
+        return None
+    return source_step.value if isinstance(source_step, SourceStep) else str(source_step)
 
 
 @dataclass
@@ -217,11 +213,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
     ) -> dict[str, Any]:
         """Serializable snapshot of the settings that generated a proposal — its provenance.
 
-        Records the *design* (the queryable axis, derived from ``source_step``) and the
-        generative settings — ``kappa`` (``None`` for data-independent designs like Sobol),
-        ``seed``, bounds, trust regions, fixed params, trajectory configs, optimizer knobs —
-        so an experiment's origin is reproducible given the same known data. See the KB note
-        *First-class dataset concept in pred-fab*.
+        Records the *source* method (the queryable provenance axis — the ``SourceStep`` that
+        generated the proposal) and the generative settings — ``kappa`` (``None`` for
+        data-independent designs like Sobol), ``seed``, bounds, trust regions, fixed params,
+        trajectory configs, optimizer knobs — so an experiment's origin is reproducible given
+        the same known data. See the KB note *ExperimentSet data model refactor*.
         """
         param_bounds = {}
         for code in self.data_objects.keys():
@@ -231,7 +227,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             except (ValueError, KeyError):
                 pass
         snapshot: dict[str, Any] = {
-            "design": _design_from_source_step(source_step),
+            "source": _source_value(source_step),
             "kappa": kappa,
             "seed": self._random_seed,
             "performance_weights": dict(self.performance_weights),
