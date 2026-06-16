@@ -21,10 +21,11 @@ experiment parameters that balance exploration (evidence gain) and exploitation 
 ## Architecture
 
 The *intended* architecture — kept honest by the `import-linter` contract in
-`.importlinter` (run `lint-imports`; also in CI). The per-folder
-`*_CONTEXT.md` files hold the module-level detail; this is the cross-cutting
-picture they don't give. The design rationale (the *why* of the layering)
-lives in [[PFAB - Repo Strategy]] / [[PFAB - Design Decisions]].
+`.importlinter` (run `lint-imports`; ready to wire into CI/pre-commit —
+neither exists in this repo yet). The per-folder `*_CONTEXT.md` files hold the
+module-level detail; this is the cross-cutting picture they don't give. The
+design rationale (the *why* of the layering) lives in [[PFAB - Repo Strategy]]
+/ [[PFAB - Design Decisions]].
 
 ### Layers (arrows = imports; a package may import only those below it)
 
