@@ -40,7 +40,7 @@ class ExportedTensorDict:
 from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDomainAxis
 from .data_objects import DataArray
 
-from ..interfaces.external_data import IExternalData
+from .ports import ExternalDataPort
 from ..utils import LocalData, PfabLogger
 from ..utils.enum import BlockType, Loaders
 
@@ -513,7 +513,7 @@ class Dataset:
 
     def __init__(self,
                  schema: DatasetSchema,
-                 external_data: IExternalData | None = None,
+                 external_data: ExternalDataPort | None = None,
                  debug_flag: bool = False):
         self.schema = schema
         self.local_data = schema.local_data

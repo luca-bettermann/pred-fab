@@ -22,6 +22,7 @@ diagnostics = [
 dev = [
     "pytest>=8.4.1",
     "pyright>=1.1.0",
+    "import-linter>=2.0",
 ]
 
 [[tool.uv.index]]
