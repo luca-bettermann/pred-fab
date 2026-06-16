@@ -20,12 +20,9 @@ experiment parameters that balance exploration (evidence gain) and exploitation 
 
 ## Architecture
 
-The *intended* architecture — kept honest by the `import-linter` contract in
+The intended layering, enforced by the `import-linter` contract in
 `.importlinter` (run `lint-imports`; ready to wire into CI/pre-commit —
-neither exists in this repo yet). The per-folder `*_CONTEXT.md` files hold the
-module-level detail; this is the cross-cutting picture they don't give. The
-design rationale (the *why* of the layering) lives in [[PFAB - Repo Strategy]]
-/ [[PFAB - Design Decisions]].
+neither exists in this repo yet).
 
 ### Layers (arrows = imports; a package may import only those below it)
 
@@ -77,8 +74,7 @@ flowchart LR
 
 `DataModule` and the deployable `InferenceBundle` share
 `core/input_pipeline` (encode → order → normalize → slice) so inference can't
-drift from training. The agent is a stateless orchestrator parameterised by
-the injected `DatasetSchema`.
+drift from training.
 
 ## Repo Structure
 
