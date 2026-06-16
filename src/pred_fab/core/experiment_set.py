@@ -1,117 +1,55 @@
-"""ExperimentSet — a named, strategy-tagged group of experiments, and the Fit that
-composes such groups into a model's training set.
+"""ExperimentSet — a named group of experiments, and the Fit that composes groups
+into a model's training set.
 
 The grouping primitive of the first-class data model — distinct from the ``Dataset``
 *container* of all experiments. An ``ExperimentSet`` names *which* experiments belong
-together: a discovery batch, a sequential exploration run, a Sobol probe. A ``Fit``
+together: a discovery batch (unordered), a sequential exploration run (ordered). A ``Fit``
 composes sets (each optionally windowed) into the experiment codes a model trained on,
-so "evaluate the model at stage k" is ``Fit.of(run, window=k).experiment_codes()`` and the
-nested-supersets of an acquisition loop collapse to *one ordered set + an index*.
+so "evaluate at stage k" is ``Fit([base, run.window(k)]).experiment_codes()``.
 
-Pure objects — no persistence, no model. See the KB note *ExperimentSet data model refactor*.
+How an experiment was *generated* (κ, the source method) is flat per-experiment provenance
+(see :class:`Provenance` / ``ExperimentData.source`` / ``.kappa``), never carried on the
+set — the set is just membership + order. Pure objects, no persistence, no model. See the
+KB note *ExperimentSet data model refactor*.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
-
-from ..utils.enum import SourceStep
-
-
-class Strategy(str, Enum):
-    """How an ExperimentSet was generated — the design (the queryable provenance axis).
-
-    The single source for the design/step taxonomy: ``SourceStep`` (the persisted
-    agent-step tag) maps onto it via ``strategy_for_source_step`` — an explicit
-    typed mapping, not a ``removesuffix`` string transform.
-
-    Ordered strategies (exploration, inference) carry a sequence + window; batch strategies
-    (discovery, sobol, grid, adaptation) are always used whole.
-    """
-    DISCOVERY = "discovery"
-    EXPLORATION = "exploration"
-    INFERENCE = "inference"
-    SOBOL = "sobol"
-    GRID = "grid"
-    ADAPTATION = "adaptation"
-
-    @property
-    def ordered(self) -> bool:
-        """Whether sets of this strategy are sequential (carry order + window) by default."""
-        return self in (Strategy.EXPLORATION, Strategy.INFERENCE)
-
-
-# Explicit SourceStep → Strategy mapping (Strategy is the SSOT for the taxonomy).
-# SourceStep keeps its own persisted ``*_step`` values; this is the typed bridge
-# that replaces the former ``str(value).removesuffix('_step')`` munge.
-_SOURCE_STEP_TO_STRATEGY: dict[SourceStep, Strategy] = {
-    SourceStep.DISCOVERY: Strategy.DISCOVERY,
-    SourceStep.EXPLORATION: Strategy.EXPLORATION,
-    SourceStep.INFERENCE: Strategy.INFERENCE,
-    SourceStep.ADAPTATION: Strategy.ADAPTATION,
-    SourceStep.SOBOL: Strategy.SOBOL,
-}
-
-
-def strategy_for_source_step(source_step: Any | None) -> Strategy | None:
-    """The :class:`Strategy` a :class:`SourceStep` (or its string value) denotes.
-
-    Accepts a ``SourceStep`` or its persisted string (``'discovery_step'``);
-    returns ``None`` for ``None`` or an unrecognised value.
-    """
-    if source_step is None:
-        return None
-    if not isinstance(source_step, SourceStep):
-        try:
-            source_step = SourceStep(source_step)
-        except ValueError:
-            return None
-    return _SOURCE_STEP_TO_STRATEGY.get(source_step)
 
 
 @dataclass
 class ExperimentSet:
-    """A named group of experiments with a strategy and optional structure.
+    """A named group of experiment codes, optionally ordered.
 
-    ``members`` are experiment codes (in sequence if ``ordered``). ``parent`` is the only
-    inter-set link — an exploration run points at the discovery set it was trained on top
-    of. Membership is many-to-many at the storage layer; this object is one group.
+    ``members`` are experiment codes (in sequence if ``ordered``). ``ordered=True`` means the
+    sequence carries meaning (an exploration run) so ``window`` / stage-k slicing apply;
+    ``False`` is a batch (discovery / sobol / grid). Membership is many-to-many at the
+    storage layer; this object is one group. Generation metadata lives in each member's
+    provenance, not here.
     """
     code: str
-    strategy: Strategy
     members: list[str] = field(default_factory=list)
-    ordered: bool | None = None          # None → default from the strategy
-    parent: ExperimentSet | None = None
-
-    def __post_init__(self) -> None:
-        if self.ordered is None:
-            self.ordered = self.strategy.ordered
+    ordered: bool = False
 
     def codes(self) -> list[str]:
         """Member experiment codes (in order if ordered)."""
         return list(self.members)
 
     def window(self, k: int) -> ExperimentSet:
-        """The first ``k`` members as a sub-set (ordered). Requires an ordered set."""
+        """The first ``k`` members as an ordered sub-set. Requires an ordered set."""
         self._require_ordered("window")
-        return ExperimentSet(
-            code=f"{self.code}[:{k}]", strategy=self.strategy,
-            members=self.members[:k], ordered=True, parent=self.parent,
-        )
+        return ExperimentSet(code=f"{self.code}[:{k}]", members=self.members[:k], ordered=True)
 
     def fit_at(self, index: int) -> Fit:
-        """The fit that *generated* the member at ``index`` (0-based): the parent chain
-        (whole) plus this set's first ``index`` members — everything the proposing model
-        had seen before that member. Requires an ordered set."""
+        """The within-set prefix before member ``index`` (0-based) — what this set's own
+        sequence had produced before that member. Requires an ordered set. Compose any base
+        sets explicitly (``Fit([base, run.window(index)])``) if the run built on them."""
         self._require_ordered("fit_at")
         return Fit.of(self, window=index)
 
     def _require_ordered(self, op: str) -> None:
         if not self.ordered:
-            raise ValueError(
-                f"{op} requires an ordered set; '{self.code}' ({self.strategy.value}) is a batch."
-            )
+            raise ValueError(f"{op} requires an ordered set; '{self.code}' is a batch.")
 
     def __len__(self) -> int:
         return len(self.members)
@@ -123,21 +61,12 @@ class ExperimentSet:
         return iter(self.members)
 
     def to_dict(self) -> dict:
-        """Serialize (``parent`` as its code — the registry resolves the link on load)."""
-        return {
-            "code": self.code,
-            "strategy": self.strategy.value,
-            "members": list(self.members),
-            "ordered": bool(self.ordered),
-            "parent": self.parent.code if self.parent is not None else None,
-        }
+        return {"code": self.code, "members": list(self.members), "ordered": bool(self.ordered)}
 
     @classmethod
-    def from_dict(cls, d: dict, parent: ExperimentSet | None = None) -> ExperimentSet:
-        """Deserialize one set; ``parent`` is the resolved set named by ``d['parent']``."""
+    def from_dict(cls, d: dict) -> ExperimentSet:
         return cls(
-            code=d["code"], strategy=Strategy(d["strategy"]),
-            members=list(d.get("members", [])), ordered=d.get("ordered"), parent=parent,
+            code=d["code"], members=list(d.get("members", [])), ordered=bool(d.get("ordered", False)),
         )
 
 
@@ -156,26 +85,19 @@ class FitPart:
 class Fit:
     """What a model trains on — a composition of ``(set, window?)`` parts.
 
-    ``experiment_codes`` resolves the parts to the union of their (windowed) members — the
-    training set. ``Fit.of`` builds the canonical fit for a set: its whole parent chain plus
-    the set itself (windowed), e.g. ``discovery ∪ exploration[:k]``. Feed
-    ``experiment_codes()`` to ``DataModule.set_split_codes`` to train/evaluate at any stage.
+    ``experiment_codes`` resolves the parts to the deduped union of their (windowed) members.
+    Compose several sets directly — ``Fit([FitPart(disc), FitPart(expl, window=k)])`` for
+    ``disc ∪ expl[:k]``; ``Fit.of`` is the single-set shorthand.
     """
     parts: list[FitPart] = field(default_factory=list)
 
     @classmethod
     def of(cls, eset: ExperimentSet, window: int | None = None) -> Fit:
-        chain: list[ExperimentSet] = []
-        p = eset.parent
-        while p is not None:
-            chain.append(p)
-            p = p.parent
-        parts = [FitPart(s) for s in reversed(chain)]   # root ancestor (e.g. discovery) first
-        parts.append(FitPart(eset, window=window))
-        return cls(parts)
+        """A single-set fit: ``eset`` windowed to ``window`` (whole if ``None``)."""
+        return cls([FitPart(eset, window=window)])
 
     def experiment_codes(self) -> list[str]:
-        """Union of every part's (windowed) members — deduped, stable order (parents first)."""
+        """Union of every part's (windowed) members — deduped, parts in order."""
         seen: dict[str, None] = {}
         for part in self.parts:
             for c in part.codes():

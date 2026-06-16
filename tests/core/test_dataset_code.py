@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from pred_fab.core import Dataset, DataModule, ExperimentSet, Strategy
+from pred_fab.core import Dataset, DataModule, ExperimentSet
 from pred_fab.interfaces import IExternalData
 from pred_fab.utils import SplitType
+from pred_fab.utils.enum import SourceStep
 from tests.utils.builders import (
     build_mixed_feature_schema,
     build_dataset_with_single_experiment,
@@ -253,46 +254,49 @@ class _RecordingExternal(IExternalData):
         return list(self.sets)
 
 
-def test_design_and_provenance_properties_default_empty(tmp_path):
+def test_source_and_provenance_properties_default_empty(tmp_path):
     dataset = build_dataset_with_single_experiment(tmp_path)
     exp = dataset.get_all_experiments()[0]
-    assert exp.design is None
+    assert exp.source is None
+    assert exp.kappa is None
     assert exp.provenance == {}
 
 
 def test_provenance_round_trips_through_local_save_load(tmp_path):
-    """config_snapshot (design + settings) persists via save and reloads via load."""
+    """config_snapshot (source + settings) persists via save and reloads via load."""
     schema = build_mixed_feature_schema(tmp_path)
     ds_a = Dataset(schema=schema, debug_flag=True)
     ds_a.create_experiment(
         "exp_sobol_001",
         parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
-        config_snapshot={"design": "sobol", "seed": 7, "kappa": None},
+        config_snapshot={"source": "sobol_step", "seed": 7, "kappa": None},
     )
     ds_a.save_experiment("exp_sobol_001", verbose=False)
 
     ds_b = Dataset(schema=schema, debug_flag=True)
     ds_b.load_experiment("exp_sobol_001", verbose=False)
     exp = ds_b.get_experiment("exp_sobol_001")
-    assert exp.design == "sobol"
-    assert exp.provenance == {"design": "sobol", "seed": 7, "kappa": None}
+    assert exp.source is SourceStep.SOBOL
+    assert exp.provenance == {"source": "sobol_step", "seed": 7, "kappa": None}
 
 
-def test_select_by_design_on_reloaded_experiments(tmp_path):
+def test_select_by_source_on_reloaded_experiments(tmp_path):
     """Provenance is queryable via select() after a save/reload — local mirrors NocoDB."""
     schema = build_mixed_feature_schema(tmp_path)
     ds_a = Dataset(schema=schema, debug_flag=True)
-    for code, design in [("e_s", "sobol"), ("e_d", "discovery"), ("e_x", "exploration")]:
+    for code, source in [("e_s", "sobol_step"), ("e_d", "discovery_step"), ("e_x", "exploration_step")]:
         ds_a.create_experiment(
             code, parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
-            config_snapshot={"design": design},
+            config_snapshot={"source": source},
         )
     ds_a.save_experiments(["e_s", "e_d", "e_x"], verbose=False)
 
     ds_b = Dataset(schema=schema, debug_flag=True)
     ds_b.load_experiments(["e_s", "e_d", "e_x"], verbose=False)
-    assert ds_b.select(lambda e: e.design == "sobol") == ["e_s"]
-    assert sorted(ds_b.select(lambda e: e.design in {"discovery", "exploration"})) == ["e_d", "e_x"]
+    assert ds_b.select(lambda e: e.source is SourceStep.SOBOL) == ["e_s"]
+    assert sorted(
+        ds_b.select(lambda e: e.source in {SourceStep.DISCOVERY, SourceStep.EXPLORATION})
+    ) == ["e_d", "e_x"]
 
 
 def test_save_pushes_provenance_to_external(tmp_path):
@@ -301,36 +305,69 @@ def test_save_pushes_provenance_to_external(tmp_path):
     ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
     ds.create_experiment(
         "e1", parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
-        config_snapshot={"design": "sobol", "seed": 1},
+        config_snapshot={"source": "sobol_step", "seed": 1},
     )
     ds.save_experiment("e1", verbose=False)
-    assert ext.pushed["e1"] == {"design": "sobol", "seed": 1}
+    assert ext.pushed["e1"] == {"source": "sobol_step", "seed": 1}
+
+
+def test_create_experiment_appends_to_declared_set(tmp_path):
+    """The accumulation path: experiment_set= appends each code, in order."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds = Dataset(schema=schema, debug_flag=True)
+    ds.add_experiment_set(ExperimentSet("run_1", ordered=True))
+    for code in ("e1", "e2", "e3"):
+        ds.create_experiment(
+            code, parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3}, experiment_set="run_1",
+        )
+    assert ds.get_experiment_set("run_1").members == ["e1", "e2", "e3"]
+
+
+def test_create_experiment_unknown_set_raises_and_creates_nothing(tmp_path):
+    """An undeclared set is a fail-fast error — no half-built experiment left behind."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds = Dataset(schema=schema, debug_flag=True)
+    with pytest.raises(KeyError, match="not declared"):
+        ds.create_experiment(
+            "e1", parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3}, experiment_set="missing",
+        )
+    assert "e1" not in [e.code for e in ds.get_all_experiments()]
+
+
+def test_select_set_builds_registered_set_from_query(tmp_path):
+    """The query path: select_set builds + registers an (unordered) set from a predicate."""
+    schema = build_mixed_feature_schema(tmp_path)
+    ds = Dataset(schema=schema, debug_flag=True)
+    for code, src in [("e_s", "sobol_step"), ("e_x", "exploration_step")]:
+        ds.create_experiment(
+            code, parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3},
+            config_snapshot={"source": src},
+        )
+    s = ds.select_set("sobols", lambda e: e.source is SourceStep.SOBOL)
+    assert s.members == ["e_s"] and s.ordered is False
+    assert ds.get_experiment_set("sobols") is s   # registered
 
 
 def test_experiment_set_registry_round_trips_locally(tmp_path):
-    """ExperimentSets save to / load from local storage, resolving parent links by code."""
+    """ExperimentSets save to / load from local storage."""
     schema = build_mixed_feature_schema(tmp_path)
     ds = Dataset(schema=schema, debug_flag=True)
-    disc = ExperimentSet("D1", Strategy.DISCOVERY, members=["e_d1", "e_d2"])
-    expl = ExperimentSet("E1", Strategy.EXPLORATION, members=["e_e1", "e_e2"], parent=disc)
-    ds.add_experiment_set(disc)
-    ds.add_experiment_set(expl)
+    ds.add_experiment_set(ExperimentSet("D1", members=["e_d1", "e_d2"]))
+    ds.add_experiment_set(ExperimentSet("E1", members=["e_e1", "e_e2"], ordered=True))
     ds.save_experiment_sets()
 
     ds2 = Dataset(schema=schema, debug_flag=True)
     ds2.load_experiment_sets()
     assert {e.code for e in ds2.list_experiment_sets()} == {"D1", "E1"}
     loaded = ds2.get_experiment_set("E1")
-    assert loaded.strategy is Strategy.EXPLORATION
     assert loaded.members == ["e_e1", "e_e2"] and loaded.ordered is True
-    assert loaded.parent is ds2.get_experiment_set("D1")     # link resolved on load
 
 
 def test_experiment_sets_push_to_external_on_save(tmp_path):
     schema = build_mixed_feature_schema(tmp_path)
     ext = _RecordingExternal()
     ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
-    ds.add_experiment_set(ExperimentSet("D1", Strategy.DISCOVERY, members=["a", "b"]))
+    ds.add_experiment_set(ExperimentSet("D1", members=["a", "b"]))
     ds.save_experiment_sets()
     assert {s["code"] for s in ext.sets} == {"D1"}     # pushed externally alongside local
 
@@ -340,23 +377,23 @@ def test_experiment_sets_load_falls_back_to_external(tmp_path):
     schema = build_mixed_feature_schema(tmp_path)
     ext = _RecordingExternal()
     ext.sets = [
-        {"code": "E1", "strategy": "exploration", "members": ["e1"], "ordered": True, "parent": "D1"},
-        {"code": "D1", "strategy": "discovery", "members": ["d1"], "ordered": False, "parent": None},
+        {"code": "E1", "members": ["e1"], "ordered": True},
+        {"code": "D1", "members": ["d1"], "ordered": False},
     ]
     ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
     ds.load_experiment_sets()
     assert {e.code for e in ds.list_experiment_sets()} == {"D1", "E1"}
-    assert ds.get_experiment_set("E1").parent is ds.get_experiment_set("D1")   # pulled + resolved
+    assert ds.get_experiment_set("E1").ordered is True
 
 
 def test_load_provenance_falls_back_to_external(tmp_path):
     """When no local config.json exists, provenance is pulled from the external source."""
     schema = build_mixed_feature_schema(tmp_path)
     ext = _RecordingExternal()
-    ext.pushed["e1"] = {"design": "exploration", "kappa": 0.4}
+    ext.pushed["e1"] = {"source": "exploration_step", "kappa": 0.4}
     ds = Dataset(schema=schema, external_data=ext, debug_flag=True)
     ds.create_experiment("e1", parameters={"param_1": 1.0, "dim_1": 2, "dim_2": 3})  # no snapshot
     assert ds.get_experiment("e1").config_snapshot is None
 
     ds._load_provenance(["e1"])
-    assert ds.get_experiment("e1").design == "exploration"
+    assert ds.get_experiment("e1").source is SourceStep.EXPLORATION

@@ -531,14 +531,14 @@ def test_run_sobol_raises_on_trajectory_params(tmp_path):
         calibration.run_sobol(n=4)
 
 
-# ===== generative provenance (config_snapshot: design + seed + settings) =====
+# ===== generative provenance (config_snapshot: source + seed + settings) =====
 
-def test_design_from_source_step_mapping():
-    from pred_fab.orchestration.calibration.system import _design_from_source_step
-    assert _design_from_source_step(SourceStep.DISCOVERY) == "discovery"
-    assert _design_from_source_step(SourceStep.SOBOL) == "sobol"
-    assert _design_from_source_step("exploration_step") == "exploration"
-    assert _design_from_source_step(None) is None
+def test_source_value_mapping():
+    from pred_fab.orchestration.calibration.system import _source_value
+    assert _source_value(SourceStep.DISCOVERY) == "discovery_step"
+    assert _source_value(SourceStep.SOBOL) == "sobol_step"
+    assert _source_value("exploration_step") == "exploration_step"
+    assert _source_value(None) is None
 
 
 def test_run_sobol_stamps_generative_provenance(tmp_path):
@@ -551,7 +551,7 @@ def test_run_sobol_stamps_generative_provenance(tmp_path):
     results = calibration.run_sobol(n=4)
     for spec in results:
         snap = spec.config_snapshot
-        assert snap["design"] == "sobol"
+        assert snap["source"] == "sobol_step"
         assert snap["seed"] == 11
         assert snap["kappa"] is None                       # data-independent design
         assert "param_1" in snap["param_bounds"]
@@ -567,7 +567,7 @@ def test_run_discovery_stamps_design_and_seed(tmp_path):
     results = calibration.run_discovery(n=3)
     for spec in results:
         snap = spec.config_snapshot
-        assert snap["design"] == "discovery"
+        assert snap["source"] == "discovery_step"
         assert snap["kappa"] == 1.0
         assert snap["seed"] == 5
 

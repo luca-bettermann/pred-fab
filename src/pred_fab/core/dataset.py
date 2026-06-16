@@ -42,7 +42,7 @@ from .data_objects import DataArray
 
 from ..interfaces.external_data import IExternalData
 from ..utils import LocalData, PfabLogger
-from ..utils.enum import BlockType, Loaders
+from ..utils.enum import BlockType, Loaders, SourceStep
 
 
 @dataclass(frozen=True)
@@ -236,16 +236,28 @@ class ExperimentData:
         self.config_snapshot: dict[str, Any] | None = None
 
     @property
-    def design(self) -> str | None:
-        """The design that generated this experiment — the queryable provenance axis
-        (``sobol`` / ``discovery`` / ``exploration`` / ``inference`` / ``adaptation``).
-        Read from ``config_snapshot``; see [[First-class dataset concept in pred-fab]]."""
-        return (self.config_snapshot or {}).get("design")
+    def source(self) -> SourceStep | None:
+        """The source method that generated this experiment — the queryable provenance axis
+        (a :class:`SourceStep`). Read from ``config_snapshot``; see the KB note
+        *ExperimentSet data model refactor*."""
+        raw = (self.config_snapshot or {}).get("source")
+        if raw is None:
+            return None
+        try:
+            return SourceStep(raw)
+        except ValueError:
+            return None
+
+    @property
+    def kappa(self) -> float | None:
+        """The acquisition blend κ that generated this experiment (``None`` for
+        data-independent designs like Sobol). Read from ``config_snapshot``."""
+        return (self.config_snapshot or {}).get("kappa")
 
     @property
     def provenance(self) -> dict[str, Any]:
         """Generative provenance — the settings that produced this experiment
-        (alias for ``config_snapshot``: design, kappa, seed, bounds, ...)."""
+        (alias for ``config_snapshot``: source, kappa, seed, bounds, ...)."""
         return self.config_snapshot or {}
 
     # === Helper Methods for Validation ===
@@ -611,14 +623,16 @@ class Dataset:
         parameter_updates: list[dict[str, Any]] | None = None,
         dataset_code: str | None = None,
         config_snapshot: dict[str, Any] | None = None,
+        experiment_set: str | None = None,
         recompute: bool = False
     ) -> ExperimentData:
         """Create and register a new experiment; raises ValueError if it already exists and recompute=False.
 
-        ``dataset_code`` (optional) tags the experiment as belonging to a named
-        dataset group (baseline / reference / test / etc.). Pred-fab core uses
-        it only as opaque metadata; ``DataModule.set_split_dataset`` reads it
-        for sugar-style split assignment.
+        ``experiment_set`` (optional) appends the new code to a declared
+        :class:`ExperimentSet` (the accumulation path — the set must already be
+        registered via :meth:`add_experiment_set`). ``dataset_code`` is the legacy
+        grouping label (opaque metadata, read by ``DataModule.set_split_dataset``),
+        retained until the migration off it completes.
         """
         # Check memory
         if exp_code in self._experiments and not recompute:
@@ -631,6 +645,12 @@ class Dataset:
             if os.path.exists(exp_folder):
                  raise ValueError(f"Experiment {exp_code} already exists locally")
 
+        # Validate the target set early so a bad call leaves no half-built experiment.
+        if experiment_set is not None and experiment_set not in self._experiment_sets:
+            raise KeyError(
+                f"ExperimentSet {experiment_set!r} not declared; call add_experiment_set first."
+            )
+
         # Build and store
         exp_data = self._build_experiment_data(
             exp_code, parameters, performance, features, parameter_updates,
@@ -639,7 +659,19 @@ class Dataset:
         if config_snapshot:
             exp_data.config_snapshot = config_snapshot
         self._experiments[exp_code] = exp_data
+        if experiment_set is not None:
+            self._append_to_experiment_set(experiment_set, exp_code)
         return exp_data
+
+    def _append_to_experiment_set(self, set_code: str, exp_code: str) -> None:
+        """Append an experiment code to a declared set (in order; idempotent)."""
+        if set_code not in self._experiment_sets:
+            raise KeyError(
+                f"ExperimentSet {set_code!r} not declared; call add_experiment_set first."
+            )
+        members = self._experiment_sets[set_code].members
+        if exp_code not in members:
+            members.append(exp_code)
     
     def add_experiment(self, exp_data: ExperimentData, recompute: bool = False) -> None:
         """Manually add an existing ExperimentData to the dataset."""        
@@ -694,18 +726,28 @@ class Dataset:
         if serialized and self.external_data is not None:
             self.external_data.push_experiment_sets(serialized)
 
+    def select_set(
+        self,
+        code: str,
+        predicate: Callable[[ExperimentData], bool],
+        ordered: bool = False,
+    ) -> ExperimentSet:
+        """Build and register an ExperimentSet from a query over experiments.
+
+        The query path to set creation (the accumulation path is ``experiment_set=`` on
+        :meth:`create_experiment`). A filter implies no order, so ``ordered`` defaults False.
+        """
+        eset = ExperimentSet(code=code, members=self.select(predicate), ordered=ordered)
+        self.add_experiment_set(eset)
+        return eset
+
     def load_experiment_sets(self) -> None:
         """Load ExperimentSets — local ``experiment_sets.json`` first, then the external source
-        if none are stored locally — resolving ``parent`` links by code."""
+        if none are stored locally."""
         raw = self.local_data.load_experiment_sets()
         if not raw and self.external_data is not None:
             raw = self.external_data.pull_experiment_sets()
-        by_code = {d["code"]: ExperimentSet.from_dict(d) for d in raw}
-        for d in raw:  # second pass: wire parents now that all sets exist
-            parent_code = d.get("parent")
-            if parent_code is not None and parent_code in by_code:
-                by_code[d["code"]].parent = by_code[parent_code]
-        self._experiment_sets = by_code
+        self._experiment_sets = {d["code"]: ExperimentSet.from_dict(d) for d in raw}
 
     def list_dataset_codes(self) -> list[str]:
         """Return distinct ``dataset_code`` values across loaded experiments, preserving insertion order."""

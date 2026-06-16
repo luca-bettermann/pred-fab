@@ -118,10 +118,10 @@ def test_cv_kfold_still_locates_all_experiments(cv_stack):
 
 def test_evaluate_fit_trains_on_fit_codes_and_scores_probe(cv_stack):
     """Stage-k evaluation: train a fresh model on a Fit's codes, score it on a probe."""
-    from pred_fab.core import ExperimentSet, Strategy, Fit
+    from pred_fab.core import ExperimentSet, Fit
 
     agent, dataset, base_dm, codes = cv_stack
-    run = ExperimentSet("run", Strategy.DISCOVERY, members=[codes[0], codes[1]])
+    run = ExperimentSet("run", members=[codes[0], codes[1]])
     fit = Fit.of(run)                                   # trains on exp 0 + 1
     metrics = CrossValidator.from_agent(agent).evaluate_fit(base_dm, fit, [codes[2]])
 
@@ -131,14 +131,14 @@ def test_evaluate_fit_trains_on_fit_codes_and_scores_probe(cv_stack):
 
 
 def test_evaluate_fit_rejects_empty_inputs(cv_stack):
-    from pred_fab.core import ExperimentSet, Strategy, Fit
+    from pred_fab.core import ExperimentSet, Fit
 
     agent, dataset, base_dm, codes = cv_stack
     cv = CrossValidator.from_agent(agent)
     with pytest.raises(ValueError, match="no experiments"):
-        cv.evaluate_fit(base_dm, Fit.of(ExperimentSet("empty", Strategy.DISCOVERY, members=[])), [codes[0]])
+        cv.evaluate_fit(base_dm, Fit.of(ExperimentSet("empty", members=[])), [codes[0]])
     with pytest.raises(ValueError, match="probe_codes is empty"):
-        cv.evaluate_fit(base_dm, Fit.of(ExperimentSet("r", Strategy.DISCOVERY, members=[codes[0]])), [])
+        cv.evaluate_fit(base_dm, Fit.of(ExperimentSet("r", members=[codes[0]])), [])
 
 
 def test_cv_does_not_touch_the_deployed_system(cv_stack):
