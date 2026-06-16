@@ -4,15 +4,14 @@ The per-step contract tests (``test_agent_step_contracts``) rebuild a fresh
 stack for each step and the workflow test stops at one exploration step.
 Neither drives the full sequence on one carried-forward agent. This does:
 discovery → (evaluate + train) → exploration → inference, asserting the
-``SourceStep`` each phase stamps maps to the expected ``Strategy`` and that the
-loop keeps producing valid proposals across iterations. ``adaptation_step``
-(not yet implemented) is confirmed excluded.
+``SourceStep`` each phase stamps and that the loop keeps producing valid
+proposals across iterations. ``adaptation_step`` (not yet implemented) is
+confirmed excluded.
 """
 
 import pytest
 
 from pred_fab.core import ExperimentSpec
-from pred_fab.core.experiment_set import Strategy, strategy_for_source_step
 from pred_fab.utils import SourceStep
 from tests.utils.builders import build_real_agent_stack
 
@@ -26,7 +25,7 @@ def _prime(agent, exp, datamodule):
 
 def test_discovery_to_exploration_to_inference_transition(tmp_path):
     """One agent advances DISCOVERY → EXPLORATION → INFERENCE, each stamping the
-    matching source_step / Strategy."""
+    matching source_step."""
     agent, _dataset, exp, datamodule = build_real_agent_stack(tmp_path)
 
     discovery = agent.discovery_step(n=3)
@@ -44,13 +43,6 @@ def test_discovery_to_exploration_to_inference_transition(tmp_path):
         inference.initial_params.source_step,
     ]
     assert observed_steps == [SourceStep.DISCOVERY, SourceStep.EXPLORATION, SourceStep.INFERENCE]
-
-    # The persisted step tag maps onto the queryable design axis.
-    assert [strategy_for_source_step(s) for s in observed_steps] == [
-        Strategy.DISCOVERY,
-        Strategy.EXPLORATION,
-        Strategy.INFERENCE,
-    ]
 
 
 def test_loop_carries_forward_across_iterations(tmp_path):
