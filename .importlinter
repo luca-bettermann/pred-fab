@@ -1,0 +1,15 @@
+[importlinter]
+root_package = pred_fab
+
+[importlinter:contract:layers]
+name = pred_fab layered architecture (core is the dependency root)
+type = layers
+containers =
+    pred_fab
+layers =
+    plotting
+    orchestration
+    models
+    interfaces
+    core
+    utils

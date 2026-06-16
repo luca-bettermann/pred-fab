@@ -3,7 +3,7 @@
 - **Purpose** — schema-agnostic predictive-fabrication calibration framework: an active-learning loop that proposes experiment parameters (see [[PFAB - Predictive Fabrication]]).
 - **Owns** — the data model, prediction/evaluation models, the evidence + acquisition optimiser, and the `PfabAgent` API. Stateless orchestrator parameterised by an injected schema.
 - **Out of scope → who** — persistence/storage (`pred-fab-nocodb`); fabrication execution + hardware (`learning-by-printing`, `rtde-robot-control`); application-specific schemas/data generation (the consuming repo).
-- **Depends on** — nothing internal at the data layer (`core` is the root); optional external-data adapters via the `IExternalData` port. See [[Repo Dependency Graph]].
+- **Depends on** — nothing internal at the data layer (`core` is the root); optional external-data adapters via the `ExternalDataPort` (defined in `core`, implemented by `interfaces.IExternalData` and the storage adapters). See [[Repo Dependency Graph]].
 
 ## Purpose (detail)
 Predictive Fabrication (PFAB) framework: active-learning loop for manufacturing process calibration.
@@ -17,6 +17,64 @@ experiment parameters that balance exploration (evidence gain) and exploitation 
    - `A = (1-κ)·P_sys + κ·ΔE` where P_sys = weighted system performance, ΔE = evidence gain
    - κ=1.0 → discovery (pure space-filling via evidence), κ=0.0 → inference (pure performance)
 4. **Execute** — apply proposed parameters; record results; repeat
+
+## Architecture
+
+The intended layering, enforced by the `import-linter` contract in
+`.importlinter` (run `lint-imports`; ready to wire into CI/pre-commit —
+neither exists in this repo yet).
+
+### Layers (arrows = imports; a package may import only those below it)
+
+```mermaid
+flowchart TD
+    plotting["plotting<br/><i>figures, render</i>"]
+    diagnostics["diagnostics<br/><i>sensitivity · SALib · standalone</i>"]
+    orchestration["orchestration<br/><i>PfabAgent · Prediction/Evaluation/Calibration · evidence</i>"]
+    models["models<br/><i>MLP · Transformer · deterministic</i>"]
+    interfaces["interfaces<br/><i>model + storage contracts</i>"]
+    core["core<br/><i>schema · Dataset · DataModule · input_pipeline · ports (ROOT)</i>"]
+    utils["utils<br/><i>logger · metrics · enums · local I/O</i>"]
+
+    plotting --> orchestration
+    plotting --> utils
+    orchestration --> interfaces
+    orchestration --> core
+    orchestration --> utils
+    models --> interfaces
+    models --> utils
+    interfaces --> core
+    interfaces --> utils
+    core --> utils
+```
+
+`core` is the dependency root — it imports nothing upward. It owns the
+`ExternalDataPort` Protocol (`core/ports.py`), so storage adapters depend
+*inward* onto `core` rather than `core` reaching up into `interfaces` (this is
+what broke the former `core ↔ interfaces` cycle; the contract now fails the
+build if it returns). `models` and `orchestration` never import each other —
+concrete models are injected into `PfabAgent` through the `interfaces`
+contracts. `diagnostics` is a standalone consumer (SALib).
+
+### Data flow (runtime pipeline)
+
+```mermaid
+flowchart LR
+    schema[DatasetSchema<br/>injected] --> dataset[Dataset]
+    storage[(external storage<br/>nocodb · lbp)] <-->|ExternalDataPort| dataset
+    dataset --> dm[DataModule]
+    dm --> pred[PredictionSystem<br/>MLP/Transformer + KDE]
+    dm --> evalsys[EvaluationSystem]
+    feat[FeatureSystem] --> evalsys
+    pred -->|Δ∫E evidence| calib[CalibrationSystem<br/>acquisition: 1-κ·P + κ·ΔE]
+    evalsys -->|P_sys| calib
+    calib --> agent[PfabAgent]
+    agent -->|ExperimentSpec proposals| dataset
+```
+
+`DataModule` and the deployable `InferenceBundle` share
+`core/input_pipeline` (encode → order → normalize → slice) so inference can't
+drift from training.
 
 ## Repo Structure
 
