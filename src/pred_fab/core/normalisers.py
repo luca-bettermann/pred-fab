@@ -32,7 +32,7 @@ class NormaliserModule(nn.Module):
     """
     method: NormMethod
 
-    def reverse(self, x):  # pragma: no cover (overridden)
+    def reverse(self, x) -> Any:  # pragma: no cover (overridden)
         raise NotImplementedError
 
     def __getitem__(self, key: str) -> Any:
@@ -65,6 +65,15 @@ class NormaliserModule(nn.Module):
             return self[key]
         except KeyError:
             return default
+
+    @classmethod
+    def from_dict(cls, stats: dict[str, Any]) -> "NormaliserModule":
+        """Rebuild a normaliser from a serialised stats dict (inverse of to_dict)."""
+        return normaliser_from_dict(stats)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise stats to a plain dict; stat subclasses add their buffers."""
+        return {"method": self.method}
 
     @staticmethod
     def _to_tensor_like(x: Any) -> tuple[torch.Tensor, bool]:
@@ -108,6 +117,9 @@ class StandardScalerModule(NormaliserModule):
     def std(self) -> float:
         return float(self._std.item())  # type: ignore[union-attr]
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"method": self.method, "mean": self.mean, "std": self.std}
+
     def forward(self, x):
         x_t, was_np = self._to_tensor_like(x)
         mean_buf: torch.Tensor = self._mean  # type: ignore[assignment]
@@ -141,6 +153,9 @@ class MinMaxScalerModule(NormaliserModule):
     def max(self) -> float:
         max_buf: torch.Tensor = self._max  # type: ignore[assignment]
         return float(max_buf.item())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"method": self.method, "min": self.min, "max": self.max}
 
     def forward(self, x):
         x_t, was_np = self._to_tensor_like(x)
@@ -189,6 +204,9 @@ class RobustScalerModule(NormaliserModule):
     def q3(self) -> float:
         q3_buf: torch.Tensor = self._q3  # type: ignore[assignment]
         return float(q3_buf.item())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"method": self.method, "median": self.median, "q1": self.q1, "q3": self.q3}
 
     def forward(self, x):
         x_t, was_np = self._to_tensor_like(x)

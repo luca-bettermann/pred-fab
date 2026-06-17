@@ -20,7 +20,7 @@ Dynamic: license-file
 
 A Python framework for iterative parameter optimization in digital fabrication systems.
 
-`pred-fab` provides a structured loop between **feature extraction**, **performance evaluation**, **predictive modelling**, and **parameter calibration**. It supports offline experiment design, online process adaptation, and inference-guided proposals — all through a single orchestration agent.
+`pred-fab` provides a structured loop between **feature extraction**, **performance evaluation**, **predictive modelling**, and **parameter calibration**. It runs the full active-learning loop — discovery → exploration → inference — through a single orchestration agent.
 
 **Package**: `pred-fab` v0.1.0
 **Python**: 3.9+
@@ -52,11 +52,11 @@ DatasetSchema          — defines parameters, features, and performance attribu
 └── IPredictionModel   — predicts features from parameters (enables calibration)
 
 PfabAgent              — orchestrates the full loop
+├── discovery_step()   — propose initial space-filling experiments (κ=1, evidence maximisation)
 ├── evaluate()         — run feature extraction + evaluation on recorded experiments
 ├── train()            — train prediction models on evaluated data
-├── exploration_step() — propose next experiment parameters (UCB acquisition)
-├── inference_step()   — evaluate + propose next parameters (performance-guided)
-└── adaptation_step()  — online trust-region adaptation during fabrication
+├── exploration_step() — propose next parameters via the κ-blend acquisition (κ ∈ (0,1))
+└── inference_step()   — evaluate, then propose optimal parameters (κ=0, performance-guided)
 ```
 
 ---
@@ -116,7 +116,7 @@ schema = DatasetSchema(
 | Boolean | `Parameter.boolean(code)` | True/False |
 | Dimension | `Parameter.dimension(code, iterator_code, level)` | Defines iteration structure |
 
-Set `runtime=True` on any parameter that can be adjusted mid-fabrication. This enables online adaptation and trajectory-based exploration.
+Set `runtime=True` on any parameter that can be adjusted mid-fabrication. This enables trajectory optimization — a per-step path for the parameter along a fabrication dimension.
 
 ### Dataset and Experiments
 
@@ -157,13 +157,12 @@ agent.register_evaluation_model(WidthEvaluationModel)
 agent.register_prediction_model(WidthPredictionModel)
 agent.initialize_systems(schema)
 
-# 3. Configure calibration bounds
-agent.configure_calibration(
-    bounds={"speed": (20.0, 100.0), "feed_rate": (10.0, 60.0)},
-)
+# 3. Configure the acquisition (hard bounds come from the schema; these are optional)
+agent.configure_performance(weights={"width_accuracy": 2.0})
+agent.configure_exploration(kappa=0.5)
 
-# 4. Sample initial experiments via Latin Hypercube Sampling
-baseline_specs = agent.sample_baseline_experiments(n_samples=10)
+# 4. Propose initial space-filling experiments (κ=1 evidence maximisation)
+discovery_specs = agent.discovery_step(n=10)
 # → run physical experiments for each spec, record results
 
 # 5. Evaluate and train on recorded experiments
@@ -177,7 +176,7 @@ datamodule.prepare()
 agent.train(datamodule)
 
 # 6. Propose next experiment
-spec = agent.exploration_step(datamodule, w_explore=0.6)
+spec = agent.exploration_step(datamodule, kappa=0.6)
 print(spec.initial_params)  # → {"speed": 72.4, "feed_rate": 38.1, ...}
 ```
 
@@ -295,97 +294,75 @@ agent.initialize_systems(schema, verbose_flag=True)
 | `evaluate(exp_data)` | Run feature extraction and performance evaluation on an experiment |
 | `train(datamodule, validate, test)` | Train prediction models; returns validation metrics if requested |
 | `predict(exp_data, dimension, step_index)` | Predict features for an experiment or a specific step slice |
-| `sample_baseline_experiments(n_samples, param_bounds)` | Generate LHS-sampled initial experiment parameters |
-| `exploration_step(datamodule, w_explore, n_optimization_rounds, current_params)` | UCB-acquisition proposal for the next experiment |
-| `inference_step(exp_data, datamodule, w_explore, n_optimization_rounds, current_params)` | Evaluate current experiment + propose next parameters |
-| `adaptation_step(dimension, step_index, exp_data, mode, w_explore, record)` | Online trust-region adaptation for a single fabrication step |
-| `configure_calibration(bounds, fixed_params, adaptation_delta, performance_weights)` | Configure the calibration system |
+| `discovery_step(n)` | Propose n space-filling initial experiments via κ=1 evidence maximisation |
+| `exploration_step(datamodule, kappa=None)` | κ-blend acquisition proposal; `kappa=None` uses the configured default |
+| `inference_step(exp_data, datamodule)` | Evaluate the current experiment, then propose optimal parameters (κ=0) |
+| `acquisition_step(datamodule, kappa=None)` | Unified proposal step underlying exploration/inference |
+| `adaptation_step(...)` | Online trust-region adaptation — **planned; currently raises `NotImplementedError`** |
+| `configure_*(...)` | Tune the acquisition — see [Calibration Configuration](#calibration-configuration) |
 | `state_report()` | Print a summary of registered models and their I/O |
-| `calibration_state_report()` | Print current bounds and trust-region configuration |
 
 ---
 
 ## Calibration Configuration
 
-```python
-agent.configure_calibration(
-    # Hard bounds for offline optimization
-    bounds={"speed": (20.0, 100.0), "feed_rate": (10.0, 60.0)},
-
-    # Parameters held constant during optimization
-    fixed_params={"material": "A"},
-
-    # Trust-region deltas for online/adaptation steps (runtime=True params only)
-    adaptation_delta={"feed_rate": 5.0},
-
-    # Performance weighting (default 1.0 for all)
-    performance_weights={"width_accuracy": 2.0},
-)
-```
-
-### Trajectory Exploration
-
-For runtime parameters that change along a fabrication dimension (e.g. feed rate per layer), configure trajectories to have the framework optimize a per-step schedule:
+Hard parameter bounds come from the **schema** (`Parameter.real(code, min_val, max_val)`); the optimizer enforces them by construction (sigmoid reparameterization, no clipping). The acquisition is tuned through focused `configure_*` methods:
 
 ```python
-agent.calibration_system.configure_trajectory("feed_rate", dimension_code="n_layers")
-agent.calibration_system.configure_adaptation_delta({"feed_rate": 5.0})
+# Weight performance attributes in the blended score (default 1.0 each)
+agent.configure_performance(weights={"width_accuracy": 2.0})
+
+# Persistent κ default for exploration_step + evidence-kernel bandwidth
+agent.configure_exploration(kappa=0.5, sigma=0.075)
+
+# Evidence estimator: "kernel_field" (default) or "sobol_local" (high-D escape hatch)
+agent.configure_evidence(estimator="kernel_field")
+
+# Optimizer: Sobol global sampling → independent L-BFGS restarts
+agent.configure_optimizer(n_starts=16, n_sobol=512, lr=0.05)
 ```
 
-`exploration_step` and `inference_step` then return an `ExperimentSpec` with both `initial_params` and per-dimension `schedules`.
+### Trajectory Optimization
 
-### MPC Lookahead
-
-Reduce greedy myopia during trajectory optimization by simulating steps ahead:
+For a runtime parameter that varies along a fabrication dimension (e.g. feed rate per layer), register a trajectory; the step methods then optimize a per-step path for it:
 
 ```python
-agent.calibration_system.default_mpc_lookahead_depth = 2   # simulate 2 steps ahead
-agent.calibration_system.default_mpc_discount = 0.9        # geometric discount factor
+agent.configure_trajectory("feed_rate", "n_layers", delta=5.0)  # delta = max change per step
 ```
+
+`discovery_step` / `exploration_step` / `inference_step` then return an `ExperimentSpec` whose `trajectories` map holds the per-dimension path alongside `initial_params`.
 
 ---
 
 ## Workflow Modes
 
-### Offline Exploration
+The κ-blend acquisition is `A = (1−κ)·S + κ·ΔE` (higher is better), where `S` is weighted system performance and `ΔE` the integrated evidence gain. κ selects the mode.
 
-Propose the next experiment using UCB acquisition (balances exploration vs. exploitation). Use when you want to explore broadly or have no trained model yet:
+### Discovery (κ=1)
 
-```python
-spec = agent.exploration_step(
-    datamodule=datamodule,
-    w_explore=0.7,             # 0.0 = exploit, 1.0 = explore
-    n_optimization_rounds=20,  # random restarts for global search
-    current_params=None,       # optional: provide to initialize search from known state
-)
-```
-
-### Inference-Guided Proposal
-
-Evaluate the current experiment first, then propose the next parameters based on updated performance estimates:
+Seed the dataset before any model exists — pure space-filling via evidence maximisation:
 
 ```python
-spec = agent.inference_step(
-    exp_data=current_exp,
-    datamodule=datamodule,
-    w_explore=0.3,
-)
+specs = agent.discovery_step(n=10)   # n joint proposals
 ```
 
-### Online Adaptation
+### Exploration (0 < κ < 1)
 
-Adapt runtime parameters step-by-step during a live fabrication run. The prediction model is fine-tuned on the latest slice before proposing new values:
+Propose the next experiment by blending performance and evidence gain. `kappa=None` uses the configured default:
 
 ```python
-spec = agent.adaptation_step(
-    exp_data=current_exp,
-    dimension="n_layers",
-    step_index=3,
-    mode=Mode.INFERENCE,  # or Mode.EXPLORATION
-    w_explore=0.0,
-    record=True,          # persist the proposed update to the experiment record
-)
+spec = agent.exploration_step(datamodule, kappa=0.7)   # higher κ = more exploratory
 ```
+
+### Inference (κ=0)
+
+Evaluate the current experiment, then propose the performance-optimal parameters:
+
+```python
+spec = agent.inference_step(exp_data=current_exp, datamodule=datamodule)
+```
+
+> **Online adaptation** (`adaptation_step`) is planned but not yet implemented — it raises `NotImplementedError`. Use `exploration_step` / `inference_step` for offline proposals.
 
 ### ExperimentSpec
 
@@ -394,14 +371,13 @@ All step methods return an `ExperimentSpec`:
 ```python
 spec = agent.exploration_step(datamodule)
 
-# Experiment-level parameters
-speed = spec["speed"]               # dict-like access on initial_params
-params = spec.initial_params        # full ParameterProposal
+speed  = spec["speed"]            # dict-like access, delegates to initial_params
+params = spec.initial_params      # full ParameterProposal
 
-# Trajectory schedules (when trajectory params are configured)
-for dim_code, schedule in spec.schedules.items():
-    for step_idx, proposal in schedule.entries:
-        print(f"  layer {step_idx}: feed_rate = {proposal['feed_rate']:.2f}")
+# Per-dimension trajectories (when trajectory params are configured)
+for dim_code, trajectory in spec.trajectories.items():
+    for step_idx, proposal in trajectory.entries:
+        print(f"  step {step_idx}: feed_rate = {proposal.values['feed_rate']:.2f}")
 ```
 
 ---

@@ -7,12 +7,23 @@ import torch
 from ...core import DataModule, Dataset, DatasetSchema
 from ...core import DataInt, DataObject, DataBool, DataCategorical, DataDomainAxis
 from ...core import ParameterProposal, ExperimentSpec
+from ...core.designs import SobolDesign
+from ...core.frames import raw_scalar_to_param
 from ...utils import PfabLogger, NormMethod, SourceStep, SplitType, combined_score, profiler
+from ...utils.console import _B, _D, _R
 from ..base_system import BaseOrchestrationSystem
 from ..evidence import evidence_from_density
 from .engine import OptimizationEngine
 from .bounds import BoundsManager
 from .space import SolutionSpace, StaticVariable, TrajectoryVariable, Variable
+
+
+def _source_value(source_step: Any | None) -> str | None:
+    """The persisted ``source`` string for a ``SourceStep`` (or a raw string), else ``None``."""
+    if source_step is None:
+        return None
+    return source_step.value if isinstance(source_step, SourceStep) else str(source_step)
+
 
 @dataclass
 class EvidenceBackend:
@@ -32,7 +43,7 @@ class EvidenceBackend:
 # ======================================================================
 
 class CalibrationSystem(BaseOrchestrationSystem):
-    """Active-learning calibration engine: acquisition-driven exploration, inference, batch discovery, and joint schedule optimization."""
+    """Active-learning calibration engine: acquisition-driven exploration, inference, batch discovery, and joint trajectory optimization."""
 
     def __init__(
         self,
@@ -60,16 +71,14 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.engine = OptimizationEngine(logger, random_seed=random_seed)
         self.bounds = BoundsManager(schema, logger)
 
-        # Active datamodule — set before each optimization run so that
-        # _acquisition_objective can call array_to_params.
+        # Active datamodule — set before each optimization run so the
+        # objective can decode candidates to parameter dicts.
         self._active_datamodule: DataModule | None = None
 
         # Set after each optimization call for external inspection.
         self.last_opt_nfev: int = 0
         self.last_opt_n_starts: int = 0
         self.last_opt_score: float = 0.0
-        self.last_opt_perf: float = 0.0
-        self.last_opt_unc: float = 0.0
         self.last_trajectory: list[dict[str, Any]] | None = None
         self.convergence_history: dict[str, list[list[float]]] = {}  # label → per-start convergence
         # Phase data for validation plots
@@ -78,7 +87,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.last_trajectory_points: np.ndarray | None = None
         self.last_trajectory_exp_ids: list[int] | None = None
         self.post_global_callback: Callable[[list[ExperimentSpec]], None] | None = None
-        self.derive_L_fn: Callable[[dict[str, Any]], int] | None = None  # deprecated, use dimension_derivations
         self.dimension_derivations: dict[str, Callable[[dict[str, Any]], int]] = {}
 
         # Set ordered weights
@@ -94,7 +102,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         # Running min/max of predicted system performance across training data.
 
-        self._schedule_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
+        self._trajectory_joint_var_limit: int = 200  # threshold for auto-selecting joint vs sequential
         self._suppress_opt_print: bool = False
 
     # ==================================================================
@@ -165,13 +173,13 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return self.bounds.get_tunable_params(datamodule)
 
     def _get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
-        return self.bounds._get_hierarchical_bounds_for_code(code)
+        return self.bounds.get_hierarchical_bounds_for_code(code)
 
     def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
-        return self.bounds._get_global_bounds(datamodule)
+        return self.bounds.get_global_bounds(datamodule)
 
     def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
-        return self.bounds._get_trust_region_bounds(datamodule, current_params)
+        return self.bounds.get_trust_region_bounds(datamodule, current_params)
 
     def _get_n_exp(self) -> int:
         """Current experiment count from the prediction system."""
@@ -181,10 +189,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def state_report(self) -> None:
         """Log the current calibration configuration state."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         lines = [f"\n  {_B}Calibration{_R}"]
 
         pw_parts = [f"{k}={v:g}" for k, v in self.performance_weights.items()]
@@ -193,7 +197,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         lines.append(f"\n    {_D}{'Parameter':<20s} {'Bounds':<20s} {'Delta':<8s}{_R}")
         for code in self.data_objects.keys():
-            low, high = self.bounds._get_hierarchical_bounds_for_code(code)
+            low, high = self.bounds.get_hierarchical_bounds_for_code(code)
             bounds_str = f"[{low}, {high}]"
             delta = self.trust_regions.get(code, "\u2500")
             lines.append(f"    {code:<20s} {bounds_str:<20s} {delta:<8}")
@@ -201,17 +205,31 @@ class CalibrationSystem(BaseOrchestrationSystem):
         self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
 
-    def get_config_snapshot(self, kappa: float, sigma: float | None = None) -> dict[str, Any]:
-        """Serializable snapshot of user-facing settings that affect the proposal."""
+    def get_config_snapshot(
+        self,
+        kappa: float | None,
+        sigma: float | None = None,
+        source_step: Any | None = None,
+    ) -> dict[str, Any]:
+        """Serializable snapshot of the settings that generated a proposal — its provenance.
+
+        Records the *source* method (the queryable provenance axis — the ``SourceStep`` that
+        generated the proposal) and the generative settings — ``kappa`` (``None`` for
+        data-independent designs like Sobol), ``seed``, bounds, trust regions, fixed params,
+        trajectory configs, optimizer knobs — so an experiment's origin is reproducible given
+        the same known data. See the KB note *ExperimentSet data model refactor*.
+        """
         param_bounds = {}
         for code in self.data_objects.keys():
             try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+                lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
                 param_bounds[code] = [lo, hi]
             except (ValueError, KeyError):
                 pass
         snapshot: dict[str, Any] = {
+            "source": _source_value(source_step),
             "kappa": kappa,
+            "seed": self._random_seed,
             "performance_weights": dict(self.performance_weights),
             "param_bounds": param_bounds,
             "trust_regions": {k: v for k, v in self.trust_regions.items()},
@@ -281,9 +299,11 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
     def _candidate_weight(self, params: dict[str, Any]) -> float:
         """1/L where L is derived from params. Matches SolutionSpace.decode()."""
-        if not self.derive_L_fn:
+        dims = sorted(set(self.trajectory_configs.values()))
+        deriv = self.dimension_derivations.get(dims[0]) if dims else None
+        if deriv is None:
             return 1.0
-        return 1.0 / max(1, self.derive_L_fn(params))
+        return 1.0 / max(1, int(deriv(params)))
 
     def evidence_gain(self, params: dict[str, Any]) -> float:
         """Evidence gain ΔE for a single candidate, weighted by 1/L."""
@@ -294,6 +314,38 @@ class CalibrationSystem(BaseOrchestrationSystem):
         p = self.system_performance(params) if kappa < 1.0 else 0.0
         e = self.evidence_gain(params) if kappa > 0.0 else 0.0
         return (1.0 - kappa) * p + kappa * e
+
+    def _sweep_2d(
+        self,
+        x_key: str,
+        y_key: str,
+        x_bounds: tuple[float, float],
+        y_bounds: tuple[float, float],
+        fixed_params: dict[str, Any],
+        cell_fn: Callable[[int, int, dict[str, Any]], None],
+        resolution: int = 60,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Sweep (x_key, y_key) over their bounds, calling ``cell_fn`` per cell.
+
+        Shared 2D-slice skeleton for the grid builders: holds all other params
+        fixed, fills any ``dimension_derivations`` for derived codes, and invokes
+        ``cell_fn(i, j, params)`` where ``i`` indexes ``xs`` and ``j`` indexes
+        ``ys`` (grids are filled ``[j, i]`` by the callable). Returns (xs, ys).
+        """
+        xs = np.linspace(*x_bounds, resolution)
+        ys = np.linspace(*y_bounds, resolution)
+
+        for i in range(resolution):
+            for j in range(resolution):
+                params = dict(fixed_params)
+                params[x_key] = float(xs[i])
+                params[y_key] = float(ys[j])
+                for code, derive_fn in self.dimension_derivations.items():
+                    if code not in params:
+                        params[code] = derive_fn(params)
+                cell_fn(i, j, params)
+
+        return xs, ys
 
     def compute_acquisition_grids(
         self,
@@ -313,23 +365,18 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Returns (xs, ys, evidence_grid, perf_grid, acq_grid).
         """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
         ev_grid = np.zeros((resolution, resolution))
         perf_grid = np.zeros((resolution, resolution))
 
-        for i in range(resolution):
-            for j in range(resolution):
-                params = dict(fixed_params)
-                params[x_key] = float(xs[i])
-                params[y_key] = float(ys[j])
-                for code, derive_fn in self.dimension_derivations.items():
-                    if code not in params:
-                        params[code] = derive_fn(params)
-                if kappa > 0.0:
-                    ev_grid[j, i] = self.evidence_gain(params)
-                if kappa < 1.0:
-                    perf_grid[j, i] = self.system_performance(params)
+        def cell(i: int, j: int, params: dict[str, Any]) -> None:
+            if kappa > 0.0:
+                ev_grid[j, i] = self.evidence_gain(params)
+            if kappa < 1.0:
+                perf_grid[j, i] = self.system_performance(params)
+
+        xs, ys = self._sweep_2d(
+            x_key, y_key, x_bounds, y_bounds, fixed_params, cell, resolution,
+        )
 
         acq_grid = (1.0 - kappa) * perf_grid + kappa * ev_grid
         return xs, ys, ev_grid, perf_grid, acq_grid
@@ -352,76 +399,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         Returns (xs, ys, density_grid, evidence_grid).
         """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
         d_grid = np.zeros((resolution, resolution))
         e_grid = np.zeros((resolution, resolution))
 
-        for i in range(resolution):
-            for j in range(resolution):
-                params = dict(fixed_params)
-                params[x_key] = float(xs[i])
-                params[y_key] = float(ys[j])
-                for code, derive_fn in self.dimension_derivations.items():
-                    if code not in params:
-                        params[code] = derive_fn(params)
-                d_grid[j, i] = self.density(params)
-                e_grid[j, i] = evidence_from_density(d_grid[j, i])
+        def cell(i: int, j: int, params: dict[str, Any]) -> None:
+            d_grid[j, i] = self.density(params)
+            e_grid[j, i] = evidence_from_density(d_grid[j, i])
 
-        return xs, ys, d_grid, e_grid
+        xs, ys = self._sweep_2d(
+            x_key, y_key, x_bounds, y_bounds, fixed_params, cell, resolution,
+        )
 
-    def compute_evidence_marginal_grids(
-        self,
-        x_key: str,
-        y_key: str,
-        x_bounds: tuple[float, float],
-        y_bounds: tuple[float, float],
-        experiment_params: list[dict[str, Any]],
-        sigma: float,
-        weights: list[float] | None = None,
-        resolution: int = 60,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Marginal density + evidence over (x_key, y_key).
-
-        Param-space KDE: projects training points onto the two visible
-        axes in [0,1]-normalized space and sums isotropic Gaussian
-        kernels. Marginalizing over hidden dims is analytic — the 2D
-        marginal of an isotropic Gaussian is itself a Gaussian with the
-        same σ and weights, evaluated on the projected centers.
-
-        Returns (xs, ys, density_grid, evidence_grid).
-        """
-        xs = np.linspace(*x_bounds, resolution)
-        ys = np.linspace(*y_bounds, resolution)
-
-        x_span = x_bounds[1] - x_bounds[0]
-        y_span = y_bounds[1] - y_bounds[0]
-        if x_span < 1e-10 or y_span < 1e-10:
-            return xs, ys, np.zeros((resolution, resolution)), np.zeros((resolution, resolution))
-
-        n = len(experiment_params)
-        if n == 0:
-            return xs, ys, np.zeros((resolution, resolution)), np.zeros((resolution, resolution))
-
-        centers = np.empty((n, 2))
-        for k, p in enumerate(experiment_params):
-            centers[k, 0] = (float(p[x_key]) - x_bounds[0]) / x_span
-            centers[k, 1] = (float(p[y_key]) - y_bounds[0]) / y_span
-
-        w = np.array(weights) if weights is not None else np.ones(n)
-        inv_2s2 = 1.0 / (2.0 * sigma ** 2)
-
-        xs_norm = (xs - x_bounds[0]) / x_span
-        ys_norm = (ys - y_bounds[0]) / y_span
-
-        d_grid = np.zeros((resolution, resolution))
-        for i in range(resolution):
-            dx = xs_norm[i] - centers[:, 0]
-            for j in range(resolution):
-                dy = ys_norm[j] - centers[:, 1]
-                d_grid[j, i] = float(np.sum(w * np.exp(-(dx ** 2 + dy ** 2) * inv_2s2)))
-
-        e_grid = d_grid / (1.0 + d_grid)
         return xs, ys, d_grid, e_grid
 
     # ==================================================================
@@ -471,21 +459,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             ev = self._evidence_backend.batched_tensor(X_SD, w)
         return float(ev[0].item())
 
-    def _per_candidate_perf_batched(
-        self,
-        X_SD: np.ndarray,
-        perf_range: tuple[float, float] | None,
-    ) -> np.ndarray:
-        """No-grad numpy shim around `_per_candidate_perf_tensor`."""
-        S = X_SD.shape[0]
-        if S == 0:
-            return np.empty((0,), dtype=np.float64)
-        with torch.no_grad():
-            out_t = self._per_candidate_perf_tensor(
-                torch.from_numpy(np.ascontiguousarray(X_SD)).double(), perf_range,
-            )
-        return out_t.detach().cpu().numpy().astype(np.float64)
-
     def _normalize_perf_dict(
         self,
         perf_dict: dict[str, float | None],
@@ -504,22 +477,6 @@ class CalibrationSystem(BaseOrchestrationSystem):
             sys_perf = (sys_perf - pmin) / span if span > 1e-10 else 0.5
         return float(sys_perf)
 
-    def _acquisition_objective(
-        self,
-        x_flat: np.ndarray,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> float:
-        """DE-compatible (negated) acquisition for single-candidate phases.
-
-        Thin no-grad numpy shim around `_acquisition_objective_tensor` —
-        wraps the 1-D x_flat as a (1, D) batch and pulls out the scalar.
-        """
-        with torch.no_grad():
-            X_SD = torch.from_numpy(np.atleast_2d(x_flat)).double()
-            out = self._acquisition_objective_tensor(X_SD, kappa, perf_range)
-        return float(out[0].item())
-
     def _kappa_blend(self, scores, perfs, evidences, kappa: float):
         """A = (1-κ)·P + κ·ΔE, negated for minimisation."""
         if perfs is not None and kappa < 1.0:
@@ -528,139 +485,85 @@ class CalibrationSystem(BaseOrchestrationSystem):
             scores = scores + kappa * evidences
         return -scores
 
-    def _per_candidate_perf_tensor(
+    def _point_perf(
         self,
-        X_SD: torch.Tensor,
+        raw_SD: torch.Tensor,
         perf_range: tuple[float, float] | None,
     ) -> torch.Tensor:
-        """Per-candidate weighted performance ``(S,)``, gradient-traversable.
+        """Per-point weighted performance ``(S,)``, gradient-traversable.
 
-        Routes through ``perf_fn_tensor`` for autograd. When the tensor closure
-        is unavailable (test fixtures) or raises, falls back to a scalar loop
-        — gradient is lost on that path.
+        ``raw_SD`` is physical-frame (one row per point). Builds a param dict
+        per row directly from raw — continuous values stay grad-bearing tensors,
+        categorical / integer / domain values resolve to Python — and scores via
+        ``perf_fn_tensor``. No normalization round-trip (the model re-normalises).
         """
-        S = int(X_SD.shape[0])
+        S = int(raw_SD.shape[0])
         if S == 0:
-            return torch.zeros(0, dtype=X_SD.dtype)
+            return torch.zeros(0, dtype=raw_SD.dtype)
         dm = self._active_datamodule
         if dm is None:
-            raise RuntimeError("_per_candidate_perf_tensor: _active_datamodule is None")
+            raise RuntimeError("_point_perf: _active_datamodule is None")
         if self.perf_fn_tensor is None:
-            raise RuntimeError("_per_candidate_perf_tensor: perf_fn_tensor is None")
+            raise RuntimeError("_point_perf: perf_fn_tensor is None")
         if not getattr(dm, "_is_fitted", True):
-            raise RuntimeError("_per_candidate_perf_tensor: DataModule not fitted")
+            raise RuntimeError("_point_perf: DataModule not fitted")
 
-        # Build per-candidate params dicts. Continuous values stay as 0-D
-        # tensors for autograd; categorical / int / domain values resolve
-        # to concrete Python types at decode time (no grad through them).
-        params_list: list[dict[str, Any]] = []
-        for s in range(S):
-            try:
-                p_np = dm.array_to_params(X_SD[s].detach().cpu().numpy().reshape(-1))
-                p_with_grad = self._reattach_tensor_continuous(p_np, X_SD[s], dm)
-                params_list.append(p_with_grad)
-            except (ValueError, KeyError) as exc:
-                self.logger.warning(f"_per_candidate_perf_tensor: candidate {s} decode failed: {exc}")
-                params_list.append(None)  # type: ignore[arg-type]
+        params_list = [self._raw_row_to_params(raw_SD[s], dm) for s in range(S)]
+        perf_dict_S = self.perf_fn_tensor(params_list)
 
-        valid_idx = [i for i, p in enumerate(params_list) if p is not None]
-        if not valid_idx:
-            raise RuntimeError(f"_per_candidate_perf_tensor: all {S} candidates failed to decode")
-
-        perf_dict_S = self.perf_fn_tensor(
-            [params_list[i] for i in valid_idx]  # type: ignore[index]
-        )
-
-        n_valid = len(valid_idx)
-        out_valid = torch.zeros(n_valid, dtype=X_SD.dtype)
-        for k in range(n_valid):
+        out = torch.zeros(S, dtype=raw_SD.dtype)
+        for k in range(S):
             perf_k = {
-                name: perf_dict_S[name][k].to(dtype=X_SD.dtype)
+                name: perf_dict_S[name][k].to(dtype=raw_SD.dtype)
                 for name in self.perf_names_order
                 if name in perf_dict_S and not torch.isnan(perf_dict_S[name][k])
             }
-            out_valid[k] = combined_score(perf_k, self.performance_weights)
+            out[k] = combined_score(perf_k, self.performance_weights)
         if perf_range is not None:
             pmin, pmax = perf_range
             span = pmax - pmin
-            if span > 1e-10:
-                out_valid = (out_valid - float(pmin)) / float(span)
-            else:
-                out_valid = torch.full_like(out_valid, 0.5)
-
-        out_full = torch.zeros(S, dtype=X_SD.dtype)
-        for k, i in enumerate(valid_idx):
-            out_full[i] = out_valid[k]
-        return out_full
-
-    def _reattach_tensor_continuous(
-        self,
-        params_np: dict[str, Any],
-        x_norm: torch.Tensor,
-        dm: DataModule,
-    ) -> dict[str, Any]:
-        """Replace continuous numeric values in ``params_np`` with their
-        gradient-bearing counterparts decoded from ``x_norm``.
-
-        ``array_to_params`` returns Python floats / ints — the gradient on
-        ``x_norm`` is lost during that decode. For autograd, we preserve the
-        tensor entries for continuous params by applying the normaliser's
-        differentiable ``reverse()`` to the z-score tensor values.
-        Categorical / integer / domain params stay as Python.
-        """
-        out = dict(params_np)
-        reattached = 0
-        for j, col_name in enumerate(dm.input_columns):
-            if col_name not in out:
-                continue
-            stats = dm._parameter_stats.get(col_name)
-            if stats is None:
-                continue
-            if col_name in dm.categorical_mappings:
-                continue
-            val = stats.reverse(x_norm[j])
-            if isinstance(val, torch.Tensor) and x_norm.requires_grad and not val.requires_grad:
-                self.logger.console_warning(
-                    f"Gradient lost in _reattach_tensor_continuous for '{col_name}'"
-                )
-            out[col_name] = val
-            reattached += 1
-        if reattached == 0 and x_norm.requires_grad:
-            self.logger.console_warning(
-                "_reattach_tensor_continuous: no columns reattached — performance gradient is zero"
-            )
+            out = (out - float(pmin)) / float(span) if span > 1e-10 else torch.full_like(out, 0.5)
         return out
 
-    def _acquisition_objective_tensor(
-        self,
-        X_SD: torch.Tensor,
-        kappa: float,
-        perf_range: tuple[float, float] | None = None,
-    ) -> torch.Tensor:
-        """Vectorised (negated) acquisition for the gradient optimiser.
+    def _raw_row_to_params(self, raw_row: torch.Tensor, dm: DataModule) -> dict[str, Any]:
+        """Physical-frame ``(D,)`` row → param dict (perf-path decode).
 
-        Takes ``(S, D)`` torch tensor — one row per candidate — and returns
-        ``(S,)`` of negated scores (lower = better). Mirrors
-        ``_acquisition_objective_vectorized`` but routes through the tensor
-        APIs added in so gradient flows from each
-        candidate's score back through the per-candidate parameters.
+        Mirrors ``DataModule.array_to_params`` minus the reverse-normalisation
+        (input is already physical). Continuous values stay grad-bearing tensors;
+        categorical → label, integer / domain → Python int. Context columns are
+        injected by the perf closure, so they are skipped here.
         """
-        with profiler.section("acq._acquisition_objective_tensor"):
-            S = int(X_SD.shape[0])
+        params: dict[str, Any] = {}
+        ctx = set(dm._context_feature_codes)
+        for j, col in enumerate(dm.input_columns):
+            if col in ctx:
+                continue
+            params[col] = raw_scalar_to_param(
+                raw_row[j],
+                categories=dm.categorical_mappings.get(col),
+                is_integer=isinstance(self.data_objects.get(col), DataInt),
+            )
+        return params
 
-            perfs: torch.Tensor | None = None
-            if kappa < 1.0:
-                perfs = self._per_candidate_perf_tensor(X_SD, perf_range)
+    def _candidate_perf(
+        self,
+        raw_pts: torch.Tensor,
+        perf_range: tuple[float, float] | None,
+    ) -> torch.Tensor:
+        """Per-candidate performance ``(S,)`` — mean over the candidate's points."""
+        S, NL, D = raw_pts.shape
+        perf_flat = self._point_perf(raw_pts.reshape(S * NL, D), perf_range)
+        return perf_flat.reshape(S, NL).mean(dim=-1)
 
-            evidences: torch.Tensor | None = None
-            if kappa > 0.0:
-                if self._evidence_backend.batched_tensor is None:
-                    raise RuntimeError(
-                        f"kappa={kappa} requires evidence but evidence.batched_tensor is None"
-                    )
-                evidences = self._evidence_backend.batched_tensor(X_SD).to(dtype=X_SD.dtype)
-
-            return self._kappa_blend(torch.zeros(S, dtype=X_SD.dtype), perfs, evidences, kappa)
+    def _candidate_evidence(
+        self,
+        zscore_pts: torch.Tensor,
+        weights: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Per-candidate Δ∫E ``(S,)`` from z-score points via the evidence backend."""
+        if self._evidence_backend.joint_batched_tensor is None:
+            raise RuntimeError("evidence requested but evidence.joint_batched_tensor is None")
+        return self._evidence_backend.joint_batched_tensor(zscore_pts, weights).to(dtype=zscore_pts.dtype)
 
     def _compute_system_performance(self, performance: list[float]) -> float:
         """Compute weighted system performance from an ordered list of scores."""
@@ -681,6 +584,37 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """Set the active DataModule for acquisition evaluation."""
         self._active_datamodule = datamodule
 
+    def _classify_param(
+        self, code: str, data_obj: DataObject,
+    ) -> tuple[str, tuple[float, float] | None]:
+        """Classify a schema parameter for optimisation/discovery composition.
+
+        Single source of truth for the cascade shared by
+        ``_build_schema_datamodule`` and ``_compose_variables``. Returns a
+        ``(kind, bounds)`` verdict; callers map each kind to their own outcome
+        (the categorical choices / degenerate auto-fix / warning text differ):
+
+        - ``"skip_fixed"``     — in ``fixed_params`` (silent).
+        - ``"categorical"``    — ``DataCategorical`` / ``DataBool``.
+        - ``"skip_no_bounds"`` — no hierarchical bounds (silent).
+        - ``"skip_infinite"``  — infinite bounds (caller logs); ``bounds`` set.
+        - ``"degenerate"``     — ``lo == hi``; ``bounds`` set.
+        - ``"optimizable"``    — finite, non-degenerate; ``bounds`` set.
+        """
+        if code in self.fixed_params:
+            return "skip_fixed", None
+        if isinstance(data_obj, (DataCategorical, DataBool)):
+            return "categorical", None
+        try:
+            lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
+        except ValueError:
+            return "skip_no_bounds", None
+        if lo == -np.inf or hi == np.inf:
+            return "skip_infinite", (lo, hi)
+        if lo == hi:
+            return "degenerate", (lo, hi)
+        return "optimizable", (lo, hi)
+
     def _build_schema_datamodule(self) -> DataModule:
         """Build a schema-only DataModule (no training data) for discovery generation.
 
@@ -688,21 +622,17 @@ class CalibrationSystem(BaseOrchestrationSystem):
         """
         active_codes: list[str] = []
         for code, data_obj in self.data_objects.items():
-            if code in self.fixed_params:
+            kind, _ = self._classify_param(code, data_obj)
+            if kind == "skip_fixed" or kind == "skip_no_bounds":
                 continue
-            if isinstance(data_obj, (DataCategorical, DataBool)):
-                active_codes.append(code)
-                continue
-            try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-            except ValueError:
-                continue
-            if lo == -np.inf or hi == np.inf:
+            if kind == "skip_infinite":
                 self.logger.warning(
                     f"Parameter '{code}' has infinite bounds; "
                     "skipping in discovery generation."
                 )
                 continue
+            # categorical / degenerate / optimizable are all active here:
+            # the schema datamodule keeps degenerate + categorical columns.
             active_codes.append(code)
 
         dataset = Dataset(schema=self.schema, debug_flag=True)
@@ -732,22 +662,20 @@ class CalibrationSystem(BaseOrchestrationSystem):
         traj_set = set(self.trajectory_configs.keys())
 
         for code, data_obj in self.data_objects.items():
-            if code in self.fixed_params:
+            kind, bnds = self._classify_param(code, data_obj)
+            if kind == "skip_fixed" or kind == "skip_no_bounds":
                 continue
-            if isinstance(data_obj, DataCategorical):
-                categorical_params.append((code, list(data_obj.constraints["categories"])))
+            if kind == "categorical":
+                if isinstance(data_obj, DataCategorical):
+                    categorical_params.append((code, list(data_obj.constraints["categories"])))
+                else:  # DataBool
+                    categorical_params.append((code, [False, True]))
                 continue
-            if isinstance(data_obj, DataBool):
-                categorical_params.append((code, [False, True]))
-                continue
-            try:
-                lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
-            except ValueError:
-                continue
-            if lo == -np.inf or hi == np.inf:
+            if kind == "skip_infinite":
                 self.logger.warning(f"Parameter '{code}' has infinite bounds; skipping.")
                 continue
-            if lo == hi:
+            if kind == "degenerate":
+                lo, _ = bnds  # type: ignore[misc]
                 fixed_val = int(lo) if isinstance(data_obj, (DataInt, DataDomainAxis)) else float(lo)
                 self.bounds.fixed_params[code] = fixed_val
                 self.logger.debug(f"Auto-fixed '{code}' = {fixed_val} (degenerate bounds).")
@@ -756,7 +684,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         variables: list[Variable] = []
         for code, obj in optimizable:
-            lo, hi = self.bounds._get_hierarchical_bounds_for_code(code)
+            lo, hi = self.bounds.get_hierarchical_bounds_for_code(code)
             if code in traj_set:
                 span = hi - lo
                 trust = self.bounds.trust_regions.get(code, span / 10.0)
@@ -828,6 +756,65 @@ class CalibrationSystem(BaseOrchestrationSystem):
         return specs
 
     # ==================================================================
+    # § Sobol — data-independent space-filling test/validation design
+    # ==================================================================
+
+    def run_sobol(self, n: int) -> list["ExperimentSpec"]:
+        """Generate ``n`` space-filling (Sobol) proposals — a data-independent test design.
+
+        Unlike :meth:`run_discovery` (evidence-optimised, κ=1), this draws low-discrepancy
+        points directly in normalised ``[0,1]`` space and maps them to real parameters via
+        each ``Variable.to_real`` — uniform over the parameter bounds, independent of model
+        and collected data, so it serves as a fair generalisation yardstick (the held-out
+        Sobol probe; see the KB note *First-class dataset concept in pred-fab*). Sampling
+        in u-space would inherit the optimiser's sigmoid, ~25× denser at the centre than the
+        bounds — unusable for space-filling — hence the direct ``to_real`` path.
+
+        Categoricals are stratified (reusing ``_compose_variables``); integers are int-typed;
+        deterministic given ``random_seed``. Trajectory parameters need their own Sobol design
+        (space-filling over layer trajectories) and are not yet covered here — raises if any
+        are configured rather than silently emitting incomplete test experiments.
+        """
+        if n <= 0:
+            return []
+
+        variables, cat_codes, cat_assignments = self._compose_variables(n)
+        traj_vars = [v for v in variables if isinstance(v, TrajectoryVariable)]
+        if traj_vars:
+            raise NotImplementedError(
+                "run_sobol does not yet cover trajectory parameters "
+                f"({[v.code for v in traj_vars]}); a Sobol test design over layer "
+                "trajectories is a follow-up — see 'First-class dataset concept in pred-fab'."
+            )
+        statics = [v for v in variables if isinstance(v, StaticVariable)]
+        if not statics and not cat_codes:
+            self.logger.warning("No valid parameters for Sobol test design.")
+            return []
+
+        pts = SobolDesign().unit_points(n, len(statics), seed=self._random_seed)
+        specs: list[ExperimentSpec] = []
+        for i in range(n):
+            bp: dict[str, Any] = dict(self.fixed_params)
+            for d_cat, code in enumerate(cat_codes):
+                bp[code] = cat_assignments[i][d_cat]
+            for di, sv in enumerate(statics):
+                bp[sv.code] = sv.to_real(float(pts[i, di]))
+            bp = self.schema.parameters.sanitize_values(bp, ignore_unknown=True)
+            proposal = ParameterProposal.from_dict(bp, source_step=SourceStep.SOBOL)
+            specs.append(ExperimentSpec(initial_params=proposal, trajectories={}))
+
+        # Stamp generative provenance (design='sobol', seed, bounds, ...); κ is N/A.
+        snapshot = self.get_config_snapshot(None, source_step=SourceStep.SOBOL)
+        for spec in specs:
+            spec.config_snapshot = snapshot
+
+        self.logger.info(
+            f"Sobol test design: {n} experiments "
+            f"({len(statics)} static, {len(cat_codes)} categorical)."
+        )
+        return specs
+
+    # ==================================================================
     # § Acquisition — single-experiment exploration / inference
     # ==================================================================
 
@@ -886,7 +873,7 @@ class CalibrationSystem(BaseOrchestrationSystem):
             cat_codes=cat_codes,
             cat_assignments=cat_assignments,
             schema_sanitize=lambda d: self.schema.parameters.sanitize_values(d, ignore_unknown=True),
-            derive_L_fn=self.derive_L_fn,
+            dimension_derivations=self.dimension_derivations,
             source_step=source_step,
         )
 
@@ -897,9 +884,8 @@ class CalibrationSystem(BaseOrchestrationSystem):
         perf_range = None
 
         def objective(x_flat: torch.Tensor) -> torch.Tensor:
-            points, weights = space.decode(x_flat)
-            full_S_NL = points.unsqueeze(1)  # (S, 1, total_points, D)
-            return self._acquisition_joint_batched_tensor(full_S_NL, kappa, perf_range, weights)
+            raw_pts, zscore_pts, weights = space.decode(x_flat)
+            return self._blend_objective(raw_pts, zscore_pts, weights, kappa, perf_range)
 
         self.logger.info(
             f"{label}: N={n}, D={space._D_per_exp}, V={space.total_vars}"
@@ -907,18 +893,21 @@ class CalibrationSystem(BaseOrchestrationSystem):
 
         opt = self.engine.optimize(
             objective, space.bounds,
-            raw_z=True,
+            raw_u=True,
             d_param=space._D_param,
             label=label,
             show_progress=console,
         )
         self.convergence_history[label] = opt.convergence_history
+        self.last_opt_nfev = opt.nfev
+        self.last_opt_n_starts = opt.n_starts
+        self.last_opt_score = opt.score
         self.last_discovery_nfev = getattr(self, 'last_discovery_nfev', 0) + opt.nfev
 
         best_x = opt.best_x if opt.best_x is not None else np.zeros(space.total_vars)
         specs = space.decode_to_specs(best_x)
 
-        config = self.get_config_snapshot(kappa)
+        config = self.get_config_snapshot(kappa, source_step=source_step)
         for spec in specs:
             spec.config_snapshot = config
 
@@ -963,35 +952,32 @@ class CalibrationSystem(BaseOrchestrationSystem):
         )
 
 
-    def _acquisition_joint_batched_tensor(
+    def _blend_objective(
         self,
-        full_S_NL: torch.Tensor,
+        raw_pts: torch.Tensor,
+        zscore_pts: torch.Tensor,
+        weights: torch.Tensor | None,
         kappa: float,
-        perf_range: tuple[float, float] | None,
-        weights: torch.Tensor | None = None,
+        perf_range: tuple[float, float] | None = None,
     ) -> torch.Tensor:
-        """Negated κ-weighted joint acquisition ``(S,)``, gradient-traversable.
+        """Negated κ-blend acquisition ``(S,)``, gradient-traversable — THE objective.
 
-        ``weights`` shape ``(S, NL)`` — per-point evidence weight. None = 1.0.
+        Single path for production (``_optimize`` closure) and tests. Perf reads
+        the physical-frame ``raw_pts``; evidence reads ``zscore_pts``; both
+        ``(S, NL, D)`` with per-point ``weights`` ``(S, NL)`` (None = 1.0).
         """
-        with profiler.section("acq._acquisition_joint_batched_tensor"):
-            S, N, L, D = full_S_NL.shape
-            NL = N * L
-            dtype = full_S_NL.dtype
-
-            perfs_S: torch.Tensor | None = None
-            if kappa < 1.0:
-                flat_rows = full_S_NL.reshape(S * NL, D)
-                perfs_flat = self._per_candidate_perf_tensor(flat_rows, perf_range)
-                perfs_S = perfs_flat.reshape(S, NL).mean(dim=-1).to(dtype=dtype)
-
-            evidence_S: torch.Tensor | None = None
-            if kappa > 0.0 and self._evidence_backend.joint_batched_tensor is not None:
-                flat_per_candidate = full_S_NL.reshape(S, NL, D)
-                w = weights.reshape(S, NL) if weights is not None else None
-                evidence_S = self._evidence_backend.joint_batched_tensor(flat_per_candidate, w).to(dtype=dtype)
-
-            return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs_S, evidence_S, kappa)
+        with profiler.section("acq._blend_objective"):
+            S = int(raw_pts.shape[0])
+            dtype = raw_pts.dtype
+            perfs = self._candidate_perf(raw_pts, perf_range) if kappa < 1.0 else None
+            if perfs is not None:
+                perfs = perfs.to(dtype=dtype)
+            evidence = (
+                self._candidate_evidence(zscore_pts, weights)
+                if kappa > 0.0 and self._evidence_backend.joint_batched_tensor is not None
+                else None
+            )
+            return self._kappa_blend(torch.zeros(S, dtype=dtype), perfs, evidence, kappa)
 
     # ==================================================================
     # § Model wrappers

@@ -233,14 +233,14 @@ def test_predict_returns_correct_shape_per_feature(tmp_path):
 
 
 def test_predict_calibration_feature_tensor_shapes_match_depth(tmp_path):
-    """predict_for_calibration_tensor returns per-feature tensors sized by feature depth."""
+    """predict_for_calibration returns per-feature tensors sized by feature depth."""
     agent, dataset, exp, datamodule = build_real_agent_stack(tmp_path)
     agent.evaluate(exp_data=exp, recompute_flag=True, visualize=False)
     datamodule.prepare(val_size=0.0, test_size=0.0, recompute=True)
     agent.train(datamodule=datamodule, validate=False, test=False)
 
     params = exp.parameters.get_values_dict()
-    out = agent.pred_system.predict_for_calibration_tensor([params])
+    out = agent.pred_system.predict_for_calibration([params])
     feat = out[0]
 
     # feature_grid: depth 2 → (2, 3)

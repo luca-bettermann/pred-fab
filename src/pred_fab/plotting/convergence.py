@@ -27,7 +27,7 @@ def plot_convergence(
         return
 
     apply_style()
-    phase_cmaps = ["Blues", "Greens", "Oranges", "Reds", "Purples"]
+    phase_cmaps = ["steel_progression", "emerald_progression", "zinc_progression"]
 
     fig, ax = plt.subplots(figsize=(10, 4))
     all_vals: list[float] = []

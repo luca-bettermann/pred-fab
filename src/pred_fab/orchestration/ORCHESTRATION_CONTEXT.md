@@ -10,15 +10,17 @@ Coordinates all subsystems. `PfabAgent` is the user-facing API; the four sub-sys
 | `PfabAgent` | `agent.py` | Registration, initialization, step methods, `configure_*` API |
 | `FeatureSystem` | `features.py` | Runs feature models; writes tensors into ExperimentData |
 | `EvaluationSystem` | `evaluation.py` | Tensor-typed batched eval (`_evaluate_feature_dict_tensor`) |
-| `PredictionSystem` | `prediction.py` | Trains/infers prediction models. Canonical autoreg is `predict_for_calibration_tensor` (gradient-traversable). Owns per-model evidence (KDE) state. |
+| `PredictionSystem` | `prediction.py` | Trains/infers prediction models. Canonical autoreg is `predict_for_calibration` (gradient-traversable). Owns per-model evidence (KDE) state. |
 | `EvidenceEstimator` | `evidence.py` | Pluggable Δ∫E: `KernelFieldEstimator` (deterministic shells, gradient-traversable; probe count grows with D) or `SobolLocalEstimator` (QMC cube, fixed `n_samples` regardless of D — high-D escape hatch, also gradient-traversable). |
-| `_choose_kde_regime` / `_resolve_kde_regime` | `evidence.py` | σ/D-aware regime dispatcher (dense / knn / cluster); only dense implemented, others log INFO and fall back |
 | `CalibrationSystem` | `calibration/system.py` | Single-path optimisation orchestrator: Variables → SolutionSpace → Engine |
 | `OptimizationEngine` | `calibration/engine.py` | Sobol → top-N → independent LBFGS with sigmoid bound reparam |
 | `BoundsManager` | `calibration/bounds.py` | Schema-aware bounds + trust regions |
 | `SolutionSpace` | `calibration/space.py` | Decision-vector layout from Variable objects; single `decode()` for all call sites |
-| `Variable` / `StaticVariable` / `TrajectoryVariable` | `calibration/variables.py` | Optimization variable types — contract between step methods and optimizer |
+| `Variable` / `StaticVariable` / `TrajectoryVariable` | `calibration/space.py` | Optimization variable types — contract between step methods and optimizer (defined alongside `SolutionSpace`) |
 | `EvidenceBackend` | `calibration/system.py` | Bundles the Δ∫E callbacks (batched_tensor / joint_batched_tensor) |
+| `BaseSystem` | `base_system.py` | Shared base for the sub-systems (logger, schema handle) |
+| CV instrument | `cross_validation.py` | `CrossValidator`, `CVResult`, `diagnose_error_coverage` (error-vs-coverage diagnostic), `evaluate_fit` |
+| `InferenceBundle` | `inference_bundle.py` | Dependency-free production inference wrapper (load trained models, predict without Dataset/training deps) |
 
 ## Unified acquisition
 
@@ -61,7 +63,7 @@ Calibration threads four frames. The code names the optimiser variable `z`, but 
 |---|---|---|---|
 | `u` (named `z` in code) | ℝ^D | what LBFGS moves; Sobol seeds in [−`Z_RANGE`, `Z_RANGE`] | — |
 | `norm` (normalised) | [0,1]^D | bound-by-construction decision vector; evidence kernel + plotting live here | `SolutionSpace.decode`: `norm = σ(K·u)` |
-| z-score | standardised | prediction-model input (matches training stats) | `_bounds_to_dm_norm`: `norm` → raw → z-score |
+| z-score | standardised | prediction-model input (matches training stats) | `_decode_frames`: `norm` → (raw, z-score) |
 | physical | [x_lo, x_hi] | experiment specs + schema bounds | `Variable.to_real`: `x = x_lo + norm·(x_hi−x_lo)` |
 
 The sigmoid is the only bound enforcement (no clipping). Physical units appear **only** when emitting specs (`decode_to_specs`); the model never sees them. Integers skip the sigmoid (straight-through rounding). `K = SIGMOID_K` (3.0); the MPC-lookahead path (`engine.py`, `raw_z=False`) instead reparametrises with a plain `σ` over its own bounds.
@@ -73,7 +75,7 @@ The sigmoid is the only bound enforcement (no clipping). Physical units appear *
 | `discovery_step(n)` | DISCOVERY | κ=1; joint Δ∫E maximisation; empty-KDE init |
 | `exploration_step(…)` | EXPLORATION | κ ∈ (0, 1); resolves to `configure_exploration(kappa=…)` default if not given |
 | `inference_step(…)` | INFERENCE | κ=0 (hardcoded) |
-| `adaptation_step(…)` | INFERENCE | Online tuning + trust region; optional MPC lookahead |
+| `adaptation_step(…)` | INFERENCE | **Not implemented** — raises `NotImplementedError` pending the trust-region migration to the unified `_optimize` path. Use `exploration_step`/`inference_step` for offline acquisition. |
 
 All return `ExperimentSpec(initial_params, trajectories)`.
 

@@ -1,5 +1,6 @@
 # folder_navigator.py
 import os
+import logging
 from typing import Any, Callable
 import shutil
 import json
@@ -58,8 +59,10 @@ class LocalData:
 
     def get_experiment_file_path(self, exp_code: str, filename: str) -> str:
         """Get full path to a file within an experiment folder."""
-        assert isinstance(exp_code, str) and exp_code, "Experiment code must be a non-empty string"
-        assert isinstance(filename, str) and filename, "Filename must be a non-empty string"
+        if not isinstance(exp_code, str) or not exp_code:
+            raise TypeError("Experiment code must be a non-empty string")
+        if not isinstance(filename, str) or not filename:
+            raise TypeError("Filename must be a non-empty string")
         if self.schema_folder is None:
             raise ValueError("Schema ID must be set before getting experiment file path")
         return os.path.join(self.schema_folder, exp_code, filename)
@@ -192,7 +195,27 @@ class LocalData:
             return True
         return False
 
-    def save_parameters(self, exp_codes: list[str], data: dict[str, dict[str, Any]], 
+    def save_experiment_sets(self, sets: list[dict[str, Any]]) -> bool:
+        """Save serialized ExperimentSet definitions to ``experiment_sets.json`` (schema root)."""
+        if not self.schema_folder:
+            raise ValueError("Schema folder not configured")
+        os.makedirs(self.schema_folder, exist_ok=True)
+        path = os.path.join(self.schema_folder, "experiment_sets." + FileFormat.JSON.value)
+        with open(path, 'w') as f:
+            json.dump(sets, f, indent=2)
+        return True
+
+    def load_experiment_sets(self) -> list[dict[str, Any]]:
+        """Load serialized ExperimentSet definitions; ``[]`` if none saved yet."""
+        if not self.schema_folder:
+            raise ValueError("Schema folder not configured")
+        path = os.path.join(self.schema_folder, "experiment_sets." + FileFormat.JSON.value)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return json.load(f)
+
+    def save_parameters(self, exp_codes: list[str], data: dict[str, dict[str, Any]],
                         recompute: bool, **kwargs) -> bool:
         """Save experiment parameters to local files."""
         return self._save_files_generic(
@@ -279,18 +302,18 @@ class LocalData:
         result_dict = {}
 
         for code in codes:
-            try:
-                # Build file path
-                path_parts = [self.schema_folder] + subdirs
-                path_parts = [part.replace("{code}", code) for part in path_parts]
-                file_name = filename.replace("{code}", code)
-                file_path = os.path.join(*path_parts, f"{file_name}.{file_format.value}")
-                
-                # Check existence and load
-                if not os.path.exists(file_path):
-                    missing_codes.append(code)
-                    continue
+            # Build file path
+            path_parts = [self.schema_folder] + subdirs
+            path_parts = [part.replace("{code}", code) for part in path_parts]
+            file_name = filename.replace("{code}", code)
+            file_path = os.path.join(*path_parts, f"{file_name}.{file_format.value}")
 
+            # Check existence and load
+            if not os.path.exists(file_path):
+                missing_codes.append(code)
+                continue
+
+            try:
                 if file_format == FileFormat.CSV:
                     df = pd.read_csv(file_path)
                     result_dict[code] = df
@@ -299,10 +322,19 @@ class LocalData:
                         result_dict[code] = json.load(f)
                 else:
                     raise ValueError(f"Unknown file format {file_format.value}. Check enum.")
-            except Exception:
-                # Keep loading behavior non-fatal: failed items are reported via missing_codes.
+            except FileNotFoundError:
+                # File vanished between the existence check and the read (TOCTOU);
+                # treat as genuinely absent.
                 missing_codes.append(code)
-                
+            except Exception:
+                # Any other failure (corrupt/locked/unparseable file) is a real
+                # error, not a missing file — surface it instead of silently
+                # dropping data.
+                logging.getLogger(__name__).exception(
+                    "Failed to load %s for code '%s' from %s", file_format.value, code, file_path
+                )
+                raise
+
         return missing_codes, result_dict
 
     def _save_files_generic(

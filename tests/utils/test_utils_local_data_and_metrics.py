@@ -83,3 +83,81 @@ def test_metrics_empty_arrays_return_zeros():
 
 
 # R²_inf tests moved to tests/utils/test_r2_inf.py
+
+
+def test_combined_score_renormalises_over_present_keys():
+    from pred_fab.utils import combined_score
+    weights = {"a": 1.0, "b": 1.0, "c": 2.0}
+    # full set: (1*0.5 + 1*0.5 + 2*1.0) / 4 = 0.75
+    assert combined_score({"a": 0.5, "b": 0.5, "c": 1.0}, weights) == pytest.approx(0.75)
+    # 'c' missing: must renormalise over a,b only -> (0.5+0.5)/2 = 0.5, NOT /4 = 0.25
+    assert combined_score({"a": 0.5, "b": 0.5}, weights) == pytest.approx(0.5)
+    # 'c' present but None: same as missing
+    assert combined_score({"a": 0.5, "b": 0.5, "c": None}, weights) == pytest.approx(0.5)
+
+
+def test_combined_score_ignores_unweighted_keys():
+    from pred_fab.utils import combined_score
+    weights = {"a": 1.0}
+    # 'b' has no weight: contributes nothing to numerator or denominator
+    assert combined_score({"a": 0.8, "b": 0.2}, weights) == pytest.approx(0.8)
+
+
+def test_combined_score_preserves_gradient_with_tensors():
+    import torch
+    from pred_fab.utils import combined_score
+    a = torch.tensor(0.4, requires_grad=True)
+    b = torch.tensor(0.6, requires_grad=True)
+    out = combined_score({"a": a, "b": b}, {"a": 1.0, "b": 3.0})
+    out.backward()
+    assert a.grad is not None and b.grad is not None
+    # weight-normalised gradients: dout/da = 1/4, dout/db = 3/4
+    assert float(a.grad) == pytest.approx(0.25)
+    assert float(b.grad) == pytest.approx(0.75)
+
+
+def test_combined_score_zero_total_weight_returns_zero():
+    from pred_fab.utils import combined_score
+    assert combined_score({"a": 0.5}, {"a": 0.0}) == 0.0
+    assert combined_score({}, {"a": 1.0}) == 0.0
+
+
+def test_importance_weight_matches_sigmoid_and_is_shared():
+    import numpy as np
+    from pred_fab.utils import importance_weight
+    from pred_fab.utils.metrics import IMPORTANCE_FLOOR, IMPORTANCE_STEEPNESS
+    scores = np.array([0.2, 0.5, 0.8])
+    w = importance_weight(scores)
+    # bounded in [floor, 1]; monotonic in score
+    assert np.all(w >= IMPORTANCE_FLOOR - 1e-9) and np.all(w <= 1.0 + 1e-9)
+    assert w[0] < w[1] < w[2]
+    # ref_scores anchors k/mean: evaluating at the mean gives the sigmoid midpoint
+    mid = importance_weight(np.array([scores.mean()]), ref_scores=scores)[0]
+    assert mid == pytest.approx(IMPORTANCE_FLOOR + (1 - IMPORTANCE_FLOOR) * 0.5)
+
+
+def test_importance_weight_zero_std_is_flat():
+    import numpy as np
+    from pred_fab.utils import importance_weight
+    from pred_fab.utils.metrics import IMPORTANCE_FLOOR
+    w = importance_weight(np.array([0.5, 0.5, 0.5]))
+    # k=0 → sigmoid=0.5 everywhere → constant weight
+    assert np.allclose(w, IMPORTANCE_FLOOR + (1 - IMPORTANCE_FLOOR) * 0.5)
+
+
+def test_combined_score_zero_weight_preserves_tensor_grad():
+    import torch
+    from pred_fab.utils import combined_score
+    v = torch.tensor(0.7, requires_grad=True)
+    out = combined_score({"a": v}, {"a": 0.0})  # total weight 0
+    assert torch.is_tensor(out) and out.requires_grad  # grad-bearing zero, not bare float
+    assert float(out) == 0.0
+
+
+def test_regression_metrics_rejects_2d_shape_mismatch():
+    import numpy as np
+    from pred_fab.utils import Metrics
+    yt = np.zeros((4, 2))
+    yp = np.zeros((4, 3))  # same len (4), different shape
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        Metrics.calculate_regression_metrics(yt, yp)

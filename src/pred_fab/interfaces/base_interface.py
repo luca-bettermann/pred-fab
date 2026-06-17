@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, final
 
-from ..core import Dataset, DataObject, Parameter, Feature, PerformanceAttribute
+from ..core import Dataset, DataObject, Parameter, DataArray, PerformanceAttribute
 from ..utils import PfabLogger
 
 
@@ -13,7 +13,8 @@ class BaseInterface(ABC):
 
         # reference to DataObjects from schema
         self._ref_parameters: dict[str, Parameter] = {}
-        self._ref_features: dict[str, Feature] = {}
+        # Feature(...) is a factory returning DataArray, so the stored type is DataArray.
+        self._ref_features: dict[str, DataArray] = {}
         self._ref_performance_attrs: dict[str, DataObject] = {}
 
         # Validate user implemented properties
@@ -53,7 +54,7 @@ class BaseInterface(ABC):
         self.set_reference(parameters, self.input_parameters, self._ref_parameters)
 
     @final
-    def set_ref_features(self, features: list[Feature]) -> None:
+    def set_ref_features(self, features: list[DataArray]) -> None:
         """Set reference to Feature DataObjects used by this model."""
         self.set_reference(features, self.input_features + self.outputs, self._ref_features)
 

@@ -14,6 +14,8 @@ import pickle
 import copy
 
 from ..interfaces.prediction import IPredictionModel
+from ..core.normalisers import normaliser_from_dict
+from ..core.input_pipeline import categorical_to_index, column_indices
 
 
 class InferenceBundle:
@@ -87,9 +89,16 @@ class InferenceBundle:
         X_norm_np = self._prepare_input(X)
         X_norm_t = torch.from_numpy(X_norm_np)
 
+        input_columns = self.normalization_state.get('input_columns', [])
+
         predictions: dict[str, Any] = {}
         for model in self.prediction_models:
-            y_pred_dict = model.forward_pass(X_norm_t)
+            # Each model was trained on its own input subset (the same
+            # column_indices PredictionSystem slices with); forward_pass expects
+            # columns ordered by the model's input_parameters + input_features.
+            model_cols = list(model.input_parameters) + list(model.input_features)
+            idx = column_indices(input_columns, model_cols)
+            y_pred_dict = model.forward_pass(X_norm_t[:, idx])
             y_pred_norm_np = np.stack(
                 [y_pred_dict[f].detach().cpu().numpy() for f in model.outputs], axis=-1,
             )
@@ -100,36 +109,44 @@ class InferenceBundle:
         return pd.DataFrame(predictions)
     
     def _prepare_input(self, X_df: pd.DataFrame) -> np.ndarray:
-        """Prepare input DataFrame for inference (one-hot + normalize)."""
+        """Prepare input DataFrame for inference (cat-index encode + normalize).
+
+        Categoricals are emitted as a single integer-index column — the index
+        into the sorted category list — matching the training-time
+        ``DataModule._encode_inputs`` encoding (the model expands them
+        internally via embedding/one-hot). Cat columns are absent from
+        ``parameter_stats``, so they pass through unnormalised, same as
+        training.
+        """
         X = X_df.copy()
-        
+
         categorical_mappings = self.normalization_state.get('categorical_mappings', {})
         input_columns = self.normalization_state.get('input_columns', [])
         parameter_stats = self.normalization_state.get('parameter_stats', {})
-        
-        # One-hot encode
-        if categorical_mappings:
-            for col, categories in categorical_mappings.items():
-                if col not in X.columns:
-                    continue
-                for category in categories:
-                    col_name = f"{col}_{category}"
-                    X[col_name] = (X[col] == category).astype(float)
-                X = X.drop(columns=[col])
-        
-        # Ensure columns match and are ordered correctly
+
+        # Categorical → single cat-index column; keep the parent column name so
+        # it aligns with input_columns (which holds the parent code, not one-hots).
+        for col, categories in categorical_mappings.items():
+            if col not in X.columns:
+                continue
+            X[col] = X[col].map(
+                lambda v, _cats=categories, _c=col: categorical_to_index(v, _cats, code=_c)
+            )
+
+        # Ensure columns match and are ordered correctly (missing → 0).
         for col in input_columns:
             if col not in X.columns:
                 X[col] = 0.0
-        
+
         X = X[input_columns]
         X_arr = X.values.astype(np.float32)
-        
-        # Normalize
+
+        # Normalize numeric columns; cat-index columns are not in
+        # parameter_stats and pass through unchanged.
         for i, col in enumerate(input_columns):
             if col in parameter_stats:
                 X_arr[:, i] = self._apply_normalization(X_arr[:, i], parameter_stats[col])
-                
+
         return X_arr
 
     def _denormalize_values(self, values: np.ndarray, feature_names: list[str]) -> np.ndarray:
@@ -148,42 +165,12 @@ class InferenceBundle:
         return y
 
     def _apply_normalization(self, data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Apply normalization to data array using pre-computed stats."""
-        method = stats['method']
-        
-        if method == 'none':
-            return data
-        elif method == 'standard':
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == 'minmax':
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.zeros_like(data, dtype=np.float64)
-            return (data - stats['min']) / (denom + 1e-8)
-        elif method == 'robust':
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            return data
+        """Apply normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).forward(data)
 
     def _reverse_normalization(self, data_norm: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Reverse normalization for data array."""
-        method = stats['method']
-        
-        if method == 'none':
-            return data_norm
-        elif method == 'standard':
-            return data_norm * stats['std'] + stats['mean']
-        elif method == 'minmax':
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.full_like(data_norm, fill_value=stats['min'], dtype=np.float64)
-            return data_norm * denom + stats['min']
-        elif method == 'robust':
-            iqr = stats['q3'] - stats['q1']
-            return data_norm * iqr + stats['median']
-        else:
-            return data_norm
+        """Reverse normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).reverse(data_norm)
     
     def _validate_inputs(self, X: pd.DataFrame) -> None:
         """Validate parameter columns against schema."""
@@ -201,7 +188,10 @@ class InferenceBundle:
                     f"Unknown parameter '{param_name}'. "
                     f"Expected parameters: {sorted(schema_params)}"
                 )
-            
+
+            # Categorical-value validation is enforced at encode time by
+            # input_pipeline.categorical_to_index (raises on unknown), so it
+            # is not duplicated here.
             # TODO: Add range validation using schema constraints
     
     @property

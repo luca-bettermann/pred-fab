@@ -1,10 +1,9 @@
 """End-to-end smoke for the gradient acquisition path through discovery_step.
 
-Confirms that the tensor acquisition path (``run_acquisition_gradient``
-in OptimizationEngine, ``_acquisition_objective_tensor`` in
-CalibrationSystem, and the tensor ``delta_integrated_evidence_*``
-closures in PredictionSystem) runs end-to-end without crashing and
-returns ExperimentSpec values inside the schema bounds.
+Confirms that the single acquisition path (``run_acquisition_gradient`` in
+OptimizationEngine, ``_blend_objective`` in CalibrationSystem, and the tensor
+``delta_integrated_evidence_*`` closures in PredictionSystem) runs end-to-end
+without crashing and returns ExperimentSpec values inside the schema bounds.
 """
 
 from __future__ import annotations

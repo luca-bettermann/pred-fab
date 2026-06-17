@@ -40,6 +40,7 @@ class PfabLogger:
         self._initialized = True
         self._console_new_line = False
         self._console_output_enabled = True
+        self._status_active = False
     
     @classmethod
     def get_logger(cls, log_folder: str) -> 'PfabLogger':
@@ -73,6 +74,7 @@ class PfabLogger:
     def console_info(self, message: str) -> None:
         """Print to console and log as info."""
         if self._console_output_enabled:
+            self._end_status()
             print(message)
             self._console_new_line = False
         self.logger.info(f"CONSOLE: \n\n{message}\n")
@@ -80,12 +82,14 @@ class PfabLogger:
     def console_success(self, message: str) -> None:
         """Print success message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE SUCCESS: \n\n{message}\n")
 
     def console_warning(self, message: str) -> None:
         """Print warning to console and log."""
+        self._end_status()
         print(f"\033[33m!\033[0m {message}")
         self._console_new_line = False
         self.logger.warning(f"CONSOLE WARNING: \n\n{message}\n")
@@ -93,6 +97,7 @@ class PfabLogger:
     def console_execute(self, message: str) -> None:
         """Print execute message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[36m>\033[0m {message}")
             self._console_new_line = False
         self.logger.warning(f"CONSOLE EXECUTE: \n\n{message}\n")
@@ -100,6 +105,7 @@ class PfabLogger:
     def console_loaded(self, message: str) -> None:
         """Print loaded message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[36m>\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE LOADED: \n\n{message}\n")
@@ -107,6 +113,7 @@ class PfabLogger:
     def console_saved(self, message: str) -> None:
         """Print saved message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE SAVED: \n\n{message}\n")
@@ -114,6 +121,7 @@ class PfabLogger:
     def console_pushed(self, message: str) -> None:
         """Print pushed message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE PUSHED: \n\n{message}\n")
@@ -121,6 +129,7 @@ class PfabLogger:
     def console_pulled(self, message: str) -> None:
         """Print pulled message to console and log."""
         if self._console_output_enabled:
+            self._end_status()
             print(f"\033[32m\u2713\033[0m {message}")
             self._console_new_line = False
         self.logger.info(f"CONSOLE PULLED: \n\n{message}\n")
@@ -128,6 +137,7 @@ class PfabLogger:
     def console_summary(self, message: str) -> None:
         """Print formatted summary to console and clean version to log."""
         if self._console_output_enabled:
+            self._end_status()
             print(message)
         clean_message = self._strip_ansi_codes(message)
         self.logger.info(f"CONSOLE SUMMARY:\n\n{clean_message}")
@@ -135,6 +145,7 @@ class PfabLogger:
     def console_new_line(self, force: bool = False) -> None:
         """Print a blank line to console (skipped if one was just printed; ``force`` always prints)."""
         if self._console_output_enabled and (force or not self._console_new_line):
+            self._end_status()
             print("")
             self._console_new_line = True
 
@@ -144,12 +155,21 @@ class PfabLogger:
         if self._console_output_enabled:
             print(f"\r\033[36m⟳\033[0m {message}\033[K", end="", flush=True)
             self._console_new_line = False
+            self._status_active = True
 
     def console_status_clear(self) -> None:
-        """Erase the current transient status line."""
-        if self._console_output_enabled:
+        """Erase the current transient status line, if any."""
+        if self._console_output_enabled and self._status_active:
             print("\r\033[K", end="", flush=True)
             self._console_new_line = True
+        self._status_active = False
+
+    def _end_status(self) -> None:
+        """Erase an active transient status line so the next full console line starts clean."""
+        if self._status_active:
+            if self._console_output_enabled:
+                print("\r\033[K", end="", flush=True)
+            self._status_active = False
 
     # === PRIVATE METHODS ===
     def _setup_file_handler(self, log_file: str) -> None:

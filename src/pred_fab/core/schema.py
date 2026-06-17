@@ -18,6 +18,23 @@ from .data_blocks import (
 )
 from .data_objects import DataArray, DataDomainAxis, Domain
 from ..utils.enum import Roles
+from ..utils.console import _B, _D, _R
+
+
+def assert_blocks_compatible(block_pairs: list[tuple[DataBlock, DataBlock]]) -> None:
+    """Raise ``ValueError`` if any ``(block_a, block_b)`` pair is not structurally compatible.
+
+    Shared by ``DatasetSchema.is_compatible_with`` and
+    ``ExperimentData.is_valid`` — both validate the same parameter / performance
+    / feature blocks against a schema and raise on the first mismatch.
+    """
+    for block_a, block_b in block_pairs:
+        if not block_a.is_compatible(block_b):
+            raise ValueError(
+                f"Schema block '{block_a.__class__.__name__}' is not identical "
+                f"to {block_b.__class__.__name__}."
+            )
+
 
 class DatasetSchema:
     """Structural definition of a dataset (parameters, features, performance, domains); hash registered via SchemaRegistry."""
@@ -29,14 +46,16 @@ class DatasetSchema:
             parameters: Parameters,
             features: Features,
             performance: PerformanceAttributes,
-            domains: Domains = Domains()
+            domains: Domains | None = None
             ):
         """Initialize schema from DataBlocks."""
         self.name = name
         self.parameters = parameters
         self.features = features
         self.performance_attrs = performance
-        self.domains = domains
+        # Not a mutable default: a shared Domains() would leak axis state across
+        # all schemas constructed without explicit domains.
+        self.domains = domains if domains is not None else Domains()
 
         # Initialize local data handler and logger
         self.local_data = LocalData(root_folder)
@@ -81,10 +100,6 @@ class DatasetSchema:
 
     def state_report(self) -> None:
         """Print schema overview to console."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         lines = [f"\n  {_B}Schema: {self.name}{_R}"]
 
         # Parameters (exclude domain axis params)
@@ -187,20 +202,12 @@ class DatasetSchema:
         return self.domains.get(domain_code) if self.domains.has(domain_code) else None
 
     def is_compatible_with(self, other: 'DatasetSchema') -> bool:
-        """Check structural compatibility with another schema."""
-        # Check all blocks using helper function
-        block_checks = [
+        """Check structural compatibility with another schema (raises on mismatch)."""
+        assert_blocks_compatible([
             (self.parameters, other.parameters),
             (self.performance_attrs, other.performance_attrs),
-            (self.features, other.features)
-        ]
-
-        for self_block, other_block in block_checks:
-            if not self_block.is_compatible(other_block):
-                raise ValueError(
-                    f"Schema block '{self_block.__class__.__name__}' is not identical "
-                    f"to {other_block.__class__.__name__}."
-                )
+            (self.features, other.features),
+        ])
         return True
 
 

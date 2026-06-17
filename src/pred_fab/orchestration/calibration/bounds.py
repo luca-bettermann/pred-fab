@@ -12,7 +12,7 @@ from ...utils import PfabLogger
 # ======================================================================
 
 class BoundsManager:
-    """Schema-aware parameter bounds, fixed params, trust regions, and schedule configs."""
+    """Schema-aware parameter bounds, fixed params, trust regions, and trajectory configs."""
 
     def __init__(self, schema: DatasetSchema, logger: PfabLogger):
         self.schema = schema
@@ -66,6 +66,13 @@ class BoundsManager:
                 code, None, ['param_bounds', 'trust_regions'], force
             ):
                 continue
+
+            # Validate categorical/bool membership at configuration time: an
+            # out-of-vocabulary fixed value would otherwise silently fall back
+            # to category index 0 when bounds are built.
+            obj = self.data_objects.get(code)
+            if isinstance(obj, (DataCategorical, DataBool)):
+                obj.validate(value)
 
             self.fixed_params[code] = value
             self.logger.debug(f"Set fixed parameter: {code} -> {value}")
@@ -124,7 +131,7 @@ class BoundsManager:
 
         if code in self.trajectory_configs and not force:
             self.logger.console_warning(
-                f"Parameter '{code}' already has a schedule configuration for "
+                f"Parameter '{code}' already has a trajectory configuration for "
                 f"'{self.trajectory_configs[code]}'; ignoring. Use force=True to overwrite."
             )
             return
@@ -135,7 +142,7 @@ class BoundsManager:
             if lo != -np.inf and hi != np.inf:
                 self.trust_regions[code] = (hi - lo) / 10.0
         self.logger.debug(
-            f"Configured schedule for '{code}' stepping through '{dimension_code}'."
+            f"Configured trajectory for '{code}' stepping through '{dimension_code}'."
         )
 
     def _validate_and_clean_config(
@@ -188,13 +195,13 @@ class BoundsManager:
                 continue
             if code in self.fixed_params:
                 continue
-            lo, hi = self._get_hierarchical_bounds_for_code(code)
+            lo, hi = self.get_hierarchical_bounds_for_code(code)
             if hi - lo < 1e-12:
                 continue
             tunable.append(code)
         return tunable
 
-    def _get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
+    def get_global_bounds(self, datamodule: DataModule) -> np.ndarray:
         """Return normalized optimization bounds over the full parameter space.
 
         categorical columns have integer bounds
@@ -216,14 +223,14 @@ class BoundsManager:
                 else:
                     low, high = 0.0, float(len(cats) - 1)
             else:
-                low, high = self._get_hierarchical_bounds_for_code(code)
+                low, high = self.get_hierarchical_bounds_for_code(code)
 
             n_low, n_high = self._normalize_bounds(code, low, high, datamodule)
             bounds_list.append((n_low, n_high))
 
         return np.array(bounds_list)
 
-    def _get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
+    def get_trust_region_bounds(self, datamodule: DataModule, current_params: dict[str, Any]) -> np.ndarray:
         """Return normalized trust-region bounds centred on current_params.
 
         categorical columns clamp to current cat-index.
@@ -254,7 +261,7 @@ class BoundsManager:
 
         return np.array(bounds_list)
 
-    def _get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
+    def get_hierarchical_bounds_for_code(self, code: str) -> tuple[float, float]:
         if code in self.fixed_params:
             val = self.fixed_params[code]
             low, high = val, val

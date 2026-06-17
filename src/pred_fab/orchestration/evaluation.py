@@ -51,11 +51,15 @@ class EvaluationSystem(BaseOrchestrationSystem):
         self,
         features_dict: dict[str, np.ndarray],
         parameters: Parameters,
-        incomplete_features: dict[str, bool] = {},
-        skip_for_code: dict[str, bool] = {},
+        incomplete_features: dict[str, bool] | None = None,
+        skip_for_code: dict[str, bool] | None = None,
         feature_filter: str | None = None,
     ) -> dict[str, float | None]:
         """Run evaluation models and return {perf_code: value} dict."""
+        if incomplete_features is None:
+            incomplete_features = {}
+        if skip_for_code is None:
+            skip_for_code = {}
         performance_dict: dict[str, float | None] = {}
 
         for eval_model in self.models:

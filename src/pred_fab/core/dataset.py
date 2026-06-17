@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Any, Literal
 import functools
 
-from .schema import DatasetSchema
+from .schema import DatasetSchema, assert_blocks_compatible
+from .experiment_set import ExperimentSet
 
 
 @dataclass(frozen=True)
@@ -39,10 +40,9 @@ class ExportedTensorDict:
 from ..core import DataBlock, Parameters, Features, PerformanceAttributes, DataDomainAxis
 from .data_objects import DataArray
 
-from ..interfaces.external_data import IExternalData
+from .ports import ExternalDataPort
 from ..utils import LocalData, PfabLogger
-# from ..utils.enum import BlockType, PRED_SUFFIX, Loaders
-from ..utils.enum import BlockType, Loaders
+from ..utils.enum import BlockType, Loaders, SourceStep
 
 
 @dataclass(frozen=True)
@@ -114,12 +114,12 @@ class ParameterUpdateEvent:
 
 @dataclass
 class ParameterTrajectory:
-    """Sparse ordered schedule of runtime parameter changes for one dimension level."""
+    """Sparse ordered trajectory of runtime parameter changes for one dimension level."""
     dimension: str
     entries: list[tuple[int, 'ParameterProposal']] = field(default_factory=list)
 
     def apply(self, experiment: 'ExperimentData') -> None:
-        """Record all schedule entries as ParameterUpdateEvents on the experiment.
+        """Record all trajectory entries as ParameterUpdateEvents on the experiment.
 
         Pure conversion goes through :func:`trajectory_to_events`; experiment-
         side delta + sanitize + append is then handled by
@@ -164,7 +164,7 @@ def events_to_trajectory(
     Filters events to those whose ``dimension`` matches; sorts ascending by
     ``step_index``; wraps each event's ``updates`` into a ``ParameterProposal``.
     Events without a ``step_index`` (i.e. initial-state events not bound to a
-    schedule step) are skipped. Inverse of :func:`trajectory_to_events`.
+    trajectory step) are skipped. Inverse of :func:`trajectory_to_events`.
     """
     matched = [e for e in events if e.iterator_code == dimension and e.step_index is not None]
     matched.sort(key=lambda e: e.step_index)  # type: ignore[arg-type, return-value]
@@ -180,15 +180,15 @@ def events_to_trajectory(
 
 @dataclass
 class ExperimentSpec:
-    """Initial parameter proposal plus optional per-dimension runtime schedules."""
+    """Initial parameter proposal plus optional per-dimension runtime trajectories."""
     initial_params: 'ParameterProposal'
     trajectories: dict[str, 'ParameterTrajectory'] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
 
-    def apply_schedules(self, experiment: 'ExperimentData') -> None:
-        """Apply all dimensional schedules to the experiment as ParameterUpdateEvents."""
-        for schedule in self.trajectories.values():
-            schedule.apply(experiment)
+    def apply_trajectories(self, experiment: 'ExperimentData') -> None:
+        """Apply all dimensional trajectories to the experiment as ParameterUpdateEvents."""
+        for trajectory in self.trajectories.values():
+            trajectory.apply(experiment)
 
     # dict-like delegation to initial_params for backward compatibility.
 
@@ -223,7 +223,6 @@ class ExperimentData:
                  performance: PerformanceAttributes,
                  features: Features,
                  dataset_code: str | None = None,
-                #  predicted_features: Features
                  ):
         self.code = exp_code
         self.parameters = parameters
@@ -235,26 +234,41 @@ class ExperimentData:
         self.dataset_code: str | None = dataset_code
         self.parameter_updates: list[ParameterUpdateEvent] = []
         self.config_snapshot: dict[str, Any] | None = None
-        # self.predicted_features = predicted_features
+
+    @property
+    def source(self) -> SourceStep | None:
+        """The source method that generated this experiment — the queryable provenance axis
+        (a :class:`SourceStep`). Read from ``config_snapshot``; see the KB note
+        *ExperimentSet data model refactor*."""
+        raw = (self.config_snapshot or {}).get("source")
+        if raw is None:
+            return None
+        try:
+            return SourceStep(raw)
+        except ValueError:
+            return None
+
+    @property
+    def kappa(self) -> float | None:
+        """The acquisition blend κ that generated this experiment (``None`` for
+        data-independent designs like Sobol). Read from ``config_snapshot``."""
+        return (self.config_snapshot or {}).get("kappa")
+
+    @property
+    def provenance(self) -> dict[str, Any]:
+        """Generative provenance — the settings that produced this experiment
+        (alias for ``config_snapshot``: source, kappa, seed, bounds, ...)."""
+        return self.config_snapshot or {}
 
     # === Helper Methods for Validation ===
 
     def is_valid(self, schema: 'DatasetSchema') -> bool:
-        """Check structural compatibility of exp with schema."""
-        # Check all blocks using helper function
-        block_checks = [
+        """Check structural compatibility of exp with schema (raises on mismatch)."""
+        assert_blocks_compatible([
             (self.parameters, schema.parameters),
             (self.performance, schema.performance_attrs),
             (self.features, schema.features),
-            # (self.predicted_features, schema.predicted_features)
-        ]
-        
-        for self_block, other_block in block_checks:
-            if not self_block.is_compatible(other_block):
-                raise ValueError(
-                    f"Schema block {self_block.__class__.__name__} is not identical "
-                    f"to {other_block.__class__.__name__}."
-                )        
+        ])
         return True
     
     def is_complete(self, feature_code: str, evaluate_from: int, evaluate_to: int | None) -> bool:
@@ -377,95 +391,141 @@ class ExperimentData:
     # === Helper Methods for Data Access ===
 
     def set_data(self, values: Any, block_type: BlockType, logger: PfabLogger) -> None:
-        """Set values for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            self.parameters.set_values_from_dict(values, logger)
-        elif block_type == BlockType.PARAM_UPDATES:
-            if isinstance(values, dict):
-                events_raw = values.get("events", [])
-            elif isinstance(values, list):
-                events_raw = values
-            else:
-                raise TypeError(
-                    f"Expected list/dict for parameter updates in experiment '{self.code}', "
-                    f"got {type(values).__name__}"
-                )
-            events = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
-            self.parameter_updates = [
-                ParameterUpdateEvent(
-                    updates=self.parameters.sanitize_values(e.updates, ignore_unknown=True),
-                    iterator_code=e.iterator_code,
-                    step_index=e.step_index,
-                    source_step=e.source_step,
-                )
-                for e in events
-            ]
-        elif block_type == BlockType.FEATURES:
-            self.features.set_values_from_df(values, logger, parameters=self.parameters)
-        elif block_type == BlockType.PERF_ATTRS:
-            self.performance.set_values_from_dict(values, logger)
-        elif block_type == BlockType.METADATA:
-            if not isinstance(values, dict):
-                raise TypeError(
-                    f"Expected dict for metadata in experiment '{self.code}', "
-                    f"got {type(values).__name__}"
-                )
-            self.dataset_code = values.get("dataset_code")
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     self.predicted_features.set_values_from_df(values, logger)
-        else:
-            raise ValueError(f"Unknown block type: {block_type}")
+        """Set values for a block type via its handler."""
+        self._block_handler(block_type).set(self, values, logger)
 
-    def get_data_dict(self, block_type: str) -> dict[str, Any]:
-        """Get values as dict for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            return self.parameters.get_values_dict()
-        elif block_type == BlockType.PARAM_UPDATES:
-            return {"events": [e.to_dict() for e in self.parameter_updates]}
-        elif block_type == BlockType.PERF_ATTRS:
-            return self.performance.get_values_dict()
-        elif block_type == BlockType.FEATURES:
-            return self.features.get_values_dict()
-        elif block_type == BlockType.METADATA:
-            if self.dataset_code is None:
-                return {}
-            return {"dataset_code": self.dataset_code}
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     return self.predicted_features.get_values_dict()
-        else:
-            raise ValueError(f"Unknown block type: {block_type}")
+    def get_data_dict(self, block_type: BlockType) -> dict[str, Any]:
+        """Get a block type's values as a dict via its handler."""
+        return self._block_handler(block_type).get(self)
 
     def has_data(self, block_type: BlockType) -> bool:
-        """Check if values are set for a specific data type."""
-        if block_type == BlockType.PARAMETERS:
-            return bool(self.parameters.get_values_dict())
-        elif block_type == BlockType.PARAM_UPDATES:
-            return bool(self.parameter_updates)
-        elif block_type == BlockType.PERF_ATTRS:
-            return bool(self.performance.get_values_dict())
-        elif block_type == BlockType.FEATURES:
-            return bool(self.features.get_values_dict())
-        elif block_type == BlockType.METADATA:
-            return self.dataset_code is not None
-        # elif block_type == BlockType.FEATURES_PRED:
-        #     return bool(self.predicted_features.get_values_dict())
-        else:
+        """Whether a block type has data, via its handler."""
+        return self._block_handler(block_type).has(self)
+
+    @staticmethod
+    def _block_handler(block_type: BlockType) -> "_BlockHandler":
+        handler = _BLOCK_HANDLERS.get(block_type)
+        if handler is None:
             raise ValueError(f"Unknown block type: {block_type}")
+        return handler
             
     def is_feature_populated(self, feature_name: str) -> bool:
         """Check if a specific feature is populated (not just initialized)."""
         return self.features.is_populated(feature_name)
-        
-    # def is_predicted_feature_populated(self, feature_name: str) -> bool:
-    #     """Check if a specific predicted feature is populated (not just initialized)."""
-    #     return self.predicted_features.is_populated(feature_name)
+
+
+# ---------------------------------------------------------------------------
+# BlockType handlers — one set/get/has strategy per block, keyed in the registry
+# ---------------------------------------------------------------------------
+
+class _BlockHandler:
+    """Strategy for one BlockType on an ExperimentData (set / get-dict / has)."""
+
+    def set(self, exp: "ExperimentData", values: Any, logger: PfabLogger) -> None:
+        raise NotImplementedError
+
+    def get(self, exp: "ExperimentData") -> dict[str, Any]:
+        raise NotImplementedError
+
+    def has(self, exp: "ExperimentData") -> bool:
+        raise NotImplementedError
+
+
+class _ParametersHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.parameters.set_values_from_dict(values, logger)
+
+    def get(self, exp):
+        return exp.parameters.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.parameters.get_values_dict())
+
+
+class _PerfAttrsHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.performance.set_values_from_dict(values, logger)
+
+    def get(self, exp):
+        return exp.performance.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.performance.get_values_dict())
+
+
+class _FeaturesHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        exp.features.set_values_from_df(values, logger, parameters=exp.parameters)
+
+    def get(self, exp):
+        return exp.features.get_values_dict()
+
+    def has(self, exp):
+        return bool(exp.features.get_values_dict())
+
+
+class _ParamUpdatesHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        if isinstance(values, dict):
+            events_raw = values.get("events", [])
+        elif isinstance(values, list):
+            events_raw = values
+        else:
+            raise TypeError(
+                f"Expected list/dict for parameter updates in experiment '{exp.code}', "
+                f"got {type(values).__name__}"
+            )
+        events = [ParameterUpdateEvent.from_dict(v) for v in events_raw]
+        exp.parameter_updates = [
+            ParameterUpdateEvent(
+                updates=exp.parameters.sanitize_values(e.updates, ignore_unknown=True),
+                iterator_code=e.iterator_code,
+                step_index=e.step_index,
+                source_step=e.source_step,
+            )
+            for e in events
+        ]
+
+    def get(self, exp):
+        return {"events": [e.to_dict() for e in exp.parameter_updates]}
+
+    def has(self, exp):
+        return bool(exp.parameter_updates)
+
+
+class _MetadataHandler(_BlockHandler):
+    def set(self, exp, values, logger):
+        if not isinstance(values, dict):
+            raise TypeError(
+                f"Expected dict for metadata in experiment '{exp.code}', "
+                f"got {type(values).__name__}"
+            )
+        exp.dataset_code = values.get("dataset_code")
+
+    def get(self, exp):
+        if exp.dataset_code is None:
+            return {}
+        return {"dataset_code": exp.dataset_code}
+
+    def has(self, exp):
+        return exp.dataset_code is not None
+
+
+_BLOCK_HANDLERS: dict[BlockType, _BlockHandler] = {
+    BlockType.PARAMETERS: _ParametersHandler(),
+    BlockType.PARAM_UPDATES: _ParamUpdatesHandler(),
+    BlockType.FEATURES: _FeaturesHandler(),
+    BlockType.PERF_ATTRS: _PerfAttrsHandler(),
+    BlockType.METADATA: _MetadataHandler(),
+}
+
 
 class Dataset:
     """Schema-validated experiment container with hierarchical load/save (memory → local → external)."""
 
     def __init__(self,
                  schema: DatasetSchema,
-                 external_data: IExternalData | None = None,
+                 external_data: ExternalDataPort | None = None,
                  debug_flag: bool = False):
         self.schema = schema
         self.local_data = schema.local_data
@@ -478,7 +538,9 @@ class Dataset:
         
         # Master storage using ExperimentData
         self._experiments: dict[str, ExperimentData] = {}  # exp_code → ExperimentData
-        
+        # Named ExperimentSet groups (discovery / exploration runs, probes, ...)
+        self._experiment_sets: dict[str, ExperimentSet] = {}  # set code → ExperimentSet
+
         # Feature column names
         # self.feature_columns: dict[str, list[str]] | None = None
 
@@ -509,7 +571,6 @@ class Dataset:
         params_block = self._init_from_schema(Parameters, self.schema.parameters)
         perf_block = self._init_from_schema(PerformanceAttributes, self.schema.performance_attrs)
         arrays_block = self._init_from_schema(Features, self.schema.features)
-        # pred_block = self._init_from_schema(Features, self.schema.features, suffix=PRED_SUFFIX)
 
         return ExperimentData(
             exp_code=exp_code,
@@ -517,7 +578,6 @@ class Dataset:
             performance=perf_block,
             features=arrays_block,
             dataset_code=dataset_code,
-            # predicted_features=pred_block
         )
     
     def _build_experiment_data(
@@ -528,7 +588,6 @@ class Dataset:
         metric_arrays: dict[str, np.ndarray] | None,
         parameter_updates: list[dict[str, Any]] | None = None,
         dataset_code: str | None = None,
-        # predicted_arrays: dict[str, np.ndarray] | None = None
     ) -> ExperimentData:
         """Build ExperimentData from loaded components."""
         # 1. Create shell with schema structure
@@ -539,8 +598,7 @@ class Dataset:
 
         # 3. Initialize feature arrays based on parameters
         exp_data.features.initialize_arrays(exp_data.parameters)
-        # exp_data.predicted_features.initialize_arrays(exp_data.parameters)
-        
+
         # 4. Set optional blocks
         if performance:
             exp_data.set_data(performance, BlockType.PERF_ATTRS, self.logger)
@@ -550,9 +608,6 @@ class Dataset:
 
         if parameter_updates:
             exp_data.set_data({"events": parameter_updates}, BlockType.PARAM_UPDATES, self.logger)
-            
-        # if predicted_arrays:
-        #     exp_data.set_data(predicted_arrays, BlockType.FEATURES_PRED, self.logger)
 
         # 5. Validate against schema
         exp_data.is_valid(self.schema)
@@ -568,14 +623,16 @@ class Dataset:
         parameter_updates: list[dict[str, Any]] | None = None,
         dataset_code: str | None = None,
         config_snapshot: dict[str, Any] | None = None,
+        experiment_set: str | None = None,
         recompute: bool = False
     ) -> ExperimentData:
         """Create and register a new experiment; raises ValueError if it already exists and recompute=False.
 
-        ``dataset_code`` (optional) tags the experiment as belonging to a named
-        dataset group (baseline / reference / test / etc.). Pred-fab core uses
-        it only as opaque metadata; ``DataModule.set_split_dataset`` reads it
-        for sugar-style split assignment.
+        ``experiment_set`` (optional) appends the new code to a declared
+        :class:`ExperimentSet` (the accumulation path — the set must already be
+        registered via :meth:`add_experiment_set`). ``dataset_code`` is the legacy
+        grouping label (opaque metadata, read by ``DataModule.set_split_dataset``),
+        retained until the migration off it completes.
         """
         # Check memory
         if exp_code in self._experiments and not recompute:
@@ -588,6 +645,12 @@ class Dataset:
             if os.path.exists(exp_folder):
                  raise ValueError(f"Experiment {exp_code} already exists locally")
 
+        # Validate the target set early so a bad call leaves no half-built experiment.
+        if experiment_set is not None and experiment_set not in self._experiment_sets:
+            raise KeyError(
+                f"ExperimentSet {experiment_set!r} not declared; call add_experiment_set first."
+            )
+
         # Build and store
         exp_data = self._build_experiment_data(
             exp_code, parameters, performance, features, parameter_updates,
@@ -596,7 +659,19 @@ class Dataset:
         if config_snapshot:
             exp_data.config_snapshot = config_snapshot
         self._experiments[exp_code] = exp_data
+        if experiment_set is not None:
+            self._append_to_experiment_set(experiment_set, exp_code)
         return exp_data
+
+    def _append_to_experiment_set(self, set_code: str, exp_code: str) -> None:
+        """Append an experiment code to a declared set (in order; idempotent)."""
+        if set_code not in self._experiment_sets:
+            raise KeyError(
+                f"ExperimentSet {set_code!r} not declared; call add_experiment_set first."
+            )
+        members = self._experiment_sets[set_code].members
+        if exp_code not in members:
+            members.append(exp_code)
     
     def add_experiment(self, exp_data: ExperimentData, recompute: bool = False) -> None:
         """Manually add an existing ExperimentData to the dataset."""        
@@ -613,6 +688,66 @@ class Dataset:
     def get_experiment_codes(self) -> list[str]:
         """Get list of all experiment codes in dataset."""
         return list(self._experiments.keys())
+
+    def select(self, predicate: Callable[[ExperimentData], bool]) -> list[str]:
+        """Experiment codes whose ``ExperimentData`` satisfies ``predicate``, in dataset order.
+
+        The **selection primitive**: a dataset / split is a *query* over experiments,
+        not a stored partition. ``dataset_code`` matching, provenance (``source_step``
+        on the initial ``parameter_updates`` event), parameter-region, and completeness
+        filters are all just predicates over ``ExperimentData``. This is the building
+        block the split helpers (``DataModule.set_split_*``) and the first-class dataset
+        layer delegate to — see the KB note *First-class dataset concept in pred-fab*.
+
+        Returns codes (the lingua franca of splits and folds); call
+        :meth:`get_experiment` for the data behind a code.
+        """
+        return [code for code, exp in self._experiments.items() if predicate(exp)]
+
+    # === ExperimentSet registry (named groups) ===
+
+    def add_experiment_set(self, eset: ExperimentSet) -> None:
+        """Register a named ExperimentSet (overwrites one with the same code)."""
+        self._experiment_sets[eset.code] = eset
+
+    def get_experiment_set(self, code: str) -> ExperimentSet:
+        if code not in self._experiment_sets:
+            raise KeyError(f"ExperimentSet {code!r} not found")
+        return self._experiment_sets[code]
+
+    def list_experiment_sets(self) -> list[ExperimentSet]:
+        return list(self._experiment_sets.values())
+
+    def save_experiment_sets(self) -> None:
+        """Persist all registered ExperimentSets locally (``experiment_sets.json``) and push
+        them externally, so local and external storage mirror each other."""
+        serialized = [e.to_dict() for e in self._experiment_sets.values()]
+        self.local_data.save_experiment_sets(serialized)
+        if serialized and self.external_data is not None:
+            self.external_data.push_experiment_sets(serialized)
+
+    def select_set(
+        self,
+        code: str,
+        predicate: Callable[[ExperimentData], bool],
+        ordered: bool = False,
+    ) -> ExperimentSet:
+        """Build and register an ExperimentSet from a query over experiments.
+
+        The query path to set creation (the accumulation path is ``experiment_set=`` on
+        :meth:`create_experiment`). A filter implies no order, so ``ordered`` defaults False.
+        """
+        eset = ExperimentSet(code=code, members=self.select(predicate), ordered=ordered)
+        self.add_experiment_set(eset)
+        return eset
+
+    def load_experiment_sets(self) -> None:
+        """Load ExperimentSets — local ``experiment_sets.json`` first, then the external source
+        if none are stored locally."""
+        raw = self.local_data.load_experiment_sets()
+        if not raw and self.external_data is not None:
+            raw = self.external_data.pull_experiment_sets()
+        self._experiment_sets = {d["code"]: ExperimentSet.from_dict(d) for d in raw}
 
     def list_dataset_codes(self) -> list[str]:
         """Return distinct ``dataset_code`` values across loaded experiments, preserving insertion order."""
@@ -651,19 +786,13 @@ class Dataset:
         """Log an overview of the current dataset to the console."""
         exp_codes = self.get_experiment_codes()
         total = len(exp_codes)
-        feature_names = list(self.schema.features.keys())
-        
+
         # Count parameter and performance presence
         count_params = sum(1 for c in exp_codes if self.get_experiment(c).has_data(BlockType.PARAMETERS))
         count_perf = sum(1 for c in exp_codes if self.get_experiment(c).has_data(BlockType.PERF_ATTRS))
         
         # Count completely populated features (using existing helper)
         count_features = len(self.get_populated_experiment_codes())
-
-        # # Count completely populated predicted features
-        # count_pred = sum(1 for c in exp_codes if all(
-        #     self.get_experiment(c).is_predicted_feature_populated(name) for name in feature_names
-        # ))
 
         summary = [
             f"===== 'Dataset State Report' =====",
@@ -672,7 +801,6 @@ class Dataset:
             f"  - Parameters: \t{count_params}/{total}",
             f"  - Features: \t\t{count_features}/{total}",
             f"  - Performance: \t{count_perf}/{total}",
-            # f"  - Predicted Features: {count_pred}/{total}",
         ]
 
         self.logger.console_new_line()
@@ -773,7 +901,7 @@ class Dataset:
         exp = self._experiments[code]
         return exp.has_data(block_type)
     
-    def _get_exp_data(self, code: str, block_type: str) -> Any:
+    def _get_exp_data(self, code: str, block_type: BlockType) -> Any:
         if code not in self._experiments:
             return None
         exp = self._experiments[code]
@@ -886,6 +1014,11 @@ class Dataset:
             verbose=verbose
         )
 
+        # 2d. Load generative provenance (config snapshot). Local config.json first,
+        #     then external if absent — so reloaded experiments carry their `design`
+        #     and are queryable via Dataset.select (mirrors the NocoDB round-trip).
+        self._load_provenance(exp_codes, verbose=verbose)
+
         # Filter codes that were actually found and validate (parameters are mandatory)
         for code in exp_codes:
             exp_data = self.get_experiment(code)
@@ -893,10 +1026,9 @@ class Dataset:
 
             # Initialize feature arrays based on loaded parameters
             exp_data.features.initialize_arrays(exp_data.parameters, recompute_flag)
-            # exp_data.predicted_features.initialize_arrays(exp_data.parameters, recompute_flag)
 
-        # 3. Load Performance Metrics
-        missing_performance = self._hierarchical_load(
+        # 3. Load Performance Metrics (side-effecting: populates exp blocks in memory).
+        self._hierarchical_load(
             BlockType.PERF_ATTRS, exp_codes,
             loader=self.local_data.load_performance,
             setter=functools.partial(self._set_exp_data, block_type=BlockType.PERF_ATTRS),
@@ -906,10 +1038,9 @@ class Dataset:
             verbose=verbose
         )
 
-        # 4. Load Features
-        missing_features_union = set()
+        # 4. Load Features (side-effecting per feature; missing sets are not surfaced).
         for name in self.schema.features.keys():
-            missing_features = self._hierarchical_load(
+            self._hierarchical_load(
                 name, exp_codes,
                 loader=self.local_data.load_features,
                 setter=functools.partial(self._set_exp_data, block_type=BlockType.FEATURES),
@@ -919,27 +1050,30 @@ class Dataset:
                 verbose=verbose,
                 feature_name=name # Passed to kwargs
             )
-            missing_features_union.update(missing_features)
-
-        # # 5. Load Predicted Features
-        # missing_pred_features_union = set()
-        # for name in self.schema.features.keys():
-        #     missing_pred_features = self._hierarchical_load(
-        #         PRED_SUFFIX + name, exp_codes,
-        #         loader=self.local_data.load_features,
-        #         setter=functools.partial(self._set_exp_data, block_type=BlockType.FEATURES_PRED),
-        #         in_memory=lambda code: self.get_experiment(code).is_predicted_feature_populated(name),
-        #         external_loader=self.external_data.pull_features if self.external_data else None,
-        #         recompute_flag=recompute_flag,
-        #         verbose=verbose,
-        #         feature_name=PRED_SUFFIX + name # Passed to kwargs
-        #     )
-        #     missing_pred_features_union.update(missing_pred_features)
 
         self.logger.console_success(f"Successfully loaded {len(exp_codes)} experiments.")
         self.logger.console_new_line()
         return missing_params
-    
+
+    def _load_provenance(self, exp_codes: list[str], verbose: bool = False) -> None:
+        """Populate ``config_snapshot`` hierarchically: local ``config.json`` first, then
+        the external source's ``pull_provenance`` for any still missing — so a reloaded
+        experiment carries its ``design`` and is queryable via :meth:`select`. Missing
+        snapshots are fine (experiments created before provenance, or non-generated)."""
+        missing: list[str] = []
+        for code in exp_codes:
+            path = self.local_data.get_experiment_file_path(code, "config.json")
+            if os.path.exists(path):
+                with open(path) as f:
+                    self.get_experiment(code).config_snapshot = json.load(f)
+            else:
+                missing.append(code)
+        if missing and self.external_data is not None:
+            _found, provenance = self.external_data.pull_provenance(missing)
+            for code, snap in provenance.items():
+                if snap and self.has_experiment(code):
+                    self.get_experiment(code).config_snapshot = snap
+
     def save_all(self, recompute_flag: bool = False, verbose_flag: bool = False) -> None:
         """Save all experiments currently in memory."""
         exp_codes = list(self._experiments.keys())
@@ -998,14 +1132,19 @@ class Dataset:
             verbose=verbose
         )
 
-        # 2d. Save config snapshot (proposal settings at time of creation).
+        # 2d. Save generative provenance (config snapshot): local config.json, then push
+        #     externally so local and external storage mirror each other.
+        provenance: dict[str, dict[str, Any]] = {}
         for code in codes_to_save:
             exp = self.get_experiment(code)
             if exp.config_snapshot:
-                path = self.local_data.get_file_path(code, "config.json")
+                provenance[code] = exp.config_snapshot
+                path = self.local_data.get_experiment_file_path(code, "config.json")
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f:
                     json.dump(exp.config_snapshot, f, indent=2)
+        if provenance and self.external_data is not None:
+            self.external_data.push_provenance(list(provenance.keys()), provenance, recompute=recompute)
 
         # 3. Save Performance
         self._hierarchical_save(
@@ -1029,19 +1168,6 @@ class Dataset:
                 verbose=verbose,
                 feature_name=name # pass to kwargs
             )
-
-        # # 5. Save Predicted Features
-        # for name in self.schema.features.keys():
-        #     self._hierarchical_save(
-        #         PRED_SUFFIX + name, codes_to_save,
-        #         getter=functools.partial(self._get_exp_feature_array, feature_name=PRED_SUFFIX + name, block_type=BlockType.FEATURES_PRED),
-        #         saver=self.local_data.save_features,
-        #         external_saver=self.external_data.push_features if self.external_data else None,
-        #         recompute=recompute,
-        #         column_names=self._get_array_column_names(name),
-        #         verbose=verbose,
-        #         feature_name=PRED_SUFFIX + name # pass to kwargs
-        #     )
 
         # One console summary for the whole external push (per-block detail is logged).
         if self.external_data is not None and not self.debug_flag:
@@ -1126,7 +1252,9 @@ class Dataset:
             for code, data in external_data.items():
                 if isinstance(data, np.ndarray) and "feature_name" in kwargs:
                     col_names = self._get_array_column_names(kwargs["feature_name"])
-                    data = pd.DataFrame(data, columns=col_names)
+                    # pandas-stubs types `columns` too narrowly (Axes | None); a
+                    # plain list[str] is valid at runtime. False positive.
+                    data = pd.DataFrame(data, columns=col_names)  # type: ignore[arg-type]
                 setter(code, data)
             self._check_for_retrieved_codes(local_missing, external_missing, dtype, Loaders.EXTERNAL, verbose)
         elif self.debug_flag:

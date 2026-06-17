@@ -126,16 +126,18 @@ def radar_chart(
         ax.scatter([a], [s], c=color, s=40, zorder=6,
                    edgecolors="white", linewidth=0.6)
 
-    # Legend: mean dot + ±σ error bar (symbols only, no labels)
-    from matplotlib.lines import Line2D
     handles = []
     handles.append(Line2D([0], [0], marker="o", color="none",
                           markerfacecolor=color, markeredgecolor="white",
-                          markersize=7, label="mean"))
+                          markersize=7, label=label or "mean"))
     if stds is not None:
         handles.append(Line2D([0], [0], color=color, linewidth=1.0,
                               marker="|", markersize=6, markeredgewidth=1.0,
                               label="±σ"))
+    if ref_values is not None:
+        handles.append(Line2D([0], [0], color=ref_color, linewidth=1.2,
+                              linestyle="--", alpha=0.8,
+                              label=ref_label or "reference"))
     ax.legend(handles=handles, loc="upper left", fontsize=FONT["legend"],
               frameon=False, markerscale=1.3,
               bbox_to_anchor=(-0.25, 1.15))
@@ -204,6 +206,4 @@ def plot_radar_panels(
     if suptitle:
         fig.suptitle(suptitle, fontsize=FONT["title"], color=ZINC_700)
 
-    path = str(save_path)
-    save_fig(path)
-    print(f"Saved: {path}")
+    save_fig(str(save_path))

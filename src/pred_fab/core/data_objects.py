@@ -188,7 +188,7 @@ class DataInt(DataObject):
 
     @classmethod
     def _from_json_impl(cls, code: str, role: Roles, constraints: dict[str, Any], round_digits: int | None) -> 'DataInt':
-        return cls(code, role, constraints.get("min"), constraints.get("max"))
+        return cls(code, role, constraints.get("min"), constraints.get("max"), round_digits)
 
 
 class DataBool(DataObject):

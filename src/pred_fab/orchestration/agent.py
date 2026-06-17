@@ -2,10 +2,13 @@
 
 import copy
 import functools
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from .base_system import BaseOrchestrationSystem
 
 
 def requires(*systems: "SystemName"):
@@ -34,7 +37,8 @@ from ..orchestration import (
 )
 
 from ..interfaces import IFeatureModel, IEvaluationModel, IPredictionModel
-from ..utils import LocalData, PfabLogger, ConsoleReporter, StepType, Mode, SourceStep
+from ..utils import LocalData, PfabLogger, ConsoleReporter, SourceStep
+from ..utils.console import _B, _D, _R
 from .evidence import EstimatorConfig
 
 
@@ -230,7 +234,7 @@ class PfabAgent:
                                         f"cal.dimension_derivations['{code}'] = fn"
                                     )
                     merged_list.append(m)
-                feat_dicts_S = _pred.predict_for_calibration_tensor(merged_list)
+                feat_dicts_S = _pred.predict_for_calibration(merged_list)
                 params_blocks: list[Any] = []
                 for pd_ in merged_list:
                     block = copy.deepcopy(schema.parameters)
@@ -238,10 +242,12 @@ class PfabAgent:
                         if code not in block.data_objects:
                             continue
                         v = val.item() if hasattr(val, "item") and torch.is_tensor(val) else val
-                        try:
-                            block.set_value(code, v)
-                        except Exception as exc:
-                            self.logger.warning(f"perf_fn_tensor: set_value({code}) failed: {exc}")
+                        # Coerce through the schema authority before set_value
+                        # validates — the decoded value carries the right type
+                        # (categoricals as labels, ints rounded). A failure here
+                        # is a real type/bounds error, not something to swallow.
+                        obj = block.get(code)
+                        block.set_value(code, obj.coerce(v))
                     params_blocks.append(block)
                 return _eval._evaluate_feature_dict_tensor(feat_dicts_S, params_blocks)
 
@@ -250,8 +256,8 @@ class PfabAgent:
                 logger=self.logger,
                 perf_fn_tensor=_perf_fn_tensor,
                 evidence=EvidenceBackend(
-                    batched_tensor=_pred.delta_integrated_evidence_batched_tensor,
-                    joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched_tensor,
+                    batched_tensor=_pred.delta_integrated_evidence_batched,
+                    joint_batched_tensor=_pred.delta_integrated_evidence_joint_batched,
                 ),
                 n_exp_fn=lambda: _pred.n_experiments,
                 fit_empty_kde_fn=_pred.fit_empty_kde,
@@ -372,10 +378,6 @@ class PfabAgent:
 
     def state_report(self) -> None:
         """Log an overview of all agent systems to the console."""
-        _B = "\033[1m"
-        _D = "\033[2m"
-        _R = "\033[0m"
-
         if not self._initialized:
             self.logger.console_warning("Agent not initialized. No models to report.")
             return
@@ -397,24 +399,6 @@ class PfabAgent:
             _add_model_section("Evaluation System", self.eval_system.models)
         if self.pred_system:
             _add_model_section("Prediction System", self.pred_system.models)
-
-        # # Calibration System (config — not a trained system)
-        # cal = self.calibration_system
-        # lines.append(f"\n  {_D}Calibration System{_R}")
-        #
-        # pw_parts = [f"{k}={v:g}" for k, v in cal.performance_weights.items()]
-        # lines.append(f"    {_D}Weights: {', '.join(pw_parts)}{_R}")
-        #
-        # explore_parts = [f"radius={cal._exploration_radius:g}",
-        #                  f"buffer={cal._buffer:g}",
-        #                  f"decay_exp={cal._decay_exp:g}"]
-        # lines.append(f"    {_D}Exploration: {', '.join(explore_parts)}{_R}")
-        #
-        # for code in cal.data_objects.keys():
-        #     low, high = cal._get_hierarchical_bounds_for_code(code)
-        #     bounds_str = f"[{low}, {high}]"
-        #     delta = cal.trust_regions.get(code, "─")
-        #     lines.append(f"    {code:<20s} {bounds_str:<15s} {_D}{delta}{_R}")
 
         self.logger.console_summary("\n".join(lines))
         self.logger.console_new_line()
@@ -453,6 +437,8 @@ class PfabAgent:
         """Alias for acquisition_step with kappa > 0; ``None`` uses the configured default."""
         return self.acquisition_step(datamodule, kappa=kappa)
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION,
+              SystemName.PREDICTION, SystemName.CALIBRATION)
     def inference_step(
         self,
         exp_data: ExperimentData,
@@ -461,8 +447,6 @@ class PfabAgent:
         visualize: bool = False,
     ) -> ExperimentSpec:
         """Feature extraction + evaluation, then acquisition_step with kappa=0."""
-        self._check_systems(StepType.FULL)
-
         self.feature_system.run_feature_extraction(exp_data, 0, None, recompute=recompute, visualize=visualize)
         self.eval_system.run_evaluation(exp_data, recompute=recompute)
 
@@ -473,57 +457,29 @@ class PfabAgent:
         dimension: str | None = None,
         step_index: int | None = None,
         exp_data: ExperimentData | None = None,
-        mode: Mode = Mode.INFERENCE,
         kappa: float = 0.0,
         record: bool = False,
         **kwargs
     ) -> ExperimentSpec:
         """Tune on a step slice then return an online calibration proposal.
 
-        batch_size is derived automatically (one batch per dimension step);
-        pass ``batch_size=N`` via ``**kwargs`` to override.
+        Not yet implemented: requires trust-region optimization, which has not
+        been migrated to the unified ``_optimize`` path. Use ``exploration_step``
+        or ``inference_step`` for offline acquisition. Raises immediately with no
+        side effects (it must not tune the prediction model for an unsupported
+        operation).
+
+        TODO: migrate adaptation to ``_optimize`` with trust-region bounds.
         """
-        if self.pred_system is None:
-            raise RuntimeError("PredictionSystem not initialized. Call initialize() first.")
-        if self.calibration_system is None:
-            raise RuntimeError("CalibrationSystem not initialized. Call initialize() first.")
-
-        # Retrieve experiment data
-        exp_data, start, end = self._step_config(exp_data, dimension, step_index)
-
-        # Tune prediction system on the requested online slice.
-        temp_datamodule = self.pred_system.tune(
-            exp_data=exp_data,
-            start=start,
-            end=end,
-            **kwargs
-        )
-        self._log_step_completion(exp_data.code, start, end, action="used for tuning")
-
-        # Calibrate around effective current parameters (online = single step).
-        current_params = exp_data.get_effective_parameters_at_step(iterator_code=dimension, step_index=step_index)
-        target_indices = {dimension: step_index} if dimension is not None and step_index is not None else {}
         raise NotImplementedError(
             "adaptation_step requires trust-region optimization (not yet migrated "
             "to the unified _optimize path). Use exploration_step or inference_step "
             "for offline acquisition."
         )
-        # TODO: migrate adaptation to _optimize with trust-region bounds
-        proposal = ParameterProposal.from_dict(
-            result.initial_params.to_dict(), source_step=SourceStep.ADAPTATION,
-        )
-        result = ExperimentSpec(initial_params=proposal, trajectories=result.trajectories)
-
-        # Record only if user confirms that proposed changes were applied physically.
-        if record:
-            exp_data.record_parameter_update(proposal, iterator_code=dimension, step_index=step_index)
-            self._log_step_completion(exp_data.code, start, end, action="recorded parameter update")
-
-        self.logger.info("Successfully completed adaptation step.")
-        return result
 
     # === ADDITIONAL API CALLS ===
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION)
     def extract(
         self,
         exp_data: ExperimentData,
@@ -536,12 +492,12 @@ class PfabAgent:
         When ``feature`` is provided (e.g. ``"extrusion"``, ``"vision"``),
         only feature models whose class name contains that string are run.
         """
-        self._check_systems(StepType.EVAL)
         return self.feature_system.run_feature_extraction(
             exp_data, 0, None, recompute=recompute, visualize=visualize,
             feature=feature,
         )
 
+    @requires(SystemName.FEATURE, SystemName.EVALUATION)
     def evaluate(
         self,
         exp_data: ExperimentData,
@@ -555,7 +511,6 @@ class PfabAgent:
         evaluation models are run.
         """
         self.extract(exp_data, recompute=recompute_flag, visualize=visualize, feature=feature)
-        self._check_systems(StepType.EVAL)
         self.eval_system.run_evaluation(exp_data, recompute=recompute_flag, feature=feature)
         self.logger.info(f"Successfully evaluated experiment '{exp_data.code}'.")
 
@@ -629,20 +584,10 @@ class PfabAgent:
         device_t = torch.device(device) if isinstance(device, str) else device
 
         for model in self.pred_system.models:
-            if hasattr(model, "_model") and model._model is not None:
-                model._model = model._model.to(device_t)
-            if hasattr(model, "_cat_embeddings"):
-                model._cat_embeddings = model._cat_embeddings.to(device_t)
-            if hasattr(model, "_compiled_forward") and model._compiled_forward is not None:
-                # torch.compile-d module; rebuild the compiled wrapper around
-                # the moved net at next first-call.
-                model._compiled_forward = None
+            model.to(device_t)
 
         if self.pred_system.datamodule is not None:
-            for stats in self.pred_system.datamodule._parameter_stats.values():
-                stats.to(device_t)
-            for stats in self.pred_system.datamodule._feature_stats.values():
-                stats.to(device_t)
+            self.pred_system.datamodule.to(device_t)
 
         # Record on PredictionSystem so KDE torch conversions target it.
         self.pred_system._device = device_t
@@ -699,8 +644,6 @@ class PfabAgent:
         box: float | None = None,
         n_samples: int | None = None,
         seed: int | None = None,
-        cutoff_sigmas: float | None = None,
-        truncation_threshold: int | None = None,
     ) -> None:
         """Configure the evidence estimator and its tuning knobs.
 
@@ -715,7 +658,6 @@ class PfabAgent:
         Per-estimator knobs:
           KernelField — ``radii``, ``angular_gap_deg``
           SobolLocal  — ``box``, ``n_samples``, ``seed``
-        Shared — ``cutoff_sigmas``, ``truncation_threshold``.
         """
         self._assert_initialized()
         self.pred_system.configure_evidence(
@@ -726,8 +668,6 @@ class PfabAgent:
             box=box,
             n_samples=n_samples,
             seed=seed,
-            cutoff_sigmas=cutoff_sigmas,
-            truncation_threshold=truncation_threshold,
         )
 
     def configure_optimizer(
@@ -758,7 +698,7 @@ class PfabAgent:
         """Configure a parameter to vary per step of a dimension.
 
         ``smoothing`` knob dropped — under the
-        gradient schedule path, smoothness emerges naturally from the
+        gradient trajectory path, smoothness emerges naturally from the
         differentiable autoreg coupling between adjacent steps and the
         delta-constraint penalty.
         """
@@ -870,19 +810,8 @@ class PfabAgent:
             self.logger.warning(
                 f"The following codes are defined in the schema but not used by any model: "
                 f"{unused}"
-            )        
+            )
 
-    
-    def _check_systems(self, step: StepType) -> None:
-        """Legacy bridge — maps StepType to _require()."""
-        if step == StepType.EVAL:
-            self._require(SystemName.FEATURE, SystemName.EVALUATION)
-        elif step == StepType.FULL:
-            self._require(SystemName.FEATURE, SystemName.EVALUATION,
-                          SystemName.PREDICTION, SystemName.CALIBRATION)
-        else:
-            self._assert_initialized()
-        
     def _step_config(
             self, 
             exp_data: ExperimentData | None, 

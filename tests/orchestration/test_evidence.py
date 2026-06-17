@@ -1,14 +1,11 @@
 """Tests for tensor-typed ANOVA marginal-joint evidence integration.
 
-Three guarantees:
+Two guarantees:
   1. ANOVA torch path produces well-behaved positive evidence values,
      both marginal and joint components contribute, and the combined
      estimator is deterministic.
   2. Gradient flow: ``new_centers_SL`` with ``requires_grad=True`` produces
      finite gradients on backward of the ``(S,)`` E_new output.
-  3. Regime dispatcher ``_choose_kde_regime(n, σ, D)`` returns expected
-     labels — dense for small N or full-coverage σ; knn / cluster for the
-     scale-aware cases that trigger follow-up commits.
 """
 
 import numpy as np
@@ -19,8 +16,7 @@ from pred_fab.orchestration.evidence import (
     EstimatorConfig,
     KernelFieldEstimator,
     KernelIndex,
-    _choose_kde_regime,
-    _in_unit_cube_torch,
+    _in_unit_cube,
     make_estimator,
 )
 
@@ -33,7 +29,7 @@ def kf_estimator() -> KernelFieldEstimator:
     return est
 
 
-# ── _in_unit_cube_torch ───────────────────────────────────────────────────
+# ── _in_unit_cube ───────────────────────────────────────────────────
 
 
 def test_in_unit_cube_torch_basic():
@@ -45,37 +41,10 @@ def test_in_unit_cube_torch_basic():
         [0.5, 1.5, 0.5],   # out (>1)
     ])
     expected = torch.tensor([True, True, True, False, False])
-    assert torch.equal(_in_unit_cube_torch(pts), expected)
+    assert torch.equal(_in_unit_cube(pts), expected)
 
 
 # ── Regime dispatcher ─────────────────────────────────────────────────────
-
-
-def test_regime_dense_for_small_n():
-    """n_kernels < 100 → dense regardless of σ/D."""
-    assert _choose_kde_regime(10, sigma=0.05, D=4) == "dense"
-    assert _choose_kde_regime(50, sigma=0.5, D=2) == "dense"
-    assert _choose_kde_regime(99, sigma=0.001, D=10) == "dense"
-
-
-def test_regime_dense_when_5sigma_covers_unit_cube():
-    """High σ in low D → 5σ ball covers cube, n_active ≈ n_kernels — dense correct."""
-    # σ=0.5, D=2 → V(5σ-ball) = π·(2.5)² ≈ 19.6 → capped at 1.0 → n_active = n.
-    assert _choose_kde_regime(500, sigma=0.5, D=2) == "dense"
-    assert _choose_kde_regime(1000, sigma=0.4, D=3) == "dense"
-
-
-def test_regime_knn_for_sparse_high_dim():
-    """Small σ in high D → tiny 5σ-ball → n_active ≪ n → KNN should fire."""
-    # σ=0.05, D=10 → V(5σ ball) = π⁵·(0.25)¹⁰ / 5! ≈ negligible → n_active≪n.
-    assert _choose_kde_regime(1000, sigma=0.05, D=10) == "knn"
-    assert _choose_kde_regime(5000, sigma=0.03, D=8) == "knn"
-
-
-def test_regime_cluster_for_huge_n():
-    """n_kernels > 100k → cluster regime regardless of σ."""
-    assert _choose_kde_regime(200_000, sigma=0.01, D=4) == "cluster"
-    assert _choose_kde_regime(150_000, sigma=0.05, D=4) == "cluster"
 
 
 # ── ANOVA torch path: well-behavedness and consistency ───────────────────
@@ -96,7 +65,7 @@ def test_torch_positive_evidence_smoke(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers[:, None, :]).double(),
         torch.from_numpy(new_weights[:, None]).double(),
@@ -122,10 +91,10 @@ def test_torch_deterministic(kf_estimator):
     t_centers = torch.from_numpy(new_centers_SL).double()
     t_weights = torch.from_numpy(new_weights_SL).double()
 
-    r1 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    r1 = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
-    r2 = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    r2 = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
     np.testing.assert_allclose(
@@ -147,7 +116,7 @@ def test_torch_empty_old_positive(kf_estimator):
 
     index_old = KernelIndex(np.zeros((0, D)), np.zeros(0), sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
@@ -171,7 +140,7 @@ def test_torch_nonuniform_weights_positive(kf_estimator):
 
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.from_numpy(new_centers_SL).double(),
         torch.from_numpy(new_weights_SL).double(),
@@ -196,13 +165,13 @@ def test_torch_marginal_joint_both_contribute(kf_estimator):
     t_centers = torch.from_numpy(rng.uniform(0.2, 0.8, size=(S, L, D))).double()
     t_weights = torch.ones((S, L), dtype=torch.float64)
 
-    e_marginal = kf_estimator._marginal_evidence_torch(index_old, t_centers, t_weights)
-    e_joint = kf_estimator._joint_evidence_torch(index_old, t_centers, t_weights)
+    e_marginal = kf_estimator._marginal_evidence(index_old, t_centers, t_weights)
+    e_joint = kf_estimator._joint_evidence(index_old, t_centers, t_weights)
 
     assert (e_marginal > 0).all(), "Marginal evidence should be positive"
     assert (e_joint > 0).all(), "Joint evidence should be positive"
     # Combined = (marginal + joint) / 2, both contribute
-    combined = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    combined = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, t_centers, t_weights,
     )
     D = t_centers.shape[2]
@@ -237,7 +206,7 @@ def test_grad_flows_through_kde(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -264,7 +233,7 @@ def test_grad_flows_with_no_old_kernels(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -293,7 +262,7 @@ def test_grad_flows_through_weights(kf_estimator):
     )
     new_weights_SL = torch.ones((S, L), dtype=torch.float64, requires_grad=True)
 
-    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    e_new = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old, new_centers_SL, new_weights_SL,
     )
     e_new.sum().backward()
@@ -312,39 +281,9 @@ def test_torch_empty_s_returns_empty(kf_estimator):
     old_weights = np.array([1.0])
     index_old = KernelIndex(old_centers, old_weights, sigma)
 
-    got = kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
+    got = kf_estimator.integrated_evidence_perturbed_batched_joint(
         index_old,
         torch.zeros((0, 1, D), dtype=torch.float64),
         torch.zeros((0, 1), dtype=torch.float64),
     )
     assert got.shape == (0,)
-
-
-def test_torch_dispatcher_logs_when_non_dense_regime(kf_estimator, caplog):
-    """When regime would be 'knn' or 'cluster', dispatcher logs INFO and
-    falls back to dense — gives empirical signal for follow-up commits.
-
-    Picked (n_old=120, σ=0.005, D=4) to trigger 'knn' while keeping the
-    dense fallback's per-old broadcast tensor small (~few MB, well within
-    the 1 GB RAM budget on this server).
-    """
-    import logging
-
-    rng = np.random.default_rng(0)
-    sigma = 0.005
-    D = 4
-    n_old = 120
-
-    old_centers = rng.uniform(0.0, 1.0, size=(n_old, D))
-    old_weights = np.ones(n_old)
-    index_old = KernelIndex(old_centers, old_weights, sigma)
-
-    new_centers_SL = torch.from_numpy(rng.uniform(0.0, 1.0, size=(2, 1, D))).double()
-    new_weights_SL = torch.ones((2, 1), dtype=torch.float64)
-
-    with caplog.at_level(logging.INFO, logger="pred_fab.orchestration.evidence"):
-        kf_estimator.integrated_evidence_perturbed_batched_joint_torch(
-            index_old, new_centers_SL, new_weights_SL,
-        )
-
-    assert any("knn" in rec.message for rec in caplog.records)

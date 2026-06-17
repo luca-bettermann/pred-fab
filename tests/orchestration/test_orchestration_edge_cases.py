@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import torch
 
 from pred_fab.orchestration.inference_bundle import InferenceBundle
 from pred_fab.utils import SplitType
@@ -40,7 +41,7 @@ def test_prediction_validate_uses_model_specific_input_slices(tmp_path):
 
 
 def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
-    """_acquisition_objective combines perf_fn with delta_integrated_evidence_fn via κ."""
+    """_blend_objective combines perf with Δ∫E via κ — the single objective path."""
     dataset = build_dataset_with_single_experiment(tmp_path)
 
     perf_calls = []
@@ -71,9 +72,14 @@ def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
     )
     calibration._active_datamodule = datamodule
 
-    X = datamodule.params_to_array({"param_1": 2.5, "dim_1": 2, "dim_2": 3})
+    # Drive the single objective core directly: one candidate, one point.
+    # raw_pts (perf) / zscore_pts (evidence) values are irrelevant to the stubs.
+    D = len(datamodule.input_columns)
+    raw_pts = torch.zeros((1, 1, D), dtype=torch.float64)
+    zscore_pts = torch.zeros((1, 1, D), dtype=torch.float64)
+    weights = torch.ones((1, 1), dtype=torch.float64)
     w = 0.5
-    result = calibration._acquisition_objective(X, kappa=w)
+    result = float(calibration._blend_objective(raw_pts, zscore_pts, weights, kappa=w)[0].item())
 
     assert len(perf_calls) == 1
     assert len(de_calls) == 1
@@ -83,7 +89,8 @@ def test_calibration_acquisition_uses_perf_fn_and_delta_evidence_fn(tmp_path):
 
 def test_inference_bundle_handles_degenerate_minmax():
     bundle = InferenceBundle(prediction_models=[], normalization_state={"method": "none"}, schema_dict={})
-    stats = {"method": "minmax", "min": 2.0, "max": 2.0}
+    # NormMethod.MIN_MAX's value is "min_max" — the bundle now matches the enum.
+    stats = {"method": "min_max", "min": 2.0, "max": 2.0}
 
     x = np.array([1.0, 2.0, 3.0])
     x_norm = bundle._apply_normalization(x, stats)
@@ -126,3 +133,50 @@ def test_prediction_tune_respects_requested_row_slice(tmp_path):
     assert 3 in model.seen_batch_sizes
     # Default residual model path should be active and fitted after tune.
     assert getattr(pred_system.residual_model, "_is_fitted", False) is True
+
+
+def test_inference_bundle_rejects_unknown_categorical():
+    """A categorical value outside the trained vocabulary must raise at encode
+    time, not silently encode to index 0 (wrong predictions for a deployed
+    model). Enforced by input_pipeline.categorical_to_index."""
+    import pandas as pd
+    bundle = InferenceBundle(
+        prediction_models=[],
+        normalization_state={"categorical_mappings": {"material": ["A", "B"]},
+                             "input_columns": ["material"], "parameter_stats": {},
+                             "feature_stats": {}},
+        schema_dict={"parameters": {"data_objects": {"material": {}}}},
+    )
+    bundle.predict(pd.DataFrame({"material": ["A", "B"]}))  # ok
+    with pytest.raises(ValueError, match="Unknown categorical value"):
+        bundle.predict(pd.DataFrame({"material": ["A", "Z"]}))
+
+
+def test_inference_bundle_slices_per_model_input_columns():
+    """predict must feed each model only its own input columns, ordered by the
+    model's input_parameters + input_features — not the full input matrix."""
+    import pandas as pd
+
+    class _StubModel:
+        input_parameters = ["p2"]
+        input_features = []
+        outputs = ["y"]
+
+        def __init__(self):
+            self.seen_width = None
+
+        def forward_pass(self, X):
+            self.seen_width = X.shape[1]
+            return {"y": torch.zeros(X.shape[0])}
+
+    model = _StubModel()
+    bundle = InferenceBundle(
+        prediction_models=[model],  # type: ignore[list-item]
+        normalization_state={"input_columns": ["p1", "p2", "p3"],
+                             "categorical_mappings": {}, "parameter_stats": {},
+                             "feature_stats": {}},
+        schema_dict={"parameters": {"data_objects": {"p1": {}, "p2": {}, "p3": {}}}},
+    )
+    bundle.predict(pd.DataFrame({"p1": [1.0], "p2": [2.0], "p3": [3.0]}))
+    # Model declares one input (p2) — it must receive 1 column, not all 3.
+    assert model.seen_width == 1

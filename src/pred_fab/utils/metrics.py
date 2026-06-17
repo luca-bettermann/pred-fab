@@ -5,23 +5,60 @@ from typing import Any
 import numpy as np
 
 
+# Importance-weighting defaults (R²_inf) — single source for the formula and
+# its constants, shared by the prediction system and its plot.
+IMPORTANCE_FLOOR = 0.1
+IMPORTANCE_STEEPNESS = 0.8
+
+
+def importance_weight(
+    scores: Any,
+    *,
+    floor: float = IMPORTANCE_FLOOR,
+    steepness: float = IMPORTANCE_STEEPNESS,
+    ref_scores: Any = None,
+) -> np.ndarray:
+    """Performance-importance weight ``floor + (1−floor)·sigmoid(k·(s−mean))``,
+    ``k = steepness/std``.
+
+    ``mean``/``std``/``k`` are taken from ``ref_scores`` (default: ``scores``
+    itself), so a plot can evaluate the same curve over an arbitrary range while
+    anchoring the sigmoid to the experiment scores. The single source for the
+    R²_inf importance weights and their plot.
+    """
+    s = np.asarray(scores, dtype=float)
+    ref = s if ref_scores is None else np.asarray(ref_scores, dtype=float)
+    mean = float(ref.mean()) if ref.size else 0.0
+    std = float(ref.std()) if ref.size else 0.0
+    k = steepness / std if std > 1e-10 else 0.0
+    return floor + (1.0 - floor) / (1.0 + np.exp(-k * (s - mean)))
+
+
 def combined_score(
     performance: dict[str, Any],
     weights: dict[str, float],
 ) -> Any:
     """Weighted combined performance score.
 
-    Computes sum(w_i * perf_i) / sum(w_i) over all keys in performance
-    that have a non-None value and a corresponding weight.
+    Computes sum(w_i * perf_i) / sum(w_i) over exactly the keys that have a
+    non-None performance value *and* a corresponding weight. The denominator
+    is summed over the same contributing keys as the numerator, so a missing
+    or NaN performance renormalises over what is present rather than deflating
+    the score by the absent term's weight (callers such as the acquisition
+    objective deliberately drop NaN performances before calling).
     Works with both Python floats and torch Tensors (preserves gradient).
     """
-    total_w = sum(weights.values())
+    contributing = [
+        (weights[k], v)
+        for k, v in performance.items()
+        if v is not None and k in weights
+    ]
+    total_w = sum(w for w, _ in contributing)
     if total_w == 0:
-        return 0.0
-    score = sum(
-        weights.get(k, 0.0) * v
-        for k, v in performance.items() if v is not None
-    )
+        # Typed zero: derive it from a contributing value so a torch input keeps
+        # a grad-bearing zero (graph intact) rather than a bare Python float.
+        return contributing[0][1] * 0.0 if contributing else 0.0
+    score = sum(w * v for w, v in contributing)
     return score / total_w
 
 
@@ -54,7 +91,7 @@ class Metrics:
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
 
-        if len(y_true) != len(y_pred):
+        if y_true.shape != y_pred.shape:
             raise ValueError(f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}")
 
         if len(y_true) == 0:

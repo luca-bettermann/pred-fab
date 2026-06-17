@@ -191,11 +191,13 @@ class FeatureSystem(BaseOrchestrationSystem):
         evaluate_from: int = 0,
         evaluate_to: int | None = None,
         visualize: bool = False,
-        skip_feature_code: dict[str, bool] = {},
+        skip_feature_code: dict[str, bool] | None = None,
         get_params_for_row: Callable[[int], dict[str, Any]] | None = None,
         feature_filter: str | None = None,
     ) -> dict[str, np.ndarray]:
         """Run feature models in dependency order and return {code: tensor} dict."""
+        if skip_feature_code is None:
+            skip_feature_code = {}
 
         feature_dict: dict[str, np.ndarray] = {}
 
@@ -222,6 +224,9 @@ class FeatureSystem(BaseOrchestrationSystem):
                 )
             domain, depth = self._model_domain_map[id(feature_model)]
 
+            # Live status during the (often slow) per-model compute; cleared
+            # before returning so the caller's value rows print clean.
+            self.logger.console_status(f"Extracting {', '.join(feature_model.outputs)}…")
             feature_array = feature_model.compute_features(
                 parameters=parameters,
                 domain=domain,
@@ -244,4 +249,5 @@ class FeatureSystem(BaseOrchestrationSystem):
                 feature_dict[code] = tensor
                 features_so_far[code] = table
 
+        self.logger.console_status_clear()
         return feature_dict

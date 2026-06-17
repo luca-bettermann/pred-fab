@@ -22,6 +22,7 @@ isn't justified at mock-scale (~50-200 rows). Threshold is class-level so
 subclasses can override.
 """
 
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -107,6 +108,9 @@ class MLPModel(IPredictionModel):
         column with ``d = _embedding_dim(C)`` (FastAI tabular heuristic).
         """
         self._cat_cardinalities = dict(col_to_cardinality)
+        # Seed before init: embeddings are built here (before train()'s seed),
+        # so without this the categorical model's init is non-reproducible.
+        torch.manual_seed(self.SEED)
         # ModuleDict keys must be strings.
         self._cat_embeddings = nn.ModuleDict({
             str(col_idx): nn.Embedding(C, _embedding_dim(C))
@@ -213,6 +217,7 @@ class MLPModel(IPredictionModel):
         # so a cached pre-loop expansion would be stale after the first update.
         use_minibatch = n_rows > self.MINIBATCH_THRESHOLD
 
+        loader: DataLoader | None = None
         if use_minibatch:
             batch_size = min(self.MINIBATCH_SIZE, max(n_rows // 4, 1))
             loader = DataLoader(
@@ -223,7 +228,7 @@ class MLPModel(IPredictionModel):
         progress_callback = kwargs.get("progress_callback")
 
         for epoch in range(self.EPOCHS):
-            if use_minibatch:
+            if loader is not None:
                 epoch_loss = 0.0
                 for X_b, y_b in loader:
                     optimizer.zero_grad()
@@ -238,27 +243,29 @@ class MLPModel(IPredictionModel):
                 optimizer.step()
                 epoch_loss = float(loss.detach())
 
+            # Validation loss in eval() mode — train() leaves Dropout active,
+            # which would corrupt the reported val loss. Computed once and
+            # shared by both reporting hooks.
+            val_loss = None
+            if val_batches and (epoch_logger is not None or progress_callback is not None):
+                net.eval()
+                self._cat_embeddings.eval()
+                with torch.no_grad():
+                    X_val = torch.cat([b[0] for b in val_batches], dim=0)
+                    y_val = torch.cat([b[1] for b in val_batches], dim=0)
+                    if y_val.ndim == 1:
+                        y_val = y_val.reshape(-1, 1)
+                    val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
+                net.train()
+                self._cat_embeddings.train()
+
             if epoch_logger is not None:
                 metrics = {"loss/total": epoch_loss}
-                if val_batches:
-                    with torch.no_grad():
-                        X_val = torch.cat([b[0] for b in val_batches], dim=0)
-                        y_val = torch.cat([b[1] for b in val_batches], dim=0)
-                        if y_val.ndim == 1:
-                            y_val = y_val.reshape(-1, 1)
-                        val_loss = float(loss_fn(net(self._embed_cats(X_val)), y_val))
-                        metrics["loss/val"] = val_loss
+                if val_loss is not None:
+                    metrics["loss/val"] = val_loss
                 epoch_logger.log_epoch(epoch, metrics)
 
             if progress_callback is not None:
-                val_loss = None
-                if val_batches:
-                    with torch.no_grad():
-                        X_v = torch.cat([b[0] for b in val_batches], dim=0)
-                        y_v = torch.cat([b[1] for b in val_batches], dim=0)
-                        if y_v.ndim == 1:
-                            y_v = y_v.reshape(-1, 1)
-                        val_loss = float(loss_fn(net(self._embed_cats(X_v)), y_v))
                 progress_callback(epoch, self.EPOCHS, epoch_loss, val_loss)
 
         net.eval()
@@ -289,14 +296,16 @@ class MLPModel(IPredictionModel):
     ) -> dict[str, torch.Tensor]:
         """Inference forward → ``dict[feat_code, (batch,) tensor]``.
 
-        Applies categorical one-hot expansion before the network. Returns one
-        normalised-space (batch,) tensor per output feature.
+        Applies categorical embedding expansion (via ``_embed_cats``) before
+        the network. Returns one normalised-space (batch,) tensor per output
+        feature.
 
         ``gradient_pass=False`` (default): wraps in ``torch.no_grad()``.
         ``gradient_pass=True``: keeps the autograd tape live (gradient
-        acquisition). Categorical expansion via ``_embed_cats`` is non-
-        differentiable (discrete index → one-hot float), but it doesn't
-        break gradient flow on the non-categorical columns.
+        acquisition). Categorical expansion via ``_embed_cats`` looks up a
+        learned ``nn.Embedding`` per cat column; the discrete index lookup is
+        non-differentiable, but it doesn't break gradient flow on the
+        non-categorical columns.
         """
         n_outputs = len(self.outputs)
         if self._model is None or not self._is_trained:
@@ -316,12 +325,8 @@ class MLPModel(IPredictionModel):
             return X
         X_expanded = self._embed_cats(X)
         layers = list(self._model.children())
-        if gradient_pass:
-            h = X_expanded
-            for layer in layers[:-1]:
-                h = layer(h)
-            return h
-        with torch.no_grad():
+        ctx: Any = nullcontext() if gradient_pass else torch.no_grad()
+        with ctx:
             h = X_expanded
             for layer in layers[:-1]:
                 h = layer(h)

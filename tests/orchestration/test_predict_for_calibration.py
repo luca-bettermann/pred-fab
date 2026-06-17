@@ -1,4 +1,4 @@
-"""Tests for predict_for_calibration_tensor.
+"""Tests for predict_for_calibration.
 
 Two guarantees:
   1. Output type — list of dict[feat, torch.Tensor] per candidate.
@@ -26,7 +26,7 @@ def _trained_agent(tmp_path):
 
 def test_tensor_empty_list_returns_empty(tmp_path):
     agent, _exp = _trained_agent(tmp_path)
-    assert agent.pred_system.predict_for_calibration_tensor([]) == []
+    assert agent.pred_system.predict_for_calibration([]) == []
 
 
 # ── Output type (dict of torch.Tensor, never numpy) ───────────────────────
@@ -36,7 +36,7 @@ def test_tensor_output_types(tmp_path):
     agent, exp = _trained_agent(tmp_path)
     p = exp.parameters.get_values_dict()
 
-    out = agent.pred_system.predict_for_calibration_tensor([p])
+    out = agent.pred_system.predict_for_calibration([p])
     assert len(out) == 1
     per_feat = out[0]
     assert isinstance(per_feat, dict)
@@ -73,7 +73,7 @@ def test_grad_flows_to_continuous_param(tmp_path):
     p = dict(base)
     p[cont_code] = leaf
 
-    out = agent.pred_system.predict_for_calibration_tensor([p])
+    out = agent.pred_system.predict_for_calibration([p])
     assert len(out) == 1
 
     # Sum any output feature → backward
@@ -111,7 +111,7 @@ def test_grad_flows_through_multi_candidate(tmp_path):
     pa = {**base, cont_code: leaf_a}
     pb = {**base, cont_code: leaf_b}
 
-    out = agent.pred_system.predict_for_calibration_tensor([pa, pb])
+    out = agent.pred_system.predict_for_calibration([pa, pb])
     assert len(out) == 2
 
     # Loss = sum over both candidates' first feature
@@ -147,7 +147,7 @@ def test_grad_zero_for_disconnected_param(tmp_path):
     # Disconnected leaf — never inserted into any params dict.
     disconnected = torch.tensor(0.5, requires_grad=True)
 
-    out = agent.pred_system.predict_for_calibration_tensor([p])
+    out = agent.pred_system.predict_for_calibration([p])
     feat = next(iter(out[0]))
     loss = out[0][feat].sum()
     loss.backward()

@@ -8,7 +8,7 @@ import torch
 
 from .base_interface import BaseInterface
 from ..utils.logger import PfabLogger
-from ..utils.enum import NormMethod
+from ..core.normalisers import normaliser_from_dict
 from ..core import DataObject, Dataset
 
 
@@ -336,6 +336,39 @@ class IPredictionModel(BaseInterface):
         """
         del col_to_cardinality  # base impl ignores
 
+    def build_training_batches(
+        self, system: Any, train_batches: Any, val_batches: Any, kwargs: dict[str, Any],
+    ) -> tuple[Any, Any]:
+        """Build this model's (train, val) batches — flat column-filter default.
+
+        Sequence models override to build sequence-shaped batches. ``system`` is
+        the PredictionSystem, passed in for its batch-building helpers.
+        """
+        return (
+            system._filter_batches_for_model(train_batches, self),
+            system._filter_batches_for_model(val_batches, self),
+        )
+
+    def validate_split(
+        self, system: Any, dm: Any, split: Any, x_split: Any, y_split: Any,
+        cell_meta: Any, importance_dict: Any,
+    ) -> dict[str, dict[str, float]]:
+        """Validate this model on a split — flat default; sequence models override."""
+        return system._validate_flat(self, dm, x_split, y_split, cell_meta, importance_dict)
+
+    def to(self, device: Any) -> "IPredictionModel":
+        """Move this model's torch state to ``device``. Override for extra state."""
+        net = getattr(self, "_model", None)
+        if net is not None:
+            setattr(self, "_model", net.to(device))
+        emb = getattr(self, "_cat_embeddings", None)
+        if emb is not None:
+            setattr(self, "_cat_embeddings", emb.to(device))
+        if getattr(self, "_compiled_forward", None) is not None:
+            # torch.compile-d module; rebuilt around the moved net on next call.
+            setattr(self, "_compiled_forward", None)
+        return self
+
     # === ONLINE LEARNING ===
 
     def tuning(self, tune_batches: list[tuple[torch.Tensor, torch.Tensor]], **kwargs) -> None:
@@ -507,39 +540,11 @@ class DeterministicModel(IPredictionModel):
 
     @staticmethod
     def _reverse_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Reverse normalization for a data array using pre-computed stats."""
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return data * stats['std'] + stats['mean']
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.full_like(data, fill_value=stats['min'], dtype=np.float64)
-            return data * (stats['max'] - stats['min']) + stats['min']
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return data * iqr + stats['median']
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
+        """Reverse normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).reverse(data)
 
     @staticmethod
     def _apply_normalization(data: np.ndarray, stats: dict[str, Any]) -> np.ndarray:
-        """Apply normalization to a data array using pre-computed stats."""
-        method = stats['method']
-        if method == NormMethod.NONE:
-            return data
-        elif method == NormMethod.STANDARD:
-            return (data - stats['mean']) / (stats['std'] + 1e-8)
-        elif method == NormMethod.MIN_MAX:
-            denom = stats['max'] - stats['min']
-            if abs(denom) < 1e-12:
-                return np.zeros_like(data, dtype=np.float64)
-            return (data - stats['min']) / (stats['max'] - stats['min'] + 1e-8)
-        elif method == NormMethod.ROBUST:
-            iqr = stats['q3'] - stats['q1']
-            return (data - stats['median']) / (iqr + 1e-8)
-        else:
-            raise ValueError(f"Unknown normalization method: {method}")
+        """Apply normalization via the canonical NormaliserModule."""
+        return normaliser_from_dict(stats).forward(data)
 

@@ -7,25 +7,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import Normalize
 from matplotlib.ticker import MaxNLocator
 
 from ._style import (
-    AxisSpec, FONT, save_fig, _extract_xy, _add_fixed_subtitle,
-    apply_style, subplot_topology,
-    STEEL_500, ZINC_400, ZINC_600,
+    AxisSpec, FONT, fig_size, save_fig, _extract_xy, _add_fixed_subtitle,
+    apply_style, row_colorbar, subplot_topology,
+    STEEL_500, ZINC_400, ZINC_600, ZINC_900,
 )
 
-# Colormaps
-_STEEL_CMAP = LinearSegmentedColormap.from_list(
-    "steel", ["#D6E4F0", "#8BB0CC", "#4A7FA5", "#2D5F85", "#1A3A5C"]
-)
-_EMERALD_CMAP = LinearSegmentedColormap.from_list(
-    "emerald", ["#D1FAE5", "#6EE7B7", "#10B981", "#047857", "#064E3B"]
-)
-_ZINC_CMAP = LinearSegmentedColormap.from_list(
-    "zinc", ["#E4E4E7", "#A1A1AA", "#71717A", "#52525B", "#3F3F46"]
-)
+_STEEL_CMAP = matplotlib.colormaps["steel_progression"]
+_EMERALD_CMAP = matplotlib.colormaps["emerald_progression"]
+_ZINC_CMAP = matplotlib.colormaps["zinc_progression"]
 
 
 # ── Shared 3D helpers ──
@@ -82,24 +75,40 @@ def plot_parameter_space(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    fit_to_data: bool = False,
+    evidence_grid: np.ndarray | None = None,
 ) -> None:
-    """1x2: ground truth topology + initial model topology."""
-    apply_style()
-    vmin, vmax = float(true_grid.min()), float(true_grid.max())
+    """1x2: ground truth topology + initial model topology.
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+    Panels share one color scale: the bounded [0,1] default, or — with
+    ``fit_to_data`` — bounds computed across *both* grids. ``evidence_grid``
+    fades the model panel where evidence is low; the truth panel is never
+    faded (it makes no epistemic claim).
+    """
+    apply_style()
+    vmin = vmax = None
+    if fit_to_data:
+        all_vals = np.concatenate([true_grid.ravel(), pred_grid.ravel()])
+        vmin, vmax = float(all_vals.min()), float(all_vals.max())
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=fig_size(2, panel_w=5.0, panel_h=4.5),
+                                   layout="constrained")
     _add_fixed_subtitle(fig, fixed_params)
 
-    for ax, grid, label in [
-        (ax1, true_grid, "Ground Truth"),
-        (ax2, pred_grid, "Initial Model"),
+    im = None
+    for ax, grid, label, ev in [
+        (ax1, true_grid, "Ground Truth", None),
+        (ax2, pred_grid, "Initial Model", evidence_grid),
     ]:
-        subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
-                         cmap_name="performance", label=label,
-                         vmin=vmin, vmax=vmax,
-                         points=points, trajectories=trajectories, codes=codes,
-                         point_size=20, point_edge="black")
+        im = subplot_topology(ax, x_axis, y_axis, x_values, y_values, grid,
+                              cmap_name="performance", label=label,
+                              vmin=vmin, vmax=vmax, fit_to_data=fit_to_data,
+                              evidence_grid=ev,
+                              points=points, trajectories=trajectories,
+                              codes=codes, show_colorbar=False,
+                              point_size=20, point_edge=ZINC_900)
 
+    row_colorbar(fig, (ax1, ax2), im)
     save_fig(save_path)
 
 
@@ -117,6 +126,7 @@ def plot_parameter_space_per_cell(
     trajectories: dict[str, list[dict[str, Any]]] | None = None,
     codes: list[str] | None = None,
     fixed_params: dict[str, Any] | None = None,
+    fit_to_data: bool = False,
 ) -> None:
     """1x3: ground truth, model prediction, and absolute difference at one cell.
 
@@ -127,15 +137,18 @@ def plot_parameter_space_per_cell(
     apply_style()
     diff_grid = np.abs(true_grid - pred_grid)
 
-    val_vmin = float(min(true_grid.min(), pred_grid.min()))
-    val_vmax = float(max(true_grid.max(), pred_grid.max()))
+    if fit_to_data:
+        val_vmin = float(min(true_grid.min(), pred_grid.min()))
+        val_vmax = float(max(true_grid.max(), pred_grid.max()))
+    else:
+        val_vmin = val_vmax = None
     diff_vmax = float(diff_grid.max()) if diff_grid.size > 0 else 1.0
 
     cell_suffix = f"  ·  {cell_label}" if cell_label else ""
     panels = [
         (true_grid, f"Ground Truth{cell_suffix}", "performance", val_vmin, val_vmax),
         (pred_grid, f"Model Prediction{cell_suffix}", "performance", val_vmin, val_vmax),
-        (diff_grid, f"|Truth − Pred|{cell_suffix}", "Reds", 0.0, max(diff_vmax, 1e-9)),
+        (diff_grid, f"|Truth − Pred|{cell_suffix}", "error", 0.0, max(diff_vmax, 1e-9)),
     ]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 4.5))
@@ -146,7 +159,7 @@ def plot_parameter_space_per_cell(
                          cmap_name=cmap, label=label,
                          vmin=vmin, vmax=vmax,
                          points=points, trajectories=trajectories, codes=codes,
-                         point_size=20, point_edge="black")
+                         point_size=20, point_edge=ZINC_900)
 
     save_fig(save_path)
 
@@ -176,10 +189,10 @@ def plot_mean_error_topology(
     fig, ax = plt.subplots(1, 1, figsize=(7, 4.5))
     _add_fixed_subtitle(fig, fixed_params)
     subplot_topology(ax, x_axis, y_axis, x_values, y_values, mean_diff_grid,
-                     cmap_name="Reds", label=label,
+                     cmap_name="error", label=label,
                      vmin=0.0, vmax=max(vmax, 1e-9),
                      points=points, trajectories=trajectories, codes=codes,
-                     point_size=20, point_edge="black")
+                     point_size=20, point_edge=ZINC_900)
 
     save_fig(save_path)
 
@@ -230,7 +243,7 @@ def plot_parameter_space_3d(
             s=50, edgecolors="white", linewidth=0.6, zorder=5, depthshade=False,
         )
         for i, (x, y, z) in enumerate(zip(px, py, pz)):
-            ax.text(x, y, z, f" {i+1}", fontsize=6, color="#666", zorder=6)
+            ax.text(x, y, z, f" {i+1}", fontsize=6, color=ZINC_600, zorder=6)
         cb = fig.colorbar(sc, ax=ax, shrink=0.6, pad=0.1)
         cb.set_label(z_axis.display_label, fontsize=FONT["axis_label"])
 
@@ -277,7 +290,7 @@ def plot_dimensional_trajectories(
         for k in range(n_steps):
             x = float(params.get(x_axis.key, 0))
             y = float(params.get(y_axis.key, 0))
-            # Override from schedule if available
+            # Override from trajectory if available
             if code and trajectories and code in trajectories and k < len(trajectories[code]):
                 step = trajectories[code][k]
                 x = float(step.get(x_axis.key, x))

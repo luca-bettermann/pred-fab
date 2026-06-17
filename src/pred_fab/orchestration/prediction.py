@@ -15,9 +15,11 @@ import pickle
 
 from ..core import Dataset, ExperimentData, DataModule, DatasetSchema
 from ..core.data_objects import DataDomainAxis, DataArray
+from ..core.frames import to_unit_frame
 from ..interfaces.prediction import IPredictionModel, DeterministicModel
 from ..interfaces.tuning import IResidualModel, MLPResidualModel
-from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler
+from ..utils import PfabLogger, ProgressBar, Metrics, LocalData, SplitType, profiler, importance_weight
+from ..utils.console import format_metrics_table
 from ..utils.enum import BlockType
 from .base_system import BaseOrchestrationSystem
 from .evidence import (
@@ -201,21 +203,10 @@ class PredictionSystem(BaseOrchestrationSystem):
         flat-batched models get the standard (N, n_input) batches via
         column filtering.
         """
-        from ..models.transformer import TransformerModel
         model.set_categorical_context(self._compute_model_cat_cardinalities(model))
-
-        if isinstance(model, TransformerModel):
-            model_train_batches, seq_axis_sizes, domain_axis_sizes = self._build_transformer_train_batches(
-                model, SplitType.TRAIN,
-            )
-            model_val_batches, _, _ = self._build_transformer_train_batches(model, SplitType.VAL)
-            if seq_axis_sizes:
-                kwargs["seq_axis_sizes"] = seq_axis_sizes
-            if domain_axis_sizes:
-                kwargs["domain_axis_sizes"] = domain_axis_sizes
-        else:
-            model_train_batches = self._filter_batches_for_model(train_batches, model)
-            model_val_batches = self._filter_batches_for_model(val_batches, model)
+        model_train_batches, model_val_batches = model.build_training_batches(
+            self, train_batches, val_batches, kwargs,
+        )
 
         model_name = model.__class__.__name__
         self.logger.info(f"Training {model_name} for {model.outputs}...")
@@ -446,10 +437,10 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # === EVIDENCE MODEL (integrated objective) ===
     #
-    # ρ_j(z)  = w_j · N(z; z_j, σ²I)      normalized Gaussian density, mass w_j in ℝ^D
-    # D(z)    = Σ_j ρ_j(z)                 raw evidence density, unbounded
-    # E(z)    = D / (1 + D)                actual evidence, [0, 1)
-    # Δ∫E     = ∫_[0,1]^D [E_new − E_old]  info gain from adding a batch
+    # ρ_j(z)  = w_j · exp(−‖z−z_j‖²/2σ²)   peak-1 Gaussian kernel (ρ_j(z_j) = w_j)
+    # D(z)    = Σ_j ρ_j(z)                  raw evidence density, unbounded
+    # E(z)    = D / (1 + D)                 actual evidence, [0, 1)
+    # Δ∫E     = ∫_[0,1]^D [E_new − E_old] dz   info gain from adding a batch
     #
     # Acquisition lives in CalibrationSystem; this module provides the math.
     # No boundary term: leakage is handled by the integration bounds [0,1]^D.
@@ -740,8 +731,6 @@ class PredictionSystem(BaseOrchestrationSystem):
         box: float | None = None,
         n_samples: int | None = None,
         seed: int | None = None,
-        cutoff_sigmas: float | None = None,
-        truncation_threshold: int | None = None,
     ) -> None:
         """Configure the evidence estimator and its tuning knobs.
 
@@ -767,8 +756,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             box=box if box is not None else cur.box,
             n_samples=n_samples if n_samples is not None else cur.n_samples,
             seed=seed if seed is not None else cur.seed,
-            cutoff_sigmas=cutoff_sigmas if cutoff_sigmas is not None else cur.cutoff_sigmas,
-            truncation_threshold=truncation_threshold if truncation_threshold is not None else cur.truncation_threshold,
         )
         self._estimator_config = new_cfg
         self._estimator = make_estimator(new_cfg)
@@ -814,8 +801,6 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> KernelIndex:
         return KernelIndex(
             centers, weights, sigma,
-            cutoff_sigmas=self._estimator_config.cutoff_sigmas,
-            truncation_threshold=self._estimator_config.truncation_threshold,
             domain_bounds=domain_bounds,
         )
 
@@ -856,34 +841,28 @@ class PredictionSystem(BaseOrchestrationSystem):
         weighted_d = 0.0
         for kde in self._model_kdes.values():
             z = self._encode_from_norm_array_for_model(kde.model, X_norm.reshape(-1))
-            z_active = z[kde.active_mask].reshape(1, -1)
-            centers = kde.latent_points
-            # Normalize to [0,1] so σ has consistent meaning across coordinate systems
-            if kde.domain_bounds is not None:
-                lo = kde.domain_bounds[:, 0]
-                hi = kde.domain_bounds[:, 1]
-                span = hi - lo
-                span = np.where(span > 1e-10, span, 1.0)
-                z_active = (z_active - lo) / span
-                centers = (centers - lo) / span
+            # Normalize to [0,1] so σ means "fraction of range" — shared with the
+            # acquisition Δ∫E path via _to_unit_frame (one σ-frame, see its docstring).
+            z_active = to_unit_frame(z[kde.active_mask].reshape(1, -1), kde.domain_bounds)
+            centers = to_unit_frame(kde.latent_points, kde.domain_bounds)
             d2 = np.sum((z_active - centers) ** 2, axis=-1)
             density = float(np.sum(kde.point_weights * np.exp(-d2 / (2.0 * kde.sigma ** 2))))
             weighted_d += kde.weight * density
             total_w += kde.weight
         return weighted_d / total_w if total_w > 0 else 0.0
 
-    def delta_integrated_evidence_batched_tensor(
+    def delta_integrated_evidence_batched(
         self,
         new_norm_batch_S: torch.Tensor,
         new_weights_S: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Per-candidate Δ∫E with L=1. Delegates to the joint method."""
         weights_SL = new_weights_S.unsqueeze(1) if new_weights_S is not None else None
-        return self.delta_integrated_evidence_joint_batched_tensor(
+        return self.delta_integrated_evidence_joint_batched(
             new_norm_batch_S.unsqueeze(1), weights_SL,
         )
 
-    def delta_integrated_evidence_joint_batched_tensor(
+    def delta_integrated_evidence_joint_batched(
         self,
         new_norm_batch_SL: torch.Tensor,
         new_weights_SL: torch.Tensor | None = None,
@@ -914,23 +893,29 @@ class PredictionSystem(BaseOrchestrationSystem):
             ).to(dtype=dtype)  # (S*L, n_active)
             new_centers_SL = new_centers_flat.reshape(S, L, -1)
 
-            index_old = self._kernel_index(kde.latent_points, kde.point_weights, kde.sigma, kde.domain_bounds)
+            # σ-frame: normalise latent → [0,1] by domain_bounds so σ means
+            # "fraction of range", matching density_at. The optimiser and the
+            # plots then share one effective kernel width. Centers are now in the
+            # unit cube, so the integration domain is [0,1] (domain_bounds=None).
+            new_centers_SL = to_unit_frame(new_centers_SL, kde.domain_bounds)
+            old_centers = to_unit_frame(kde.latent_points, kde.domain_bounds)
+
+            index_old = self._kernel_index(old_centers, kde.point_weights, kde.sigma)
 
             # Compute E_old via the same ANOVA torch path
             if index_old.is_empty:
                 E_old = 0.0
             else:
                 empty_index = self._kernel_index(
-                    np.empty((0, kde.latent_points.shape[1])), np.empty(0), kde.sigma,
-                    kde.domain_bounds,
+                    np.empty((0, old_centers.shape[1])), np.empty(0), kde.sigma,
                 )
                 old_centers_t = index_old.centers.unsqueeze(0).to(dtype=dtype)
                 old_weights_t = index_old.weights.unsqueeze(0).to(dtype=dtype)
-                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+                E_old = float(self._estimator.integrated_evidence_perturbed_batched_joint(
                     empty_index, old_centers_t, old_weights_t,
                 )[0].item())
 
-            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint_torch(
+            E_new_per_s = self._estimator.integrated_evidence_perturbed_batched_joint(
                 index_old, new_centers_SL, weights_SL,
             )
             out = out + float(kde.weight) * (E_new_per_s - E_old)
@@ -938,7 +923,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return out / total_w if total_w > 0 else out
 
-    # --- Stacking / virtual evidence for sequential-phase schedule mode ---
+    # --- Stacking / virtual evidence for sequential-phase trajectory mode ---
 
     def push_virtual_points(
         self,
@@ -948,8 +933,8 @@ class PredictionSystem(BaseOrchestrationSystem):
     ) -> None:
         """Append (params, weight) pairs as temporary evidence in each KDE.
 
-        Used by the sequential-stacked schedule mode to represent
-        not-yet-scheduled experiments as stacks at their step0 with weight L_j.
+        Used by the sequential-stacked trajectory mode to represent
+        not-yet-run experiments as stacks at their step0 with weight L_j.
         Restore via `pop_virtual_points`.
         """
         if not self._model_kdes:
@@ -1036,7 +1021,7 @@ class PredictionSystem(BaseOrchestrationSystem):
 
     # --- Aggregated public API ---
 
-    def predict_for_calibration_tensor(
+    def predict_for_calibration(
         self,
         params_list: list[dict[str, Any]],
     ) -> list[dict[str, torch.Tensor]]:
@@ -1064,7 +1049,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         if not params_list:
             return []
 
-        with profiler.section("predict.predict_for_calibration_tensor"):
+        with profiler.section("predict.predict_for_calibration"):
             return self._predict_from_params_tensor(params_list)
 
     def _predict_from_params_tensor(
@@ -1199,14 +1184,11 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         return temp_datamodule
 
-    @staticmethod
-    @staticmethod
     def _build_importance_per_feature(
+        self,
         dm: DataModule,
         split: SplitType,
         eval_system: Any | None = None,
-        floor: float = 0.1,
-        steepness: float = 0.8,
     ) -> dict[str, list[float]]:
         """Build per-experiment importance weights from stored performance scores.
 
@@ -1232,14 +1214,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         perf_importance: dict[str, list[float]] = {}
         for perf_code in perf_codes:
             scores = np.array([p.get(perf_code, 0.0) or 0.0 for p in perf_per_exp])
-            s_mean = float(scores.mean())
-            s_std = float(scores.std())
-            k = steepness / s_std if s_std > 1e-10 else 0.0
-            weights = []
-            for score in scores:
-                sigmoid = 1.0 / (1.0 + np.exp(-k * (score - s_mean)))
-                weights.append(floor + (1.0 - floor) * sigmoid)
-            perf_importance[perf_code] = weights
+            perf_importance[perf_code] = importance_weight(scores).tolist()
 
         if eval_system is None:
             return perf_importance
@@ -1262,20 +1237,26 @@ class PredictionSystem(BaseOrchestrationSystem):
         return result
 
     @staticmethod
-    def _expand_importance(
-        per_exp_weights: list[float],
-        cell_meta: torch.Tensor,
+    def _expand_per_experiment(
+        per_exp_values: list[float] | np.ndarray,
+        row_exp_ids: np.ndarray,
     ) -> np.ndarray:
-        """Expand per-experiment importance to per-row using cell_meta exp_idx."""
-        exp_ids = cell_meta[:, 0].long().cpu().numpy()
-        unique_ids = np.unique(exp_ids)
-        if len(unique_ids) != len(per_exp_weights):
+        """Expand per-experiment values to per-row, keyed by each row's
+        experiment index into ``per_exp_values``.
+
+        Robust to experiments contributing any number of rows (including zero —
+        a skipped experiment simply never appears in ``row_exp_ids``). This is
+        the one identity-keyed expansion both the flat and the sequence
+        validation paths use — positional ``zip``/``np.unique`` alignment
+        silently mis-weighted (or crashed) when an experiment was skipped.
+        """
+        vals = np.asarray(per_exp_values, dtype=np.float64)
+        ids = np.asarray(row_exp_ids)
+        if ids.size and (int(ids.min()) < 0 or int(ids.max()) >= len(vals)):
             raise ValueError(
-                f"Importance has {len(per_exp_weights)} experiments but "
-                f"cell_meta has {len(unique_ids)} unique exp_ids"
+                f"row experiment index out of range for {len(vals)} experiments"
             )
-        id_to_weight = {int(uid): w for uid, w in zip(unique_ids, per_exp_weights)}
-        return np.array([id_to_weight[int(eid)] for eid in exp_ids], dtype=np.float64)
+        return vals[ids.astype(int)]
 
     def _validate_flat(
         self,
@@ -1304,7 +1285,8 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_true[:, i], y_pred[:, i])
             per_exp = importance_dict.get(feat)
             if per_exp is not None:
-                importance_arr = self._expand_importance(per_exp, cell_meta)
+                row_exp_ids = cell_meta[:, 0].long().cpu().numpy()
+                importance_arr = self._expand_per_experiment(per_exp, row_exp_ids)
                 inf = Metrics.calculate_informed_r2(y_true[:, i], y_pred[:, i], importance_arr)
                 feat_metrics['r2_inf'] = inf['r2_inf']
             results[feat] = feat_metrics
@@ -1327,9 +1309,12 @@ class PredictionSystem(BaseOrchestrationSystem):
 
         per_feat_true: dict[str, list[float]] = {f: [] for f in model.outputs}
         per_feat_pred: dict[str, list[float]] = {f: [] for f in model.outputs}
-        rows_per_exp: list[int] = []
+        # Per-row experiment identity (the experiment's index into `codes`, and
+        # so into per_exp) — built only for experiments that contribute rows, so
+        # a skipped experiment never shifts the weight alignment.
+        row_exp_ids: list[int] = []
 
-        for code in codes:
+        for exp_idx, code in enumerate(codes):
             exp = dm.dataset.get_experiment(code)
             params = exp.get_effective_parameters_for_row(0)
             dim_info = self._get_model_dim_info(model, params)
@@ -1349,6 +1334,9 @@ class PredictionSystem(BaseOrchestrationSystem):
             if exported.is_empty():
                 continue
 
+            # All outputs of one experiment share the same row count; track the
+            # last computed n. Bound to 0 so an empty model.outputs is safe.
+            n = 0
             for feat in model.outputs:
                 y_pred_native = preds[feat].detach().cpu().numpy().ravel()
                 # export_to_tensor_dict returns raw values; predict() also
@@ -1359,8 +1347,9 @@ class PredictionSystem(BaseOrchestrationSystem):
                 n = min(len(y_true_flat), len(y_pred_native))
                 per_feat_true[feat].extend(y_true_flat[:n].tolist())
                 per_feat_pred[feat].extend(y_pred_native[:n].tolist())
-            rows_per_exp.append(n)
+            row_exp_ids.extend([exp_idx] * n)
 
+        row_exp_ids_arr = np.asarray(row_exp_ids, dtype=int)
         results: dict[str, dict[str, float]] = {}
         for feat in model.outputs:
             y_t = np.array(per_feat_true[feat])
@@ -1370,10 +1359,7 @@ class PredictionSystem(BaseOrchestrationSystem):
             feat_metrics = Metrics.calculate_regression_metrics(y_t, y_p)
             per_exp = importance_dict.get(feat)
             if per_exp is not None:
-                # Expand per-experiment weights to per-row
-                importance_arr = np.concatenate([
-                    np.full(nr, w) for w, nr in zip(per_exp, rows_per_exp)
-                ])
+                importance_arr = self._expand_per_experiment(per_exp, row_exp_ids_arr)
                 if len(importance_arr) != len(y_t):
                     raise ValueError(
                         f"R²_inf importance length mismatch for '{feat}': "
@@ -1430,31 +1416,14 @@ class PredictionSystem(BaseOrchestrationSystem):
         # Compute per-feature metrics
         results: dict[str, dict[str, float]] = {}
         for model in self.models:
-            from ..models.transformer import TransformerModel
-            if isinstance(model, TransformerModel):
-                results.update(self._validate_transformer(model, dm, split, importance_dict))
-            else:
-                results.update(self._validate_flat(model, dm, X_split, y_split, cell_meta, importance_dict))
+            results.update(
+                model.validate_split(self, dm, split, X_split, y_split, cell_meta, importance_dict)
+            )
 
-        has_inf = any('r2_inf' in m for m in results.values())
-        has_mae = any('mae' in m for m in results.values())
-        header = f"  {'Feature':<30s}  {'R²':>8s}"
-        if has_inf:
-            header += f"  {'R²_inf':>8s}"
-        if has_mae:
-            header += f"  {'MAE':>10s}"
         self.logger.console_new_line()
-        self.logger.console_info(header)
-        self.logger.console_info(f"  {'─' * len(header)}")
-        for feat, m in results.items():
-            r2 = m.get('r2', 0.0)
-            line = f"  {feat:<30s}  {r2:8.4f}"
-            if has_inf:
-                r2_inf = m.get('r2_inf')
-                line += f"  {r2_inf:8.4f}" if r2_inf is not None else f"  {'—':>8s}"
-            if has_mae:
-                line += f"  {m.get('mae', 0.0):10.3f}"
+        for line in format_metrics_table(results):
             self.logger.console_info(line)
+        has_inf = any('r2_inf' in m for m in results.values())
         if not has_inf and not importance_dict:
             self.logger.console_warning(
                 "R²_inf not computed: no importance weights available. "
@@ -1586,53 +1555,6 @@ class PredictionSystem(BaseOrchestrationSystem):
             'iterator_feats': iterator_feats,
             'total_positions': total_positions,
         }
-
-    def _build_X_dict_flat(
-        self,
-        dm: "DataModule",
-        dim_info_list: list[dict[str, Any]],
-        cell_indices: list[tuple[int, ...]] | np.ndarray,
-        iterator_feats: list[tuple[str, int, int]],
-    ) -> dict[str, torch.Tensor]:
-        """Build per-column tensors for the (S × n_cells, n_input_cols) batch.
-
-        Each ``dim_info`` in ``dim_info_list`` carries a ``param_base`` dict —
-        the (param_code → value) map for that S-row. ``cell_indices`` lists the
-        cell-index tuples within the dimension. Output is keyed by
-        ``dm.input_columns`` and ready for ``prepare_input_from_tensor_dict``.
-        Categoricals emit cat-index ``int64`` tensors; iterator features emit
-        normalised positions; numeric params/features emit float scalars.
-        """
-        S = len(dim_info_list)
-        n_cells = len(cell_indices)
-        iter_feat_lookup = {fc: (axis_pos, size) for fc, axis_pos, size in iterator_feats}
-        X_dict_flat: dict[str, torch.Tensor] = {}
-        for col_name in dm.input_columns:
-            if col_name in dm.categorical_mappings:
-                cats = dm.categorical_mappings[col_name]
-                cat_to_idx = {c: i for i, c in enumerate(cats)}
-                idx_vals: list[int] = []
-                for s in range(S):
-                    param_base = dim_info_list[s]['param_base']
-                    v = param_base.get(col_name, cats[0] if cats else None)
-                    cell_val = cat_to_idx.get(v, 0)
-                    idx_vals.extend([cell_val] * n_cells)
-                X_dict_flat[col_name] = torch.tensor(idx_vals, dtype=torch.long)
-            elif col_name in iter_feat_lookup:
-                axis_pos, size = iter_feat_lookup[col_name]
-                vals: list[float] = []
-                for _s in range(S):
-                    for idx in cell_indices:
-                        vals.append(float(idx[axis_pos]) / max(size - 1, 1))
-                X_dict_flat[col_name] = torch.tensor(vals, dtype=torch.float32)
-            else:
-                num_vals: list[float] = []
-                for s in range(S):
-                    param_base = dim_info_list[s]['param_base']
-                    v = float(param_base.get(col_name, 0.0))
-                    num_vals.extend([v] * n_cells)
-                X_dict_flat[col_name] = torch.tensor(num_vals, dtype=torch.float32)
-        return X_dict_flat
 
     def _predict_from_params(
         self,
@@ -1829,7 +1751,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         for model in self.models:
             self._validate_model_export(model)
         
-        self.logger.console_info("✓ All models validated successfully")
+        self.logger.console_success("All models validated successfully")
         
         # Build bundle dict
         bundle = self._create_bundle_dict(include_evaluation)
@@ -1838,7 +1760,7 @@ class PredictionSystem(BaseOrchestrationSystem):
         with open(filepath, 'wb') as f:
             pickle.dump(bundle, f)
         
-        self.logger.console_success(f"✓ Exported inference bundle to: {filepath}")
+        self.logger.console_success(f"Exported inference bundle to: {filepath}")
         return filepath
     
     def _validate_model_export(self, model: IPredictionModel) -> None:

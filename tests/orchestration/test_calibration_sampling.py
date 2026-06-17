@@ -5,8 +5,11 @@ _compute_system_performance mismatched lengths,
 and configure_trajectory_parameter / ParameterTrajectory / ExperimentSpec behavior.
 """
 import pytest
+import torch
 
 from pred_fab.core import ParameterProposal, ExperimentSpec, ParameterTrajectory
+from pred_fab.orchestration.calibration.space import SolutionSpace
+from pred_fab.utils import SourceStep
 from tests.utils.builders import (
     build_calibration_system,
     build_workflow_stack,
@@ -171,8 +174,8 @@ def test_generate_discovery_returns_experiment_spec_instances(tmp_path):
         assert isinstance(spec.initial_params, ParameterProposal)
 
 
-def test_generate_discovery_has_empty_schedules(tmp_path):
-    """run_discovery() always returns ExperimentSpecs with empty schedules."""
+def test_generate_discovery_has_empty_trajectories(tmp_path):
+    """run_discovery() always returns ExperimentSpecs with empty trajectories."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
     calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
@@ -205,7 +208,7 @@ def test_generate_discovery_experiment_spec_supports_dict_like_access(tmp_path):
 
 # ===== configure_trajectory_parameter() =====
 
-def test_configure_schedule_parameter_sets_config(tmp_path):
+def test_configure_trajectory_parameter_sets_config(tmp_path):
     """configure_trajectory_parameter() stores the dimension code for the given runtime param."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -214,7 +217,7 @@ def test_configure_schedule_parameter_sets_config(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
-def test_configure_schedule_parameter_raises_for_non_runtime_param(tmp_path):
+def test_configure_trajectory_parameter_raises_for_non_runtime_param(tmp_path):
     """configure_trajectory_parameter() raises ValueError when the parameter is not runtime-adjustable."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -223,7 +226,7 @@ def test_configure_schedule_parameter_raises_for_non_runtime_param(tmp_path):
         calibration.configure_trajectory_parameter("param_1", "n_layers")
 
 
-def test_configure_schedule_parameter_blocked_without_force(tmp_path):
+def test_configure_trajectory_parameter_blocked_without_force(tmp_path):
     """Calling configure_trajectory_parameter twice without force is silently blocked."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -235,8 +238,8 @@ def test_configure_schedule_parameter_blocked_without_force(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_layers"
 
 
-def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
-    """force=True overwrites an existing schedule configuration."""
+def test_configure_trajectory_parameter_with_force_overwrites(tmp_path):
+    """force=True overwrites an existing trajectory configuration."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
 
@@ -246,7 +249,7 @@ def test_configure_schedule_parameter_with_force_overwrites(tmp_path):
     assert calibration.trajectory_configs["speed"] == "n_segments"
 
 
-def test_configure_schedule_parameter_ignores_unknown_param(tmp_path):
+def test_configure_trajectory_parameter_ignores_unknown_param(tmp_path):
     """configure_trajectory_parameter() silently skips params not in the schema."""
     agent, dataset, codes = build_workflow_stack(tmp_path)
     calibration = build_calibration_system(tmp_path, dataset)
@@ -257,16 +260,16 @@ def test_configure_schedule_parameter_ignores_unknown_param(tmp_path):
 
 # ===== ParameterTrajectory.apply() =====
 
-def test_parameter_schedule_apply_records_update_events(tmp_path):
+def test_parameter_trajectory_apply_records_update_events(tmp_path):
     """ParameterTrajectory.apply() records each entry as a ParameterUpdateEvent."""
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     # "speed" initial = 100.0; change to 150.0 at step 1 of dim_1.
     proposal = ParameterProposal.from_dict({"speed": 150.0})
-    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
+    traj = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
 
     initial_count = len(exp.parameter_updates)
-    schedule.apply(exp)
+    traj.apply(exp)
 
     assert len(exp.parameter_updates) == initial_count + 1
     event = exp.parameter_updates[-1]
@@ -275,19 +278,19 @@ def test_parameter_schedule_apply_records_update_events(tmp_path):
     assert event.step_index == 1
 
 
-def test_experiment_spec_apply_schedules_records_all_entries(tmp_path):
-    """ExperimentSpec.apply_schedules() applies all dimensional schedules to the experiment."""
+def test_experiment_spec_apply_trajectories_records_all_entries(tmp_path):
+    """ExperimentSpec.apply_trajectories() applies all dimensional trajectories to the experiment."""
     agent, dataset, exp, _ = build_runtime_agent_stack(tmp_path)
 
     proposal = ParameterProposal.from_dict({"speed": 180.0})
-    schedule = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
+    traj = ParameterTrajectory(dimension="dim_1", entries=[(1, proposal)])
     spec = ExperimentSpec(
         initial_params=ParameterProposal.from_dict({"speed": 100.0}),
-        trajectories={"dim_1": schedule},
+        trajectories={"dim_1": traj},
     )
 
     initial_count = len(exp.parameter_updates)
-    spec.apply_schedules(exp)
+    spec.apply_trajectories(exp)
 
     assert len(exp.parameter_updates) == initial_count + 1
 
@@ -325,6 +328,53 @@ def test_discovery_unfixed_categorical_covers_multiple_categories(tmp_path):
     )
 
 
+def test_categorical_strata_reach_objective_with_own_category(tmp_path):
+    """Each stratum must be scored under its *own* category in the objective frame.
+
+    Regression: ``_build_prior_fill`` fell through to 0.5 for categoricals
+    (``float("A")`` raises → caught), so the raw/z-score the objective sees had
+    every stratum at ``cats[round(0.5)] = cats[0]``. ``decode_to_specs`` re-injects
+    the assigned category, so only the *objective* path (``decode``) exposed the
+    bug. Categoricals carry no normaliser stats, so ``_decode_frames`` passes the
+    column through unchanged — the fix places the raw cat-index there directly.
+    """
+    _agent, dataset, _codes = build_workflow_stack(tmp_path)
+    cal = build_calibration_system(tmp_path, dataset)
+    cal.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+
+    n = 3  # one stratum per category of param_3 = [A, B, C]
+    variables, cat_codes, cat_assignments = cal._compose_variables(n)
+    assert cat_codes == ["param_3"]
+    assigned = [a[0] for a in cat_assignments]
+    assert sorted(assigned) == ["A", "B", "C"]
+
+    dm = cal._build_schema_datamodule()
+    space = SolutionSpace(
+        variables=variables,
+        n_experiments=n,
+        bounds_manager=cal.bounds,
+        datamodule=dm,
+        fixed_params=dict(cal.fixed_params),
+        cat_codes=cat_codes,
+        cat_assignments=cat_assignments,
+        schema_sanitize=lambda d: cal.schema.parameters.sanitize_values(d, ignore_unknown=True),
+        dimension_derivations=cal.dimension_derivations,
+    )
+
+    cat_col = dm.input_columns.index("param_3")
+    cats = dm.categorical_mappings["param_3"]  # sorted -> ["A", "B", "C"]
+
+    # Inspect the objective frame (raw), NOT decode_to_specs — the latter
+    # re-injects cat_assignments and would pass even with the bug.
+    raw, _zscore, _w = space.decode(torch.zeros(1, space.total_vars, dtype=torch.float64))
+    assert raw.shape[1] == n  # no trajectory -> one point per experiment
+    raw0 = raw[0]
+
+    decoded = [cats[int(round(float(raw0[i, cat_col].item())))] for i in range(n)]
+    assert decoded == assigned                    # each stratum scored as its own category
+    assert sorted(decoded) == ["A", "B", "C"]     # all three represented (bug -> all cats[0])
+
+
 # ===== DISCOVERY: Sobol space-filling =====
 
 def test_discovery_sobol_covers_parameter_range(tmp_path):
@@ -359,4 +409,165 @@ def test_discovery_sobol_covers_parameter_range(tmp_path):
     # κ=1 acquisition is the realistic floor.)
     span = values[-1] - values[0]
     assert span > 3.0, f"Samples should span > 50% of [0, 6], span={span:.2f}: {values}"
+
+
+# ===== SOBOL: data-independent space-filling test design =====
+
+def test_run_sobol_returns_count_and_sobol_provenance(tmp_path):
+    """run_sobol() returns n ExperimentSpecs tagged SOBOL, with empty trajectories."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+
+    results = calibration.run_sobol(n=5)
+    assert len(results) == 5
+    for spec in results:
+        assert isinstance(spec, ExperimentSpec)
+        assert isinstance(spec.initial_params, ParameterProposal)
+        assert spec.initial_params.source_step == SourceStep.SOBOL
+        assert spec.trajectories == {}
+
+
+def test_run_sobol_returns_empty_for_zero(tmp_path):
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    assert calibration.run_sobol(n=0) == []
+
+
+def test_run_sobol_values_within_bounds_and_int_typed(tmp_path):
+    """Continuous values respect bounds; integer params are int-typed."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds({"param_1": (2.0, 7.0), "param_2": (1, 4)})
+
+    results = calibration.run_sobol(n=6)
+    for spec in results:
+        assert 2.0 <= spec["param_1"] <= 7.0, f"param_1 out of bounds: {spec['param_1']}"
+        assert isinstance(spec["param_2"], int), f"param_2 should be int: {type(spec['param_2'])}"
+        assert 1 <= spec["param_2"] <= 4
+
+
+def test_run_sobol_fixed_params_appear_in_all(tmp_path):
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+    calibration.configure_fixed_params({"param_3": "A"})
+
+    results = calibration.run_sobol(n=6)
+    for spec in results:
+        assert spec["param_3"] == "A"
+
+
+def test_run_sobol_is_uniform_space_filling_to_the_bounds(tmp_path):
+    """The defining property: uniform coverage reaching the bounds.
+
+    Unlike acquisition (which decodes through a sigmoid, ~25× denser at the centre
+    than the bounds), a Sobol test set maps unit points straight via ``to_real`` —
+    so it tiles the range and reaches the extremes the optimiser under-samples.
+    Fix all but param_1 → 1D over [0, 10]; n=16 must populate every quartile and
+    come within 10% of each bound.
+    """
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0)})
+    calibration.configure_fixed_params(
+        {"param_2": 2, "n_layers": 2, "n_segments": 2, "param_3": "B", "speed": 100.0}
+    )
+    calibration.random_seed = 42
+
+    values = sorted(spec["param_1"] for spec in calibration.run_sobol(n=16))
+
+    # Every quartile of [0, 10] is populated (uniform tiling, not centre-clustered).
+    for lo in (0.0, 2.5, 5.0, 7.5):
+        in_q = [v for v in values if lo <= v < lo + 2.5]
+        assert in_q, f"Quartile [{lo}, {lo + 2.5}) empty — not space-filling: {values}"
+    # Reaches within 10% of each bound (the extremes a sigmoid frame would miss).
+    assert values[0] < 1.0, f"min {values[0]:.3f} does not reach the lower bound"
+    assert values[-1] > 9.0, f"max {values[-1]:.3f} does not reach the upper bound"
+
+
+def test_run_sobol_stratifies_categoricals(tmp_path):
+    """An unfixed categorical is stratified — all categories appear across the set."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+    calibration.random_seed = 0
+
+    results = calibration.run_sobol(n=9)
+    categories_seen = {spec["param_3"] for spec in results}
+    assert categories_seen == {"A", "B", "C"}, (
+        f"Stratification should cover all 3 categories, got: {categories_seen}"
+    )
+
+
+def test_run_sobol_is_deterministic_with_same_seed(tmp_path):
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+
+    cal1 = build_calibration_system(tmp_path / "a", dataset)
+    cal1.random_seed = 7
+    cal1.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+    r1 = cal1.run_sobol(n=5)
+
+    cal2 = build_calibration_system(tmp_path / "b", dataset)
+    cal2.random_seed = 7
+    cal2.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+    r2 = cal2.run_sobol(n=5)
+
+    for s1, s2 in zip(r1, r2):
+        assert s1["param_1"] == pytest.approx(s2["param_1"], abs=1e-6)
+        assert s1["param_2"] == s2["param_2"]
+
+
+def test_run_sobol_raises_on_trajectory_params(tmp_path):
+    """Trajectory test design is a follow-up — refuse rather than emit incomplete experiments."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.configure_param_bounds(
+        {"param_1": (0.0, 10.0), "param_2": (1, 4), "speed": (50.0, 150.0)}
+    )
+    calibration.configure_trajectory_parameter("speed", "n_layers")
+
+    with pytest.raises(NotImplementedError, match="trajectory"):
+        calibration.run_sobol(n=4)
+
+
+# ===== generative provenance (config_snapshot: source + seed + settings) =====
+
+def test_source_value_mapping():
+    from pred_fab.orchestration.calibration.system import _source_value
+    assert _source_value(SourceStep.DISCOVERY) == "discovery_step"
+    assert _source_value(SourceStep.SOBOL) == "sobol_step"
+    assert _source_value("exploration_step") == "exploration_step"
+    assert _source_value(None) is None
+
+
+def test_run_sobol_stamps_generative_provenance(tmp_path):
+    """Each Sobol spec carries its provenance: design='sobol', the seed, bounds; κ is N/A."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.random_seed = 11
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+
+    results = calibration.run_sobol(n=4)
+    for spec in results:
+        snap = spec.config_snapshot
+        assert snap["source"] == "sobol_step"
+        assert snap["seed"] == 11
+        assert snap["kappa"] is None                       # data-independent design
+        assert "param_1" in snap["param_bounds"]
+
+
+def test_run_discovery_stamps_design_and_seed(tmp_path):
+    """Discovery specs carry design='discovery', κ=1.0, and the seed (via _optimize)."""
+    agent, dataset, codes = build_workflow_stack(tmp_path)
+    calibration = build_calibration_system(tmp_path, dataset)
+    calibration.random_seed = 5
+    calibration.configure_param_bounds({"param_1": (0.0, 10.0), "param_2": (1, 4)})
+
+    results = calibration.run_discovery(n=3)
+    for spec in results:
+        snap = spec.config_snapshot
+        assert snap["source"] == "discovery_step"
+        assert snap["kappa"] == 1.0
+        assert snap["seed"] == 5
 

@@ -1,12 +1,18 @@
 """DataModule — ML preprocessing (normalization, splitting, batching) for Dataset instances."""
 
-from typing import Any, cast
+from typing import Any, cast, TYPE_CHECKING
 import pandas as pd
 import numpy as np
 import torch
 import copy
 from .data_objects import DataArray, DataCategorical
 from .dataset import Dataset
+from .input_pipeline import column_indices
+
+if TYPE_CHECKING:
+    # Runtime import is kept local (inside methods) to avoid a circular import;
+    # this TYPE_CHECKING import only resolves the string annotations below.
+    from .dataset import ExportedTensorDict
 from .normalisers import (
     NormaliserModule,
     make_normaliser,
@@ -365,6 +371,20 @@ class DataModule:
                 out[code] = y_dict[code]
         return out
 
+    def _y_export_columns(self) -> list[str]:
+        """Output columns plus any context-feature codes.
+
+        Context features are inputs, never outputs, so an export restricted to
+        ``output_columns`` filters them out of ``exported.y`` — and the X side
+        only carries parameter values, so the context column there is 0.0-fill.
+        Including the context codes here lets ``_inject_context_features_tensor``
+        recover the observed values. Safe because the y-normalisation fit and
+        the y-tensor build both iterate ``output_columns`` explicitly, so the
+        extra keys never enter y stats or the y tensor.
+        """
+        extra = [c for c in self._context_feature_codes if c not in self.output_columns]
+        return self.output_columns + extra
+
     def _fit_normalize(self, split: SplitType = SplitType.TRAIN) -> None:
         """Fit normalization parameters on the specified split."""
         if not self._initialized:
@@ -381,7 +401,7 @@ class DataModule:
         exported = self.dataset.export_to_tensor_dict(
             codes,
             x_columns=self.input_columns,
-            y_columns=self.output_columns,
+            y_columns=self._y_export_columns(),
             categorical_mappings=self.categorical_mappings,
             max_depth=self._max_depth,
         )
@@ -456,7 +476,7 @@ class DataModule:
         exported = self.dataset.export_to_tensor_dict(
             codes,
             x_columns=self.input_columns,
-            y_columns=self.output_columns,
+            y_columns=self._y_export_columns(),
             categorical_mappings=self.categorical_mappings,
             max_depth=self._max_depth,
         )
@@ -547,11 +567,8 @@ class DataModule:
         for col_name in self.input_columns:
             if col_name in X_dict:
                 col_t = X_dict[col_name]
-                # Categoricals are long-typed; numerics are float.
-                if col_name in self.categorical_mappings:
-                    col_f = col_t.to(dtype=torch.float32)
-                else:
-                    col_f = col_t.to(dtype=torch.float32)
+                # Categoricals (long) and numerics (float) both cast to float32 here.
+                col_f = col_t.to(dtype=torch.float32)
                 # Replace NaNs (boundary cells) with 0 — matches _encode_inputs.
                 col_f = torch.nan_to_num(col_f, nan=0.0)
             else:
@@ -613,6 +630,14 @@ class DataModule:
         else:
             return data_obj.normalize_strategy
     
+    def to(self, device: Any) -> "DataModule":
+        """Move normaliser buffers to ``device``."""
+        for stats in self._parameter_stats.values():
+            stats.to(device)
+        for stats in self._feature_stats.values():
+            stats.to(device)
+        return self
+
     def get_normalization_state(self) -> dict[str, Any]:
         """Export normalisation state for inference bundle.
 
@@ -623,25 +648,11 @@ class DataModule:
         if not self._is_fitted:
             raise RuntimeError("DataModule has not been fitted yet.")
 
-        def _module_to_dict(m: NormaliserModule) -> dict[str, Any]:
-            d: dict[str, Any] = {"method": m.method}
-            if m.method == NormMethod.STANDARD:
-                d["mean"] = m["mean"]
-                d["std"] = m["std"]
-            elif m.method == NormMethod.MIN_MAX:
-                d["min"] = m["min"]
-                d["max"] = m["max"]
-            elif m.method == NormMethod.ROBUST:
-                d["median"] = m["median"]
-                d["q1"] = m["q1"]
-                d["q3"] = m["q3"]
-            return d
-
         return {
             'method': self._default_normalize,
             'is_fitted': True,
-            'feature_stats': {k: _module_to_dict(v) for k, v in self._feature_stats.items()},
-            'parameter_stats': {k: _module_to_dict(v) for k, v in self._parameter_stats.items()},
+            'feature_stats': {k: v.to_dict() for k, v in self._feature_stats.items()},
+            'parameter_stats': {k: v.to_dict() for k, v in self._parameter_stats.items()},
             'categorical_mappings': copy.deepcopy(self.categorical_mappings),
             'input_columns': copy.deepcopy(self.input_columns),
             'output_columns': copy.deepcopy(self.output_columns)
@@ -673,13 +684,7 @@ class DataModule:
         each schema code maps to exactly ONE column
         index — categoricals are no longer expanded.
         """
-        indices: list[int] = []
-        for code in codes:
-            if code in self.input_columns:
-                indices.append(self.input_columns.index(code))
-            elif not skip_missing:
-                raise ValueError(f"Column '{code}' not found in input_columns.")
-        return indices
+        return column_indices(self.input_columns, codes, skip_missing=skip_missing)
 
     # === SHARED NORMALIZATION HELPERS ===
     
@@ -1209,10 +1214,7 @@ class DataModule:
         """
         if split not in (SplitType.TRAIN, SplitType.VAL, SplitType.TEST):
             raise ValueError(f"set_split_dataset: unknown split {split!r}.")
-        codes = [
-            code for code, exp in self.dataset._experiments.items()
-            if exp.dataset_code == dataset_code
-        ]
+        codes = self.dataset.select(lambda exp: exp.dataset_code == dataset_code)
         if not codes:
             raise ValueError(
                 f"set_split_dataset: no experiments tagged with dataset_code "
@@ -1231,11 +1233,8 @@ class DataModule:
             raise ValueError(f"set_split_datasets: unknown split {split!r}.")
         codes: list[str] = []
         for dc in dataset_codes:
-            matched = [
-                code for code, exp in self.dataset._experiments.items()
-                if exp.dataset_code == dc
-            ]
-            codes.extend(matched)
+            # per-code select preserves grouped-by-dataset_code order (non-breaking)
+            codes.extend(self.dataset.select(lambda exp, dc=dc: exp.dataset_code == dc))
         if not codes:
             raise ValueError(
                 f"set_split_datasets: no experiments tagged with any of "

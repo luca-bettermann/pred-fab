@@ -1,9 +1,14 @@
 """Abstract interface for evaluation models that score features into performance."""
 
 import numpy as np
-from typing import Any, Literal, final
+from typing import Any, Literal, final, TYPE_CHECKING
 from abc import abstractmethod
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    # torch is imported locally inside compute_performance_tensor at runtime
+    # (keeps it an optional/lazy dependency); only needed here for annotations.
+    import torch
 
 from .base_interface import BaseInterface
 from ..core import Parameters

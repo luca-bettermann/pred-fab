@@ -1,7 +1,7 @@
 """Global sensitivity analysis for prediction models."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -51,10 +51,42 @@ def _evaluate_samples(
 
         for k in resolved_outputs:
             val = result.get(k)
-            Y_dict[k].append(float(val) if val is not None else 0.0)
+            if val is None:
+                raise ValueError(
+                    f"Sensitivity sample produced no value for output {k!r}; "
+                    f"indices cannot be computed with missing outputs (a 0.0 "
+                    f"substitute would silently corrupt them)."
+                )
+            Y_dict[k].append(float(val))
 
     out_codes = resolved_outputs or []
     return out_codes, {k: np.array(v) for k, v in Y_dict.items()}
+
+
+def _build_problem(
+    inputs: list[str], bounds: dict[str, tuple[float, float]]
+) -> dict[str, Any]:
+    """Build the SALib problem definition for the given inputs and bounds."""
+    return {
+        "num_vars": len(inputs),
+        "names": inputs,
+        "bounds": [list(bounds[k]) for k in inputs],
+    }
+
+
+def _near_zero_variance_outputs(
+    out_codes: list[str], Y_dict: dict[str, np.ndarray], warnings: list[str]
+) -> set[str]:
+    """Return output codes whose response has near-zero variance.
+
+    Appends a warning (in ``out_codes`` order) for each skipped output.
+    """
+    skip: set[str] = set()
+    for key in out_codes:
+        if np.std(Y_dict[key]) < 1e-12:
+            warnings.append(f"Output '{key}' has near-zero variance — sensitivity undefined")
+            skip.add(key)
+    return skip
 
 
 def _sobol(
@@ -75,7 +107,7 @@ def _sobol(
     if n < 64 * D:
         warnings.append(f"Sample size N={n} may be too small for D={D} (recommended: N >= {64 * D})")
 
-    problem = {"num_vars": D, "names": inputs, "bounds": [list(bounds[k]) for k in inputs]}
+    problem = _build_problem(inputs, bounds)
     X = sobol_sample.sample(problem, n, calc_second_order=False, seed=seed)
     out_codes, Y_dict = _evaluate_samples(X, inputs, predict_fn, fixed_params, derivations, outputs)
 
@@ -85,11 +117,11 @@ def _sobol(
     S1 = np.zeros((n_out, D))
     S1_conf = np.zeros((n_out, D))
 
+    skip = _near_zero_variance_outputs(out_codes, Y_dict, warnings)
     for i, key in enumerate(out_codes):
-        Y = Y_dict[key]
-        if np.std(Y) < 1e-12:
-            warnings.append(f"Output '{key}' has near-zero variance — sensitivity undefined")
+        if key in skip:
             continue
+        Y = Y_dict[key]
         Si = sobol.analyze(problem, Y, calc_second_order=False, print_to_console=False)
         S_T[i, :] = Si["ST"]
         S_T_conf[i, :] = Si["ST_conf"]
@@ -118,7 +150,7 @@ def _morris(
 
     D = len(inputs)
     warnings: list[str] = []
-    problem = {"num_vars": D, "names": inputs, "bounds": [list(bounds[k]) for k in inputs]}
+    problem = _build_problem(inputs, bounds)
     X = morris_sample.sample(problem, n, seed=seed)
     out_codes, Y_dict = _evaluate_samples(X, inputs, predict_fn, fixed_params, derivations, outputs)
 
@@ -126,11 +158,11 @@ def _morris(
     S_T = np.zeros((n_out, D))
     S_T_conf = np.zeros((n_out, D))
 
+    skip = _near_zero_variance_outputs(out_codes, Y_dict, warnings)
     for i, key in enumerate(out_codes):
-        Y = Y_dict[key]
-        if np.std(Y) < 1e-12:
-            warnings.append(f"Output '{key}' has near-zero variance — sensitivity undefined")
+        if key in skip:
             continue
+        Y = Y_dict[key]
         Si = morris_analyze.analyze(problem, X, Y, print_to_console=False)
         # mu_star = mean absolute elementary effect (analogous to S_T)
         S_T[i, :] = Si["mu_star"]
@@ -195,37 +227,32 @@ def filter_top_k(
 
     Ranks by max S_T across the other axis.
     """
-    S_T = result.S_T
-    inputs = list(result.inputs)
-    outputs = list(result.outputs)
-
-    if k_inputs is not None and k_inputs < len(inputs):
-        col_max = S_T.max(axis=0)
+    # Column (input) filter — write back unconditionally; guard the optional
+    # conf/S1 slices individually (the old code only wrote back when S_T_conf
+    # was present, so without it the input filter was silently discarded).
+    if k_inputs is not None and k_inputs < len(result.inputs):
+        col_max = result.S_T.max(axis=0)
         top_cols = np.argsort(col_max)[-k_inputs:][::-1]
-        S_T = S_T[:, top_cols]
-        inputs = [inputs[j] for j in top_cols]
-        if result.S_T_conf is not None:
-            result = SensitivityResult(
-                method=result.method, inputs=inputs, outputs=outputs,
-                S_T=S_T, S_T_conf=result.S_T_conf[:, top_cols],
-                S1=result.S1[:, top_cols] if result.S1 is not None else None,
-                S1_conf=result.S1_conf[:, top_cols] if result.S1_conf is not None else None,
-                n_samples=result.n_samples, warnings=result.warnings,
-            )
+        result = replace(
+            result,
+            inputs=[result.inputs[j] for j in top_cols],
+            S_T=result.S_T[:, top_cols],
+            S_T_conf=result.S_T_conf[:, top_cols] if result.S_T_conf is not None else None,
+            S1=result.S1[:, top_cols] if result.S1 is not None else None,
+            S1_conf=result.S1_conf[:, top_cols] if result.S1_conf is not None else None,
+        )
 
-    if k_outputs is not None and k_outputs < len(outputs):
-        row_max = S_T.max(axis=1)
+    # Row (output) filter — operate on the (possibly column-filtered) result.
+    if k_outputs is not None and k_outputs < len(result.outputs):
+        row_max = result.S_T.max(axis=1)
         top_rows = np.argsort(row_max)[-k_outputs:][::-1]
-        return SensitivityResult(
-            method=result.method,
-            inputs=inputs,
-            outputs=[outputs[i] for i in top_rows],
+        result = replace(
+            result,
+            outputs=[result.outputs[i] for i in top_rows],
             S_T=result.S_T[top_rows, :],
-            S_T_conf=result.S_T_conf[top_rows, :],
+            S_T_conf=result.S_T_conf[top_rows, :] if result.S_T_conf is not None else None,
             S1=result.S1[top_rows, :] if result.S1 is not None else None,
             S1_conf=result.S1_conf[top_rows, :] if result.S1_conf is not None else None,
-            n_samples=result.n_samples,
-            warnings=result.warnings,
         )
 
     return result

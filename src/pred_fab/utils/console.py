@@ -7,6 +7,9 @@ from typing import Any
 from .logger import PfabLogger
 from .metrics import combined_score as _combined_score
 
+# Canonical ANSI style constants. Importable module-level — reused by
+# ``state_report``-style methods across the codebase (see agent.py,
+# core/schema.py, calibration/system.py). Do not redefine locally.
 _R  = "\033[0m"   # reset
 _B  = "\033[1m"   # bold
 _D  = "\033[2m"   # dim
@@ -99,6 +102,28 @@ class ProgressBar:
             f"\r{_G}✓{_R} {self._prefix} [{bar}] {_D}{ctr}{_R}            \n"
         )
         sys.stdout.flush()
+
+
+def format_metrics_table(feature_metrics: dict[str, dict[str, float]]) -> list[str]:
+    """Format R²/R²_inf/MAE per-feature metrics into aligned table lines (header + rows)."""
+    has_inf = any('r2_inf' in m for m in feature_metrics.values())
+    has_mae = any('mae' in m for m in feature_metrics.values())
+    header = f"  {'Feature':<30s}  {'R²':>8s}"
+    if has_inf:
+        header += f"  {'R²_inf':>8s}"
+    if has_mae:
+        header += f"  {'MAE':>10s}"
+    lines = [header, f"  {'─' * len(header)}"]
+    for name, metrics in feature_metrics.items():
+        r2 = metrics.get('r2', 0.0)
+        line = f"  {name:<30s}  {r2:8.4f}"
+        if has_inf:
+            r2_inf = metrics.get('r2_inf')
+            line += f"  {r2_inf:8.4f}" if r2_inf is not None else f"  {'—':>8s}"
+        if has_mae:
+            line += f"  {metrics.get('mae', 0.0):10.3f}"
+        lines.append(line)
+    return lines
 
 
 class ConsoleReporter:
@@ -299,7 +324,7 @@ class ConsoleReporter:
 
         self._logger.console_new_line()
 
-    def print_schedule_table(
+    def print_trajectory_table(
         self,
         param_code: str,
         exp_codes: list[str],
@@ -307,7 +332,7 @@ class ConsoleReporter:
         *,
         short_name: str | None = None,
     ) -> None:
-        """Print a per-step trajectory table for one schedule parameter."""
+        """Print a per-step trajectory table for one trajectory parameter."""
         if not self.enabled or not per_exp_values:
             return
         n_steps = max(len(v) for v in per_exp_values)
@@ -336,29 +361,8 @@ class ConsoleReporter:
         """Print R², R²_inf, and MAE per feature in a table."""
         if not self.enabled:
             return
-        has_inf = any('r2_inf' in m for m in feature_metrics.values())
-        has_mae = any('mae' in m for m in feature_metrics.values())
-
-        header = f"  {'Feature':<30s}  {'R²':>8s}"
-        if has_inf:
-            header += f"  {'R²_inf':>8s}"
-        if has_mae:
-            header += f"  {'MAE':>10s}"
         self._print(f"\n  {_B}Model quality{_R}")
-        self._print(header)
-        self._print(f"  {'─' * len(header)}")
-        for name, metrics in feature_metrics.items():
-            r2 = metrics.get('r2', 0.0)
-            line = f"  {name:<30s}  {r2:8.4f}"
-            if has_inf:
-                r2_inf = metrics.get('r2_inf')
-                if r2_inf is not None:
-                    line += f"  {r2_inf:8.4f}"
-                else:
-                    line += f"  {'—':>8s}"
-            if has_mae:
-                mae = metrics.get('mae', 0.0)
-                line += f"  {mae:10.3f}"
+        for line in format_metrics_table(feature_metrics):
             self._print(line)
 
     # ── Adaptation ──────────────────────────────────────────────────────

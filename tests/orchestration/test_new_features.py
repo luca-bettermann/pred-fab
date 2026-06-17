@@ -1,4 +1,4 @@
-"""Tests for new features: optimizer config, virtual KDE points, schedule smoothing, perf range."""
+"""Tests for new features: optimizer config, virtual KDE points, trajectory smoothing, perf range."""
 
 import pytest
 import numpy as np

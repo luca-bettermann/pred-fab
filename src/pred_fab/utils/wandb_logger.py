@@ -22,7 +22,7 @@ class WandbLogger:
         config: dict[str, Any] | None = None,
         **wandb_kwargs: Any,
     ):
-        import wandb
+        import wandb  # type: ignore[import]  # optional dependency, imported lazily
         self._wandb = wandb
         self._run = wandb.init(
             project=project,
