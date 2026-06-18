@@ -5,7 +5,7 @@ checks, registration validation, and serialization roundtrip.
 import pytest
 
 from pred_fab.core.schema import DatasetSchema, SchemaRegistry
-from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes
+from pred_fab.core.data_blocks import Parameters, Features, PerformanceAttributes, Domains
 from pred_fab.core.data_objects import Parameter, Feature, PerformanceAttribute, Domain, Dimension
 from tests.utils.builders import build_mixed_feature_schema, build_workflow_schema
 
@@ -48,21 +48,46 @@ def test_same_name_same_structure_does_not_raise(tmp_path):
     build_mixed_feature_schema(tmp_path, name="schema_test")
 
 
-def test_different_structure_same_name_raises(tmp_path):
-    build_mixed_feature_schema(tmp_path, name="schema_test")
+def test_different_structure_same_name_overwrites(tmp_path):
+    """The registry is a cache, not a ledger: a changed structure under the same name
+    overwrites the stale entry (dev iteration) instead of raising."""
+    s1 = build_mixed_feature_schema(tmp_path, name="schema_test")
+    old_hash = s1._compute_schema_hash()
 
     params = Parameters.from_list([Parameter.real("param_extra", 0.0, 1.0)])
     feats = Features()
     perfs = PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")])
+    s2 = DatasetSchema(                       # different structure, same name → no raise
+        root_folder=str(tmp_path),
+        name="schema_test",
+        parameters=params,
+        features=feats,
+        performance=perfs,
+    )
 
-    with pytest.raises(ValueError, match="different structure"):
-        DatasetSchema(
-            root_folder=str(tmp_path),
-            name="schema_test",
-            parameters=params,
-            features=feats,
-            performance=perfs,
-        )
+    reg = SchemaRegistry(s2.local_data.local_folder)
+    assert reg.get_hash_by_id("schema_test") == s2._compute_schema_hash()  # name → new structure
+    assert old_hash not in reg.registry                                    # stale entry dropped
+
+
+def test_register_false_builds_pure_value_object(tmp_path):
+    """register=False builds the structural value object with NO registry side-effects."""
+    spatial = Domain("spatial", [Dimension("d_a", "da", 1, 2), Dimension("d_b", "db", 1, 3)])
+    schema = DatasetSchema(
+        root_folder=str(tmp_path),
+        name="schema_ro",
+        parameters=Parameters.from_list([Parameter.real("p1", 0.0, 10.0)]),
+        features=Features.from_list([Feature("f1", domain=spatial)]),
+        performance=PerformanceAttributes.from_list([PerformanceAttribute.score("perf_1")]),
+        domains=Domains([spatial]),
+        register=False,
+    )
+    # Structural init ran: the domain's axis params were added to Parameters.
+    assert len(list(schema.parameters.keys())) > 1
+    # No registry side-effects: no registry object, no registry file, no schema folder.
+    assert schema.registry is None
+    assert schema.local_data.schema_id is None
+    assert not (tmp_path / "local" / "schema_registry.json").exists()
 
 
 # ===== is_compatible_with() =====

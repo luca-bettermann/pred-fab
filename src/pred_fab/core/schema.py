@@ -46,9 +46,17 @@ class DatasetSchema:
             parameters: Parameters,
             features: Features,
             performance: PerformanceAttributes,
-            domains: Domains | None = None
+            domains: Domains | None = None,
+            register: bool = True,
             ):
-        """Initialize schema from DataBlocks."""
+        """Initialize schema from DataBlocks.
+
+        ``register=True`` (default) persists the schema in the on-disk registry under
+        ``root_folder`` (the storage path). ``register=False`` builds a **pure structural
+        value object** — no registry, no filesystem side-effects — for read-only consumers
+        that only need the structure (feature columns, param types) and must not depend on
+        or collide with registry state.
+        """
         self.name = name
         self.parameters = parameters
         self.features = features
@@ -57,12 +65,19 @@ class DatasetSchema:
         # all schemas constructed without explicit domains.
         self.domains = domains if domains is not None else Domains()
 
-        # Initialize local data handler and logger
+        # Initialize local data handler and logger. When not registering, resolve the log
+        # folder *without* creating it (get_log_folder makes the dir) — the logger is a
+        # process singleton, so a read-only build reuses it and touches no disk.
         self.local_data = LocalData(root_folder)
-        self.logger = PfabLogger.get_logger(self.local_data.get_log_folder('logs'))
+        log_folder = (
+            self.local_data.get_log_folder('logs') if register
+            else os.path.join(self.local_data.local_folder, 'logs')
+        )
+        self.logger = PfabLogger.get_logger(log_folder)
+        self.registry: SchemaRegistry | None = None
 
         # Initialize schema
-        self._initialize()
+        self._initialize(register)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], root_folder: str) -> 'DatasetSchema':
@@ -79,8 +94,9 @@ class DatasetSchema:
         schema = cls(root_folder, name, parameter_block, feature_block, performance_block, domains)
         return schema
 
-    def _initialize(self) -> None:
-        """Initialize schema: register domain axis params into Parameters, set feature columns, compute hash, register."""
+    def _initialize(self, register: bool = True) -> None:
+        """Build the structural value object; persist into the registry only when ``register``."""
+        # --- Structural (always) — pure value-object setup, no side effects. ---
         # Register domain axis params into Parameters (auto-created DataDomainAxis objects)
         for domain in self.domains.values():
             for axis_param in domain.create_axis_params(Roles.PARAMETER):
@@ -90,6 +106,10 @@ class DatasetSchema:
         # Set column names on feature DataArrays from domain definitions
         self._initialize_feature_columns()
 
+        if not register:
+            return  # pure structural value object — no registry, no filesystem writes
+
+        # --- Persistence (opt-in) — registry registration + storage wiring. ---
         self.registry = SchemaRegistry(self.local_data.local_folder)
         schema_hash = self._compute_schema_hash()
         schema_struct = self.to_dict()
@@ -239,32 +259,30 @@ class SchemaRegistry:
             json.dump(self.registry, f, indent=2)
 
     def register_schema(self, name: str, schema_hash: str, schema_struct: dict[str, Any]) -> None:
-        """Register schema with a specific name, validating against existing entries."""
-
-        # 1. Check if name already exists
+        """Record a name → structure mapping. The registry is a **cache**, not an immutable
+        ledger: a same-name entry whose structure changed (dev iteration) is **overwritten**,
+        not rejected. The one genuine error is the *same structure under two names* (ambiguity).
+        """
         existing_hash_for_name = self.get_hash_by_id(name)
 
-        if existing_hash_for_name:
-            # Name exists. Check if hash matches.
-            if existing_hash_for_name != schema_hash:
-                raise ValueError(
-                    f"Schema name '{name}' is already registered with a different structure. "
-                    "Please use a different name or ensure the schema structure is identical."
-                    "If you want to overwrite, please delete the existing entry in the schema_registry.json file."
-                )
-            # If matches, we are good. Ensure registry is consistent (it should be).
+        # 1. Already current — nothing to do.
+        if existing_hash_for_name == schema_hash:
             return
 
-        # 2. Check if hash already exists (under a different name)
-        if schema_hash in self.registry:
-            existing_name = self.registry[schema_hash]["schema_id"]
-            if existing_name != name:
-                 raise ValueError(
-                    f"This schema structure is already registered under the name '{existing_name}'. "
-                    f"Cannot register the same structure as '{name}' to avoid ambiguity."
-                )
+        # 2. This exact structure is already registered under a *different* name → ambiguous.
+        existing_name_for_hash = self.registry.get(schema_hash, {}).get("schema_id")
+        if existing_name_for_hash is not None and existing_name_for_hash != name:
+            raise ValueError(
+                f"This schema structure is already registered under the name "
+                f"'{existing_name_for_hash}'. Cannot register the same structure as "
+                f"'{name}' to avoid ambiguity."
+            )
 
-        # 3. Register new
+        # 3. Name exists with a stale structure → drop the stale entry (cache overwrite).
+        if existing_hash_for_name:
+            self.registry.pop(existing_hash_for_name, None)
+
+        # 4. Record the (possibly updated) mapping.
         self.registry[schema_hash] = {
             "schema_id": name,
             "created": datetime.now().isoformat(),
