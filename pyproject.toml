@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pred-fab"
-version = "0.2.0"
+version = "0.2.1"
 description = "PFAB: A Predictive Layer for Digital Fabrication Systems"
 readme = "README.md"
 requires-python = ">=3.9"

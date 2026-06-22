@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 from .schema import DatasetSchema, assert_blocks_compatible
 from .experiment_set import ExperimentSet
+from .resolver import effective_parameters
 
 
 @dataclass(frozen=True)
@@ -321,20 +322,20 @@ class ExperimentData:
     ) -> dict[str, Any]:
         """Get effective parameter values for a given iterator context.
 
-        Matches events by iterator_code and step_index against the context.
-        Works at any depth — no flat index computation needed.
+        Matches events by iterator_code and step_index against the context. Works at any
+        depth — no flat index computation needed. Delegates the apply logic to the pure
+        :func:`effective_parameters` (the one home for it; also the external plain-dict entry
+        point), sanitising each event's updates to param types first.
         """
-        effective = self.parameters.get_values_dict().copy()
-        for event in self.parameter_updates:
-            if event.iterator_code is None or event.step_index is None:
-                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
-                effective.update(coerced)
-                continue
-            ctx_value = iterator_ctx.get(event.iterator_code)
-            if ctx_value is not None and ctx_value >= event.step_index:
-                coerced = self.parameters.sanitize_values(event.updates, ignore_unknown=True)
-                effective.update(coerced)
-        return effective
+        updates = [
+            {
+                "updates": self.parameters.sanitize_values(e.updates, ignore_unknown=True),
+                "iterator_code": e.iterator_code,
+                "step_index": e.step_index,
+            }
+            for e in self.parameter_updates
+        ]
+        return effective_parameters(self.parameters.get_values_dict().copy(), updates, iterator_ctx)
 
     def get_num_rows(self) -> int:
         """Return flattened row count implied by dimensional parameters."""

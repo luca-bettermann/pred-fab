@@ -43,6 +43,7 @@ from .dataset import (
 )
 from .experiment_set import ExperimentSet, FitPart, Fit
 from .provenance import Provenance
+from .resolver import effective_parameters
 
 
 def __getattr__(name: str):
@@ -90,4 +91,5 @@ __all__ = [
     'ParameterUpdateEvent',
     'ParameterTrajectory',
     'ExperimentSpec',
+    'effective_parameters',
 ]

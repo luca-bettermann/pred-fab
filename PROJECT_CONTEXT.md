@@ -71,7 +71,18 @@ consumers (e.g. rtde's per-dim recompute) import model-only. Guarded by
 - **Install (base, NOT `[ml]`):** `pred-fab @ git+https://github.com/luca-bettermann/pred-fab.git@v0.2.0` — import name `pred_fab`. (`[ml]` would re-pull torch; base is torch/pandas-free.)
 - **Import:** `from pred_fab.core import DatasetSchema, Dataset, ExperimentData, Dimension, Domain, Parameters, ParameterProposal, ParameterUpdateEvent, ParameterTrajectory, events_to_trajectory, trajectory_to_events`
 - **Per-dim / trajectory expansion entry points** (on `ExperimentData`): `get_effective_parameters_for_context(iterator_ctx: dict[str,int]) -> dict` (effective params at a dim position — applies the sparse dim-change events whose `(iterator_code, step_index)` ≤ ctx); `get_effective_parameters_for_row(row_index)`; `get_effective_parameters_at_step(iterator_code, step_index)`. Pure converters: `events_to_trajectory` / `trajectory_to_events`.
-- **Build the model:** `DatasetSchema(params + domains)` → `Dataset(schema)` → `create_experiment(code, parameters=<resolved scalar base>, parameter_updates=<sparse dim-changes>)` → the returned `ExperimentData` exposes the traversal above. The schema carries the dim strides the traversal needs.
+- **Lean entry (recommended for external recompute — no model build, plain dicts):**
+  `from pred_fab.core import effective_parameters`;
+  `effective_parameters(base: dict, updates: list[dict], ctx: dict[str,int]) -> dict` —
+  applies `base` then each `update` where `ctx[iterator_code] >= step_index`. Each `update` =
+  `{"updates": {code: val}, "iterator_code": <axis>, "step_index": <idx>}` (no `iterator_code`/
+  `step_index` ⇒ unconditional initial-state). No `DataObject`/`Roles`/schema — decoupled from
+  the internal data model. `ExperimentData.get_effective_parameters_for_context` delegates to
+  this (one apply implementation).
+- **Full-model path** (if you need the typed model): `DatasetSchema(params + domains)` →
+  `Dataset(schema)` → `create_experiment(code, parameters=<resolved scalar base>,
+  parameter_updates=<sparse dim-changes>)` → `ExperimentData` (carries dim strides for the
+  stride-based `get_effective_parameters_for_row`).
 
 ### Data flow (runtime pipeline)
 

@@ -16,8 +16,10 @@ from pred_fab.core import (
     Dimension, Domain, DatasetSchema, SchemaRegistry, Dataset, ExperimentData,
     Parameters, Features, PerformanceAttributes, ParameterProposal,
     ParameterTrajectory, ExperimentSpec, ExperimentSet, Provenance,
+    effective_parameters,
 )
 assert hasattr(ExperimentData, "get_effective_parameters_for_context")
+assert effective_parameters({"a": 1}, [], {}) == {"a": 1}   # pure entry usable torch-free
 leaked = sorted(m for m in sys.modules if m.split(".")[0] in ("torch", "pandas"))
 assert not leaked, "model surface pulled heavy deps: " + repr(leaked)
 print("OK")
