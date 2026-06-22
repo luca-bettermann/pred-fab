@@ -67,6 +67,12 @@ consumers (e.g. rtde's per-dim recompute) import model-only. Guarded by
 `tests/test_torch_free_model_import.py`. Consumers needing the ML stack depend on
 `pred-fab[ml]`.
 
+**Model-only consumer wiring** (external, torch/pandas-free):
+- **Install (base, NOT `[ml]`):** `pred-fab @ git+https://github.com/luca-bettermann/pred-fab.git@v0.2.0` — import name `pred_fab`. (`[ml]` would re-pull torch; base is torch/pandas-free.)
+- **Import:** `from pred_fab.core import DatasetSchema, Dataset, ExperimentData, Dimension, Domain, Parameters, ParameterProposal, ParameterUpdateEvent, ParameterTrajectory, events_to_trajectory, trajectory_to_events`
+- **Per-dim / trajectory expansion entry points** (on `ExperimentData`): `get_effective_parameters_for_context(iterator_ctx: dict[str,int]) -> dict` (effective params at a dim position — applies the sparse dim-change events whose `(iterator_code, step_index)` ≤ ctx); `get_effective_parameters_for_row(row_index)`; `get_effective_parameters_at_step(iterator_code, step_index)`. Pure converters: `events_to_trajectory` / `trajectory_to_events`.
+- **Build the model:** `DatasetSchema(params + domains)` → `Dataset(schema)` → `create_experiment(code, parameters=<resolved scalar base>, parameter_updates=<sparse dim-changes>)` → the returned `ExperimentData` exposes the traversal above. The schema carries the dim strides the traversal needs.
+
 ### Data flow (runtime pipeline)
 
 ```mermaid
