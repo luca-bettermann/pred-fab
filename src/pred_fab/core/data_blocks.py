@@ -1,10 +1,13 @@
 """DataBlock collections grouping DataObjects into logical collections with value storage."""
 
+from __future__ import annotations
+
 from abc import abstractmethod, ABC
 import itertools
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import numpy as np
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd  # annotation-only here — keeps the model surface pandas-free
 from .data_objects import DataObject, DataDomainAxis, DataArray, Domain
 from .data_objects import Parameter, Feature, PerformanceAttribute
 from ..utils.enum import Roles

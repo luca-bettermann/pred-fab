@@ -4,22 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pred-fab"
-version = "0.1.0"
+version = "0.2.0"
 description = "PFAB: A Predictive Layer for Digital Fabrication Systems"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=2.0.2",
+]
+
+[project.optional-dependencies]
+# The ML/data stack — required for training, tensor export, plotting, and the
+# DataModule. The torch-free MODEL surface (dim/experiment types + per-position
+# traversal) imports without these; consumers that only need the model omit `ml`.
+ml = [
     "pandas>=2.3.1",
     "matplotlib>=3.8",
     "torch>=2.0",
 ]
-
-[project.optional-dependencies]
 diagnostics = [
     "SALib>=1.5",
 ]
 dev = [
+    "pred-fab[ml]",
     "pytest>=8.4.1",
     "pyright>=1.1.0",
     "import-linter>=2.0",

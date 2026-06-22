@@ -1,13 +1,21 @@
-"""Dataset — in-memory experiment container validated against a DatasetSchema; persistence delegated to LocalData."""
+"""Dataset — in-memory experiment container validated against a DatasetSchema; persistence delegated to LocalData.
+
+Model + per-position traversal are torch/pandas-free; torch (tensor export) and pandas
+(dataframe export / CSV) are imported lazily inside the export methods so the model surface
+stays importable without the ML stack (see [[PFAB - Hierarchical Load Save]])."""
+
+from __future__ import annotations
 
 import json
 import numpy as np
-import pandas as pd
-import torch
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Any, Literal
+from typing import TYPE_CHECKING, Callable, Any, Literal
 import functools
+
+if TYPE_CHECKING:
+    import pandas as pd
+    import torch
 
 from .schema import DatasetSchema, assert_blocks_compatible
 from .experiment_set import ExperimentSet
@@ -1251,6 +1259,7 @@ class Dataset:
             # directly store retrieved data in ExpData object
             for code, data in external_data.items():
                 if isinstance(data, np.ndarray) and "feature_name" in kwargs:
+                    import pandas as pd  # local: external feature ingest (ML-path only)
                     col_names = self._get_array_column_names(kwargs["feature_name"])
                     # pandas-stubs types `columns` too narrowly (Axes | None); a
                     # plain list[str] is valid at runtime. False positive.
@@ -1407,6 +1416,7 @@ class Dataset:
         now a thin wrapper around ``_build_export_rows``;
         the same row-builder backs ``export_to_tensor_dict``.
         """
+        import pandas as pd  # local: dataframe export is an ML-path convenience
         if not experiment_codes:
             return pd.DataFrame(), pd.DataFrame()
         X_rows, y_rows, _ = self._build_export_rows(experiment_codes, max_depth=max_depth)
@@ -1437,6 +1447,7 @@ class Dataset:
         list) determines which X columns get encoded as long-tensor cat
         indices instead of float values.
         """
+        import torch  # local: tensor export is the ML path (model surface stays torch-free)
         if not experiment_codes:
             return ExportedTensorDict({}, {}, torch.zeros((0, 2), dtype=torch.long))
 

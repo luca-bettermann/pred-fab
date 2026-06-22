@@ -9,10 +9,11 @@ import cycle — see [[PFAB - Repo Strategy]]).
 """
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd  # annotation-only (PEP 563) — port stays pandas-free at import
 
 
 @runtime_checkable

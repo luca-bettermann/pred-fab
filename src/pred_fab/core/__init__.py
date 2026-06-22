@@ -1,4 +1,11 @@
-"""Core AIXD architecture components for LBP framework."""
+"""Core data model + ML data-prep.
+
+The model surface (types + `Dataset`/`ExperimentData` + the per-position traversal) imports
+torch/pandas-free — torch/pandas are confined to the export/ML methods (lazy). `DataModule`
+is the one genuinely torch-bound member, so it's loaded **lazily** via PEP 562 ``__getattr__``
+to keep ``from pred_fab.core import …`` torch-free for model-only consumers.
+"""
+from typing import TYPE_CHECKING
 
 from .data_objects import (
     DataObject,
@@ -34,9 +41,20 @@ from .dataset import (
     events_to_trajectory,
     trajectory_to_events,
 )
-from .datamodule import DataModule
 from .experiment_set import ExperimentSet, FitPart, Fit
 from .provenance import Provenance
+
+
+def __getattr__(name: str):
+    """Lazily expose `DataModule` (torch-bound) without pulling torch at package import."""
+    if name == "DataModule":
+        from .datamodule import DataModule
+        return DataModule
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+if TYPE_CHECKING:
+    from .datamodule import DataModule
 
 __all__ = [
     'ExperimentSet',

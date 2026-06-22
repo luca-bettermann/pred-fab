@@ -4,9 +4,10 @@ import logging
 from typing import Any, Callable
 import shutil
 import json
-import pandas as pd
 
 from ..utils.enum import BlockType, FileFormat
+# pandas is imported lazily in the CSV read/write methods so this module (on the
+# torch/pandas-free model import path via Dataset) stays pandas-free at import.
 
 
 class LocalData:
@@ -315,6 +316,7 @@ class LocalData:
 
             try:
                 if file_format == FileFormat.CSV:
+                    import pandas as pd  # local: CSV feature I/O (ML path)
                     df = pd.read_csv(file_path)
                     result_dict[code] = df
                 elif file_format == FileFormat.JSON:
@@ -374,6 +376,7 @@ class LocalData:
 
                 # Save as CSV
                 if file_format == FileFormat.CSV:
+                    import pandas as pd  # local: CSV feature I/O (ML path)
                     df = pd.DataFrame(code_data, columns=column_names)  # type: ignore[call-overload]
                     df.to_csv(file_path, index=False)
                 # Save as JSON

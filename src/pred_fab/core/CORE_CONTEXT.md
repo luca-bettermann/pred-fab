@@ -31,6 +31,7 @@ Schema → Dataset → ExperimentData → DataModule (for training/calibration)
 - **Normalisation** is per-column via `NormMethod`; the corresponding `nn.Module` instance lives in `_parameter_stats` / `_feature_stats`. `module(x)` forward, `module.reverse(x)` inverse.
 - `fit_without_data()` sets up column mappings without any training rows (used by discovery generation)
 - **Tensor-dict path:** `prepare_input_from_tensor_dict(X_dict)` is the canonical input encoder. Pandas no longer appears inside the framework hot path — only at user-facing I/O (`Dataset.export_to_dataframe`, parquet via `LocalData`).
+- **Torch/pandas-free model surface:** the model types + `Dataset`/`ExperimentData` + the per-position traversal (`get_effective_parameters_*`) import without torch/pandas — both are confined to the export/ML methods via **lazy (method-local) imports** (`export_to_tensor_dict`, `export_to_dataframe`, `LocalData` CSV I/O) and TYPE_CHECKING-only annotations (`data_blocks`, `ports`). `DataModule` (genuinely torch-bound) is **lazily exposed** from `core/__init__` (PEP 562). Lets external consumers import model-only without `pred-fab[ml]`; guarded by `tests/test_torch_free_model_import.py`.
 
 ## Open Risks
 - Column-order coupling: `input_columns` order must be stable across fit/transform calls

@@ -56,6 +56,17 @@ build if it returns). `models` and `orchestration` never import each other —
 concrete models are injected into `PfabAgent` through the `interfaces`
 contracts. `diagnostics` is a standalone consumer (SALib).
 
+**Torch-free model surface.** Base install (`pip install pred-fab`) pulls only numpy; the
+ML stack (torch/pandas/matplotlib) is the **`pred-fab[ml]`** extra. The dim/experiment
+**model + per-position traversal** (`from pred_fab.core import Dimension, Domain,
+DatasetSchema, ExperimentData, …` + `ExperimentData.get_effective_parameters_*`) imports
+without torch/pandas — they're confined to the export/ML methods (lazy imports) and the
+torch-bound `DataModule` is lazily exposed from `core/__init__`; `pred_fab/__init__` is
+PEP 562-lazy so `import pred_fab` doesn't pull the ML stack. This is the surface external
+consumers (e.g. rtde's per-dim recompute) import model-only. Guarded by
+`tests/test_torch_free_model_import.py`. Consumers needing the ML stack depend on
+`pred-fab[ml]`.
+
 ### Data flow (runtime pipeline)
 
 ```mermaid
